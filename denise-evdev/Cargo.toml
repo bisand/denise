@@ -1,0 +1,26 @@
+[package]
+name = "denise-evdev"
+description = "Linux evdev input for Denise: mouse, touch and keyboard, with no display server."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# As in denise-drm: the translation state machine is platform-independent so it
+# can be tested without a finger on a screen. Only device I/O is gated to Linux.
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
