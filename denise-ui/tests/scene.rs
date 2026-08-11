@@ -535,6 +535,53 @@ fn the_cursor_sprite_repairs_the_pixels_it_leaves() {
     }
 }
 
+/// Left alone the tree decides: a pointer reveals the sprite, a finger hides it.
+/// That is right for a panel with nothing underneath it to draw a cursor.
+#[test]
+fn the_tree_shows_the_sprite_for_a_pointer_and_not_for_a_finger() {
+    let (mut ui, _, _) = two_buttons(theme::DARK);
+    assert!(!ui.cursor().visible, "nothing has moved yet");
+
+    ui.handle(&[InputEvent::PointerMoved {
+        position: Point::new(70, 60),
+    }]);
+    assert!(ui.cursor().visible, "a pointer moved and drew nothing");
+
+    ui.handle(&[InputEvent::TouchDown {
+        id: 1,
+        position: Point::new(70, 60),
+    }]);
+    assert!(!ui.cursor().visible, "a finger left a pointer behind");
+}
+
+/// An embedded host has a system cursor already, and a second one compositing a
+/// frame behind it is worse than none. So `show_cursor` is a decision, not a
+/// suggestion: once made, no amount of pointer motion overrides it.
+#[test]
+fn an_explicit_show_cursor_survives_every_later_event() {
+    let (mut ui, _, _) = two_buttons(theme::DARK);
+    ui.show_cursor(false);
+
+    for x in (30..280).step_by(37) {
+        ui.handle(&[InputEvent::PointerMoved {
+            position: Point::new(x, 100),
+        }]);
+        assert!(
+            !ui.cursor().visible,
+            "the tree drew a cursor over the host's"
+        );
+    }
+
+    // And the other direction: a kiosk that wants the sprite always, including
+    // under a finger, gets to say so.
+    ui.show_cursor(true);
+    ui.handle(&[InputEvent::TouchDown {
+        id: 1,
+        position: Point::new(70, 60),
+    }]);
+    assert!(ui.cursor().visible, "a finger overrode an explicit request");
+}
+
 #[test]
 fn structural_changes_repaint_correctly() {
     let (mut ui, left, right) = two_buttons(theme::DARK);

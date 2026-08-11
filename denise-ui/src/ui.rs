@@ -63,6 +63,9 @@ pub struct Ui<M: 'static> {
     messages: Vec<M>,
     now_ms: u64,
     next_wake: Option<u64>,
+    /// Whether the tree still gets to decide the cursor's visibility. Cleared by
+    /// the first `show_cursor`, which is a host taking the decision over.
+    cursor_auto: bool,
 }
 
 impl<M: 'static> Ui<M> {
@@ -88,6 +91,7 @@ impl<M: 'static> Ui<M> {
             messages: Vec::new(),
             now_ms: 0,
             next_wake: None,
+            cursor_auto: true,
         }
     }
 
@@ -147,11 +151,20 @@ impl<M: 'static> Ui<M> {
         self.damage.add(self.cursor.bounds());
     }
 
-    /// Shows or hides the cursor sprite.
+    /// Shows or hides the cursor sprite, and stops the tree deciding for itself.
     ///
-    /// It starts hidden and reveals itself on the first pointer motion, so a
-    /// touch-only panel never shows a pointer it has no way to move.
+    /// Left alone, the sprite starts hidden, reveals itself on the first pointer
+    /// motion and hides again when a finger arrives — which is what a panel with
+    /// no window system underneath it wants, because nothing else is going to
+    /// draw a pointer.
+    ///
+    /// Calling this takes that policy over for good, in whichever direction. That
+    /// matters for an embedded host: a Win32 child window or an `NSView` already
+    /// has a system cursor, and Denise compositing a second one that lags it by a
+    /// frame is worse than drawing none. Such a host calls `show_cursor(false)`
+    /// once at startup and never thinks about it again.
     pub fn show_cursor(&mut self, visible: bool) {
+        self.cursor_auto = false;
         if self.cursor.visible == visible {
             return;
         }
@@ -640,11 +653,19 @@ impl<M: 'static> Ui<M> {
     }
 
     fn move_pointer(&mut self, position: Point, show_cursor: bool) {
-        if self.pointer != position || self.cursor.visible != show_cursor {
+        // `show_cursor` here is the *input kind* — a pointer wants a sprite, a
+        // finger does not. It only decides anything while nobody has said
+        // otherwise; see `Ui::show_cursor`.
+        let visible = if self.cursor_auto {
+            show_cursor
+        } else {
+            self.cursor.visible
+        };
+        if self.pointer != position || self.cursor.visible != visible {
             self.damage.add(self.cursor.bounds());
             self.pointer = position;
             self.cursor.position = position;
-            self.cursor.visible = show_cursor;
+            self.cursor.visible = visible;
             self.damage.add(self.cursor.bounds());
         }
         self.update_hover();
