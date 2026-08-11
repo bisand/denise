@@ -56,11 +56,15 @@ cargo run -p kiosk            # M2's instrumented loop: latency percentiles
 cargo run -p denise-drm --example probe   # read-only: what it would drive
 ```
 
-The number that matters is what it costs when nothing happens. Left untouched for
-three seconds, the kiosk demo draws **one frame**, wakes **thirteen times**, and
-uses no measurable CPU — it blocks in `poll` on the input descriptors rather than
-spinning. Move the pointer and it repaints a cursor-sized rectangle, not a
-megapixel.
+The number that matters is what it costs when nothing happens. On a Raspberry Pi
+3 A+ at 1920×1080, the panel demo left untouched for ten seconds — with a text
+field focused, so its caret is blinking — draws **20 frames**, wakes **20 times**,
+and spends **80 ms of CPU in total**, most of it on the two full repaints every
+double-buffered swapchain owes at startup. It blocks in `poll` on the input
+descriptors and the caret deadline rather than spinning; with nothing focused
+there is no deadline either and it blocks indefinitely.
+
+Move the pointer and it repaints two cursor-sized rectangles, not a megapixel.
 
 Without a display, the desktop preview backend runs the same scene code unchanged:
 

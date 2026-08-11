@@ -28,6 +28,13 @@ const BLINK_MS: u64 = 500;
 /// a timer at all, which is the difference between a device that idles and one
 /// that keeps a core awake for its whole service life. Typing resets the phase so
 /// the caret stays solid while it is moving.
+///
+/// A blink damages the whole field rather than the caret, because
+/// [`Widget::animate`] reports *that* something changed, not *where*. On a Pi 3
+/// that is 26 kpx twice a second — 58 µs, or 0.35% of one 60 Hz frame — against
+/// the 32 px the caret actually occupies. The 800× coarseness is real and the
+/// cost of removing it is a wider trait; the measurement is why it has not been
+/// paid.
 #[derive(Clone, Debug)]
 pub struct TextInput<M> {
     text: String,

@@ -358,6 +358,11 @@ mod app {
         let mut app = App::new(size);
         // Something must hold focus for a keyboard-only panel to be usable at all.
         app.ui.focus(Some(app.name));
+        // Prime the clock before the first `poll`. `next_wake_ms` is only set by
+        // `tick`, so a loop that polls first blocks with no timeout at all and the
+        // caret never blinks — which is exactly what happened the first time this
+        // ran on hardware.
+        app.ui.tick(0);
 
         // Built once: the device set does not change, and `poll` updates each
         // entry's revents in place.
@@ -379,6 +384,8 @@ mod app {
         let mut frames = 0u64;
         let mut wakeups = 0u64;
         let mut painted = 0u64;
+        let mut input_events = 0u64;
+        let mut timer_wakes = 0u64;
 
         while Instant::now() < deadline {
             let now = || started.elapsed().as_millis() as u64;
@@ -392,6 +399,10 @@ mod app {
 
             events.clear();
             input.poll(&mut events);
+            if events.is_empty() {
+                timer_wakes += 1;
+            }
+            input_events += events.len() as u64;
             app.ui.handle(&events);
             app.ui.tick(now());
             if !handle_shortcuts(&mut app, &events) {
@@ -412,6 +423,7 @@ mod app {
             app.ui.tick(now());
             app.dispatch();
 
+            input_events += events.len() as u64;
             app.ui.paint(&mut frame);
             painted += app.ui.damage().iter().map(Rect::area).sum::<u64>();
             drop(frame);
@@ -430,6 +442,7 @@ mod app {
             "repainted {:.2}% of the surface per drawn frame — the tree decided all of it",
             painted as f64 / (surface_area * frames.max(1)) as f64 * 100.0
         );
+        eprintln!("{input_events} input events, {timer_wakes} wake-ups with nothing to read");
         Ok(())
     }
 
