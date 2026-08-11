@@ -8,6 +8,7 @@ members = [
     "denise-render",
     "denise-winit",
     "examples/hello-rect",
+    "examples/kiosk",
 ]
 
 [workspace.package]

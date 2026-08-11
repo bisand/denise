@@ -1,0 +1,21 @@
+[package]
+name = "kiosk"
+description = "M2 demo: DRM display and evdev input driving one another, with no desktop."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-render = { workspace = true, features = ["std"] }
+
+# Linux-only, so the workspace still builds on a development machine.
+[target.'cfg(target_os = "linux")'.dependencies]
+denise-drm = { workspace = true }
+denise-evdev = { workspace = true }
+rustix = { workspace = true, features = ["event", "std"] }
