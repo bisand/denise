@@ -145,6 +145,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Latency accounting. "Drag" can mean two very different things — the frame
     // arriving late, or the pointer travelling too little per unit of hand
     // movement — and they have opposite fixes, so measure rather than guess.
+    // What is actually on screen. Input updates `cursor` and `card`; these lag
+    // behind until a frame is presented, and the difference between them is
+    // exactly the damage. Deriving damage this way rather than per event is what
+    // makes coalescing correct: ten moves folded into one frame damage two
+    // rectangles, not twenty, because the intermediate positions were never drawn
+    // and so have nothing to erase.
+    let mut drawn_cursor = cursor;
+    let mut drawn_card = card;
+
     let mut render_us: Vec<u32> = Vec::new();
     let mut latency_us: Vec<u32> = Vec::new();
     let mut interval_us: Vec<u32> = Vec::new();
@@ -182,9 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     motion_events += 1;
                     motion_pixels += i64::from((position.x - cursor.x).abs())
                         + i64::from((position.y - cursor.y).abs());
-                    tracker.add(cursor_rect(cursor));
                     cursor = *position;
-                    tracker.add(cursor_rect(cursor));
                 }
                 InputEvent::PointerButton {
                     button,
@@ -197,18 +204,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if held {
                         clicks += 1;
                     }
-                    tracker.add(card);
                 }
                 InputEvent::TouchDown { position, .. }
                 | InputEvent::TouchMoved { position, .. } => {
-                    tracker.add(cursor_rect(cursor));
                     cursor = *position;
                     held = true;
-                    tracker.add(cursor_rect(cursor));
                 }
                 InputEvent::TouchUp { .. } => {
                     held = false;
-                    tracker.add(card);
                 }
                 InputEvent::Key {
                     code,
@@ -245,11 +248,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 card.width,
                 card.height,
             );
-            if next != card {
-                tracker.add(card);
-                card = next;
-                tracker.add(card);
-            }
+            card = next;
+        }
+
+        // One diff against the screen, however many events were folded in.
+        if cursor != drawn_cursor {
+            tracker.add(cursor_rect(drawn_cursor));
+            tracker.add(cursor_rect(cursor));
+        }
+        if card != drawn_card {
+            tracker.add(drawn_card);
+            tracker.add(card);
         }
 
         if tracker.is_clean() {
@@ -281,6 +290,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         drop(frame);
         surface.present(damage)?;
         tracker.end_frame();
+        drawn_cursor = cursor;
+        drawn_card = card;
         frames += 1;
 
         let now = Instant::now();
@@ -311,8 +322,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             motion_pixels as f64 / motion_events as f64
         );
         eprintln!(
-            "device reported roughly {:.0} events/s",
-            motion_events as f64 / elapsed
+            "device reported roughly {:.0} events/s, {:.2} motion events per frame",
+            motion_events as f64 / elapsed,
+            motion_events as f64 / frames.max(1) as f64
         );
     }
 
