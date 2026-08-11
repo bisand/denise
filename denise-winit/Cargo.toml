@@ -1,0 +1,23 @@
+[package]
+name = "denise-winit"
+description = "Desktop development and preview backend for Denise, on winit + softbuffer."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+softbuffer = { workspace = true }
+thiserror = { workspace = true, features = ["std"] }
+winit = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
