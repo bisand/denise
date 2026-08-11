@@ -17,11 +17,11 @@ architecture: scene stack, z-index layering, dirty-rectangle tracking, composite
 cursor sprite, 60 FPS at under 5% CPU on a Pi 4. Denise keeps the design and drops
 the runtime.
 
-## Status: M0
+## Status: M1
 
-The core abstraction exists and is proven against a desktop backend. There is no
-scene graph, no component model, no hardware backend and no text yet. See
-[Milestones](#milestones).
+The core abstraction and the software rasteriser exist, benchmarked, and proven
+against a desktop backend. There is no scene graph, no component model, no
+hardware backend and no text yet. See [Milestones](#milestones).
 
 What works today:
 
@@ -29,10 +29,10 @@ What works today:
 cargo run -p hello-rect
 ```
 
-A rectangle bounces around a window at 60 FPS while repainting roughly 4% of the
-surface per frame. Stats print to stderr once a second — that number is the whole
-point of the project, so it is measured from the first commit rather than asserted
-in a README later.
+A rounded rectangle bounces around a window at 60 FPS while repainting roughly 4%
+of the surface per frame. Stats print to stderr once a second — that number is the
+whole point of the project, so it is measured from the first commit rather than
+asserted in a README later.
 
 ## What it is not
 
@@ -50,9 +50,9 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 
 | Crate | Purpose | Status |
 |---|---|---|
-| `denise` | Geometry, colour, pixel buffer contract, input, damage tracking | M0 |
-| `denise-winit` | Desktop development and preview backend | M0 |
-| `denise-render` | Software rasteriser | M1 |
+| `denise` | Geometry, colour, pixel buffer contract, input, damage tracking | ✅ M0 |
+| `denise-render` | Software rasteriser | ✅ M1 |
+| `denise-winit` | Desktop development and preview backend | ✅ M0 |
 | `denise-drm` | Linux DRM/KMS backend — the primary target | M2 |
 | `denise-fbdev` | Linux fbdev fallback | M2 |
 | `denise-evdev` | Linux input | M2 |
@@ -62,7 +62,7 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-macos` | Layer-backed `NSView` | M5 |
 | `denise-activex` | COM/ActiveX shim for legacy Windows hosts | M5 |
 
-Only the first two exist. The rest are listed so the shape of the thing is clear.
+Only the first three exist. The rest are listed so the shape of the thing is clear.
 
 ### The two traits
 
@@ -97,9 +97,10 @@ last two are the whole reason `acquire` exists rather than a bare
   cover everything that buffer missed.
 
 Both failure modes are covered by
-[`denise/tests/damage_pipeline.rs`](denise/tests/damage_pipeline.rs), which runs a
-scene through 1-, 2-, 3- and 6-buffered swapchains with a padded stride and asserts
-every presented frame is pixel-identical to a full repaint.
+[`denise-render/tests/damage_pipeline.rs`](denise-render/tests/damage_pipeline.rs),
+which runs an anti-aliased scene through 1-, 2-, 3- and 6-buffered swapchains with
+a padded stride and asserts every presented frame is pixel-identical to a full
+repaint.
 
 ### Rendering pipeline
 
@@ -127,6 +128,59 @@ Worth being precise about, because it differs per backend:
 On DRM the win is entirely upstream: not rasterising the untouched pixels in the
 first place. That is where the CPU goes, so that is where the tracking pays.
 
+## The rasteriser
+
+`denise-render` draws rectangles, rounded rectangles, lines and source-over alpha
+straight into a `Frame`. It needs neither `std` nor `alloc`, contains no `unsafe`,
+and uses **no floating point at all** — anti-aliasing coverage included.
+
+That last one is a deliberate trade. Integer coverage means no `libm` on `no_std`
+targets, no FPU traffic where that costs, and output that is bit-identical between
+x86 and ARM — which is what makes a pixel-exact reference test meaningful on a
+developer's laptop *and* on the Pi. Rounded corners are evaluated analytically per
+scanline with an integer square root, at four sub-rows per scanline.
+
+The clip is the only damage-awareness the drawing code has. Widget code paints as
+though it owned the whole window; restricting the clip to a damage region turns
+that into an incremental repaint, so there is never a second draw path to keep in
+step with the first.
+
+### Numbers
+
+Apple M-series, `--release`, so read the *ratios*, not the absolute times — a Pi 4
+is an order of magnitude slower on memory-bound work.
+
+| Benchmark | Time |
+|---|---|
+| 1080p scene, full repaint | 211 µs |
+| 1080p scene, typical damage (0.4% of the surface) | **5.7 µs** |
+| 1080p blit, whole buffer | 101 µs |
+| 1080p blit, same damage | **0.88 µs** |
+| 800×480 scene, full repaint | 54 µs |
+| Rounded rect fill 1600×900, r=8 / r=32 | 77 µs / 78 µs |
+
+A damaged frame costs **37× less** than a full one, and the rounded-rect cost is
+flat in the radius — anti-aliasing is paid per perimeter pixel, not per area. Both
+are the properties the design was aiming at.
+
+Two results worth keeping in view:
+
+- **A padded stride costs 3× on a full clear** (59 µs → 185 µs at 1080p). DRM hands
+  out pitch-aligned buffers, so the padded number is the one that will matter on
+  hardware. Whether that gap is stride handling or simply the larger buffer falling
+  out of cache is not yet established.
+- **`fill_rect` currently measures slower than `fill_rounded_rect` on the same
+  rectangle**, which cannot be right — the rounded path does strictly more work.
+  Unexplained, and flagged rather than papered over.
+
+```bash
+cargo bench --workspace
+```
+
+CI compiles the benches but does not gate on their timings: wall-clock variance on
+a shared runner is far wider than any threshold worth setting. The regression gate
+belongs on a self-hosted Pi, or on instruction counts.
+
 ## Constraints
 
 - `unsafe_code = "forbid"` in `denise`. `unsafe` is allowed in backend crates only,
@@ -145,7 +199,8 @@ first place. That is where the CPU goes, so that is where the tracking pays.
 | | | |
 |---|---|---|
 | **M0** | Workspace, `Surface`/`InputSource`, winit backend, damage tracking, CI | ✅ |
-| **M1** | Software rasteriser: rects, rounded rects, lines, clipping, alpha blend. Benches. | |
+| **M1** | Software rasteriser: rects, rounded rects, lines, clipping, alpha blend. Benches. | ✅ |
+| **M1.1** | Theming: semantic colour roles, guaranteed-contrast content pairing, geometry tokens. | |
 | **M2** | DRM/KMS with atomic modesetting and page flip; fbdev fallback; evdev input. Runs on a Pi with no X. | |
 | **M3** | Scene stack, z-index, modal dialogs, cursor sprite. Label, Button, TextInput. CoreCanvas 0.4 parity. | |
 | **M4** | Text: built-in 8×8 bitmap font; `cosmic-text` behind a feature flag with a glyph atlas. Latin plus `æøå`, dead keys included. | |
