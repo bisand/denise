@@ -245,6 +245,20 @@ DRM master works over SSH provided nothing else holds it. A compositor running o
 the machine will take it and Denise will fail with `EBUSY`; stop the compositor or
 use a bare VT.
 
+## Keyboard layout
+
+evdev reports key *positions*; what they type is a property of the layout. Denise
+defaults to US, because `KeyCode` names US positions and any other default would
+make the two disagree. On a Norwegian keyboard:
+
+```bash
+DENISE_KEYMAP=no /tmp/panel
+```
+
+Without it the keyboard still works — every key produces an event and Tab, Enter
+and Escape all behave — but `Ø` types `;` and the dead keys type nothing. That is
+worth knowing because it looks like a broken keyboard rather than a wrong setting.
+
 ## Known gaps
 
 - **The VT keyboard is not muted** while Denise holds DRM master, so keystrokes

@@ -11,7 +11,7 @@ environment.**
 [![CI](https://github.com/bisand/denise/actions/workflows/ci.yml/badge.svg)](https://github.com/bisand/denise/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-MIT-89B4FA)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.95-F9E2AF)](#constraints)
-[![Milestone](https://img.shields.io/badge/milestone-M3-F5C2E7)](#milestones)
+[![Milestone](https://img.shields.io/badge/milestone-M4-F5C2E7)](#milestones)
 [![Core](https://img.shields.io/badge/core-forbid(unsafe__code)-A6E3A1)](#constraints)
 [![Targets](https://img.shields.io/badge/targets-aarch64_%7C_armv7_%7C_x86__64-94E2D5)](#constraints)
 
@@ -28,14 +28,14 @@ architecture: scene stack, z-index layering, dirty-rectangle tracking, composite
 cursor sprite, 60 FPS at under 5% CPU on a Pi 4. Denise keeps the design and drops
 the runtime.
 
-## Status: M3
+## Status: M4
 
-Denise drives a real display with no desktop environment, and now has a user
-interface to put on it: a retained widget tree in a generational arena, a scene
-stack with modal dialogs over a dimmed backdrop, a composite cursor sprite, and
-Label, Button and TextInput. Underneath, DRM/KMS scanout with async page flips,
-an fbdev fallback, evdev input, damage tracking and theming — verified on a
-Raspberry Pi 3 A+ driving a 1920×1080 output with no X.
+Denise drives a real display with no desktop environment, has a user interface to
+put on it, and now has text: a keyboard that types `æøå` including dead keys, a
+bounded glyph cache, and three font tiers you choose between by cost. Underneath,
+DRM/KMS scanout with async page flips, an fbdev fallback, evdev input, damage
+tracking and theming — verified on a Raspberry Pi 3 A+ driving a 1920×1080 output
+with no X.
 
 <img src="assets/showcase.png" width="620"
      alt="A panel of themed buttons, text fields and a modal dialog over a dimmed backdrop">
@@ -122,19 +122,19 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | Crate | Purpose | Status |
 |---|---|---|
 | `denise` | Geometry, colour, pixel buffer contract, input, damage tracking, theming | ✅ M0, M1.1 |
-| `denise-render` | Software rasteriser and the built-in bitmap font | ✅ M1, M3 |
+| `denise-render` | Software rasteriser, coverage blitting, the built-in bitmap font | ✅ M1, M3, M4 |
+| `denise-text` | Glyph sources, a bounded glyph atlas, line layout | ✅ M4 |
 | `denise-ui` | Scene graph, scene stack, widgets, cursor sprite | ✅ M3 |
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |
 | `denise-drm` | Linux DRM/KMS backend — the primary target | ✅ M2 |
 | `denise-fbdev` | Linux fbdev fallback | ✅ M2 |
-| `denise-evdev` | Linux input | ✅ M2 |
-| `denise-text` | Font loading, glyph cache, shaping | M4 |
+| `denise-evdev` | Linux input, keyboard layouts and dead keys | ✅ M2, M4 |
 | `denise-ffi` | Stable C ABI, `cdylib` | M5 |
 | `denise-win32` | Windows child-HWND control | M5 |
 | `denise-macos` | Layer-backed `NSView` | M5 |
 | `denise-activex` | COM/ActiveX shim for legacy Windows hosts | M5 |
 
-Everything through M3 exists. The rest are listed so the shape of the thing is clear.
+Everything through M4 exists. The rest are listed so the shape of the thing is clear.
 
 `denise-ui` is a crate of its own rather than part of the core because widgets
 need both the platform contract and the rasteriser, and the rasteriser already
@@ -331,16 +331,22 @@ Two results worth keeping in view:
 
 ### The built-in font
 
-Five by seven in an eight-row cell, monospace, integer-scaled: printable ASCII
-plus `ÆØÅ æøå ÄÖÜ äöü Éé ß °` and a few units and dashes. Anything else draws a
-visible box rather than nothing.
+Five by seven in an eight-row cell, monospace, integer-scaled. Glyphs are ASCII
+art in the source, packed into bits by a `const fn` at compile time, because a
+table of hex bytes cannot be reviewed and a picture of a `Ø` can. It is the first
+of the three [text tiers](#text), and the only one that needs no feature flag, no
+file and no allocator.
 
-This is M4's promised built-in font brought forward, because a Label, a Button and
-a TextInput without glyphs are three rectangles. It is deliberately not
-extensible — no font loading here, and none coming. Glyphs are ASCII art in the
-source, packed into bits by a `const fn` at compile time, because a table of hex
-bytes cannot be reviewed and a picture of a `Ø` can. `cargo run -p denise-render
---example fontdump -- "Kjøre på Æ"` prints them without a display.
+```bash
+cargo run -p denise-render --example fontdump -- "Kjøre på Æ"
+```
+
+Anti-aliased glyphs from the other tiers arrive as 8-bit coverage masks. The
+blitter walks each row in runs: solid runs — the inside of a glyph — go through
+the span blend, empty runs are skipped, and the per-pixel path is paid only on the
+rim. That matters because the M1 benches put the per-pixel path at 31 Mpx/s
+against 457 for spans on a Pi 3, and predicted glyphs would be where the gap got
+paid.
 
 ```bash
 cargo bench --workspace
@@ -349,6 +355,95 @@ cargo bench --workspace
 CI compiles the benches but does not gate on their timings: wall-clock variance on
 a shared runner is far wider than any threshold worth setting. The regression gate
 belongs on a self-hosted Pi, or on instruction counts.
+
+## Text
+
+Three tiers, chosen by what a panel actually has to draw. The cost column is the
+increase in a stripped, statically linked `aarch64-unknown-linux-musl` binary,
+measured rather than estimated.
+
+| Tier | Feature | Cost | Buys |
+|---|---|---|---|
+| Built-in bitmap | none | 0 | Latin plus `ÆØÅ æøå ÄÖÜ äöü Éé ß °`, whole-number scales |
+| TrueType | `truetype` | **+145 KB** | Real faces, anti-aliased, proportionally spaced, any size |
+| Shaped | `shaping` | **+3.1 MB** | Ligatures, bidirectional text, font fallback, complex scripts |
+
+For scale, the whole of Denise, DRM, evdev and the widgets is **848 KB**, so the
+shaping tier is four times the rest of the toolkit put together.
+
+The numbers that decide between them are stark in both directions. On a Norwegian
+pangram, `truetype` and `shaping` produce lines **two pixels** different in total
+width — three megabytes for two pixels. On Arabic they are not comparable at all:
+
+- the built-in font draws **boxes** — obviously missing, obviously a defect;
+- `truetype` draws **the right glyphs, unjoined and in logical order**, which is
+  fluent nonsense: it looks like text, it is wrong, and nobody who cannot read the
+  script will notice;
+- only `shaping` joins them and runs them right to left.
+
+That middle result is the one to be careful about. `examples/specimen` takes a
+sample string as its third argument precisely so it can be checked before a device
+ships:
+
+```bash
+cargo run -p denise-text --features truetype,shaping \
+  --example specimen -- specimen.ppm MyFont.ttf "sample text"
+```
+
+**No font ships with Denise, and none will.** Type designers' licences differ, and
+embedding somebody's typeface in a toolkit is a decision for whoever ships the
+device. There is also no font discovery: nothing is read from a system font
+directory, because a device that boots from flash with a read-only root very often
+has none, and a UI whose text depends on that is a UI that fails in the field.
+`cosmic-text`'s own `new_with_fonts` turned out to load the host's fonts anyway —
+812 of them on the machine this was written on — which is why the database is
+built by hand.
+
+### The glyph cache
+
+One buffer of coverage bytes, shelf-packed, with a size fixed at construction:
+64 KB by default. A panel with a twenty-year service life wants "the glyph cache
+is exactly 64 KB", not "however many glyphs the user has typed since Tuesday".
+
+When it fills it resets wholesale rather than freeing rectangles, and counts the
+reset — so a cache that is genuinely too small shows up as a rising number rather
+than as a mystery. Measurement goes through it as well as drawing, which is what
+stops a label being re-outlined on every layout pass.
+
+| Benchmark | Time |
+|---|---|
+| Cache hit | 2.8 ns |
+| Cache miss, 16 px | 100 ns |
+| Cache miss, 24 px | 213 ns |
+| Measure a 16-character label | 252 ns |
+| Draw a 16-character label, 16 px | 1.39 µs |
+| Draw the same label, 48 px | 6.91 µs |
+
+## Keyboards
+
+`KeyCode` names a *position*; what it types is a property of the user's layout.
+`denise-evdev` ships US and Norwegian as static tables, with dead-key composition,
+AltGr as a third level, and a Caps Lock that reaches `æøå` without turning `1`
+into `!`.
+
+```bash
+DENISE_KEYMAP=no cargo run -p panel
+```
+
+The composition table is generated from Unicode's own canonical composition data
+rather than typed out — a hand-written table of a hundred accented letters is a
+list of a hundred chances to be subtly wrong about one of them.
+
+Deliberately **not** libxkbcommon. It is the right answer on a desktop and the
+wrong one here: a C library with a runtime data directory defeats "one static
+binary" on a read-only root. Two layouts cost about four kilobytes and no
+filesystem at all. The trade is that this will never cover xkeyboard-config, and a
+device that needs Devanagari should be told so plainly rather than sold a
+half-implementation.
+
+Control characters are never text. Enter, Tab and Backspace produce `Key` events
+and nothing else, so a field can insert everything it receives without filtering
+and a key binding cannot be shadowed by a stray control character.
 
 ## Theming
 
@@ -396,7 +491,8 @@ somebody paid for.
   every block carrying a `// SAFETY:` comment.
 - Zero allocation in the render hot path. `DamageTracker` is fixed-capacity;
   coalescing degrades to a bounding box rather than allocating.
-- The core builds `no_std + alloc`. `--no-default-features` is checked in CI.
+- The core builds `no_std + alloc` — `denise`, `denise-render`, `denise-text` and
+  `denise-ui` all of them. `--no-default-features` is checked in CI.
 - CI cross-compiles the core to `aarch64-unknown-linux-gnu` and
   `armv7-unknown-linux-gnueabihf`, and asserts the core's dependency tree contains
   no platform crates — `denise`, `denise-render` and `denise-ui` all held to it.
@@ -412,7 +508,7 @@ somebody paid for.
 | **M1.1** | Theming: semantic colour roles, guaranteed-contrast content pairing, geometry tokens. | ✅ |
 | **M2** | DRM/KMS with legacy modesetting and page flip; fbdev fallback; evdev input. Runs with no X. | ✅ |
 | **M3** | Scene stack, z-index, modal dialogs, cursor sprite. Label, Button, TextInput. CoreCanvas 0.4 parity. | ✅ |
-| **M4** | Text: `cosmic-text` behind a feature flag with a glyph atlas, proportional metrics, shaping. The built-in bitmap font shipped early with M3. | |
+| **M4** | Text: three font tiers behind feature flags, a bounded glyph atlas, keyboard layouts with dead keys. | ✅ |
 | **M5** | C ABI, Windows child-HWND control, ActiveX shim, macOS `NSView`. | |
 
 M2 does not start until M1 is benchmarked. M5 does not start until the Pi story is
@@ -424,10 +520,16 @@ guarantees; a page flip swaps whole buffers, so damage saves rasterisation rathe
 than bandwidth, and the one plane worth having — the hardware cursor — has a
 legacy equivalent. Atomic slots in behind the same seam when planes earn it.
 
-M3 pulled the built-in bitmap font forward from M4. The milestone that ships
-Label, Button and TextInput needs glyphs, and shipping three rectangles instead
-would have been a milestone in name only. M4 still owns real text: `cosmic-text`,
-an atlas, proportional metrics and shaping.
+M3 pulled the built-in bitmap font forward from M4, because a milestone shipping
+Label, Button and TextInput without glyphs would have been a milestone in name
+only. M4 then found the other half of that gap: `denise-evdev` reported key
+*positions* and never turned them into text, so M3's text fields could not receive
+a single character from real hardware. Tab and Enter worked, which is why it
+looked fine on the Pi.
+
+M4 also added a tier the bootstrap did not name. It listed `cosmic-text` and
+`fontdue`; measuring them showed 3.1 MB against 145 KB, and a middle tier with
+real fonts but no shaper is what most panels actually want.
 
 Still outstanding, and deliberately not hidden:
 
@@ -436,8 +538,13 @@ Still outstanding, and deliberately not hidden:
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.
-- **No text selection, clipboard or word motion** in `TextInput`. Half of that is
-  meaningless without a font that can measure a substring, which is M4.
+- **No text selection, clipboard or word motion** in `TextInput`. The measurement
+  it needs now exists; the editing model does not.
+- **The Norwegian layout is a reconstruction.** `æøå` and the `¨^~` dead key are
+  certain; the AltGr assignments on the `+?` and `´` positions are less so, and
+  want checking against a physical keyboard.
+- **Only two layouts.** US and Norwegian. Adding one is about thirty lines,
+  because a layout table lists only what differs from the Latin alphabet.
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
   their parent, which is what a fixed-resolution panel wants; a constraint solver
   can be added over this without changing anything below it.
@@ -445,11 +552,17 @@ Still outstanding, and deliberately not hidden:
 ## Development
 
 ```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo run -p hello-rect
 cargo run -p denise-ui --example showcase -- dark showcase.ppm   # no display needed
+cargo run -p denise-text --example specimen -- specimen.ppm      # ditto, for fonts
 ```
+
+The text tiers are off by default, so `--all-features` is the only build that sees
+them together and the plain build is the only one that sees neither. CI runs both,
+because a `#[cfg]` that compiles in one combination and not the other is exactly
+the rot that goes unnoticed.
 
 ## Licence
 
