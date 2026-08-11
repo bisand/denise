@@ -312,6 +312,7 @@ mod app {
 
         let size = surface.size();
         let mut input = InputBackend::open_all(size)?;
+        input.set_layout_from_env();
         for device in input.devices() {
             eprintln!("input   {}: {}", device.capabilities(), device.name());
         }

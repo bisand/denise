@@ -108,6 +108,8 @@ pub fn key_code(code: u16) -> KeyCode {
         39 => K::Semicolon,
         40 => K::Quote,
         41 => K::Backquote,
+        // The 102nd key, present on ISO keyboards and absent on ANSI ones.
+        86 => K::IntlBackslash,
         51 => K::Comma,
         52 => K::Period,
         53 => K::Slash,

@@ -8,6 +8,7 @@ use denise::{InputEvent, InputSource, Point, Size};
 
 use crate::codes::abs;
 use crate::error::EvdevError;
+use crate::layout::{self, Layout};
 use crate::translate::{AbsAxis, RawEvent, Translator};
 
 /// What a device can report.
@@ -171,6 +172,35 @@ impl InputBackend {
     /// The devices that were opened.
     pub fn devices(&self) -> &[InputDevice] {
         &self.devices
+    }
+
+    /// Reads every keyboard with `layout`.
+    ///
+    /// Defaults to [`layout::US`](crate::layout::US), because [`KeyCode`] names US
+    /// positions and a different default would make the two disagree out of the
+    /// box. A panel shipped to Norway sets this once at startup; there is no
+    /// runtime layout switching to discover, because a kiosk has one keyboard and
+    /// it does not change.
+    ///
+    /// [`KeyCode`]: denise::KeyCode
+    pub fn set_layout(&mut self, layout: &'static Layout) {
+        for device in &mut self.devices {
+            device.translator.set_layout(layout);
+        }
+    }
+
+    /// Reads every keyboard with the layout named by `DENISE_KEYMAP`, if it is set
+    /// and names one that exists. Returns the layout in force either way.
+    ///
+    /// Environment rather than a config file: this is for getting a demo onto a
+    /// Norwegian keyboard over SSH, not a configuration system.
+    pub fn set_layout_from_env(&mut self) -> &'static Layout {
+        let chosen = std::env::var("DENISE_KEYMAP")
+            .ok()
+            .and_then(|name| layout::by_name(&name))
+            .unwrap_or(&layout::US);
+        self.set_layout(chosen);
+        chosen
     }
 
     /// Descriptors to wait on.

@@ -20,6 +20,8 @@
 
 use denise::{ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Size, TouchId};
 
+use crate::layout::{self, Composer, Layout};
+
 use crate::codes::{abs, btn, ev, key_value, rel, syn};
 use crate::keymap::key_code;
 
@@ -134,6 +136,11 @@ pub struct Translator {
     slots: [Slot; MAX_SLOTS],
     slot: usize,
 
+    /// Turns key positions into characters. Held here rather than beside the
+    /// keymap because composition is a property of the *sequence* of keystrokes,
+    /// and this is the only thing that sees them in order.
+    composer: Composer,
+
     /// `BTN_TOUCH` state, for single-contact panels with no slots.
     touch_down: bool,
     single_touch_active: bool,
@@ -161,8 +168,22 @@ impl Translator {
             slot: 0,
             touch_down: false,
             single_touch_active: false,
+            composer: Composer::new(&layout::US),
             deferred: Vec::new(),
         }
+    }
+
+    /// Reads this device with a different keyboard layout.
+    ///
+    /// Defaults to US, because [`KeyCode`] names US positions and defaulting to
+    /// anything else would make the two disagree by default.
+    pub fn set_layout(&mut self, layout: &'static Layout) {
+        self.composer.set_layout(layout);
+    }
+
+    /// The layout this device is being read with.
+    pub fn layout(&self) -> &'static Layout {
+        self.composer.layout()
     }
 
     /// Declares the range of an absolute axis, from the device's `absinfo`.
@@ -383,12 +404,22 @@ impl Translator {
                     code,
                     state,
                     repeat,
-                } => InputEvent::Key {
-                    code,
-                    state,
-                    repeat,
-                    modifiers: self.modifiers,
-                },
+                } => {
+                    // The key event first, then whatever it typed. A binding on
+                    // Enter or Escape therefore runs before any text arrives, and
+                    // a field can insert every `Text` it sees without filtering.
+                    out.push(InputEvent::Key {
+                        code,
+                        state,
+                        repeat,
+                        modifiers: self.modifiers,
+                    });
+                    let composed = self.composer.feed(code, state, self.modifiers);
+                    for &ch in composed.as_slice() {
+                        out.push(InputEvent::Text { ch });
+                    }
+                    continue;
+                }
             });
         }
     }
@@ -689,12 +720,16 @@ mod tests {
         );
         assert_eq!(
             out,
-            vec![InputEvent::Key {
-                code: KeyCode::A,
-                state: ElementState::Down,
-                repeat: false,
-                modifiers: Modifiers::SHIFT,
-            }]
+            vec![
+                InputEvent::Key {
+                    code: KeyCode::A,
+                    state: ElementState::Down,
+                    repeat: false,
+                    modifiers: Modifiers::SHIFT,
+                },
+                // The held shift decides the character as well as the flag.
+                InputEvent::Text { ch: 'A' },
+            ]
         );
 
         drain(
@@ -713,12 +748,65 @@ mod tests {
         );
         assert_eq!(
             out,
-            vec![InputEvent::Key {
-                code: KeyCode::A,
-                state: ElementState::Down,
-                repeat: true,
-                modifiers: Modifiers::NONE,
-            }]
+            vec![
+                InputEvent::Key {
+                    code: KeyCode::A,
+                    state: ElementState::Down,
+                    repeat: true,
+                    modifiers: Modifiers::NONE,
+                },
+                // A held key keeps typing, which is the entire point of repeat.
+                InputEvent::Text { ch: 'a' },
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_evdev_codes_become_norwegian_text() {
+        // End to end from the wire: evdev code 39 is the US semicolon position,
+        // which on a Norwegian keyboard is where ø lives.
+        let mut t = translator();
+        t.set_layout(&crate::layout::NORWEGIAN);
+        let out = drain(
+            &mut t,
+            &[RawEvent::new(ev::KEY, 39, key_value::DOWN), RawEvent::SYN],
+        );
+        assert_eq!(
+            out,
+            vec![
+                InputEvent::Key {
+                    code: KeyCode::Semicolon,
+                    state: ElementState::Down,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                },
+                InputEvent::Text { ch: '\u{00f8}' },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dead_key_spans_two_evdev_frames() {
+        // Composition survives the frame boundary, which is the thing a per-frame
+        // translator could plausibly get wrong.
+        let mut t = translator();
+        t.set_layout(&crate::layout::NORWEGIAN);
+        let first = drain(
+            &mut t,
+            &[RawEvent::new(ev::KEY, 27, key_value::DOWN), RawEvent::SYN],
+        );
+        assert_eq!(
+            first.len(),
+            1,
+            "the dead key reports its position and no text: {first:?}"
+        );
+        let second = drain(
+            &mut t,
+            &[RawEvent::new(ev::KEY, 24, key_value::DOWN), RawEvent::SYN],
+        );
+        assert!(
+            second.contains(&InputEvent::Text { ch: '\u{00f6}' }),
+            "expected ö from ¨ then o, got {second:?}"
         );
     }
 

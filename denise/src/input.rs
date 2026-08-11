@@ -187,6 +187,10 @@ pub enum KeyCode {
 
     Minus,
     Equal,
+    /// The extra key an ISO keyboard has that an ANSI one does not, between the
+    /// left shift and `Z`. It carries `<`, `>` and `\\` on a Norwegian layout, so
+    /// a build that never names it cannot type a backslash.
+    IntlBackslash,
     BracketLeft,
     BracketRight,
     Backslash,

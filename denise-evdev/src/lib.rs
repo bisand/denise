@@ -27,6 +27,7 @@
 
 pub mod codes;
 pub mod keymap;
+pub mod layout;
 pub mod translate;
 
 pub use keymap::key_code;

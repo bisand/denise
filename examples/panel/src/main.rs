@@ -350,9 +350,13 @@ mod app {
 
         let size = surface.size();
         let mut input = InputBackend::open_all(size)?;
+        // `DENISE_KEYMAP=no` for a Norwegian keyboard. Without this the fields
+        // still take input, but every key types what a US layout says it does.
+        let keymap = input.set_layout_from_env();
         for device in input.devices() {
             eprintln!("input   {}: {}", device.capabilities(), device.name());
         }
+        eprintln!("keymap  {}", keymap.name);
         eprintln!("\nTab / Enter to drive it, F2 for the next theme, Escape to quit\n");
 
         let mut app = App::new(size);
