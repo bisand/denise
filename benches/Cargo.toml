@@ -1,0 +1,26 @@
+[package]
+name = "denise-benches"
+description = "Criterion benchmarks for the Denise workspace. Not published."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-render = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "raster"
+harness = false
+
+[[bench]]
+name = "damage"
+harness = false

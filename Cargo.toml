@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["denise", "denise-render", "denise-winit", "examples/hello-rect"]
+members = ["benches", "denise", "denise-render", "denise-winit", "examples/hello-rect"]
 
 [workspace.package]
 version = "0.0.0"
@@ -16,6 +16,7 @@ denise = { version = "0.0.0", path = "denise", default-features = false }
 denise-render = { version = "0.0.0", path = "denise-render", default-features = false }
 denise-winit = { version = "0.0.0", path = "denise-winit" }
 
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 thiserror = { version = "2.0", default-features = false }
 winit = "0.30"
 softbuffer = "0.4"
