@@ -640,3 +640,80 @@ fn damage_stays_proportional_to_what_moved() {
          a cursor move should cost two sprite-sized rectangles"
     );
 }
+
+#[test]
+fn the_shipped_widgets_damage_exactly_what_they_change() {
+    use denise::KeyCode;
+    use denise_ui::widgets::{Button, Label, TextInput};
+
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let card = ui
+        .add(root, Panel::default(), Rect::new(10, 10, 300, 180))
+        .expect("card");
+    let label = ui
+        .add(card, Label::new("Name"), Rect::new(16, 10, 120, 24))
+        .expect("label");
+    let field = ui
+        .add(
+            card,
+            TextInput::<Msg>::new().with_placeholder("type here"),
+            Rect::new(16, 40, 260, 36),
+        )
+        .expect("field");
+    ui.add(
+        card,
+        Button::new("Save", Msg::Clicked),
+        Rect::new(16, 120, 120, 40),
+    )
+    .expect("save");
+
+    let mut buffers = Buffers::new();
+    assert_matches_full_repaint(&mut ui, &mut buffers, "the form as built");
+
+    // Tab to the field, type into it, and check every intermediate frame.
+    ui.handle(&[tab(false)]);
+    assert_matches_full_repaint(&mut ui, &mut buffers, "after focusing the field");
+
+    for ch in "Kjærlighet på Øy, and then some more than fits".chars() {
+        ui.handle(&[InputEvent::Text { ch }]);
+        assert_matches_full_repaint(&mut ui, &mut buffers, "after a keystroke");
+    }
+
+    for _ in 0..8 {
+        ui.handle(&[InputEvent::Key {
+            code: KeyCode::ArrowLeft,
+            state: ElementState::Down,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        assert_matches_full_repaint(&mut ui, &mut buffers, "after moving the caret");
+    }
+
+    // The caret blinking is the one thing that repaints on a timer.
+    for step in 1..=4 {
+        ui.tick(step * 500);
+        assert_matches_full_repaint(&mut ui, &mut buffers, "after a blink");
+    }
+
+    ui.handle(&[tab(false)]);
+    assert_matches_full_repaint(&mut ui, &mut buffers, "after tabbing to the button");
+
+    ui.handle(&press_at(80, 180));
+    assert_matches_full_repaint(&mut ui, &mut buffers, "with the button held");
+    ui.handle(&[release_at(80, 180)]);
+    assert_matches_full_repaint(&mut ui, &mut buffers, "after releasing the button");
+
+    ui.widget_mut::<Label>(label)
+        .expect("label")
+        .set_text("Navn");
+    assert_matches_full_repaint(&mut ui, &mut buffers, "after changing a label");
+
+    assert!(
+        ui.widget::<TextInput<Msg>>(field)
+            .expect("field")
+            .text()
+            .starts_with("Kjærlighet"),
+        "the field should have kept what was typed"
+    );
+}

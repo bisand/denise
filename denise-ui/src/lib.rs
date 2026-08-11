@@ -55,3 +55,4 @@ pub use cursor::{ARROW, CROSSHAIR, Cursor, CursorImage};
 pub use node::NodeId;
 pub use ui::Ui;
 pub use widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
+pub use widgets::{Align, Button, Label, Panel, TextInput};

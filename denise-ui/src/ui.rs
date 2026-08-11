@@ -792,12 +792,14 @@ impl<M: 'static> Ui<M> {
     }
 
     fn is_focusable(&self, id: NodeId) -> bool {
-        let (start, end) = self.input_span();
         self.nodes.get(id).is_some_and(|node| {
             node.paintable()
                 && !node.state.contains(VisualState::DISABLED)
                 && node.widget.focusable()
-                && self.order[start..end].contains(&id)
+                // Only the topmost scene is reachable. Scanning the paint order
+                // for this would be O(n) per candidate and O(n²) per Tab; the
+                // node already knows which scene it belongs to.
+                && node.scene + 1 == self.scenes.len()
         })
     }
 
