@@ -12,4 +12,5 @@ homepage.workspace = true
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
+denise-render = { workspace = true, features = ["std"] }
 denise-winit = { workspace = true }

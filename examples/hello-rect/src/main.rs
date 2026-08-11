@@ -14,16 +14,17 @@
 
 use std::time::{Duration, Instant};
 
-use denise::{
-    Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, Point, Rect, Size, paint,
-};
+use denise::{Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, Point, Rect, Size};
+use denise_render::Canvas;
 use denise_winit::{DeniseApp, WindowConfig, run};
 
 const BACKGROUND: Color = Color::from_rgb888(0x1E1E2E);
 const BOX_COLOR: Color = Color::from_rgb888(0xF5A9B8);
-const CURSOR_COLOR: Color = Color::from_rgb888(0x89B4FA);
+const BOX_BORDER: Color = Color::rgba(255, 255, 255, 64);
+const CURSOR_COLOR: Color = Color::rgba(137, 180, 250, 160);
 const BOX_SIZE: i32 = 120;
-const CURSOR_SIZE: i32 = 24;
+const BOX_RADIUS: i32 = 20;
+const CURSOR_SIZE: i32 = 28;
 const SPEED: i32 = 4;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -142,23 +143,27 @@ impl DeniseApp for HelloRect {
     }
 
     fn render(&mut self, frame: &mut Frame<'_>, damage: &[Rect]) {
-        // Repaint the damaged region only. Clearing the whole frame here would
+        let size = frame.size();
+        let mut canvas = Canvas::new(frame);
+
+        // Repaint the damaged regions only. Clearing the whole frame here would
         // still look correct — which is exactly why damage bugs survive until they
         // reach hardware that cannot afford them.
-        paint::fill_rects(frame, damage, BACKGROUND);
-
+        //
+        // The scene code below is written as though it were painting the whole
+        // window. The clip is what turns it into an incremental repaint, so there
+        // is no second, damage-aware draw path to keep in step with this one.
         for region in damage {
-            if let Some(part) = self.boxx.intersect(region) {
-                paint::fill_rect(frame, part, BOX_COLOR);
-            }
-            if let Some(cursor) = self.cursor
-                && let Some(part) = cursor.intersect(region)
-            {
-                paint::fill_rect(frame, part, CURSOR_COLOR);
+            let mut c = canvas.with_clip(*region);
+            c.clear(BACKGROUND);
+            c.fill_rounded_rect(self.boxx, BOX_RADIUS, BOX_COLOR);
+            c.stroke_rounded_rect(self.boxx, BOX_RADIUS, 2, BOX_BORDER);
+            if let Some(cursor) = self.cursor {
+                c.fill_rounded_rect(cursor, CURSOR_SIZE / 2, CURSOR_COLOR);
             }
         }
 
-        self.stats.record(damage, frame.size());
+        self.stats.record(damage, size);
     }
 
     fn exit_requested(&self) -> bool {

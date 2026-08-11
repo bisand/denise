@@ -16,6 +16,9 @@ softbuffer = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 winit = { workspace = true }
 
+[dev-dependencies]
+denise-render = { workspace = true, features = ["std"] }
+
 [lints.rust]
 missing_docs = "warn"
 

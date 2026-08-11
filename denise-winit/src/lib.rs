@@ -5,7 +5,8 @@
 //! Denise on a desktop means shipping a compositor you did not need.
 //!
 //! ```no_run
-//! use denise::{Color, DamageTracker, Frame, InputEvent, Rect, paint};
+//! use denise::{Color, DamageTracker, Frame, InputEvent, Rect};
+//! use denise_render::Canvas;
 //! use denise_winit::{DeniseApp, WindowConfig, run};
 //!
 //! struct Hello;
@@ -14,7 +15,10 @@
 //!     fn update(&mut self, _events: &[InputEvent], _damage: &mut DamageTracker) {}
 //!
 //!     fn render(&mut self, frame: &mut Frame<'_>, damage: &[Rect]) {
-//!         paint::fill_rects(frame, damage, Color::from_rgb888(0x1E1E2E));
+//!         let mut canvas = Canvas::new(frame);
+//!         for region in damage {
+//!             canvas.with_clip(*region).clear(Color::from_rgb888(0x1E1E2E));
+//!         }
 //!     }
 //! }
 //!

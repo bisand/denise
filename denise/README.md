@@ -24,9 +24,10 @@ tracker.end_frame();
 # }
 ```
 
-**Status: 0.0.0, M0.** The `Surface` and `InputSource` traits and damage tracking
-work and are tested. There is no scene graph, component model, rasteriser, text
-support or hardware backend yet. Not usable for applications. See the
+**Status: 0.0.0, M1.** The `Surface` and `InputSource` traits and damage tracking
+work and are tested, and `denise-render` rasterises into them. There is no scene
+graph, component model, text support or hardware backend yet. Not usable for
+applications. See the
 [repository README](https://github.com/bisand/denise) for the roadmap.
 
 MIT licensed.

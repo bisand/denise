@@ -12,8 +12,9 @@
 
 use denise::{
     BufferAge, Color, DamageTracker, Frame, MAX_DAMAGE_RECTS, PixelFormat, Rect, Size, Surface,
-    SurfaceError, paint,
+    SurfaceError,
 };
+use denise_render::Canvas;
 
 /// Extra words per row, so nothing may assume rows are contiguous.
 const STRIDE_PADDING: u32 = 7;
@@ -116,6 +117,7 @@ struct Scene {
 
 const BACKGROUND: Color = Color::from_rgb888(0x101018);
 const BOX_COLOR: Color = Color::from_rgb888(0xF5A9B8);
+const BORDER_COLOR: Color = Color::rgba(255, 255, 255, 96);
 const DOT_COLOR: Color = Color::from_rgb888(0x89B4FA);
 
 impl Scene {
@@ -166,16 +168,21 @@ impl Scene {
 
     /// Paints the scene, clipped to `region`. This is the only draw path; a full
     /// repaint is just this with `region` set to the whole surface.
+    ///
+    /// The box is a rounded rectangle with a translucent border, so the comparison
+    /// against a full repaint covers anti-aliased coverage and alpha blending, not
+    /// just solid fills. Those are where an incremental repaint goes subtly wrong:
+    /// a partially covered pixel composited once looks nothing like one composited
+    /// twice, and only a pixel-exact reference catches it.
     fn paint(&self, frame: &mut Frame<'_>, region: &[Rect]) {
-        paint::fill_rects(frame, region, BACKGROUND);
+        let mut canvas = Canvas::new(frame);
         for clip in region {
-            if let Some(part) = self.boxx.intersect(clip) {
-                paint::fill_rect(frame, part, BOX_COLOR);
-            }
-            if let Some(dot) = self.dot
-                && let Some(part) = dot.intersect(clip)
-            {
-                paint::fill_rect(frame, part, DOT_COLOR);
+            let mut c = canvas.with_clip(*clip);
+            c.clear(BACKGROUND);
+            c.fill_rounded_rect(self.boxx, 6, BOX_COLOR);
+            c.stroke_rounded_rect(self.boxx, 6, 2, BORDER_COLOR);
+            if let Some(dot) = self.dot {
+                c.fill_rect(dot, DOT_COLOR);
             }
         }
     }

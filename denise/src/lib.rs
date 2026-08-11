@@ -42,7 +42,6 @@ pub mod color;
 pub mod damage;
 pub mod geom;
 pub mod input;
-pub mod paint;
 pub mod surface;
 
 pub use color::Color;
