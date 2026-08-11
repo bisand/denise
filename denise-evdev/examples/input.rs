@@ -34,8 +34,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => String::new(),
         };
         eprintln!(
-            "  {:?}: {} ({}){calibration}",
-            device.kind(),
+            "  {}: {} ({}){calibration}",
+            device.capabilities(),
             device.name(),
             device.path().display()
         );

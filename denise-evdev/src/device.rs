@@ -9,15 +9,51 @@ use crate::codes::abs;
 use crate::error::EvdevError;
 use crate::translate::{AbsAxis, RawEvent, Translator};
 
-/// What a device is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeviceKind {
-    /// A mouse or an absolute pointing device.
-    Pointer,
-    /// A touchscreen.
-    Touch,
-    /// A keyboard.
-    Keyboard,
+/// What a device can report.
+///
+/// A set rather than a single kind, because plenty of real hardware is more than
+/// one thing: a Logitech K400 is a keyboard with a touchpad on one event node, and
+/// most laptops present their touchpad and keyboard together. Picking a single
+/// label for those either loses the pointer or loses the keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Reports a mouse or an absolute pointing device.
+    pub pointer: bool,
+    /// Reports multitouch contacts.
+    pub touch: bool,
+    /// Reports letter keys.
+    pub keyboard: bool,
+}
+
+impl Capabilities {
+    /// Returns `true` if the device reports nothing this backend can use.
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        !self.pointer && !self.touch && !self.keyboard
+    }
+}
+
+impl core::fmt::Display for Capabilities {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut first = true;
+        for (present, name) in [
+            (self.keyboard, "keyboard"),
+            (self.pointer, "pointer"),
+            (self.touch, "touch"),
+        ] {
+            if present {
+                if !first {
+                    f.write_str("+")?;
+                }
+                f.write_str(name)?;
+                first = false;
+            }
+        }
+        if first {
+            f.write_str("none")?;
+        }
+        Ok(())
+    }
 }
 
 /// One open input device, with its own translation state.
@@ -26,7 +62,7 @@ pub struct InputDevice {
     device: evdev::Device,
     path: PathBuf,
     name: String,
-    kind: DeviceKind,
+    capabilities: Capabilities,
     translator: Translator,
 }
 
@@ -41,9 +77,9 @@ impl InputDevice {
         &self.name
     }
 
-    /// What the device is for.
-    pub fn kind(&self) -> DeviceKind {
-        self.kind
+    /// What the device can report.
+    pub fn capabilities(&self) -> Capabilities {
+        self.capabilities
     }
 
     /// The absolute-axis calibration read from the device, as `(x, y)`.
@@ -81,9 +117,10 @@ impl InputBackend {
         let mut devices = Vec::new();
 
         for (path, device) in evdev::enumerate() {
-            let Some(kind) = classify(&device) else {
+            let capabilities = classify(&device);
+            if capabilities.is_empty() {
                 continue;
-            };
+            }
 
             let name = device.name().unwrap_or("<unnamed>").to_owned();
             let mut translator = Translator::new(surface);
@@ -112,7 +149,7 @@ impl InputBackend {
                 device,
                 path,
                 name,
-                kind,
+                capabilities,
                 translator,
             });
         }
@@ -185,32 +222,22 @@ impl InputSource for InputBackend {
     }
 }
 
-/// Decides what a device is, from what it can report.
-fn classify(device: &evdev::Device) -> Option<DeviceKind> {
+/// Works out what a device can report, from what it says it supports.
+fn classify(device: &evdev::Device) -> Capabilities {
     let abs_axes = device.supported_absolute_axes();
     let keys = device.supported_keys();
 
     let has_abs = |code: u16| abs_axes.is_some_and(|axes| axes.iter().any(|axis| axis.0 == code));
-
-    // Slots mean a real touchscreen. Checked first: a touchscreen also reports
-    // BTN_TOUCH and absolute axes, and would otherwise look like a pointer.
-    if has_abs(abs::MT_POSITION_X) {
-        return Some(DeviceKind::Touch);
-    }
-
     let has_key = |code: u16| keys.is_some_and(|k| k.iter().any(|key| key.0 == code));
 
-    // BTN_LEFT is what separates a pointing device from a device that merely has
-    // axes, such as a joystick or an accelerometer.
-    if has_key(crate::codes::btn::LEFT) {
-        return Some(DeviceKind::Pointer);
+    Capabilities {
+        // BTN_LEFT is what separates a pointing device from something that merely
+        // has axes, such as a joystick or an accelerometer.
+        pointer: has_key(crate::codes::btn::LEFT),
+        // Slots mean a real touchscreen rather than a tablet or a touchpad.
+        touch: has_abs(abs::MT_POSITION_X),
+        // Letter keys, not any key at all: a power button and a lid switch both
+        // report EV_KEY and neither is a keyboard. KEY_A is 30, KEY_Z is 44.
+        keyboard: has_key(30) && has_key(44),
     }
-
-    // Letter keys, rather than any key at all: a power button and a lid switch
-    // both report EV_KEY and neither is a keyboard.
-    if has_key(30) && has_key(44) {
-        return Some(DeviceKind::Keyboard);
-    }
-
-    None
 }

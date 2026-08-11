@@ -851,6 +851,7 @@ dependencies = [
  "denise",
  "denise-drm",
  "denise-evdev",
+ "denise-fbdev",
  "denise-render",
  "rustix 1.1.4",
 ]

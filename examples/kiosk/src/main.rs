@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     use denise_drm::{DrmSurface, SurfaceConfig};
     use denise_evdev::InputBackend;
+    use denise_fbdev::FbdevSurface;
     use denise_render::Canvas;
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
@@ -44,17 +45,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(60)
         .clamp(1, 600);
 
-    let mut surface = DrmSurface::open(SurfaceConfig::default())?;
+    // DRM first, because it is the one that page-flips and knows about vblank.
+    // fbdev is not a lesser configuration of the same thing: on a Pi with no
+    // vc4-kms-v3d overlay it is the only display there is.
+    let mut surface: Box<dyn Surface> = match DrmSurface::open(SurfaceConfig::default()) {
+        Ok(drm) => {
+            eprintln!(
+                "display DRM/KMS {} — {} buffers",
+                drm.mode_name(),
+                drm.buffer_count()
+            );
+            Box::new(drm)
+        }
+        Err(drm_error) => match FbdevSurface::open_first() {
+            Ok(fb) => {
+                eprintln!("display fbdev {} ({})", fb.info(), fb.path().display());
+                eprintln!("        no DRM: {drm_error}");
+                eprintln!("        no page flip and no vsync, so this can tear");
+                Box::new(fb)
+            }
+            Err(fb_error) => {
+                return Err(format!("no display — DRM: {drm_error}; fbdev: {fb_error}").into());
+            }
+        },
+    };
+
     let size = surface.size();
     let mut input = InputBackend::open_all(size)?;
 
-    eprintln!(
-        "display {} — {} buffers",
-        surface.mode_name(),
-        surface.buffer_count()
-    );
     for device in input.devices() {
-        eprintln!("input   {:?}: {}", device.kind(), device.name());
+        eprintln!("input   {}: {}", device.capabilities(), device.name());
     }
     eprintln!("\npointer to move, click, T for theme, Escape or Q to quit\n");
 

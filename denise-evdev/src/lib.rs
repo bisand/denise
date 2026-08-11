@@ -38,6 +38,6 @@ mod device;
 mod error;
 
 #[cfg(target_os = "linux")]
-pub use device::{DeviceKind, InputBackend, InputDevice};
+pub use device::{Capabilities, InputBackend, InputDevice};
 #[cfg(target_os = "linux")]
 pub use error::EvdevError;

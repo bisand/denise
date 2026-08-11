@@ -18,4 +18,5 @@ denise-render = { workspace = true, features = ["std"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 denise-drm = { workspace = true }
 denise-evdev = { workspace = true }
+denise-fbdev = { workspace = true }
 rustix = { workspace = true, features = ["event", "std"] }
