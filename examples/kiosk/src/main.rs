@@ -145,14 +145,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Latency accounting. "Drag" can mean two very different things — the frame
     // arriving late, or the pointer travelling too little per unit of hand
     // movement — and they have opposite fixes, so measure rather than guess.
-    // What is actually on screen. Input updates `cursor` and `card`; these lag
-    // behind until a frame is presented, and the difference between them is
-    // exactly the damage. Deriving damage this way rather than per event is what
-    // makes coalescing correct: ten moves folded into one frame damage two
-    // rectangles, not twenty, because the intermediate positions were never drawn
-    // and so have nothing to erase.
+    // What is actually on screen. Input updates the live state; these lag behind
+    // until a frame is presented, and the difference between them is exactly the
+    // damage. Deriving damage this way rather than per event is what makes
+    // coalescing correct: ten moves folded into one frame damage two rectangles,
+    // not twenty, because the intermediate positions were never drawn and so have
+    // nothing to erase.
+    //
+    // The snapshot has to cover everything that changes the pixels, not just
+    // position. `held` decides the card's colour, so a press or release with no
+    // movement still has to be damage. Leaving it out looked like the pointer
+    // wiping a trail across the card: the card kept its stale colour, and only the
+    // patches repainted under the moving cursor showed the right one.
     let mut drawn_cursor = cursor;
     let mut drawn_card = card;
+    let mut drawn_held = held;
 
     let mut render_us: Vec<u32> = Vec::new();
     let mut latency_us: Vec<u32> = Vec::new();
@@ -256,7 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracker.add(cursor_rect(drawn_cursor));
             tracker.add(cursor_rect(cursor));
         }
-        if card != drawn_card {
+        if card != drawn_card || held != drawn_held {
             tracker.add(drawn_card);
             tracker.add(card);
         }
@@ -292,6 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracker.end_frame();
         drawn_cursor = cursor;
         drawn_card = card;
+        drawn_held = held;
         frames += 1;
 
         let now = Instant::now();
