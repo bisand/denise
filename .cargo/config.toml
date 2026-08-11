@@ -1,0 +1,15 @@
+# Cross-compiling to Linux from a non-Linux development machine.
+#
+# Rust ships musl's startup objects and libc.a for these targets, so a fully
+# static binary links with rustc's bundled lld and needs no cross toolchain
+# installed. That makes the loop "build here, scp to the target, run" work from a
+# Mac against a Pi or a VM, which is the only way the DRM and evdev backends get
+# tested at all before they reach hardware.
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"
+
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"

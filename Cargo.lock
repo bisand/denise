@@ -413,6 +413,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "denise-drm"
+version = "0.0.0"
+dependencies = [
+ "denise",
+ "drm 0.15.0",
+ "drm-fourcc",
+ "rustix 1.1.4",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "denise-render"
 version = "0.0.0"
 dependencies = [
@@ -479,6 +490,21 @@ dependencies = [
  "drm-fourcc",
  "libc",
  "rustix 0.38.44",
+]
+
+[[package]]
+name = "drm"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a41816e58f47f49acfd956651055ddcf137c4882c2098c30c448817af21183a"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytemuck",
+ "bytemuck_derive",
+ "drm-ffi",
+ "drm-fourcc",
+ "libc",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -1568,7 +1594,7 @@ checksum = "aac18da81ebbf05109ab275b157c22a653bb3c12cf884450179942f81bcbf6c3"
 dependencies = [
  "as-raw-xcb-connection",
  "bytemuck",
- "drm",
+ "drm 0.14.1",
  "fastrand",
  "js-sys",
  "memmap2",

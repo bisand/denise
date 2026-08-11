@@ -1,0 +1,29 @@
+[package]
+name = "denise-drm"
+description = "Linux DRM/KMS backend for Denise. Scans out straight to the display with no compositor."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# The mode-selection and swapchain policy is deliberately platform-independent so
+# it can be unit-tested on a development machine that has no DRM device. Only the
+# ioctl layer is gated to Linux.
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+drm = { workspace = true }
+drm-fourcc = { workspace = true }
+rustix = { workspace = true, features = ["mm", "std"] }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
