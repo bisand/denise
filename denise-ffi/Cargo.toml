@@ -1,0 +1,27 @@
+[package]
+name = "denise-ffi"
+description = "Stable C ABI for Denise. A cdylib for hosts that are not written in Rust."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# `rlib` alongside `cdylib` so the integration tests can link the same code the
+# shared library exports, rather than a separate build of it.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-render = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std"] }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"

@@ -6,6 +6,7 @@ members = [
     "denise-drm",
     "denise-evdev",
     "denise-fbdev",
+    "denise-ffi",
     "denise-render",
     "denise-text",
     "denise-ui",
@@ -29,6 +30,7 @@ denise = { version = "0.0.0", path = "denise", default-features = false }
 denise-drm = { version = "0.0.0", path = "denise-drm" }
 denise-evdev = { version = "0.0.0", path = "denise-evdev" }
 denise-fbdev = { version = "0.0.0", path = "denise-fbdev" }
+denise-ffi = { version = "0.0.0", path = "denise-ffi" }
 denise-render = { version = "0.0.0", path = "denise-render", default-features = false }
 denise-text = { version = "0.0.0", path = "denise-text", default-features = false }
 denise-ui = { version = "0.0.0", path = "denise-ui", default-features = false }

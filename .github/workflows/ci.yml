@@ -115,3 +115,28 @@ jobs:
             fi
           done
           exit $status
+
+  c-abi:
+    name: the C ABI links and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The header is written by hand, so nothing but a real C compiler proves it
+      # is valid C. `tests/header.rs` checks that it *agrees* with the Rust; this
+      # checks that it parses, links, and that the library behind it works when
+      # driven from the other side of the ABI.
+      - run: cargo build -p denise-ffi --release
+      - run: make -C denise-ffi/examples run
+
+      # C++ hosts are half of what an ActiveX shim serves, and `extern "C"` in
+      # the header is only load-bearing if somebody compiles it as C++.
+      - name: The header is valid C++ too
+        run: |
+          echo '#include "denise.h"' > /tmp/cxx.cpp
+          echo 'int main() { return denise_abi_version() == DENISE_ABI_VERSION ? 0 : 1; }' >> /tmp/cxx.cpp
+          c++ -std=c++17 -Wall -Wextra -Idenise-ffi/include -o /tmp/cxx /tmp/cxx.cpp \
+              -Ltarget/release -ldenise_ffi -Wl,-rpath,"$PWD/target/release"
+          /tmp/cxx
