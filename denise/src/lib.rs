@@ -43,6 +43,7 @@ pub mod damage;
 pub mod geom;
 pub mod input;
 pub mod surface;
+pub mod theme;
 
 pub use color::Color;
 pub use damage::{DamageTracker, MAX_DAMAGE_RECTS, RectList};
@@ -51,3 +52,4 @@ pub use input::{
     ElementState, InputEvent, InputSource, KeyCode, Modifiers, PointerButton, TouchId,
 };
 pub use surface::{BufferAge, Frame, PixelFormat, Surface, SurfaceError};
+pub use theme::{ColorScheme, Metrics, Radius, Role, Theme};

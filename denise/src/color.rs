@@ -70,6 +70,34 @@ impl Color {
     pub const fn is_transparent(self) -> bool {
         self.a == 0
     }
+
+    /// This colour at a different alpha.
+    #[inline]
+    pub const fn with_alpha(self, a: u8) -> Color {
+        Color { a, ..self }
+    }
+
+    /// Blends towards `other`. `t` of `0` is `self`, `255` is `other`.
+    ///
+    /// Mixed in gamma-encoded sRGB, which is what CSS `color-mix(in srgb, ...)`
+    /// does and what a theme author picking two hex values expects. Perceptually
+    /// even ramps want a different space; see [`crate::theme`].
+    #[inline]
+    pub const fn mix(self, other: Color, t: u8) -> Color {
+        Color {
+            r: lerp(self.r, other.r, t),
+            g: lerp(self.g, other.g, t),
+            b: lerp(self.b, other.b, t),
+            a: lerp(self.a, other.a, t),
+        }
+    }
+}
+
+/// Rounded linear interpolation. Exact at both ends.
+#[inline]
+const fn lerp(a: u8, b: u8, t: u8) -> u8 {
+    let (a, b, t) = (a as u32, b as u32, t as u32);
+    ((a * (255 - t) + b * t + 127) / 255) as u8
 }
 
 #[cfg(test)]
