@@ -417,6 +417,7 @@ name = "denise-drm"
 version = "0.0.0"
 dependencies = [
  "denise",
+ "denise-render",
  "drm 0.15.0",
  "drm-fourcc",
  "rustix 1.1.4",

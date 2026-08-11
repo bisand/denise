@@ -53,8 +53,12 @@ pub use swapchain::Swapchain;
 mod device;
 #[cfg(target_os = "linux")]
 mod error;
+#[cfg(target_os = "linux")]
+mod surface;
 
 #[cfg(target_os = "linux")]
 pub use device::Card;
 #[cfg(target_os = "linux")]
 pub use error::DrmError;
+#[cfg(target_os = "linux")]
+pub use surface::{DrmSurface, SurfaceConfig};

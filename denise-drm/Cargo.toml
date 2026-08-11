@@ -22,6 +22,9 @@ drm = { workspace = true }
 drm-fourcc = { workspace = true }
 rustix = { workspace = true, features = ["mm", "std"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+denise-render = { workspace = true, features = ["std"] }
+
 [lints.rust]
 missing_docs = "warn"
 
