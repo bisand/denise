@@ -67,7 +67,7 @@ fn build(theme: Theme) -> Ui<Msg> {
     ui.add(
         root,
         Label::new("Denise M3 — widgets, states and a modal")
-            .with_scale(3)
+            .with_size(24)
             .with_align(Align::Center, Align::Center),
         Rect::new(0, 12, SIZE.width as i32, 30),
     )
@@ -218,7 +218,7 @@ fn build(theme: Theme) -> Ui<Msg> {
     ui.add(
         dialog,
         Label::new("Lagre endringer?")
-            .with_scale(3)
+            .with_size(24)
             .with_align(Align::Center, Align::Center),
         Rect::new(20, 18, w - 40, 30),
     )

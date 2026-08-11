@@ -170,7 +170,7 @@ enum Msg {
 }
 
 impl Widget<Msg> for Probe {
-    fn paint(&self, ctx: &PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let mut color = ctx.theme.color(self.color);
         // Every visual state must change the pixels, otherwise the tests below
         // could not tell a missing invalidation from a no-op.

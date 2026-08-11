@@ -4,10 +4,10 @@ use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
 use denise_render::Canvas;
-use denise_render::font::{self, BitmapFont};
+use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
-use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
+use crate::widgets::style::{Align, focus_ring, interactive_pair};
 
 /// Half-period of the caret blink, in milliseconds.
 const BLINK_MS: u64 = 500;
@@ -44,7 +44,7 @@ pub struct TextInput<M> {
     /// First character drawn, for fields wider than their box.
     first_visible: usize,
     max_chars: usize,
-    scale: i32,
+    style: TextStyle,
     radius: Radius,
     submit: Option<M>,
     password: bool,
@@ -61,7 +61,7 @@ impl<M> TextInput<M> {
             caret: 0,
             first_visible: 0,
             max_chars: 256,
-            scale: 2,
+            style: TextStyle::built_in(16),
             radius: Radius::Field,
             submit: None,
             password: false,
@@ -88,10 +88,22 @@ impl<M> TextInput<M> {
         self
     }
 
-    /// Sets the integer glyph scale.
-    pub fn with_scale(mut self, scale: i32) -> Self {
-        self.scale = scale.max(1);
+    /// Sets the font and size.
+    pub fn with_style(mut self, style: TextStyle) -> Self {
+        self.style = style;
         self
+    }
+
+    /// Sets the size, keeping the font.
+    pub fn with_size(mut self, size_px: u16) -> Self {
+        self.style.size_px = size_px;
+        self
+    }
+
+    /// The font and size this field draws in.
+    #[inline]
+    pub const fn style(&self) -> TextStyle {
+        self.style
     }
 
     /// Draws every character as `*`. The text is still stored in the clear —
@@ -141,27 +153,59 @@ impl<M> TextInput<M> {
     /// Horizontal padding inside the field's bounds.
     #[inline]
     const fn pad(&self) -> i32 {
-        font::ADVANCE * self.scale / 2
+        self.style.size_px as i32 / 3
     }
 
-    /// Characters that fit between the paddings.
-    fn visible_chars(&self, bounds: Rect) -> usize {
-        let inner = bounds.width - self.pad() * 2;
-        ((inner / (font::ADVANCE * self.scale)).max(1)) as usize
+    /// The field's inner rectangle, inside the padding.
+    fn inner(&self, bounds: Rect) -> Rect {
+        Rect::from_edges(
+            bounds.x + self.pad(),
+            bounds.y,
+            bounds.right() - self.pad(),
+            bounds.bottom(),
+        )
     }
 
-    /// First character to draw, given where the caret is.
-    fn window_start(&self, bounds: Rect) -> usize {
-        let visible = self.visible_chars(bounds);
+    /// Width of characters `from..to` as they are displayed.
+    ///
+    /// Measured rather than counted. With a proportional font a caret placed by
+    /// multiplying an index by an advance is wrong everywhere except after the
+    /// first character, and wrong in a way that looks like a rendering glitch
+    /// rather than an arithmetic mistake.
+    fn run_width(&self, engine: &mut TextEngine, from: usize, to: usize) -> i32 {
+        if from >= to {
+            return 0;
+        }
+        if self.password {
+            return engine.measure_line(self.style, "*") * (to - from) as i32;
+        }
+        let (start, end) = (self.byte_of(from), self.byte_of(to));
+        engine.measure_line(self.style, &self.text[start..end])
+    }
+
+    /// First character to draw, given where the caret is and how wide the box is.
+    fn window_start(&self, engine: &mut TextEngine, bounds: Rect) -> usize {
+        let available = self.inner(bounds).width;
         let mut first = self.first_visible.min(self.caret);
-        if self.caret >= first + visible {
-            first = self.caret + 1 - visible;
+        // Walks rather than bisects: a kiosk field holds a name or a setpoint, and
+        // the loop runs once per character that scrolled off since last frame,
+        // which is almost always one.
+        while first < self.caret && self.run_width(engine, first, self.caret) > available {
+            first += 1;
         }
         first
     }
 
-    fn scroll_to_caret(&mut self, bounds: Rect) {
-        self.first_visible = self.window_start(bounds);
+    /// Horizontal offset of the caret from the field's left edge.
+    ///
+    /// Measured, not counted — see [`TextInput::run_width`].
+    pub fn caret_x(&self, engine: &mut TextEngine, bounds: Rect) -> i32 {
+        let first = self.window_start(engine, bounds);
+        self.pad() + self.run_width(engine, first, self.caret)
+    }
+
+    fn scroll_to_caret(&mut self, engine: &mut TextEngine, bounds: Rect) {
+        self.first_visible = self.window_start(engine, bounds);
     }
 
     /// Restarts the blink so the caret is solid while it is being moved.
@@ -207,62 +251,79 @@ impl<M> Default for TextInput<M> {
 }
 
 impl<M: Clone + 'static> Widget<M> for TextInput<M> {
-    fn paint(&self, ctx: &PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let disabled = ctx.state.contains(VisualState::DISABLED);
+        let focused = ctx.state.contains(VisualState::FOCUSED);
         let (background, _) = interactive_pair(ctx.theme, Role::Base100, ctx.state);
         canvas.fill_rounded_rect(ctx.bounds, radius, background);
         canvas.stroke_rounded_rect(ctx.bounds, radius, 1, ctx.theme.color(Role::Base300));
-        if ctx.state.contains(VisualState::FOCUSED) {
+        if focused {
             focus_ring(ctx.theme, ctx.bounds, radius, canvas);
         }
 
-        let pad = self.pad();
-        let inner = Rect::from_edges(
-            ctx.bounds.x + pad,
-            ctx.bounds.y,
-            ctx.bounds.right() - pad,
-            ctx.bounds.bottom(),
-        );
-        let text_y = inner.y + Align::Center.offset(inner.height, font::CELL_HEIGHT * self.scale);
+        let inner = self.inner(ctx.bounds);
+        let line_height = ctx.text.line_height(self.style);
+        let top = inner.y + Align::Center.offset(inner.height, line_height);
+        // Text is clipped to the inner box, so a value longer than the field
+        // scrolls under the border rather than over it.
+        let mut clipped = canvas.with_clip(inner);
 
-        if self.text.is_empty() && !self.placeholder.is_empty() {
-            draw_aligned(
-                canvas,
-                inner,
-                Align::Start,
-                Align::Center,
-                self.scale,
-                &self.placeholder,
-                ctx.theme
+        if self.text.is_empty() {
+            if !self.placeholder.is_empty() {
+                let hint = ctx
+                    .theme
                     .color(Role::Base300)
-                    .mix(ctx.theme.color(Role::BaseContent), 128),
-            );
+                    .mix(ctx.theme.color(Role::BaseContent), 128);
+                ctx.text.draw(
+                    &mut clipped,
+                    self.style,
+                    Point::new(inner.x, top),
+                    &self.placeholder,
+                    hint,
+                );
+            }
         } else {
-            // Drawn glyph by glyph rather than by slicing the string, so scrolling
-            // a long field costs no allocation in the paint path.
             let content = if disabled {
                 ctx.theme.color(Role::Base300)
             } else {
                 ctx.theme.color(Role::BaseContent)
             };
-            let first = self.window_start(ctx.bounds);
-            let visible = self.visible_chars(ctx.bounds);
-            let mut pen = Point::new(inner.x, text_y);
-            for ch in self.text.chars().skip(first).take(visible) {
-                let ch = if self.password { '*' } else { ch };
-                canvas.draw_glyph(font::BUILT_IN.glyph(ch), pen, self.scale, content);
-                pen.x += font::ADVANCE * self.scale;
-            }
-
-            if ctx.state.contains(VisualState::FOCUSED) && self.caret_on && !disabled {
-                let x = inner.x
-                    + BitmapFont::caret_offset(&font::BUILT_IN, self.caret - first, self.scale);
-                canvas.fill_rect(
-                    Rect::new(x, text_y, self.scale, font::CELL_HEIGHT * self.scale),
-                    ctx.theme.color(Role::Accent),
+            let first = self.window_start(ctx.text, ctx.bounds);
+            if self.password {
+                // Drawn one at a time rather than by building a string of stars,
+                // because a paint path that allocates is a paint path that can
+                // fail on a device with no memory left.
+                let advance = ctx.text.measure_line(self.style, "*");
+                let count = self.len_chars().saturating_sub(first);
+                for i in 0..count {
+                    let x = inner.x + advance * i as i32;
+                    if x > inner.right() {
+                        break;
+                    }
+                    ctx.text
+                        .draw(&mut clipped, self.style, Point::new(x, top), "*", content);
+                }
+            } else {
+                let start = self.byte_of(first);
+                ctx.text.draw(
+                    &mut clipped,
+                    self.style,
+                    Point::new(inner.x, top),
+                    &self.text[start..],
+                    content,
                 );
             }
+        }
+
+        if focused && self.caret_on && !disabled {
+            let first = self.window_start(ctx.text, ctx.bounds);
+            let x = inner.x + self.run_width(ctx.text, first, self.caret);
+            let width = (i32::from(self.style.size_px) / 10).max(1);
+            clipped.fill_rect(
+                Rect::new(x, top, width, line_height),
+                ctx.theme.color(Role::Accent),
+            );
         }
     }
 
@@ -277,7 +338,8 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
             Event::Input(InputEvent::Text { ch }) if !ch.is_control() => {
                 if self.insert(*ch) {
                     self.wake_caret(ctx.now_ms);
-                    self.scroll_to_caret(ctx.bounds);
+                    let bounds = ctx.bounds;
+                    self.scroll_to_caret(ctx.text, bounds);
                     Handled::Yes
                 } else {
                     Handled::No
@@ -322,7 +384,8 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                     _ => return Handled::No,
                 };
                 self.wake_caret(ctx.now_ms);
-                self.scroll_to_caret(ctx.bounds);
+                let bounds = ctx.bounds;
+                self.scroll_to_caret(ctx.text, bounds);
                 // Even a caret move that changed nothing must repaint, because the
                 // caret itself is pixels.
                 let _ = changed;

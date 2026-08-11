@@ -297,3 +297,123 @@ impl Settle for Ui<Msg> {
         self.presented();
     }
 }
+
+/// A font whose characters are deliberately different widths.
+///
+/// The built-in font is monospace, so it cannot tell a caret placed by
+/// *measuring* from one placed by multiplying an index by a constant. This can.
+#[derive(Debug, Default)]
+struct Proportional {
+    scratch: Vec<u8>,
+}
+
+impl Proportional {
+    /// `i` is narrow, `W` is wide, everything else is in between.
+    fn advance_of(ch: char, size_px: u16) -> i32 {
+        let units = match ch {
+            'i' | 'l' | '.' => 2,
+            'W' | 'M' => 14,
+            _ => 7,
+        };
+        (units * i32::from(size_px)) / 16
+    }
+}
+
+impl denise_text::GlyphSource for Proportional {
+    fn name(&self) -> &str {
+        "proportional test face"
+    }
+
+    fn metrics(&self, size_px: u16) -> denise_text::FontMetrics {
+        denise_text::FontMetrics {
+            ascent: i32::from(size_px) * 3 / 4,
+            descent: i32::from(size_px) / 4,
+            line_gap: 0,
+        }
+    }
+
+    fn glyph_metrics(
+        &mut self,
+        glyph: denise_text::GlyphId,
+        size_px: u16,
+    ) -> Option<denise_text::GlyphMetrics> {
+        let ch = glyph.as_char()?;
+        let advance = Self::advance_of(ch, size_px);
+        Some(denise_text::GlyphMetrics {
+            advance,
+            bearing_x: 0,
+            bearing_y: i32::from(size_px) * 3 / 4,
+            size: Size::new(advance.max(1) as u32, u32::from(size_px) / 2),
+        })
+    }
+
+    fn rasterise(
+        &mut self,
+        glyph: denise_text::GlyphId,
+        size_px: u16,
+    ) -> Option<denise_text::Rasterised<'_>> {
+        let metrics = self.glyph_metrics(glyph, size_px)?;
+        let len = (metrics.size.width * metrics.size.height) as usize;
+        self.scratch.clear();
+        self.scratch.resize(len, 255);
+        Some(denise_text::Rasterised {
+            metrics,
+            coverage: &self.scratch,
+            stride: metrics.size.width as usize,
+        })
+    }
+
+    fn contains(&self, _ch: char) -> bool {
+        true
+    }
+}
+
+#[test]
+fn the_caret_is_measured_not_counted() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let font = ui.add_font(Box::new(Proportional::default()));
+    let style = denise_ui::TextStyle { font, size_px: 16 };
+    let root = ui.root();
+    let bounds = Rect::new(20, 20, 320, 40);
+    let field = ui
+        .add(root, TextInput::<Msg>::new().with_style(style), bounds)
+        .expect("field");
+    ui.focus(Some(field));
+
+    // `iiiW`: three narrow characters then a wide one. A caret placed by
+    // multiplying the index by an advance would step evenly; a measured one steps
+    // narrow, narrow, narrow, wide.
+    for ch in "iiiW".chars() {
+        ui.handle(&[text(ch)]);
+    }
+
+    // Walk the caret from the start, asking where it is at each step. The
+    // measuring engine is built separately from the tree's so that reading the
+    // widget and measuring do not borrow the same object at once; both are given
+    // the same face, which the assertion below checks.
+    let mut engine = denise_text::TextEngine::new();
+    let id = engine.add_font(Box::new(Proportional::default()));
+    assert_eq!(
+        id, font,
+        "the test engine must agree with the tree's font ids"
+    );
+
+    ui.handle(&[key(KeyCode::Home)]);
+    let mut positions = Vec::new();
+    for _ in 0..=4 {
+        let widget = ui.widget::<TextInput<Msg>>(field).expect("field");
+        positions.push(widget.caret_x(&mut engine, bounds));
+        ui.handle(&[key(KeyCode::ArrowRight)]);
+    }
+
+    let deltas: Vec<i32> = positions.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(deltas.len(), 4);
+    assert!(
+        deltas[0] == deltas[1] && deltas[1] == deltas[2],
+        "the three narrow characters should advance equally: {deltas:?}"
+    );
+    assert!(
+        deltas[3] > deltas[2] * 3,
+        "the wide character should advance much further: {deltas:?}"
+    );
+}

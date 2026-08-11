@@ -11,6 +11,7 @@ use core::any::Any;
 
 use denise::{InputEvent, Rect, Theme};
 use denise_render::Canvas;
+use denise_text::TextEngine;
 
 /// Upcast to [`Any`], so an application can get its concrete widget type back out
 /// of the tree. Blanket-implemented; never implement it by hand.
@@ -120,10 +121,16 @@ pub enum Event<'a> {
 }
 
 /// What a widget needs in order to draw itself.
+///
+/// Mutable, because [`PaintCtx::text`] is: measuring a string is what fills the
+/// glyph cache, so a widget that measures and then draws rasterises each glyph
+/// once rather than twice. The widget itself is still `&self`.
 #[derive(Debug)]
 pub struct PaintCtx<'a> {
     /// The active theme. Widgets name roles, never colours.
     pub theme: &'a Theme,
+    /// Fonts and the glyph cache.
+    pub text: &'a mut TextEngine,
     /// Absolute bounds of this widget, in surface pixels.
     pub bounds: Rect,
     /// Hover, press, focus and enabled state, tracked by the tree.
@@ -139,6 +146,12 @@ pub struct EventCtx<'a, M> {
     pub bounds: Rect,
     /// The active theme.
     pub theme: &'a Theme,
+    /// Fonts and the glyph cache.
+    ///
+    /// Needed while *handling* events, not only while painting: a text field with
+    /// a proportional font cannot work out where its caret is without measuring
+    /// the text in front of it.
+    pub text: &'a mut TextEngine,
     /// Hover, press, focus and enabled state.
     pub state: VisualState,
     /// Milliseconds from an arbitrary epoch.
@@ -152,6 +165,7 @@ impl<'a, M> EventCtx<'a, M> {
     pub(crate) fn new(
         bounds: Rect,
         theme: &'a Theme,
+        text: &'a mut TextEngine,
         state: VisualState,
         now_ms: u64,
         messages: &'a mut Vec<M>,
@@ -159,6 +173,7 @@ impl<'a, M> EventCtx<'a, M> {
         Self {
             bounds,
             theme,
+            text,
             state,
             now_ms,
             messages,
@@ -225,7 +240,7 @@ pub trait Widget<M>: AsAny {
     /// Paint as though the whole widget were visible. The clip turns that into an
     /// incremental repaint, so there is never a second draw path to keep in step
     /// with the first.
-    fn paint(&self, ctx: &PaintCtx<'_>, canvas: &mut Canvas<'_>);
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>);
 
     /// Reacts to an event routed to this widget.
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
@@ -270,7 +285,7 @@ pub trait Widget<M>: AsAny {
 pub struct Void;
 
 impl<M: 'static> Widget<M> for Void {
-    fn paint(&self, _ctx: &PaintCtx<'_>, _canvas: &mut Canvas<'_>) {}
+    fn paint(&self, _ctx: &mut PaintCtx<'_>, _canvas: &mut Canvas<'_>) {}
 }
 
 pub(crate) type BoxedWidget<M> = Box<dyn Widget<M>>;

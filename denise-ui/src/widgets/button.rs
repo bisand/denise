@@ -4,7 +4,7 @@ use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Radius, Role};
 use denise_render::Canvas;
-use denise_render::font;
+use denise_text::TextStyle;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
@@ -21,7 +21,7 @@ pub struct Button<M> {
     message: Option<M>,
     role: Role,
     radius: Radius,
-    scale: i32,
+    style: TextStyle,
 }
 
 impl<M> Button<M> {
@@ -32,7 +32,7 @@ impl<M> Button<M> {
             message: Some(message),
             role: Role::Primary,
             radius: Radius::Field,
-            scale: 2,
+            style: TextStyle::built_in(16),
         }
     }
 
@@ -44,7 +44,7 @@ impl<M> Button<M> {
             message: None,
             role: Role::Primary,
             radius: Radius::Field,
-            scale: 2,
+            style: TextStyle::built_in(16),
         }
     }
 
@@ -61,10 +61,22 @@ impl<M> Button<M> {
         self
     }
 
-    /// Sets the integer glyph scale.
-    pub fn with_scale(mut self, scale: i32) -> Self {
-        self.scale = scale.max(1);
+    /// Sets the font and size.
+    pub fn with_style(mut self, style: TextStyle) -> Self {
+        self.style = style;
         self
+    }
+
+    /// Sets the size, keeping the font.
+    pub fn with_size(mut self, size_px: u16) -> Self {
+        self.style.size_px = size_px;
+        self
+    }
+
+    /// The font and size the label draws in.
+    #[inline]
+    pub const fn style(&self) -> TextStyle {
+        self.style
     }
 
     /// The current label.
@@ -84,13 +96,18 @@ impl<M> Button<M> {
     }
 
     /// Width this button needs for its label plus comfortable padding.
-    pub fn preferred_width(&self) -> i32 {
-        font::BUILT_IN.line_width(&self.label, self.scale) + font::ADVANCE * self.scale * 2
+    ///
+    /// Takes the engine because with a proportional font the answer is not the
+    /// character count times anything, and guessing is how a button ends up one
+    /// letter too narrow in the language it was not tested in.
+    pub fn preferred_width(&self, engine: &mut denise_text::TextEngine) -> i32 {
+        let text = engine.measure_line(self.style, &self.label);
+        text + i32::from(self.style.size_px) * 3 / 2
     }
 }
 
 impl<M: Clone + 'static> Widget<M> for Button<M> {
-    fn paint(&self, ctx: &PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let (background, content) = interactive_pair(ctx.theme, self.role, ctx.state);
         canvas.fill_rounded_rect(ctx.bounds, radius, background);
@@ -99,10 +116,10 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         }
         draw_aligned(
             canvas,
+            ctx.text,
+            self.style,
             ctx.bounds,
-            Align::Center,
-            Align::Center,
-            self.scale,
+            (Align::Center, Align::Center),
             &self.label,
             content,
         );

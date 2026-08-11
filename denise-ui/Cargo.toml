@@ -12,12 +12,19 @@ homepage.workspace = true
 
 [features]
 default = ["std"]
-std = ["denise/std", "denise-render/std"]
+std = ["denise/std", "denise-render/std", "denise-text/std"]
+# Passed through so an application picks its text tier once, on `denise-ui`.
+truetype = ["denise-text/truetype"]
+shaping = ["denise-text/shaping"]
 
 [dependencies]
 denise = { workspace = true }
 denise-render = { workspace = true }
+denise-text = { workspace = true }
 slotmap = { workspace = true }
+
+[dev-dependencies]
+denise-text = { workspace = true, features = ["std"] }
 
 [lints.rust]
 unsafe_code = "forbid"

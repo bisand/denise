@@ -9,6 +9,7 @@ use denise::{
     Point, Rect, Role, Size, Surface, SurfaceError, Theme,
 };
 use denise_render::Canvas;
+use denise_text::{FontId, GlyphSource, TextEngine};
 use slotmap::SlotMap;
 
 use crate::cursor::{Cursor, CursorImage};
@@ -52,6 +53,7 @@ pub struct Ui<M: 'static> {
     order_dirty: bool,
     size: Size,
     theme: Theme,
+    text: TextEngine,
     damage: DamageTracker,
     pointer: Point,
     hovered: Option<NodeId>,
@@ -76,6 +78,7 @@ impl<M: 'static> Ui<M> {
             order_dirty: true,
             size,
             theme,
+            text: TextEngine::new(),
             damage: DamageTracker::new(size),
             pointer: Point::ZERO,
             hovered: None,
@@ -105,6 +108,30 @@ impl<M: 'static> Ui<M> {
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
         self.damage.add_full();
+    }
+
+    /// Fonts and the glyph cache.
+    #[inline]
+    pub const fn text(&self) -> &TextEngine {
+        &self.text
+    }
+
+    /// Fonts and the glyph cache, mutably. Measuring fills the cache, so this is
+    /// how an application asks how wide a string will be before laying it out.
+    #[inline]
+    pub const fn text_mut(&mut self) -> &mut TextEngine {
+        &mut self.text
+    }
+
+    /// Registers a font and returns its id.
+    ///
+    /// The built-in bitmap font is always registered as `FontId(0)`, so a widget
+    /// that names no font has one regardless of what else was loaded. Everything
+    /// on screen may change width, so this damages the whole surface.
+    pub fn add_font(&mut self, source: alloc::boxed::Box<dyn GlyphSource>) -> FontId {
+        let id = self.text.add_font(source);
+        self.damage.add_full();
+        id
     }
 
     /// The cursor sprite.
@@ -510,14 +537,15 @@ impl<M: 'static> Ui<M> {
                     if !node.paintable() || !node.clip.intersects(region) {
                         continue;
                     }
-                    let ctx = PaintCtx {
+                    let mut ctx = PaintCtx {
                         theme: &self.theme,
+                        text: &mut self.text,
                         bounds: node.bounds,
                         state: node.state,
                         now_ms: self.now_ms,
                     };
                     let mut widget_canvas = region_canvas.with_clip(node.clip);
-                    node.widget.paint(&ctx, &mut widget_canvas);
+                    node.widget.paint(&mut ctx, &mut widget_canvas);
                 }
                 start = end;
             }
@@ -682,6 +710,7 @@ impl<M: 'static> Ui<M> {
         let mut ctx = EventCtx::new(
             node.bounds,
             &self.theme,
+            &mut self.text,
             node.state,
             self.now_ms,
             &mut self.messages,
@@ -938,6 +967,7 @@ impl<M: 'static> core::fmt::Debug for Ui<M> {
             .field("scenes", &self.scenes.len())
             .field("size", &self.size)
             .field("theme", &self.theme.name)
+            .field("glyphs", &self.text.atlas().len())
             .field("focused", &self.focused)
             .field("hovered", &self.hovered)
             .finish_non_exhaustive()

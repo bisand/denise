@@ -102,7 +102,7 @@ mod app {
 
             ui.add(
                 card,
-                Label::new("Operator sign-in").with_scale(3),
+                Label::new("Operator sign-in").with_size(24),
                 Rect::new(pad, y, inner, 30),
             )
             .expect("title");
@@ -223,7 +223,7 @@ mod app {
                 .add(
                     dialog,
                     Label::new("Lagre endringer?")
-                        .with_scale(3)
+                        .with_size(24)
                         .with_align(Align::Center, Align::Center),
                     Rect::new(20, 20, w - 40, 30),
                 )

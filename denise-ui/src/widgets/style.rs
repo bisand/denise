@@ -3,7 +3,7 @@
 use denise::theme::{AA_LARGE, derive_content};
 use denise::{Color, Point, Rect, Role, Size, Theme};
 use denise_render::Canvas;
-use denise_render::font::{self, BitmapFont};
+use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::VisualState;
 
@@ -81,22 +81,25 @@ pub(crate) fn focus_ring(theme: &Theme, bounds: Rect, radius: i32, canvas: &mut 
 }
 
 /// Draws `text` inside `bounds` with the given alignment, and returns its extent.
+///
+/// Measurement goes through the engine, so the box a widget centres in is the box
+/// the glyphs actually occupy — including with a proportional font, where the
+/// answer is not the character count times anything.
 pub(crate) fn draw_aligned(
     canvas: &mut Canvas<'_>,
+    engine: &mut TextEngine,
+    style: TextStyle,
     bounds: Rect,
-    horizontal: Align,
-    vertical: Align,
-    scale: i32,
+    align: (Align, Align),
     text: &str,
     color: Color,
 ) -> Size {
-    let font: &BitmapFont = &font::BUILT_IN;
-    let extent = font.measure(text, scale);
+    let extent = engine.measure(style, text);
     let at = Point::new(
-        bounds.x + horizontal.offset(bounds.width, extent.width as i32),
-        bounds.y + vertical.offset(bounds.height, extent.height as i32),
+        bounds.x + align.0.offset(bounds.width, extent.width as i32),
+        bounds.y + align.1.offset(bounds.height, extent.height as i32),
     );
-    canvas.draw_text(font, at, scale, text, color);
+    engine.draw(canvas, style, at, text, color);
     extent
 }
 
