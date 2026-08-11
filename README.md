@@ -523,6 +523,15 @@ Three things fell out of doing it three times:
   to stay off — and it did not, because the tree revealed it on every pointer move.
   `Ui::show_cursor` is now a decision that sticks.
 
+The Windows CI job caught the first thing it was pointed at: two virtual key codes
+naming the same position, because the unsided `VK_CONTROL` deliberately aliases
+`VK_LCONTROL` and the test excluded only the shift case. The mapping was right; the
+test's exclusion was too narrow. The fix worth having was not the one-line one —
+`denise-win32`'s keymap is now platform-independent and its tests run everywhere,
+the same split `denise-drm` and `denise-evdev` already made. A table of a hundred
+numbers is exactly the thing that breaks, and a CI runner is a slow place to find
+out.
+
 ### The header is the contract
 
 `denise-ffi`'s header is written by hand and the Rust is checked against it, not
@@ -646,9 +655,9 @@ Still outstanding, and deliberately not hidden:
 
 - **The ActiveX COM object is not written.** See above.
 - **`denise-win32` has never run.** It compiles for `x86_64-pc-windows-msvc` and
-  its unit tests pass on a Windows runner. The parts most likely to be wrong are
-  the ones no compiler checks: message ordering, focus behaviour inside a dialog,
-  and DPI changes.
+  its unit tests pass on a Windows runner; its keymap is platform-independent and
+  tested everywhere. The parts most likely to be wrong are the ones no compiler
+  checks: message ordering, focus behaviour inside a dialog, and DPI changes.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.

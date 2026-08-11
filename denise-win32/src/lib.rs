@@ -24,6 +24,15 @@
 //!   stays off: `Ui::show_cursor(false)`, which since M5 is a decision that sticks
 //!   rather than one the next mouse move overrides.
 //!
+//! # Testing
+//!
+//! [`keymap`] is platform-independent and its tests run everywhere. That is not
+//! tidiness: it is a table of a hundred numbers, it is the part that breaks, and
+//! discovering that on a CI runner rather than locally is a slow way to discover
+//! it — which is exactly what happened the first time. Only the window and the
+//! DIB section are gated to Windows, the same split `denise-drm` and
+//! `denise-evdev` make.
+//!
 //! # Status
 //!
 //! Written against the documentation and compile-checked for
@@ -31,17 +40,27 @@
 //! be wrong are the ones no compiler checks: message ordering, focus behaviour
 //! inside a dialog, and DPI changes. See the README.
 
-#![cfg(windows)]
+// `keymap` is deliberately outside the gate: it is a table of a hundred numbers
+// mapping `u16` to `KeyCode`, which is exactly the sort of thing that goes wrong
+// and exactly the sort of thing that should not need a Windows machine to test.
+// Only the window and the DIB section are platform code. The same split
+// `denise-drm` and `denise-evdev` make, for the same reason.
+pub mod keymap;
 
+#[cfg(windows)]
 mod control;
-mod keymap;
+#[cfg(windows)]
 mod surface;
 
-pub use control::{ControlDelegate, DeniseControl};
 pub use keymap::key_code;
+
+#[cfg(windows)]
+pub use control::{ControlDelegate, DeniseControl};
+#[cfg(windows)]
 pub use surface::DibSurface;
 
 /// Failures from this backend.
+#[cfg(windows)]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A surface was asked for with no pixels in it.

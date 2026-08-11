@@ -10,11 +10,13 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+# `keymap` is platform-independent so it can be tested without Windows; only the
+# window and the DIB section are gated. As in denise-drm and denise-evdev.
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-thiserror = { workspace = true, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
+thiserror = { workspace = true, features = ["std"] }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
