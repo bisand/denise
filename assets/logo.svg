@@ -18,20 +18,6 @@
   <!-- base-100 -->
   <rect x="0" y="0" width="256" height="256" rx="56" fill="#1E1E2E"/>
 
-  <!-- A video signal, scanned out one line at a time. -->
-  <g clip-path="url(#panel)" opacity="0.09">
-    <g fill="#CDD6F4">
-      <rect x="0" y="8" width="256" height="2"/><rect x="0" y="24" width="256" height="2"/>
-      <rect x="0" y="40" width="256" height="2"/><rect x="0" y="56" width="256" height="2"/>
-      <rect x="0" y="72" width="256" height="2"/><rect x="0" y="88" width="256" height="2"/>
-      <rect x="0" y="104" width="256" height="2"/><rect x="0" y="120" width="256" height="2"/>
-      <rect x="0" y="136" width="256" height="2"/><rect x="0" y="152" width="256" height="2"/>
-      <rect x="0" y="168" width="256" height="2"/><rect x="0" y="184" width="256" height="2"/>
-      <rect x="0" y="200" width="256" height="2"/><rect x="0" y="216" width="256" height="2"/>
-      <rect x="0" y="232" width="256" height="2"/><rect x="0" y="248" width="256" height="2"/>
-    </g>
-  </g>
-
   <!-- Three bitplanes, offset and translucent, so the overlaps show the
        compositing rather than merely implying it. Accent, secondary, primary. -->
   <g clip-path="url(#panel)">
