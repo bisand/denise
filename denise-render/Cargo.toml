@@ -1,0 +1,22 @@
+[package]
+name = "denise-render"
+description = "Software rasteriser for Denise: rectangles, rounded rectangles, lines and alpha blending."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["std"]
+std = ["denise/std"]
+
+[dependencies]
+denise = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
