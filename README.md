@@ -11,7 +11,7 @@ environment.**
 [![CI](https://github.com/bisand/denise/actions/workflows/ci.yml/badge.svg)](https://github.com/bisand/denise/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-MIT-89B4FA)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.95-F9E2AF)](#constraints)
-[![Milestone](https://img.shields.io/badge/milestone-M4-F5C2E7)](#milestones)
+[![Milestone](https://img.shields.io/badge/milestone-M5-F5C2E7)](#milestones)
 [![Core](https://img.shields.io/badge/core-forbid(unsafe__code)-A6E3A1)](#constraints)
 [![Targets](https://img.shields.io/badge/targets-aarch64_%7C_armv7_%7C_x86__64-94E2D5)](#constraints)
 
@@ -28,14 +28,13 @@ architecture: scene stack, z-index layering, dirty-rectangle tracking, composite
 cursor sprite, 60 FPS at under 5% CPU on a Pi 4. Denise keeps the design and drops
 the runtime.
 
-## Status: M4
+## Status: M5
 
 Denise drives a real display with no desktop environment, has a user interface to
-put on it, and now has text: a keyboard that types `æøå` including dead keys, a
-bounded glyph cache, and three font tiers you choose between by cost. Underneath,
-DRM/KMS scanout with async page flips, an fbdev fallback, evdev input, damage
-tracking and theming — verified on a Raspberry Pi 3 A+ driving a 1920×1080 output
-with no X.
+put on it, text that types `æøå` including dead keys, and — since M5 — a way to
+embed all of it in somebody else's application. Underneath, DRM/KMS scanout with
+async page flips, an fbdev fallback, evdev input, damage tracking and theming —
+verified on a Raspberry Pi 3 A+ driving a 1920×1080 output with no X.
 
 <img src="assets/showcase.png" width="620"
      alt="A panel of themed buttons, text fields and a modal dialog over a dimmed backdrop">
@@ -128,13 +127,16 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |
 | `denise-drm` | Linux DRM/KMS backend — the primary target | ✅ M2 |
 | `denise-fbdev` | Linux fbdev fallback | ✅ M2 |
-| `denise-evdev` | Linux input, keyboard layouts and dead keys | ✅ M2, M4 |
-| `denise-ffi` | Stable C ABI, `cdylib` | M5 |
-| `denise-win32` | Windows child-HWND control | M5 |
-| `denise-macos` | Layer-backed `NSView` | M5 |
-| `denise-activex` | COM/ActiveX shim for legacy Windows hosts | M5 |
+| `denise-evdev` | Linux input, keyboard layouts, dead keys, console muting | ✅ M2, M4, M5 |
+| `denise-ffi` | Stable C ABI, `cdylib`, hand-written header | ✅ M5 |
+| `denise-macos` | Embeddable `NSView` over a CoreGraphics bitmap context | ✅ M5 |
+| `denise-win32` | Windows child-`HWND` control over a DIB section | ⚠️ M5, unrun |
+| `denise-activex` | COM/ActiveX shim for legacy Windows hosts | ◐ M5, registration only |
 
-Everything through M4 exists. The rest are listed so the shape of the thing is clear.
+Everything through M4 has run on hardware. `denise-win32` compiles and its tests
+pass on a Windows runner; nothing has hosted it in a real application yet.
+`denise-activex` has its registration table and not its COM object — see
+[Milestones](#milestones) for why that is where it stopped.
 
 `denise-ui` is a crate of its own rather than part of the core because widgets
 need both the platform contract and the rasteriser, and the rasteriser already
@@ -489,6 +491,54 @@ Two things make this safe to ship rather than a footgun:
 the keyboard, and nothing restores it after `SIGKILL`. The escape hatch, over SSH,
 is `kbd_mode -u -C /dev/tty1`.
 
+## Embedding
+
+M5 is the other direction. Everything before it is Denise owning the display; this
+is Denise owning one rectangle inside an application that already exists — an MFC
+dialog, a Cocoa window, a C or C# or Python host.
+
+The shape is the same in all of them, and it is the one thing worth getting right:
+**the host owns the window, the event loop and the pixel buffer; Denise owns the
+widget tree and draws into whatever it is handed.** There is no `run` function in
+any of these backends, and no `Surface` in the C ABI. A library that owned either
+would be unembeddable in exactly the places this exists for.
+
+| | Backing store | Present | Verified |
+|---|---|---|---|
+| `denise-ffi` | the caller's, described by `DeniseFrame` | the caller's problem | C and C++ example built and run in CI |
+| `denise-macos` | `CGBitmapContext`, CoreGraphics owns the pixels | `setNeedsDisplayInRect:` then `CGContextDrawImage` | rendered through AppKit's own `cacheDisplayInRect:` |
+| `denise-win32` | 32-bit top-down DIB section | `InvalidateRect` then `BitBlt` | compiles, unit tests pass on a Windows runner |
+
+Three things fell out of doing it three times:
+
+- **Damage means different things.** On DRM a page flip swaps whole buffers, so
+  damage saves rasterisation and no bandwidth. On Win32 and on AppKit it saves
+  both — `BitBlt` moves only what it is given. The same rectangles, worth
+  measurably more.
+- **Row zero is not agreed on.** A `CGImage` is bottom-up; a DIB section is
+  bottom-up unless you ask for a negative height; Denise's row zero is the top.
+  Neither platform reports a mistake here. It renders upside down and looks like
+  somebody laid the widgets out wrong.
+- **There is already a cursor.** Both hosts draw one, so the composited sprite has
+  to stay off — and it did not, because the tree revealed it on every pointer move.
+  `Ui::show_cursor` is now a decision that sticks.
+
+### The header is the contract
+
+`denise-ffi`'s header is written by hand and the Rust is checked against it, not
+generated from it. A generated header follows whatever the implementation says this
+week, which is the opposite of what a stable ABI means.
+
+[`tests/header.rs`](denise-ffi/tests/header.rs) does the checking, and it earns its
+keep on the parts a linker cannot. A missing declaration is a link error the first
+time anybody tries. A key number that differs between the two sides is not: the
+host presses Enter, the field receives Home, and nothing anywhere says so.
+
+The numbering is not arbitrary either. A key position is *named* after the US
+layout, so positions carrying an ASCII character there are numbered with it —
+`DENISE_KEY_A` is `0x41`, `DENISE_KEY_SEMICOLON` is `0x3B`. Half the table needs no
+lookup and a key log is readable in hex.
+
 ## Theming
 
 The role vocabulary is borrowed from [daisyUI](https://daisyui.com), which got the
@@ -537,6 +587,10 @@ somebody paid for.
   coalescing degrades to a bounding box rather than allocating.
 - The core builds `no_std + alloc` — `denise`, `denise-render`, `denise-text` and
   `denise-ui` all of them. `--no-default-features` is checked in CI.
+- CI builds the C ABI's example with a C compiler and runs it, and compiles the
+  header as C++ as well — `extern "C"` is only load-bearing if somebody does. A
+  Windows runner builds `denise-win32` and runs its tests, because it is the only
+  machine that can.
 - CI cross-compiles the core to `aarch64-unknown-linux-gnu` and
   `armv7-unknown-linux-gnueabihf`, and asserts the core's dependency tree contains
   no platform crates — `denise`, `denise-render` and `denise-ui` all held to it.
@@ -553,7 +607,7 @@ somebody paid for.
 | **M2** | DRM/KMS with legacy modesetting and page flip; fbdev fallback; evdev input. Runs with no X. | ✅ |
 | **M3** | Scene stack, z-index, modal dialogs, cursor sprite. Label, Button, TextInput. CoreCanvas 0.4 parity. | ✅ |
 | **M4** | Text: three font tiers behind feature flags, a bounded glyph atlas, keyboard layouts with dead keys. | ✅ |
-| **M5** | C ABI, Windows child-HWND control, ActiveX shim, macOS `NSView`. | |
+| **M5** | C ABI, macOS `NSView`, Windows child-HWND control. ActiveX shim: registration only. | ◐ |
 
 M2 does not start until M1 is benchmarked. M5 does not start until the Pi story is
 solid — that is the entire point of the project.
@@ -575,8 +629,26 @@ M4 also added a tier the bootstrap did not name. It listed `cosmic-text` and
 `fontdue`; measuring them showed 3.1 MB against 145 KB, and a middle tier with
 real fonts but no shaper is what most panels actually want.
 
+M5 was gated on the Pi story being solid, which it was not quite: the console
+keyboard was still unmuted, so every character typed into a Denise text field was
+also typed at the login shell behind it. That is fixed first — `Console` in
+`denise-evdev`, restoring on drop — and then the milestone starts.
+
+**M5's ActiveX shim stops at registration.** The registry table is there and
+tested; the COM object is not. It would sit entirely on top of `denise-win32`,
+which has itself never run on Windows, and nothing available here can check it
+beyond "it compiles" — a long way from "a VB6 form can host it". A thousand lines
+of unverifiable COM stacked on an unverified control produces something that looks
+finished and is not. The right order is: run the control on Windows, then write the
+shim against a host that can load it.
+
 Still outstanding, and deliberately not hidden:
 
+- **The ActiveX COM object is not written.** See above.
+- **`denise-win32` has never run.** It compiles for `x86_64-pc-windows-msvc` and
+  its unit tests pass on a Windows runner. The parts most likely to be wrong are
+  the ones no compiler checks: message ordering, focus behaviour inside a dialog,
+  and DPI changes.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.
@@ -600,6 +672,19 @@ cargo run -p hello-rect
 cargo run -p denise-ui --example showcase -- dark showcase.ppm   # no display needed
 cargo run -p denise-text --example specimen -- specimen.ppm      # ditto, for fonts
 ```
+
+The embedding backends, each on its own platform:
+
+```bash
+cargo build -p denise-ffi --release && make -C denise-ffi/examples run
+cargo run -p denise-macos --example embed                        # a real window
+cargo run -p denise-macos --example embed -- snapshot out.ppm    # no window server
+cargo run -p denise-win32 --example embed
+```
+
+The macOS snapshot renders through AppKit's own `cacheDisplayInRect:`, so
+`drawRect:`, `isFlipped` and the blit all really run — which makes the whole draw
+path reviewable over SSH.
 
 The text tiers are off by default, so `--all-features` is the only build that sees
 them together and the plain build is the only one that sees neither. CI runs both,
