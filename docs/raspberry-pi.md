@@ -118,6 +118,41 @@ That difference matters when you are testing: **a VM cannot tell you anything
 about frame pacing.** Correctness, mode selection, buffer ages and input all check
 out in a VM. Timing does not.
 
+## Async page flips: keep KMS, drop the vblank wait
+
+vc4 advertises `DRM_CAP_ASYNC_PAGE_FLIP`, so Denise can flip **immediately**
+instead of at the next vblank. That removes the latency described below while
+keeping everything KMS gives you — proper mode setting, real buffer ages, a
+restored console on exit. It is [`PresentMode::Immediate`], and it is the default.
+
+```bash
+cargo run -p kiosk               # immediate: the default
+cargo run -p kiosk -- 20 250 vsync   # tear-free, for comparison
+```
+
+On the test machine `immediate` felt clearly better than `vsync` and about the
+same as the old tearing fbdev path, which is the point: the latency was the vblank
+wait, not anything in the software.
+
+The cost is a horizontal seam where the panel switched buffers mid-scan. With
+damage tracking a typical update is a few thousand pixels, so the seam is small
+and brief. Reconsider for signage or large fast-moving content.
+
+Drivers without the capability fall back to vsync silently;
+`DrmSurface::present_mode` reports what was actually obtained, so log it rather
+than assume.
+
+### Immediate mode does not pace your loop
+
+Under vsync, `acquire` blocks until the previous flip retires, so
+`loop { acquire; draw; present }` runs at exactly the refresh rate for free.
+Under immediate, **nothing waits**, and that same loop will use a whole core
+drawing frames nobody sees.
+
+Draw only when something changed — damage tracking makes that natural — or keep a
+frame deadline of your own. `examples/kiosk` does both. This is not a defect in
+async flips; it is what removing the wait means.
+
 ## Tear-free costs latency, and it is not subtle
 
 Measured on the same machine, same demo, same movements, with a Logitech K400:
@@ -128,17 +163,13 @@ Measured on the same machine, same demo, same movements, with a Logitech K400:
 | input → pixels in buffer | 0.17 ms | 16.64 ms |
 | tearing | yes | none |
 
-The DRM path was **visibly draggier** to the person operating it. That is not a
-defect: a flip queued after a vblank cannot land before the next one, so
+The vsync DRM path was **visibly draggier** to the person operating it. That is
+not a defect: a flip queued after a vblank cannot land before the next one, so
 double-buffered tear-free presentation costs on the order of one refresh period.
 Every system that does this pays it.
 
-Two consequences worth knowing before choosing a backend:
-
-- For a **touch panel** where responsiveness dominates, fbdev's tearing may be the
-  better trade. Tearing is least visible on small, slow-moving UI changes, which is
-  most of what a control panel does.
-- For **signage or anything with large moving content**, tear-free wins easily.
+Which is why [`PresentMode::Immediate`] is the default — it keeps KMS and drops
+the wait. Choose `Vsync` deliberately, for content where a seam would show.
 
 ### Read input *after* waiting for the display
 

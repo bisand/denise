@@ -4,7 +4,7 @@
 //! tracking, the theme — on a machine with no desktop environment.
 //!
 //! ```text
-//! /tmp/kiosk [seconds] [frame-cap-hz]
+//! /tmp/kiosk [seconds] [frame-cap-hz] [vsync]
 //! ```
 //!
 //! Move the pointer, click, press `T` for the next theme, `Escape` or `Q` to quit.
@@ -37,7 +37,7 @@ mod app {
         Color, DamageTracker, ElementState, InputEvent, InputSource, KeyCode, MAX_DAMAGE_RECTS,
         Modifiers, Point, Radius, Rect, Role, Size, Surface, Theme,
     };
-    use denise_drm::{DrmSurface, SurfaceConfig};
+    use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
     use denise_evdev::InputBackend;
     use denise_fbdev::FbdevSurface;
     use denise_render::Canvas;
@@ -263,16 +263,38 @@ mod app {
             .clamp(10, 1000);
         let frame = Duration::from_micros(1_000_000 / hz);
 
+        // "immediate" asks for async page flips: no wait for vblank, at the cost
+        // of a tear. Which way this should go depends on the product, so it is a
+        // choice rather than a default.
+        let requested = match std::env::args().nth(3).as_deref() {
+            Some("vsync") | Some("tearfree") => PresentMode::Vsync,
+            _ => PresentMode::Immediate,
+        };
+
         // DRM first, because it page-flips and knows about vblank. fbdev is not a
         // lesser configuration of the same thing: on a Pi with no vc4-kms-v3d
         // overlay it is the only display there is.
-        let mut surface: Box<dyn Surface> = match DrmSurface::open(SurfaceConfig::default()) {
+        let config = SurfaceConfig {
+            present_mode: requested,
+            ..SurfaceConfig::default()
+        };
+        let mut surface: Box<dyn Surface> = match DrmSurface::open(config) {
             Ok(drm) => {
+                let actual = drm.present_mode();
                 eprintln!(
-                    "display DRM/KMS {} — {} buffers, tear-free, paced by vblank",
+                    "display DRM/KMS {} — {} buffers, {}",
                     drm.mode_name(),
-                    drm.buffer_count()
+                    drm.buffer_count(),
+                    match actual {
+                        PresentMode::Vsync => "vsync: tear-free, paced by vblank",
+                        PresentMode::Immediate => "immediate: async flips, tears, no vblank wait",
+                    }
                 );
+                if requested == PresentMode::Immediate && actual == PresentMode::Vsync {
+                    eprintln!(
+                        "        asked for immediate, but the driver has no DRM_CAP_ASYNC_PAGE_FLIP"
+                    );
+                }
                 Box::new(drm)
             }
             Err(drm_error) => match FbdevSurface::open_first() {

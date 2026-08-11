@@ -1,6 +1,8 @@
 //! The scanout surface: dumb buffers, modeset, and page flips.
 
 use denise::{Frame, PixelFormat, Rect, Size, Surface, SurfaceError};
+use drm::Device as _;
+use drm::DriverCapability;
 use drm::buffer::Buffer as _;
 use drm::control::{
     Device as ControlDevice, Event, Mode, PageFlipFlags, connector, crtc, dumbbuffer::DumbBuffer,
@@ -18,6 +20,46 @@ const BPP: u32 = 32;
 /// Colour depth, excluding the ignored high byte.
 const DEPTH: u32 = 24;
 
+/// When a queued flip actually reaches the panel.
+///
+/// A real trade, not a quality setting. Which way it should go depends on what is
+/// on the screen, and the default here is chosen for the kind of thing Denise is
+/// built for rather than for the kind of thing a compositor is built for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PresentMode {
+    /// Flip immediately, part-way through a scan-out if necessary. Tears.
+    ///
+    /// The default, and measured on a Pi 3 A+ driving 1920x1080 the reason is
+    /// plain: waiting for vblank costs about 17 ms of latency and was described by
+    /// the person operating it as lagging several milliseconds behind the whole
+    /// time. Flipping immediately removes that wait entirely.
+    ///
+    /// The cost is a horizontal seam where the panel switched buffers mid-frame.
+    /// With damage tracking most updates are a few thousand pixels, so the seam is
+    /// small, brief and in practice invisible — a control panel redrawing a button
+    /// is nothing like a compositor scrolling a window.
+    ///
+    /// Reconsider for signage or anything with large fast-moving content, where a
+    /// tear crosses something worth looking at. Requires `DRM_CAP_ASYNC_PAGE_FLIP`;
+    /// drivers without it fall back to [`PresentMode::Vsync`], and
+    /// [`DrmSurface::present_mode`] reports what was actually obtained.
+    ///
+    /// **This mode does not pace the caller.** See [`DrmSurface`].
+    #[default]
+    Immediate,
+
+    /// Flip at the next vblank. Never tears.
+    ///
+    /// A flip queued just after a vblank cannot land before the next one, so this
+    /// costs on the order of one refresh period — about 17 ms at 60 Hz. Every
+    /// tear-free system pays it.
+    ///
+    /// In exchange, [`Surface::acquire`] blocks until the flip retires, so the
+    /// display paces the render loop for free and an application needs no frame
+    /// timing of its own.
+    Vsync,
+}
+
 /// How to bring the display up.
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceConfig {
@@ -30,6 +72,9 @@ pub struct SurfaceConfig {
     /// Two by default. Three trades latency for smoothness, which is the wrong
     /// trade for a panel someone is touching.
     pub buffers: usize,
+
+    /// Whether to wait for vblank before showing a frame.
+    pub present_mode: PresentMode,
 }
 
 impl Default for SurfaceConfig {
@@ -38,6 +83,7 @@ impl Default for SurfaceConfig {
             output: OutputPreference::Auto,
             mode: ModePreference::Preferred,
             buffers: 2,
+            present_mode: PresentMode::Vsync,
         }
     }
 }
@@ -115,6 +161,20 @@ impl Scanout {
 /// Takes DRM master on construction and gives it back on drop, restoring whatever
 /// the CRTC was showing before. A clean exit and a panic both hand the console
 /// back, rather than leaving a black screen that needs a power cycle.
+///
+/// # Pacing is the caller's job under [`PresentMode::Immediate`]
+///
+/// Under [`PresentMode::Vsync`], [`acquire`](Surface::acquire) blocks until the
+/// previous flip retires, so a bare `loop { acquire; draw; present }` runs at
+/// exactly the refresh rate and costs nothing extra.
+///
+/// Under [`PresentMode::Immediate`] — the default — nothing waits. The same loop
+/// runs as fast as the CPU allows and will happily use a whole core drawing
+/// frames no one will ever see. An application must either draw only when
+/// something changed, which damage tracking makes natural, or keep a frame
+/// deadline of its own. `examples/kiosk` does both.
+///
+/// This is not a flaw in async flips; it is what removing the wait means.
 #[derive(Debug)]
 pub struct DrmSurface {
     card: Card,
@@ -127,6 +187,9 @@ pub struct DrmSurface {
     stride: u32,
     /// A flip has been queued and its completion event not yet read.
     flip_pending: bool,
+    /// The mode actually in force, after checking what the driver supports.
+    present_mode: PresentMode,
+    flip_flags: PageFlipFlags,
     saved_crtc: Option<crtc::Info>,
     mode_name: String,
 }
@@ -165,6 +228,22 @@ impl DrmSurface {
             return Err(DrmError::UnalignedPitch { pitch });
         }
 
+        // Ask the driver rather than assume. Requesting an async flip on hardware
+        // that cannot do one fails the ioctl every frame, which would turn a
+        // latency preference into a display that never updates.
+        let async_capable = card
+            .get_driver_capability(DriverCapability::ASyncPageFlip)
+            .is_ok_and(|supported| supported != 0);
+
+        let present_mode = match config.present_mode {
+            PresentMode::Immediate if async_capable => PresentMode::Immediate,
+            _ => PresentMode::Vsync,
+        };
+        let flip_flags = match present_mode {
+            PresentMode::Vsync => PageFlipFlags::EVENT,
+            PresentMode::Immediate => PageFlipFlags::EVENT | PageFlipFlags::ASYNC,
+        };
+
         card.set_crtc(crtc, Some(buffers[0].fb), (0, 0), &[connector], Some(mode))
             .map_err(|source| DrmError::SetMode {
                 mode: format!("{width}x{height}"),
@@ -186,6 +265,8 @@ impl DrmSurface {
             size,
             stride: pitch / 4,
             flip_pending: false,
+            present_mode,
+            flip_flags,
             saved_crtc,
             mode_name: format!("{width}x{height}@{}", mode.vrefresh()),
         })
@@ -209,6 +290,14 @@ impl DrmSurface {
     /// Number of buffers in rotation.
     pub fn buffer_count(&self) -> usize {
         self.buffers.len()
+    }
+
+    /// The presentation mode actually in force.
+    ///
+    /// May be [`PresentMode::Vsync`] even when [`PresentMode::Immediate`] was
+    /// asked for, if the driver does not advertise `DRM_CAP_ASYNC_PAGE_FLIP`.
+    pub fn present_mode(&self) -> PresentMode {
+        self.present_mode
     }
 
     /// Blocks until any queued flip has actually happened.
@@ -286,7 +375,7 @@ impl Surface for DrmSurface {
         let fb = self.buffers[index].fb;
 
         self.card
-            .page_flip(self.crtc, fb, PageFlipFlags::EVENT, None)
+            .page_flip(self.crtc, fb, self.flip_flags, None)
             .map_err(DrmError::PageFlip)?;
 
         self.flip_pending = true;

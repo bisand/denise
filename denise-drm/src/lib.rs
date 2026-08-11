@@ -61,4 +61,4 @@ pub use device::Card;
 #[cfg(target_os = "linux")]
 pub use error::DrmError;
 #[cfg(target_os = "linux")]
-pub use surface::{DrmSurface, SurfaceConfig};
+pub use surface::{DrmSurface, PresentMode, SurfaceConfig};

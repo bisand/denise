@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use denise::{
         Color, DamageTracker, MAX_DAMAGE_RECTS, Radius, Rect, Role, Surface, Theme, theme,
     };
-    use denise_drm::{DrmSurface, SurfaceConfig};
+    use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
     use denise_render::Canvas;
 
     let seconds: u64 = std::env::args()
@@ -24,7 +24,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(6)
         .clamp(1, 60);
 
-    let mut surface = DrmSurface::open(SurfaceConfig::default())?;
+    // Explicitly vsync: this loop has no frame timing of its own, and the frame
+    // rate it reports is the measurement. Under the default immediate mode
+    // nothing would pace it and it would spin.
+    let mut surface = DrmSurface::open(SurfaceConfig {
+        present_mode: PresentMode::Vsync,
+        ..SurfaceConfig::default()
+    })?;
     let size = surface.size();
     eprintln!(
         "mode {} — {} buffers, stride {} px for {} px of width",
