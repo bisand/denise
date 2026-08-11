@@ -34,9 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use denise_render::Canvas;
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
-    /// Frame budget. The display should pace us, but a driver that retires flips
-    /// immediately — every virtualised GPU — would otherwise let this run flat out.
-    const FRAME: Duration = Duration::from_millis(16);
     const CURSOR: i32 = 28;
 
     let seconds: u64 = std::env::args()
@@ -44,6 +41,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|a| a.parse().ok())
         .unwrap_or(60)
         .clamp(1, 600);
+
+    // The shortest gap allowed between presents — a runaway guard, not a schedule.
+    //
+    // This defaulted to 60 Hz, which measured badly on real hardware. A Logitech
+    // K400 reports every 16 ms, so a 60 Hz cap runs at almost exactly the input
+    // rate: the two drift in and out of phase and an event lands at a uniformly
+    // random point in the frame window, waiting up to a full frame for nothing.
+    // Measured on a Pi 3 A+, that was 6.8 ms of median latency and 15.5 ms at p95,
+    // and it was visible as drag.
+    //
+    // Raising it does not add frames, because frames here are bound by the input
+    // rate rather than the cap: at 250 Hz the observed interval stayed at 16 ms,
+    // one present per event, and median latency fell to 0.16 ms. So the cap is set
+    // far above any input rate and does nothing until something goes wrong.
+    //
+    // The caveat is animation. This scene only changes when input arrives, so
+    // input-bound and damage-bound are the same thing. A scene that animates on its
+    // own damages something every iteration and would run at the cap, so it needs
+    // to pace itself rather than lean on this.
+    let hz: u64 = std::env::args()
+        .nth(2)
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(250)
+        .clamp(10, 1000);
+    let frame = Duration::from_micros(1_000_000 / hz);
 
     // DRM first, because it is the one that page-flips and knows about vblank.
     // fbdev is not a lesser configuration of the same thing: on a Pi with no
@@ -76,6 +98,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for device in input.devices() {
         eprintln!("input   {}: {}", device.capabilities(), device.name());
     }
+    eprintln!(
+        "present no more often than every {:.1} ms ({hz} Hz cap)",
+        frame.as_secs_f64() * 1000.0
+    );
     eprintln!("\npointer to move, click, T for theme, Escape or Q to quit\n");
 
     // Built once: the device set does not change, and `poll` updates each entry's
@@ -116,6 +142,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut quit = false;
     let started = Instant::now();
 
+    // Latency accounting. "Drag" can mean two very different things — the frame
+    // arriving late, or the pointer travelling too little per unit of hand
+    // movement — and they have opposite fixes, so measure rather than guess.
+    let mut render_us: Vec<u32> = Vec::new();
+    let mut latency_us: Vec<u32> = Vec::new();
+    let mut interval_us: Vec<u32> = Vec::new();
+    let mut motion_events = 0u64;
+    let mut motion_pixels = 0i64;
+    // When the input that this frame will show first arrived.
+    let mut dirty_since: Option<Instant> = None;
+    let mut last_present: Option<Instant> = None;
+
     while !quit && Instant::now() < deadline {
         // Sleep until input arrives or the next frame is due. With nothing moving
         // there is no next frame, so this blocks outright and the process uses no
@@ -134,10 +172,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         events.clear();
         input.poll(&mut events);
+        if !events.is_empty() && dirty_since.is_none() {
+            dirty_since = Some(Instant::now());
+        }
 
         for event in &events {
             match event {
                 InputEvent::PointerMoved { position } => {
+                    motion_events += 1;
+                    motion_pixels += i64::from((position.x - cursor.x).abs())
+                        + i64::from((position.y - cursor.y).abs());
                     tracker.add(cursor_rect(cursor));
                     cursor = *position;
                     tracker.add(cursor_rect(cursor));
@@ -214,7 +258,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if Instant::now() < next_frame {
             continue;
         }
-        next_frame = Instant::now() + FRAME;
+        next_frame = Instant::now() + frame;
+        let render_start = Instant::now();
 
         let mut frame = surface.acquire()?;
         let mut regions = [Rect::ZERO; MAX_DAMAGE_RECTS];
@@ -237,6 +282,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         surface.present(damage)?;
         tracker.end_frame();
         frames += 1;
+
+        let now = Instant::now();
+        render_us.push(now.duration_since(render_start).as_micros() as u32);
+        if let Some(since) = dirty_since.take() {
+            latency_us.push(now.duration_since(since).as_micros() as u32);
+        }
+        if let Some(previous) = last_present.replace(now) {
+            interval_us.push(now.duration_since(previous).as_micros() as u32);
+        }
     }
 
     let elapsed = started.elapsed().as_secs_f64();
@@ -245,6 +299,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         frames as f64 / elapsed
     );
     eprintln!("frames only cost anything when something changed — that is the whole idea");
+
+    report("render     acquire..present", &mut render_us);
+    report("latency    input..present  ", &mut latency_us);
+    report("interval   present..present", &mut interval_us);
+
+    if motion_events > 0 {
+        eprintln!(
+            "\n{motion_events} pointer events moved {motion_pixels} px in total \
+             = {:.2} px per event",
+            motion_pixels as f64 / motion_events as f64
+        );
+        eprintln!(
+            "device reported roughly {:.0} events/s",
+            motion_events as f64 / elapsed
+        );
+    }
+
+    /// Prints the shape of a sample set. Percentiles, not a mean: a mean hides
+    /// exactly the occasional long frame that gets noticed as a stutter.
+    fn report(label: &str, samples: &mut [u32]) {
+        if samples.is_empty() {
+            return;
+        }
+        samples.sort_unstable();
+        let at = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize] as f64 / 1000.0;
+        eprintln!(
+            "{label}  n={:<5} p50 {:>6.2} ms   p95 {:>6.2} ms   max {:>6.2} ms",
+            samples.len(),
+            at(0.50),
+            at(0.95),
+            at(1.0)
+        );
+    }
 
     /// Renders held modifiers, or nothing when none are.
     fn modifier_suffix(modifiers: denise::Modifiers) -> String {
