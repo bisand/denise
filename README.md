@@ -35,6 +35,11 @@ double-buffered page flips, evdev input, damage tracking and theming, verified o
 aarch64 Linux against a live 1280×800 output. There is no scene graph, no
 component model and no text yet. See [Milestones](#milestones).
 
+On a Raspberry Pi, read [docs/raspberry-pi.md](docs/raspberry-pi.md) first — a
+stock Pi has no `/dev/dri` at all until the vc4 KMS overlay is enabled, and that
+one line decides whether you get real page flips or a tearing firmware
+framebuffer.
+
 On a Linux machine with a spare VT or a virtual GPU:
 
 ```bash
