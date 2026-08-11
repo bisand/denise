@@ -10,8 +10,13 @@ use crate::widget::VisualState;
 /// How much a hovered surface shifts towards its own content colour.
 const HOVER_MIX: u8 = 24;
 /// How much a pressed surface shifts. Larger, so press is unmistakably a
-/// different state and not just a brighter hover.
-const PRESS_MIX: u8 = 56;
+/// different state and not just a stronger hover.
+///
+/// This cannot be turned up freely: moving a background towards its own text
+/// colour costs contrast, and the light theme's `primary` pair breaks 3:1 at 72.
+/// `every_state_keeps_the_pair_readable` is what found that, and is what will
+/// find it again if a future theme has a tighter pair than today's do.
+const PRESS_MIX: u8 = 64;
 
 /// Where text sits along one axis of its box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

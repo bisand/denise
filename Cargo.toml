@@ -11,6 +11,7 @@ members = [
     "denise-winit",
     "examples/hello-rect",
     "examples/kiosk",
+    "examples/panel",
 ]
 
 [workspace.package]

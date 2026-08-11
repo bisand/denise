@@ -13,6 +13,7 @@ homepage.workspace = true
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-render = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -23,4 +24,8 @@ harness = false
 
 [[bench]]
 name = "damage"
+harness = false
+
+[[bench]]
+name = "ui"
 harness = false

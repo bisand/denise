@@ -422,6 +422,7 @@ dependencies = [
  "criterion",
  "denise",
  "denise-render",
+ "denise-ui",
 ]
 
 [[package]]
@@ -1314,6 +1315,18 @@ checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
 dependencies = [
  "libc",
  "winapi",
+]
+
+[[package]]
+name = "panel"
+version = "0.0.0"
+dependencies = [
+ "denise",
+ "denise-drm",
+ "denise-evdev",
+ "denise-fbdev",
+ "denise-ui",
+ "rustix 1.1.4",
 ]
 
 [[package]]
