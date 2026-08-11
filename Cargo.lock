@@ -483,6 +483,7 @@ version = "0.0.0"
 dependencies = [
  "denise",
  "evdev",
+ "rustix 1.1.4",
  "thiserror 2.0.20",
 ]
 

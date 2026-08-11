@@ -18,6 +18,9 @@ thiserror = { workspace = true, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = { workspace = true }
+# For the console ioctls only. KDSKBMODE is not in any safe wrapper anywhere,
+# because muting a shared kernel device is not a safe operation to expose.
+rustix = { workspace = true, features = ["std"] }
 
 [lints.rust]
 missing_docs = "warn"

@@ -34,10 +34,14 @@ pub use keymap::key_code;
 pub use translate::{AbsAxis, MAX_SLOTS, RawEvent, Translator};
 
 #[cfg(target_os = "linux")]
+pub mod console;
+#[cfg(target_os = "linux")]
 mod device;
 #[cfg(target_os = "linux")]
 mod error;
 
+#[cfg(target_os = "linux")]
+pub use console::{Console, ConsoleError};
 #[cfg(target_os = "linux")]
 pub use device::{Capabilities, InputBackend, InputDevice};
 #[cfg(target_os = "linux")]

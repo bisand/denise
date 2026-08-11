@@ -40,7 +40,7 @@ mod app {
         ElementState, InputEvent, InputSource, KeyCode, Radius, Rect, Role, Size, Surface, Theme,
     };
     use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
-    use denise_evdev::{InputBackend, layout};
+    use denise_evdev::{Console, InputBackend, layout};
     use denise_fbdev::FbdevSurface;
     use denise_ui::widgets::{Align, Button, Label, Panel, TextInput};
     use denise_ui::{NodeId, Ui};
@@ -363,6 +363,32 @@ mod app {
             eprintln!("input   {}: {}", device.capabilities(), device.name());
         }
         eprintln!("keymap  {} (from {source})", keymap.name);
+
+        // Held for the whole run: dropping it puts the console back exactly as it
+        // was. Over SSH there is no console to take, and `open_if_present` says so
+        // by returning `None` rather than by failing.
+        let _console = if std::env::var_os("DENISE_KEEP_CONSOLE").is_some() {
+            eprintln!("console left alone (DENISE_KEEP_CONSOLE)");
+            None
+        } else {
+            match Console::open_if_present() {
+                Some(mut console) => {
+                    let result = console
+                        .mute_keyboard()
+                        .and_then(|()| console.graphics_mode());
+                    match result {
+                        Ok(()) => eprintln!("console muted — restored on exit"),
+                        Err(e) => eprintln!("console found but not muted: {e}"),
+                    }
+                    Some(console)
+                }
+                None => {
+                    eprintln!("console none (over SSH, so nothing to mute)");
+                    None
+                }
+            }
+        };
+
         eprintln!("\nTab / Enter to drive it, F2 theme, F3 keyboard layout, Escape quits\n");
 
         let mut app = App::new(size);

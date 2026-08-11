@@ -464,6 +464,31 @@ Control characters are never text. Enter, Tab and Backspace produce `Key` events
 and nothing else, so a field can insert everything it receives without filtering
 and a key binding cannot be shadowed by a stray control character.
 
+### Muting the console
+
+Reading evdev does not stop anyone *else* reading it. On a console-booted kiosk
+the login shell behind the UI receives every keystroke as well, so typing into a
+Denise text field also types at the shell — and a form field that happens to
+contain `reboot` followed by Enter does what it says. Holding DRM master stops the
+console drawing; it does nothing about the keyboard.
+
+`Console::mute_keyboard` sets `KDSKBMODE` to `K_OFF`. evdev sits below the console
+layer, so Denise still sees everything and the shell sees nothing. It is paired
+with `KDSETMODE`/`KD_GRAPHICS`, which stops console blanking on an idle panel and
+stops the kernel repainting text after an oops.
+
+Two things make this safe to ship rather than a footgun:
+
+- **The guard restores on drop**, including while a panic unwinds, and it puts
+  back the mode it *read* rather than a guess at the default.
+- **A pty is refused.** `/dev/tty` over SSH is not a console, and `KDGKBTYPE` is
+  the ioctl that says so. Without that check, `open` would hand back the first
+  thing that opened and the developer's own terminal would be the one muted.
+
+`K_OFF` also swallows `Ctrl+Alt+F2`, so a muted console cannot be escaped from at
+the keyboard, and nothing restores it after `SIGKILL`. The escape hatch, over SSH,
+is `kbd_mode -u -C /dev/tty1`.
+
 ## Theming
 
 The role vocabulary is borrowed from [daisyUI](https://daisyui.com), which got the
@@ -552,8 +577,6 @@ real fonts but no shaper is what most panels actually want.
 
 Still outstanding, and deliberately not hidden:
 
-- **The VT keyboard is not muted** while Denise holds DRM master, so keystrokes
-  still reach the shell behind the UI. Real kiosks mute it with `KDSKBMODE`/`K_OFF`.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.
