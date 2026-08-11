@@ -40,7 +40,7 @@ mod app {
         ElementState, InputEvent, InputSource, KeyCode, Radius, Rect, Role, Size, Surface, Theme,
     };
     use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
-    use denise_evdev::InputBackend;
+    use denise_evdev::{InputBackend, layout};
     use denise_fbdev::FbdevSurface;
     use denise_ui::widgets::{Align, Button, Label, Panel, TextInput};
     use denise_ui::{NodeId, Ui};
@@ -156,7 +156,7 @@ mod app {
             let status = ui
                 .add(
                     card,
-                    Label::new("Tab and Enter work without a pointer")
+                    Label::new("F3 switches keyboard layout")
                         .with_role(Role::Base300)
                         .with_align(Align::Center, Align::Center),
                     Rect::new(pad, y, inner, 24),
@@ -180,6 +180,12 @@ mod app {
                 .widget::<TextInput<Msg>>(id)
                 .map(|f| f.text().to_owned())
                 .unwrap_or_default()
+        }
+
+        /// Names the active keyboard layout in the status line.
+        fn show_layout(&mut self, name: &str) {
+            let text = format!("keyboard: {name}  —  F3 switches it");
+            self.set_status(&text);
         }
 
         fn set_status(&mut self, text: &str) {
@@ -357,7 +363,7 @@ mod app {
             eprintln!("input   {}: {}", device.capabilities(), device.name());
         }
         eprintln!("keymap  {}", keymap.name);
-        eprintln!("\nTab / Enter to drive it, F2 for the next theme, Escape to quit\n");
+        eprintln!("\nTab / Enter to drive it, F2 theme, F3 keyboard layout, Escape quits\n");
 
         let mut app = App::new(size);
         // Something must hold focus for a keyboard-only panel to be usable at all.
@@ -391,6 +397,16 @@ mod app {
         let mut input_events = 0u64;
         let mut timer_wakes = 0u64;
 
+        // Shown on screen and switchable at runtime, because a layout set only by
+        // an environment variable is a layout somebody forgets to set, and the
+        // symptom — a Norwegian key typing a semicolon — reads as a broken
+        // keyboard rather than a wrong setting.
+        let mut layout_index = layout::BUILT_IN
+            .iter()
+            .position(|l| core::ptr::eq(*l, keymap))
+            .unwrap_or(0);
+        app.show_layout(keymap.name);
+
         while Instant::now() < deadline {
             let now = || started.elapsed().as_millis() as u64;
 
@@ -409,7 +425,7 @@ mod app {
             input_events += events.len() as u64;
             app.ui.handle(&events);
             app.ui.tick(now());
-            if !handle_shortcuts(&mut app, &events) {
+            if !handle_shortcuts(&mut app, &events, &mut input, &mut layout_index) {
                 break;
             }
             app.dispatch();
@@ -466,7 +482,12 @@ mod app {
 
     /// Keys the application claims before the tree sees them. Returns `false` to
     /// quit.
-    fn handle_shortcuts(app: &mut App, events: &[InputEvent]) -> bool {
+    fn handle_shortcuts(
+        app: &mut App,
+        events: &[InputEvent],
+        input: &mut InputBackend,
+        layout_index: &mut usize,
+    ) -> bool {
         for event in events {
             let InputEvent::Key {
                 code,
@@ -483,6 +504,12 @@ mod app {
                     }
                 }
                 KeyCode::F2 => app.cycle_theme(),
+                KeyCode::F3 => {
+                    *layout_index = (*layout_index + 1) % layout::BUILT_IN.len();
+                    let next = layout::BUILT_IN[*layout_index];
+                    input.set_layout(next);
+                    app.show_layout(next.name);
+                }
                 _ => {}
             }
         }
