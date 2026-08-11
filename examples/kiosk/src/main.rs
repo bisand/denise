@@ -161,6 +161,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut drawn_card = card;
     let mut drawn_held = held;
 
+    // Is damage growing when frames get slow? That is the feedback loop to look
+    // for: a slow frame lets the pointer travel further, which enlarges the next
+    // damage region, which makes that frame slower again.
+    // Age of the event when we read it: queuing the loop cannot otherwise see.
+    let mut queued_us: Vec<u32> = Vec::new();
+    let mut damage_px: Vec<u32> = Vec::new();
+    let mut events_per_poll: Vec<u32> = Vec::new();
+    let mut slow_frames = 0u64;
+
     let mut render_us: Vec<u32> = Vec::new();
     let mut latency_us: Vec<u32> = Vec::new();
     let mut interval_us: Vec<u32> = Vec::new();
@@ -188,6 +197,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         events.clear();
         input.poll(&mut events);
+        if !events.is_empty() {
+            events_per_poll.push(events.len() as u32);
+            if let Some(age) = input.last_event_age() {
+                queued_us.push(age.as_micros().min(u128::from(u32::MAX)) as u32);
+            }
+        }
         if !events.is_empty() && dirty_since.is_none() {
             dirty_since = Some(Instant::now());
         }
@@ -285,6 +300,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             resolved.len()
         };
         let damage = &regions[..count];
+        damage_px.push(damage.iter().map(Rect::area).sum::<u64>() as u32);
 
         {
             let mut canvas = Canvas::new(&mut frame);
@@ -303,7 +319,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         frames += 1;
 
         let now = Instant::now();
-        render_us.push(now.duration_since(render_start).as_micros() as u32);
+        let took = now.duration_since(render_start);
+        if took > Duration::from_millis(16) {
+            slow_frames += 1;
+        }
+        render_us.push(took.as_micros() as u32);
         if let Some(since) = dirty_since.take() {
             latency_us.push(now.duration_since(since).as_micros() as u32);
         }
@@ -319,6 +339,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     eprintln!("frames only cost anything when something changed — that is the whole idea");
 
+    eprintln!(
+        "{slow_frames} frames took longer than 16 ms ({:.1}% of {frames})",
+        slow_frames as f64 / frames.max(1) as f64 * 100.0
+    );
+    report("queued     hardware..read  ", &mut queued_us);
+    report_raw("damage     pixels per frame", &mut damage_px, 1.0);
+    report_raw("backlog    events per poll ", &mut events_per_poll, 1.0);
     report("render     acquire..present", &mut render_us);
     report("latency    input..present  ", &mut latency_us);
     report("interval   present..present", &mut interval_us);
@@ -345,7 +372,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         samples.sort_unstable();
         let at = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize] as f64 / 1000.0;
         eprintln!(
-            "{label}  n={:<5} p50 {:>6.2} ms   p95 {:>6.2} ms   max {:>6.2} ms",
+            "{label}  n={:<5} p50 {:>8.2} ms   p95 {:>8.2} ms   max {:>8.2} ms",
+            samples.len(),
+            at(0.50),
+            at(0.95),
+            at(1.0)
+        );
+    }
+
+    /// As [`report`], for samples that are not durations.
+    fn report_raw(label: &str, samples: &mut [u32], scale: f64) {
+        if samples.is_empty() {
+            return;
+        }
+        samples.sort_unstable();
+        let at = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize] as f64 * scale;
+        eprintln!(
+            "{label}  n={:<5} p50 {:>8.0}      p95 {:>8.0}      max {:>8.0}",
             samples.len(),
             at(0.50),
             at(0.95),

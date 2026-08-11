@@ -2,6 +2,7 @@
 
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use denise::{InputEvent, InputSource, Point, Size};
 
@@ -106,6 +107,7 @@ pub struct InputBackend {
     /// the same cursor rather than fighting over two.
     pointer: Point,
     scratch: Vec<RawEvent>,
+    last_event_age: Option<Duration>,
 }
 
 impl InputBackend {
@@ -162,6 +164,7 @@ impl InputBackend {
             devices,
             pointer: Point::new(surface.width as i32 / 2, surface.height as i32 / 2),
             scratch: Vec::new(),
+            last_event_age: None,
         })
     }
 
@@ -190,6 +193,20 @@ impl InputBackend {
     pub fn pointer(&self) -> Point {
         self.pointer
     }
+
+    /// How long the most recently read event had been waiting.
+    ///
+    /// The kernel timestamps an event when the driver receives it, so this is the
+    /// delay between the hardware reporting and this process reading — time spent
+    /// queued, which no measurement taken after the read can see. `None` until
+    /// something has been read.
+    ///
+    /// A frame loop keeping up reads events within a millisecond or so of the
+    /// kernel taking them. A growing figure means the loop is falling behind and
+    /// is drawing positions the user has already moved on from.
+    pub fn last_event_age(&self) -> Option<Duration> {
+        self.last_event_age
+    }
 }
 
 impl InputSource for InputBackend {
@@ -201,7 +218,11 @@ impl InputSource for InputBackend {
             };
 
             self.scratch.clear();
+            let now = SystemTime::now();
             for event in events {
+                // The kernel's own timestamp, so queuing before this read is
+                // included rather than invisible.
+                self.last_event_age = now.duration_since(event.timestamp()).ok();
                 self.scratch.push(RawEvent::new(
                     event.event_type().0,
                     event.code(),
