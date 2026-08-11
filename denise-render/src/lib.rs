@@ -37,6 +37,7 @@
 
 pub mod blend;
 pub mod canvas;
+pub mod font;
 
 mod line;
 mod rect;
@@ -47,3 +48,4 @@ mod testing;
 
 pub use blend::Paint;
 pub use canvas::{Canvas, PixelView};
+pub use font::BitmapFont;
