@@ -37,6 +37,7 @@
 
 pub mod blend;
 pub mod canvas;
+pub mod coverage;
 pub mod font;
 
 mod line;
@@ -48,4 +49,5 @@ mod testing;
 
 pub use blend::Paint;
 pub use canvas::{Canvas, PixelView};
+pub use coverage::Mask;
 pub use font::BitmapFont;
