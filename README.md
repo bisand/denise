@@ -17,9 +17,9 @@ architecture: scene stack, z-index layering, dirty-rectangle tracking, composite
 cursor sprite, 60 FPS at under 5% CPU on a Pi 4. Denise keeps the design and drops
 the runtime.
 
-## Status: M1
+## Status: M1.1
 
-The core abstraction and the software rasteriser exist, benchmarked, and proven
+The core abstraction, the software rasteriser and the theme system exist, benchmarked, and proven
 against a desktop backend. There is no scene graph, no component model, no
 hardware backend and no text yet. See [Milestones](#milestones).
 
@@ -30,9 +30,10 @@ cargo run -p hello-rect
 ```
 
 A rounded rectangle bounces around a window at 60 FPS while repainting roughly 4%
-of the surface per frame. Stats print to stderr once a second — that number is the
-whole point of the project, so it is measured from the first commit rather than
-asserted in a README later.
+of the surface per frame. Press `T` to cycle themes; the drawing code does not
+change, because it never names a colour. Stats print to stderr once a second —
+that number is the whole point of the project, so it is measured from the first
+commit rather than asserted in a README later.
 
 ## What it is not
 
@@ -50,7 +51,7 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 
 | Crate | Purpose | Status |
 |---|---|---|
-| `denise` | Geometry, colour, pixel buffer contract, input, damage tracking | ✅ M0 |
+| `denise` | Geometry, colour, pixel buffer contract, input, damage tracking, theming | ✅ M0, M1.1 |
 | `denise-render` | Software rasteriser | ✅ M1 |
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |
 | `denise-drm` | Linux DRM/KMS backend — the primary target | M2 |
@@ -181,6 +182,46 @@ CI compiles the benches but does not gate on their timings: wall-clock variance 
 a shared runner is far wider than any threshold worth setting. The regression gate
 belongs on a self-hosted Pi, or on instruction counts.
 
+## Theming
+
+The role vocabulary is borrowed from [daisyUI](https://daisyui.com), which got the
+important part right: a widget never names a colour, it names a **role**, and every
+surface role has a **content** partner. Swapping a theme cannot produce unreadable
+text, because readability is a property of the pair rather than of the widget.
+
+```rust
+let (background, foreground) = theme.pair(Role::Primary);
+let corner = theme.radius(Radius::Box);
+```
+
+Twenty roles — `base-100/200/300` plus `base-content`, then `primary`,
+`secondary`, `accent`, `neutral`, `info`, `success`, `warning` and `error`, each
+with a content partner. Three radius tokens by widget class (`Selector`, `Field`,
+`Box`) rather than one constant per widget, which is what stops the set drifting.
+
+A theme is built from nine seed colours; the two recessed base surfaces and all
+nine content colours are derived by walking towards black or white until the mix
+clears **WCAG 4.5:1**, so a derived theme keeps its hue instead of collapsing to
+black on white. `Theme::from_seeds` is a `const fn`, so the built-in themes cost
+nothing at runtime and cannot drift out of step with the derivation rules.
+
+`Theme::validate` checks every pair, and it earns its place: it caught that pure
+magenta and `#FF5555` both top out near 6.7:1 against black and cannot reach AAA,
+which is why the high-contrast palette uses lightened variants.
+
+Three themes ship — `LIGHT`, `DARK`, and `HIGH_CONTRAST` for panels read in glare
+or through a visor. On a device booting from flash, an unused theme is bytes
+somebody paid for.
+
+### What was not borrowed
+
+| | |
+|---|---|
+| **OKLCH storage** | Cube roots mean floats, which mean `libm` on `no_std` and output that is no longer bit-identical across architectures. Colours are sRGB, derived with integers. |
+| **`--noise`** | A per-pixel texture makes every pixel differ from its neighbour, so no damaged region can be repainted without a seam against the region beside it. It turns every frame into a full repaint. |
+| **35 built-in themes** | Three. |
+| **`--depth` as a shadow** | Kept as a number. A real blur is expensive in software and spills outside the widget's bounds, so every damage rectangle would have to be inflated by the blur radius. |
+
 ## Constraints
 
 - `unsafe_code = "forbid"` in `denise`. `unsafe` is allowed in backend crates only,
@@ -200,7 +241,7 @@ belongs on a self-hosted Pi, or on instruction counts.
 |---|---|---|
 | **M0** | Workspace, `Surface`/`InputSource`, winit backend, damage tracking, CI | ✅ |
 | **M1** | Software rasteriser: rects, rounded rects, lines, clipping, alpha blend. Benches. | ✅ |
-| **M1.1** | Theming: semantic colour roles, guaranteed-contrast content pairing, geometry tokens. | |
+| **M1.1** | Theming: semantic colour roles, guaranteed-contrast content pairing, geometry tokens. | ✅ |
 | **M2** | DRM/KMS with atomic modesetting and page flip; fbdev fallback; evdev input. Runs on a Pi with no X. | |
 | **M3** | Scene stack, z-index, modal dialogs, cursor sprite. Label, Button, TextInput. CoreCanvas 0.4 parity. | |
 | **M4** | Text: built-in 8×8 bitmap font; `cosmic-text` behind a feature flag with a glyph atlas. Latin plus `æøå`, dead keys included. | |

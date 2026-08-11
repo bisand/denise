@@ -1,9 +1,18 @@
-//! M0 proof of the abstraction.
+//! Proof of the abstraction, the rasteriser and the theme.
 //!
-//! A rectangle bounces around a dark background and a small square tracks the
-//! pointer. Neither is interesting; what is interesting is that a frame in which
-//! nothing moved costs nothing, and a frame in which the rectangle moved repaints
-//! roughly two rectangles' worth of pixels rather than a megapixel.
+//! A rounded rectangle bounces around and a translucent square tracks the pointer.
+//! Neither is interesting; what is interesting is that a frame in which nothing
+//! moved costs nothing, and a frame in which the rectangle moved repaints roughly
+//! two rectangles' worth of pixels rather than a megapixel.
+//!
+//! Nothing here names a colour. Every colour comes from a semantic role, which is
+//! why `T` can swap the whole palette at runtime without touching the drawing code.
+//!
+//! | Key | |
+//! |---|---|
+//! | `T` | next theme |
+//! | `Space` | pause |
+//! | `Esc`, `Q` | quit |
 //!
 //! Stats go to stderr once a second. On an idle window the damage percentage
 //! should read `0.0%`; hold a key down to see it climb.
@@ -14,18 +23,17 @@
 
 use std::time::{Duration, Instant};
 
+use denise::theme::{Radius, Role, Theme};
 use denise::{Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, Point, Rect, Size};
 use denise_render::Canvas;
 use denise_winit::{DeniseApp, WindowConfig, run};
 
-const BACKGROUND: Color = Color::from_rgb888(0x1E1E2E);
-const BOX_COLOR: Color = Color::from_rgb888(0xF5A9B8);
-const BOX_BORDER: Color = Color::rgba(255, 255, 255, 64);
-const CURSOR_COLOR: Color = Color::rgba(137, 180, 250, 160);
 const BOX_SIZE: i32 = 120;
-const BOX_RADIUS: i32 = 20;
 const CURSOR_SIZE: i32 = 28;
 const SPEED: i32 = 4;
+/// Alpha applied to a content colour to get a border that reads as an edge rather
+/// than an outline.
+const BORDER_ALPHA: u8 = 72;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = WindowConfig {
@@ -38,6 +46,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 struct HelloRect {
+    theme: Theme,
+    theme_index: usize,
     surface: Size,
     boxx: Rect,
     velocity: (i32, i32),
@@ -50,6 +60,8 @@ struct HelloRect {
 impl HelloRect {
     fn new() -> Self {
         Self {
+            theme: Theme::BUILT_IN[0],
+            theme_index: 0,
             surface: Size::ZERO,
             boxx: Rect::new(40, 40, BOX_SIZE, BOX_SIZE),
             velocity: (SPEED, SPEED),
@@ -115,6 +127,15 @@ impl DeniseApp for HelloRect {
                 } => match code {
                     KeyCode::Escape | KeyCode::Q => self.exit = true,
                     KeyCode::Space => self.paused = !self.paused,
+                    KeyCode::T => {
+                        self.theme_index = (self.theme_index + 1) % Theme::BUILT_IN.len();
+                        self.theme = Theme::BUILT_IN[self.theme_index];
+                        // Every pixel on screen is now the wrong colour. This is
+                        // the one case where a full repaint is the correct answer,
+                        // and saying so is cheaper than tracking it.
+                        damage.add_full();
+                        eprintln!("theme: {}", self.theme.name);
+                    }
                     _ => {}
                 },
 
@@ -153,13 +174,21 @@ impl DeniseApp for HelloRect {
         // The scene code below is written as though it were painting the whole
         // window. The clip is what turns it into an incremental repaint, so there
         // is no second, damage-aware draw path to keep in step with this one.
+        // Not one literal colour or radius below: the theme supplies every one, so
+        // pressing T restyles the whole scene without this function changing.
+        let theme = self.theme;
+        let radius = theme.radius(Radius::Box);
+        let (box_fill, box_content) = theme.pair(Role::Primary);
+        let border = Color::rgba(box_content.r, box_content.g, box_content.b, BORDER_ALPHA);
+        let cursor_fill = theme.color(Role::Accent).with_alpha(160);
+
         for region in damage {
             let mut c = canvas.with_clip(*region);
-            c.clear(BACKGROUND);
-            c.fill_rounded_rect(self.boxx, BOX_RADIUS, BOX_COLOR);
-            c.stroke_rounded_rect(self.boxx, BOX_RADIUS, 2, BOX_BORDER);
+            c.clear(theme.color(Role::Base100));
+            c.fill_rounded_rect(self.boxx, radius, box_fill);
+            c.stroke_rounded_rect(self.boxx, radius, theme.metrics.border.max(2), border);
             if let Some(cursor) = self.cursor {
-                c.fill_rounded_rect(cursor, CURSOR_SIZE / 2, CURSOR_COLOR);
+                c.fill_rounded_rect(cursor, CURSOR_SIZE / 2, cursor_fill);
             }
         }
 
