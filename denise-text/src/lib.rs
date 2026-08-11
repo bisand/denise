@@ -48,8 +48,12 @@ pub mod atlas;
 pub mod bitmap;
 pub mod engine;
 pub mod source;
+#[cfg(feature = "truetype")]
+pub mod truetype;
 
 pub use atlas::{AtlasStats, GlyphAtlas, GlyphKey, Placed};
 pub use bitmap::BitmapSource;
 pub use engine::{PositionedGlyph, TextEngine, TextStyle};
 pub use source::{FontId, FontMetrics, GlyphMetrics, GlyphSource, Rasterised};
+#[cfg(feature = "truetype")]
+pub use truetype::TrueTypeSource;

@@ -33,6 +33,13 @@ jobs:
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps --all-features
 
+      # The optional text tiers are off by default, so `--all-features` is the
+      # only build that ever sees them together and the default build is the only
+      # one that sees neither. Both have to compile, and a `#[cfg]` that only
+      # works in one combination is exactly the rot this catches.
+      - run: cargo clippy -p denise-text --all-targets -- -D warnings
+      - run: cargo test -p denise-text
+
   no-std:
     name: core builds without std
     runs-on: ubuntu-latest

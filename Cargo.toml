@@ -41,6 +41,7 @@ bytemuck = "1.25"
 drm-fourcc = "2.2"
 rustix = { version = "1.1", default-features = false }
 slotmap = { version = "1.1", default-features = false }
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
 
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 thiserror = { version = "2.0", default-features = false }

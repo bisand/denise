@@ -13,10 +13,14 @@ homepage.workspace = true
 [features]
 default = ["std"]
 std = ["denise/std", "denise-render/std"]
+# Real TrueType and OpenType fonts, anti-aliased and proportionally spaced.
+# About 145 KB of static binary, and no shaping — see the crate docs.
+truetype = ["dep:fontdue"]
 
 [dependencies]
 denise = { workspace = true }
 denise-render = { workspace = true }
+fontdue = { workspace = true, optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
