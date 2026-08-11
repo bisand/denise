@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["denise"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+authors = ["BogenTech <andre@biseth.net>"]
+repository = "https://github.com/bisand/denise"
+homepage = "https://github.com/bisand/denise"
+
+[workspace.dependencies]
+denise = { version = "0.0.0", path = "denise", default-features = false }
+
+thiserror = { version = "2.0", default-features = false }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# Benches need real optimisation but also debug symbols for profiling.
+[profile.bench]
+debug = true
