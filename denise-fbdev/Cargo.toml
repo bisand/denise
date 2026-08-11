@@ -1,0 +1,30 @@
+[package]
+name = "denise-fbdev"
+description = "Legacy Linux fbdev backend for Denise, for kernels with no usable DRM device."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# As elsewhere: geometry parsing is platform-independent and tested everywhere,
+# only the mapping is gated to Linux.
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bytemuck = { workspace = true }
+memmap2 = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+denise-render = { workspace = true, features = ["std"] }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"

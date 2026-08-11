@@ -5,6 +5,7 @@ members = [
     "denise",
     "denise-drm",
     "denise-evdev",
+    "denise-fbdev",
     "denise-render",
     "denise-winit",
     "examples/hello-rect",
@@ -24,11 +25,14 @@ homepage = "https://github.com/bisand/denise"
 denise = { version = "0.0.0", path = "denise", default-features = false }
 denise-drm = { version = "0.0.0", path = "denise-drm" }
 denise-evdev = { version = "0.0.0", path = "denise-evdev" }
+denise-fbdev = { version = "0.0.0", path = "denise-fbdev" }
 denise-render = { version = "0.0.0", path = "denise-render", default-features = false }
 denise-winit = { version = "0.0.0", path = "denise-winit" }
 
 drm = "0.15"
 evdev = "0.13"
+memmap2 = "0.9"
+bytemuck = "1.25"
 drm-fourcc = "2.2"
 rustix = { version = "1.1", default-features = false }
 

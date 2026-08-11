@@ -446,6 +446,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "denise-fbdev"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "denise",
+ "denise-render",
+ "memmap2",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "denise-render"
 version = "0.0.0"
 dependencies = [

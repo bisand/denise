@@ -11,7 +11,7 @@ environment.**
 [![CI](https://github.com/bisand/denise/actions/workflows/ci.yml/badge.svg)](https://github.com/bisand/denise/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/badge/licence-MIT-89B4FA)](LICENSE)
 [![MSRV](https://img.shields.io/badge/MSRV-1.95-F9E2AF)](#constraints)
-[![Milestone](https://img.shields.io/badge/milestone-M1.1-F5C2E7)](#milestones)
+[![Milestone](https://img.shields.io/badge/milestone-M2-F5C2E7)](#milestones)
 [![Core](https://img.shields.io/badge/core-forbid(unsafe__code)-A6E3A1)](#constraints)
 [![Targets](https://img.shields.io/badge/targets-aarch64_%7C_armv7_%7C_x86__64-94E2D5)](#constraints)
 
@@ -28,24 +28,31 @@ architecture: scene stack, z-index layering, dirty-rectangle tracking, composite
 cursor sprite, 60 FPS at under 5% CPU on a Pi 4. Denise keeps the design and drops
 the runtime.
 
-## Status: M1.1
+## Status: M2
 
-The core abstraction, the software rasteriser and the theme system exist,
-benchmarked and proven against a desktop backend. There is no scene graph, no
-component model, no hardware backend and no text yet. See
-[Milestones](#milestones).
+Denise drives a real display with no desktop environment: DRM/KMS scanout,
+double-buffered page flips, evdev input, damage tracking and theming, verified on
+aarch64 Linux against a live 1280×800 output. There is no scene graph, no
+component model and no text yet. See [Milestones](#milestones).
 
-What works today:
+On a Linux machine with a spare VT or a virtual GPU:
+
+```bash
+cargo run -p kiosk            # display and input together, no X
+cargo run -p denise-drm --example probe   # read-only: what it would drive
+```
+
+The number that matters is what it costs when nothing happens. Left untouched for
+three seconds, the kiosk demo draws **one frame**, wakes **thirteen times**, and
+uses no measurable CPU — it blocks in `poll` on the input descriptors rather than
+spinning. Move the pointer and it repaints a cursor-sized rectangle, not a
+megapixel.
+
+Without a display, the desktop preview backend runs the same scene code unchanged:
 
 ```bash
 cargo run -p hello-rect
 ```
-
-A rounded rectangle bounces around a window at 60 FPS while repainting roughly 4%
-of the surface per frame. Press `T` to cycle themes; the drawing code does not
-change, because it never names a colour. Stats print to stderr once a second —
-that number is the whole point of the project, so it is measured from the first
-commit rather than asserted in a README later.
 
 ## The name
 
@@ -99,16 +106,16 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise` | Geometry, colour, pixel buffer contract, input, damage tracking, theming | ✅ M0, M1.1 |
 | `denise-render` | Software rasteriser | ✅ M1 |
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |
-| `denise-drm` | Linux DRM/KMS backend — the primary target | M2 |
-| `denise-fbdev` | Linux fbdev fallback | M2 |
-| `denise-evdev` | Linux input | M2 |
+| `denise-drm` | Linux DRM/KMS backend — the primary target | ✅ M2 |
+| `denise-fbdev` | Linux fbdev fallback | ✅ M2 |
+| `denise-evdev` | Linux input | ✅ M2 |
 | `denise-text` | Font loading, glyph cache, layout | M4 |
 | `denise-ffi` | Stable C ABI, `cdylib` | M5 |
 | `denise-win32` | Windows child-HWND control | M5 |
 | `denise-macos` | Layer-backed `NSView` | M5 |
 | `denise-activex` | COM/ActiveX shim for legacy Windows hosts | M5 |
 
-Only the first three exist. The rest are listed so the shape of the thing is clear.
+Everything through M2 exists. The rest are listed so the shape of the thing is clear.
 
 ### The two traits
 
@@ -287,13 +294,24 @@ somebody paid for.
 | **M0** | Workspace, `Surface`/`InputSource`, winit backend, damage tracking, CI | ✅ |
 | **M1** | Software rasteriser: rects, rounded rects, lines, clipping, alpha blend. Benches. | ✅ |
 | **M1.1** | Theming: semantic colour roles, guaranteed-contrast content pairing, geometry tokens. | ✅ |
-| **M2** | DRM/KMS with atomic modesetting and page flip; fbdev fallback; evdev input. Runs on a Pi with no X. | |
+| **M2** | DRM/KMS with legacy modesetting and page flip; fbdev fallback; evdev input. Runs with no X. | ✅ |
 | **M3** | Scene stack, z-index, modal dialogs, cursor sprite. Label, Button, TextInput. CoreCanvas 0.4 parity. | |
 | **M4** | Text: built-in 8×8 bitmap font; `cosmic-text` behind a feature flag with a glyph atlas. Latin plus `æøå`, dead keys included. | |
 | **M5** | C ABI, Windows child-HWND control, ActiveX shim, macOS `NSView`. | |
 
 M2 does not start until M1 is benchmarked. M5 does not start until the Pi story is
 solid — that is the entire point of the project.
+
+M2 shipped legacy modesetting rather than atomic, which reverses the original
+plan. What atomic buys is `FB_DAMAGE_CLIPS`, plane composition and tear-free
+guarantees; a page flip swaps whole buffers, so damage saves rasterisation rather
+than bandwidth, and the one plane worth having — the hardware cursor — has a
+legacy equivalent. Atomic slots in behind the same seam when planes earn it.
+
+Still outstanding from M2, and deliberately not hidden: the VT keyboard is not
+muted while holding DRM master, so keystrokes still reach the shell behind the UI.
+Frame pacing and the CPU budget have been measured under virtio-gpu, which retires
+page flips immediately instead of at vblank; both remain unproven on vc4.
 
 ## Development
 
