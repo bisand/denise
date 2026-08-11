@@ -1,0 +1,15 @@
+[package]
+name = "hello-rect"
+description = "M0 proof: a filled rect at 60 FPS, repainting only what changed."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-winit = { workspace = true }
