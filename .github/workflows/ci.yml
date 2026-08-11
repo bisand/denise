@@ -40,7 +40,22 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p denise --no-default-features
+      - run: cargo build -p denise -p denise-render --no-default-features
+
+  benches:
+    name: benches compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Compiled, not run. Criterion wall-clock on a shared GitHub runner varies
+      # by well over the 10% a regression gate would want to trip on, so a timing
+      # gate here would be noise that everyone learns to ignore. The gate belongs
+      # on a self-hosted Pi — the target hardware — or on instruction counts.
+      # Until then this job exists to stop the benches rotting.
+      - run: cargo bench --workspace --no-run
 
   cross:
     name: core for ${{ matrix.target }}
@@ -65,8 +80,8 @@ jobs:
       # The core is a pure rlib with no C dependencies, so this needs no
       # cross-linker. When the DRM and evdev backends land in M2 this job grows a
       # `cross` or a gcc-aarch64-linux-gnu toolchain and starts linking examples.
-      - run: cargo build -p denise --target ${{ matrix.target }} --no-default-features
-      - run: cargo build -p denise --target ${{ matrix.target }} --features std
+      - run: cargo build -p denise -p denise-render --target ${{ matrix.target }} --no-default-features
+      - run: cargo build -p denise -p denise-render --target ${{ matrix.target }} --features std
 
   isolation:
     name: core pulls in no platform code
@@ -78,11 +93,18 @@ jobs:
 
       # The central promise of the architecture: an embedded build never compiles
       # winit, Wayland, X11, Windows or macOS code. Assert it rather than hope.
+      # The rasteriser is held to the same standard — it is the other half of what
+      # an embedded target actually links.
       - name: Assert the dependency tree stays clean
         run: |
-          tree=$(cargo tree -p denise --no-default-features --edges normal --prefix none)
-          echo "$tree"
-          if echo "$tree" | grep -Eiq '^(winit|softbuffer|wayland|x11|xkb|windows|objc|core-graphics|smithay|calloop)'; then
-            echo "::error::denise core has picked up a platform dependency"
-            exit 1
-          fi
+          status=0
+          for crate in denise denise-render; do
+            tree=$(cargo tree -p "$crate" --no-default-features --edges normal --prefix none)
+            echo "== $crate =="
+            echo "$tree"
+            if echo "$tree" | grep -Eiq '^(winit|softbuffer|wayland|x11|xkb|windows|objc|core-graphics|smithay|calloop)'; then
+              echo "::error::$crate has picked up a platform dependency"
+              status=1
+            fi
+          done
+          exit $status
