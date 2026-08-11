@@ -1,0 +1,60 @@
+[package]
+name = "denise-macos"
+description = "Embeddable NSView backend for Denise, for a panel inside a Cocoa application."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+
+# The `objc2` project's framework bindings. AppKit is where `NSView` and
+# `NSEvent` live and CoreGraphics is where the bitmap context does; neither can
+# be reached from `objc2` alone, which is only the runtime and the message send.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = [
+    # The bindings gate the CoreGraphics-typed methods on the crates that define
+    # those types, so `-[NSGraphicsContext CGContext]` and the scroll deltas are
+    # only reachable with these on.
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "NSEvent",
+    "NSGraphicsContext",
+    "NSResponder",
+    "NSTrackingArea",
+    "NSView",
+] }
+objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
+objc2-core-graphics = { workspace = true, features = [
+    "CGBitmapContext",
+    "CGColorSpace",
+    "CGContext",
+    "CGImage",
+] }
+objc2-foundation = { workspace = true, features = ["NSGeometry"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+denise-render = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std"] }
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSBitmapImageRep",
+    "NSGraphics",
+    "NSImageRep",
+    "NSRunningApplication",
+    "NSWindow",
+] }
+objc2-foundation = { workspace = true, features = ["NSDate", "NSString", "NSTimer"] }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
