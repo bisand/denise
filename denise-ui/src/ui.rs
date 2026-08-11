@@ -1,0 +1,943 @@
+//! The tree, the scene stack, and the compositor that turns them into pixels.
+
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::{Drain, Vec};
+
+use denise::{
+    Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, MAX_DAMAGE_RECTS, Modifiers,
+    Point, Rect, Role, Size, Surface, SurfaceError, Theme,
+};
+use denise_render::Canvas;
+use slotmap::SlotMap;
+
+use crate::cursor::{Cursor, CursorImage};
+use crate::node::{Node, NodeId, Scene};
+use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
+
+/// A retained tree of widgets, a stack of scenes, and the damage they generate.
+///
+/// `M` is the application's message type. Widgets emit `M`; the application drains
+/// them with [`Ui::drain_messages`] and decides what they mean. Nothing calls back
+/// into the application mid-traversal, so there is no borrow to fight and no
+/// `Rc<RefCell<_>>` anywhere in the path.
+///
+/// # Damage is the tree's job, not the application's
+///
+/// This is the part worth reading. Every route into mutable widget state runs
+/// through the tree, and every one of them marks the node dirty:
+///
+/// - [`Ui::widget_mut`] invalidates on access, before you have even changed
+///   anything. Taking `&mut` to a widget *is* the declaration that it will look
+///   different.
+/// - Hover, press, focus and enabled are tracked by the tree, so a widget cannot
+///   forget to invalidate on a state it does not own.
+/// - [`Handled::Yes`] from `on_event` invalidates the node.
+/// - Moving, resizing, showing, hiding, adding or removing a node damages the
+///   rectangles it vacated and the ones it now occupies.
+///
+/// The alternative — the application deciding what changed and telling the damage
+/// tracker — is where the classic bug lives: some piece of state that decides the
+/// pixels is left out of the comparison, and the screen keeps a stale colour until
+/// something unrelated repaints over it. That bug is not fixed here so much as made
+/// unrepresentable.
+pub struct Ui<M: 'static> {
+    nodes: SlotMap<NodeId, Node<M>>,
+    scenes: Vec<Scene>,
+    /// Flattened paint order across every scene: parents before children, siblings
+    /// by z. Rebuilt only on structural or z-order change, never per frame.
+    order: Vec<NodeId>,
+    /// Exclusive end index in `order` for each scene.
+    scene_end: Vec<usize>,
+    order_dirty: bool,
+    size: Size,
+    theme: Theme,
+    damage: DamageTracker,
+    pointer: Point,
+    hovered: Option<NodeId>,
+    pressed: Option<NodeId>,
+    focused: Option<NodeId>,
+    cursor: Cursor,
+    messages: Vec<M>,
+    now_ms: u64,
+    next_wake: Option<u64>,
+}
+
+impl<M: 'static> Ui<M> {
+    /// Creates a tree covering a surface of `size`, with one base scene.
+    pub fn new(size: Size, theme: Theme) -> Self {
+        let mut nodes = SlotMap::with_key();
+        let root = nodes.insert(Node::new(Box::new(Void), Rect::from_size(size), 0));
+        Self {
+            nodes,
+            scenes: vec![Scene { root, dim: 0 }],
+            order: Vec::new(),
+            scene_end: Vec::new(),
+            order_dirty: true,
+            size,
+            theme,
+            damage: DamageTracker::new(size),
+            pointer: Point::ZERO,
+            hovered: None,
+            pressed: None,
+            focused: None,
+            cursor: Cursor::default(),
+            messages: Vec::new(),
+            now_ms: 0,
+            next_wake: None,
+        }
+    }
+
+    /// Surface extent the tree lays out against.
+    #[inline]
+    pub const fn size(&self) -> Size {
+        self.size
+    }
+
+    /// The active theme.
+    #[inline]
+    pub const fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    /// Swaps the theme. Every colour on screen may have changed, so this damages
+    /// the whole surface — the one case where a full repaint is the honest answer.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        self.damage.add_full();
+    }
+
+    /// The cursor sprite.
+    #[inline]
+    pub const fn cursor(&self) -> &Cursor {
+        &self.cursor
+    }
+
+    /// Replaces the cursor sprite, damaging both shapes' footprints.
+    pub fn set_cursor_image(&mut self, image: &'static CursorImage) {
+        self.damage.add(self.cursor.bounds());
+        self.cursor.image = image;
+        self.damage.add(self.cursor.bounds());
+    }
+
+    /// Shows or hides the cursor sprite.
+    ///
+    /// It starts hidden and reveals itself on the first pointer motion, so a
+    /// touch-only panel never shows a pointer it has no way to move.
+    pub fn show_cursor(&mut self, visible: bool) {
+        if self.cursor.visible == visible {
+            return;
+        }
+        self.damage.add(self.cursor.bounds());
+        self.cursor.visible = visible;
+        self.damage.add(self.cursor.bounds());
+    }
+
+    // ---------------------------------------------------------------- scenes
+
+    /// Root node of the base scene.
+    #[inline]
+    pub fn root(&self) -> NodeId {
+        self.scenes[0].root
+    }
+
+    /// Root node of the topmost scene: the one that receives input.
+    #[inline]
+    pub fn top_root(&self) -> NodeId {
+        self.scenes[self.scenes.len() - 1].root
+    }
+
+    /// Number of scenes on the stack, always at least one.
+    #[inline]
+    pub fn scene_count(&self) -> usize {
+        self.scenes.len()
+    }
+
+    /// Pushes a scene over the current one and returns its root.
+    ///
+    /// `dim` is the alpha of a black backdrop painted under the new scene, `0` for
+    /// none and `128` for a conventional modal veil. The backdrop is painted per
+    /// damage region rather than over the whole surface, which matters: a
+    /// full-screen alpha fill measured 63% of a 60 Hz frame budget on a Pi 3, so a
+    /// dialog that repaints its own caret must not drag a megapixel of blending
+    /// along with it.
+    ///
+    /// The new scene takes all input. Nothing underneath is hittable, focusable or
+    /// reachable by Tab until it is popped — that is what makes it modal, and it is
+    /// a property of the stack rather than something each dialog has to enforce.
+    pub fn push_scene(&mut self, dim: u8) -> NodeId {
+        let index = self.scenes.len();
+        let root = self
+            .nodes
+            .insert(Node::new(Box::new(Void), Rect::from_size(self.size), index));
+        self.scenes.push(Scene { root, dim });
+        self.order_dirty = true;
+        self.set_focus(None);
+        self.pressed = None;
+        self.set_hovered(None);
+        if dim > 0 {
+            self.damage.add_full();
+        }
+        root
+    }
+
+    /// Pops the topmost scene and everything in it. The base scene cannot be
+    /// popped; returns `false` if that is all there is.
+    pub fn pop_scene(&mut self) -> bool {
+        if self.scenes.len() <= 1 {
+            return false;
+        }
+        self.ensure_order();
+        let scene = self.scenes.pop().expect("checked non-empty");
+        let start = if self.scenes.is_empty() {
+            0
+        } else {
+            self.scene_end[self.scenes.len() - 1]
+        };
+        // Repaint exactly what the scene covered: every node's clip, plus the whole
+        // surface if it was dimming what was underneath.
+        if scene.dim > 0 {
+            self.damage.add_full();
+        } else {
+            for i in start..self.order.len() {
+                let id = self.order[i];
+                if let Some(node) = self.nodes.get(id) {
+                    let clip = node.clip;
+                    self.damage.add(clip);
+                }
+            }
+        }
+        self.drop_subtree(scene.root);
+        self.order_dirty = true;
+        self.set_focus(None);
+        self.pressed = None;
+        self.set_hovered(None);
+        true
+    }
+
+    // ------------------------------------------------------------------ tree
+
+    /// Adds `widget` under `parent`, positioned relative to the parent's origin.
+    ///
+    /// Returns `None` if `parent` no longer exists.
+    pub fn add(&mut self, parent: NodeId, widget: impl Widget<M>, layout: Rect) -> Option<NodeId> {
+        let scene = self.nodes.get(parent)?.scene;
+        let id = self
+            .nodes
+            .insert(Node::new(Box::new(widget), layout, scene));
+        self.nodes[id].parent = Some(parent);
+        self.nodes[parent].children.push(id);
+        self.sort_children(parent);
+        self.reflow(id);
+        self.damage_subtree(id);
+        self.order_dirty = true;
+        Some(id)
+    }
+
+    /// Removes a node and its descendants. Scene roots cannot be removed this way;
+    /// use [`Ui::pop_scene`].
+    pub fn remove(&mut self, id: NodeId) -> bool {
+        if !self.nodes.contains_key(id) || self.scenes.iter().any(|s| s.root == id) {
+            return false;
+        }
+        self.damage_subtree(id);
+        if let Some(parent) = self.nodes[id].parent
+            && let Some(node) = self.nodes.get_mut(parent)
+        {
+            node.children.retain(|&c| c != id);
+        }
+        self.drop_subtree(id);
+        self.order_dirty = true;
+        true
+    }
+
+    /// Returns `true` if the node still exists.
+    #[inline]
+    pub fn contains(&self, id: NodeId) -> bool {
+        self.nodes.contains_key(id)
+    }
+
+    /// Absolute bounds of a node, before ancestor clipping.
+    #[inline]
+    pub fn bounds(&self, id: NodeId) -> Option<Rect> {
+        self.nodes.get(id).map(|n| n.bounds)
+    }
+
+    /// Position and extent relative to the parent.
+    #[inline]
+    pub fn layout(&self, id: NodeId) -> Option<Rect> {
+        self.nodes.get(id).map(|n| n.layout)
+    }
+
+    /// Moves or resizes a node, damaging the rectangles it left and the ones it
+    /// now occupies.
+    pub fn set_layout(&mut self, id: NodeId, layout: Rect) {
+        let Some(node) = self.nodes.get(id) else {
+            return;
+        };
+        if node.layout == layout {
+            return;
+        }
+        self.damage_subtree(id);
+        self.nodes[id].layout = layout;
+        self.reflow(id);
+        self.damage_subtree(id);
+    }
+
+    /// Sets the sibling sort key. Higher paints later, so higher is on top.
+    pub fn set_z(&mut self, id: NodeId, z: i32) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if node.z == z {
+            return;
+        }
+        node.z = z;
+        let parent = node.parent;
+        if let Some(parent) = parent {
+            self.sort_children(parent);
+        }
+        self.damage_subtree(id);
+        self.order_dirty = true;
+    }
+
+    /// Shows or hides a node and its descendants.
+    pub fn set_visible(&mut self, id: NodeId, visible: bool) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if node.visible == visible {
+            return;
+        }
+        node.visible = visible;
+        self.damage_subtree(id);
+        if !visible {
+            self.forget(id);
+        }
+    }
+
+    /// Enables or disables a node and its descendants. Disabled widgets are not
+    /// hittable, not focusable, and paint with [`VisualState::DISABLED`].
+    pub fn set_enabled(&mut self, id: NodeId, enabled: bool) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if node.enabled == enabled {
+            return;
+        }
+        node.enabled = enabled;
+        self.reflow(id);
+        self.damage_subtree(id);
+        if !enabled {
+            self.forget(id);
+        }
+    }
+
+    /// Borrows a widget as its concrete type.
+    pub fn widget<W: Widget<M>>(&self, id: NodeId) -> Option<&W> {
+        self.nodes.get(id)?.widget.as_any().downcast_ref::<W>()
+    }
+
+    /// Borrows a widget mutably as its concrete type, **marking it dirty**.
+    ///
+    /// Invalidation happens on access rather than on change, because the tree
+    /// cannot see what you did through the `&mut`. The cost of being conservative
+    /// is repainting one widget; the cost of being clever would be the class of bug
+    /// this whole design exists to remove.
+    pub fn widget_mut<W: Widget<M>>(&mut self, id: NodeId) -> Option<&mut W> {
+        let clip = self.nodes.get(id)?.clip;
+        self.damage.add(clip);
+        self.nodes
+            .get_mut(id)?
+            .widget
+            .as_any_mut()
+            .downcast_mut::<W>()
+    }
+
+    // ---------------------------------------------------------------- focus
+
+    /// The node holding keyboard focus.
+    #[inline]
+    pub const fn focused(&self) -> Option<NodeId> {
+        self.focused
+    }
+
+    /// The node under the pointer.
+    #[inline]
+    pub const fn hovered(&self) -> Option<NodeId> {
+        self.hovered
+    }
+
+    /// Moves keyboard focus, refusing nodes that are gone, hidden, disabled,
+    /// unfocusable, or in a scene under a modal.
+    pub fn focus(&mut self, id: Option<NodeId>) {
+        let id = id.filter(|&id| self.is_focusable(id));
+        self.set_focus(id);
+    }
+
+    /// Topmost node under `p` that accepts pointer input, within the input scene.
+    pub fn hit_test(&mut self, p: Point) -> Option<NodeId> {
+        self.ensure_order();
+        let (start, end) = self.input_span();
+        self.order[start..end].iter().rev().copied().find(|&id| {
+            self.nodes
+                .get(id)
+                .is_some_and(|n| n.paintable() && self.is_interactive(n) && n.clip.contains(p))
+        })
+    }
+
+    // ---------------------------------------------------------------- input
+
+    /// Routes a batch of input events into the tree.
+    pub fn handle(&mut self, events: &[InputEvent]) {
+        self.ensure_order();
+        for event in events {
+            self.handle_one(event);
+        }
+    }
+
+    /// Advances time-based state. Only the focused widget is asked to animate.
+    pub fn tick(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
+        let Some(id) = self.focused else {
+            self.next_wake = None;
+            return;
+        };
+        let Some(node) = self.nodes.get_mut(id) else {
+            self.next_wake = None;
+            return;
+        };
+        let animation = node.widget.animate(now_ms);
+        let clip = node.clip;
+        if animation.repaint {
+            self.damage.add(clip);
+        }
+        self.next_wake = animation.next_ms;
+    }
+
+    /// When something wants to be woken, in the same clock as [`Ui::tick`].
+    ///
+    /// `None` means nothing is animating and the event loop may block on input
+    /// indefinitely, which is the state a kiosk should be in almost all the time.
+    #[inline]
+    pub const fn next_wake_ms(&self) -> Option<u64> {
+        self.next_wake
+    }
+
+    /// Messages emitted since the last drain.
+    #[inline]
+    pub fn drain_messages(&mut self) -> Drain<'_, M> {
+        self.messages.drain(..)
+    }
+
+    /// Messages emitted since the last drain, without consuming them.
+    #[inline]
+    pub fn messages(&self) -> &[M] {
+        &self.messages
+    }
+
+    // --------------------------------------------------------------- painting
+
+    /// Returns `true` if anything has been marked dirty since the last present.
+    #[inline]
+    pub fn needs_paint(&self) -> bool {
+        !self.damage.is_clean()
+    }
+
+    /// Marks the whole surface for repaint.
+    #[inline]
+    pub fn invalidate_all(&mut self) {
+        self.damage.add_full();
+    }
+
+    /// Marks one node's rectangle for repaint.
+    pub fn invalidate(&mut self, id: NodeId) {
+        if let Some(node) = self.nodes.get(id) {
+            let clip = node.clip;
+            self.damage.add(clip);
+        }
+    }
+
+    /// The regions [`Ui::paint`] last drew. Pass this to
+    /// [`Surface::present`](denise::Surface::present).
+    #[inline]
+    pub fn damage(&self) -> &[Rect] {
+        self.damage.resolved()
+    }
+
+    /// Retires this frame's damage. Call after a successful present.
+    #[inline]
+    pub fn presented(&mut self) {
+        self.damage.end_frame();
+    }
+
+    /// Draws every damaged region of the scene stack into `frame`.
+    ///
+    /// The pipeline, in order: clear, base scene, each further scene over its
+    /// backdrop, cursor sprite. All of it inside the damage clip, so an untouched
+    /// panel costs nothing and a moved cursor costs two sprite-sized rectangles.
+    pub fn paint(&mut self, frame: &mut Frame<'_>) {
+        self.ensure_order();
+
+        let mut regions = [Rect::ZERO; MAX_DAMAGE_RECTS];
+        let count = {
+            let resolved = self.damage.resolve(frame.age());
+            regions[..resolved.len()].copy_from_slice(resolved);
+            resolved.len()
+        };
+
+        let base = self.theme.color(Role::Base100);
+        let mut canvas = Canvas::new(frame);
+
+        for region in &regions[..count] {
+            let mut region_canvas = canvas.with_clip(*region);
+            if region_canvas.is_clipped_out() {
+                continue;
+            }
+            region_canvas.clear(base);
+
+            let mut start = 0;
+            for (index, scene) in self.scenes.iter().enumerate() {
+                let end = self.scene_end[index];
+                if scene.dim > 0 {
+                    let veil = region_canvas.clip();
+                    region_canvas.fill_rect(veil, Color::rgba(0, 0, 0, scene.dim));
+                }
+                for &id in &self.order[start..end] {
+                    let Some(node) = self.nodes.get(id) else {
+                        continue;
+                    };
+                    if !node.paintable() || !node.clip.intersects(region) {
+                        continue;
+                    }
+                    let ctx = PaintCtx {
+                        theme: &self.theme,
+                        bounds: node.bounds,
+                        state: node.state,
+                        now_ms: self.now_ms,
+                    };
+                    let mut widget_canvas = region_canvas.with_clip(node.clip);
+                    node.widget.paint(&ctx, &mut widget_canvas);
+                }
+                start = end;
+            }
+
+            self.cursor.paint(&self.theme, &mut region_canvas);
+        }
+    }
+
+    /// Acquires, paints and presents in one call. Returns `false` when nothing was
+    /// dirty and no frame was drawn.
+    pub fn render(&mut self, surface: &mut impl Surface) -> Result<bool, SurfaceError> {
+        if !self.needs_paint() {
+            return Ok(false);
+        }
+        let mut frame = surface.acquire()?;
+        self.paint(&mut frame);
+        drop(frame);
+        surface.present(self.damage.resolved())?;
+        self.damage.end_frame();
+        Ok(true)
+    }
+
+    // -------------------------------------------------------------- internals
+
+    fn handle_one(&mut self, event: &InputEvent) {
+        match event {
+            InputEvent::PointerMoved { position } => {
+                self.move_pointer(*position, true);
+                if let Some(id) = self.pressed.or(self.hovered) {
+                    self.dispatch(id, &Event::Input(event));
+                }
+            }
+            InputEvent::PointerButton {
+                state: ElementState::Down,
+                position,
+                ..
+            } => {
+                self.move_pointer(*position, true);
+                self.press(event);
+            }
+            InputEvent::PointerButton {
+                state: ElementState::Up,
+                position,
+                ..
+            } => {
+                self.move_pointer(*position, true);
+                self.release(event);
+            }
+            InputEvent::PointerScroll { position, .. } => {
+                self.move_pointer(*position, true);
+                if let Some(id) = self.hovered {
+                    self.dispatch(id, &Event::Input(event));
+                }
+            }
+            InputEvent::PointerLeft => {
+                self.show_cursor(false);
+                self.set_hovered(None);
+            }
+            InputEvent::TouchDown { position, .. } => {
+                self.move_pointer(*position, false);
+                self.press(event);
+            }
+            InputEvent::TouchMoved { position, .. } => {
+                self.move_pointer(*position, false);
+                if let Some(id) = self.pressed {
+                    self.dispatch(id, &Event::Input(event));
+                }
+            }
+            InputEvent::TouchUp { position, .. } => {
+                self.move_pointer(*position, false);
+                self.release(event);
+                self.set_hovered(None);
+            }
+            InputEvent::Key {
+                code: KeyCode::Tab,
+                state: ElementState::Down,
+                modifiers,
+                ..
+            } => {
+                // Tab belongs to the toolkit, not to the focused widget. A panel
+                // with no pointer is driven entirely by this.
+                self.focus_step(modifiers.contains(Modifiers::SHIFT));
+            }
+            InputEvent::Key { .. } | InputEvent::Text { .. } => {
+                if let Some(id) = self.focused {
+                    self.dispatch(id, &Event::Input(event));
+                }
+            }
+            InputEvent::SurfaceResized { size, .. } => self.resize(*size),
+            _ => {}
+        }
+    }
+
+    fn move_pointer(&mut self, position: Point, show_cursor: bool) {
+        if self.pointer != position || self.cursor.visible != show_cursor {
+            self.damage.add(self.cursor.bounds());
+            self.pointer = position;
+            self.cursor.position = position;
+            self.cursor.visible = show_cursor;
+            self.damage.add(self.cursor.bounds());
+        }
+        self.update_hover();
+    }
+
+    fn update_hover(&mut self) {
+        let hit = self.hit_test(self.pointer);
+        match self.pressed {
+            // While a button is held the hover does not wander off to other
+            // widgets, and the pressed one shows its state only while the pointer
+            // is still over it — which is how a drag-off-then-release cancels.
+            Some(pressed) => {
+                let inside = hit == Some(pressed);
+                self.set_hovered(inside.then_some(pressed));
+                self.set_state(pressed, VisualState::PRESSED, inside);
+            }
+            None => self.set_hovered(hit),
+        }
+    }
+
+    fn press(&mut self, event: &InputEvent) {
+        let hit = self.hit_test(self.pointer);
+        self.pressed = hit;
+        match hit {
+            Some(id) => {
+                self.set_state(id, VisualState::PRESSED, true);
+                self.set_hovered(Some(id));
+                let focus = self.is_focusable(id).then_some(id);
+                self.set_focus(focus);
+                self.dispatch(id, &Event::Input(event));
+            }
+            // Clicking the background drops focus, which is what makes a text
+            // field commit and stop blinking.
+            None => self.set_focus(None),
+        }
+    }
+
+    fn release(&mut self, event: &InputEvent) {
+        if let Some(id) = self.pressed {
+            self.set_state(id, VisualState::PRESSED, false);
+            self.dispatch(id, &Event::Input(event));
+        }
+        self.pressed = None;
+        self.update_hover();
+    }
+
+    /// Delivers an event and applies whatever the widget asked for.
+    fn dispatch(&mut self, id: NodeId, event: &Event<'_>) -> Handled {
+        let (handled, wants_focus) = self.deliver(id, event);
+        if wants_focus && self.is_focusable(id) {
+            self.set_focus(Some(id));
+        }
+        handled
+    }
+
+    fn deliver(&mut self, id: NodeId, event: &Event<'_>) -> (Handled, bool) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return (Handled::No, false);
+        };
+        if node.state.contains(VisualState::DISABLED) {
+            return (Handled::No, false);
+        }
+        let mut ctx = EventCtx::new(
+            node.bounds,
+            &self.theme,
+            node.state,
+            self.now_ms,
+            &mut self.messages,
+        );
+        let handled = node.widget.on_event(event, &mut ctx);
+        let (dirty, wants_focus) = ctx.finish();
+        let clip = node.clip;
+        if dirty || handled.is_handled() {
+            self.damage.add(clip);
+        }
+        (handled, wants_focus)
+    }
+
+    fn set_hovered(&mut self, id: Option<NodeId>) {
+        if self.hovered == id {
+            return;
+        }
+        if let Some(old) = self.hovered {
+            self.set_state(old, VisualState::HOVERED, false);
+        }
+        self.hovered = id;
+        if let Some(new) = id {
+            self.set_state(new, VisualState::HOVERED, true);
+        }
+    }
+
+    fn set_focus(&mut self, id: Option<NodeId>) {
+        if self.focused == id {
+            return;
+        }
+        if let Some(old) = self.focused {
+            self.set_state(old, VisualState::FOCUSED, false);
+            self.focused = None;
+            self.deliver(old, &Event::FocusLost);
+        }
+        self.focused = id;
+        self.next_wake = None;
+        if let Some(new) = id {
+            self.set_state(new, VisualState::FOCUSED, true);
+            self.deliver(new, &Event::FocusGained);
+        }
+    }
+
+    fn set_state(&mut self, id: NodeId, flag: VisualState, on: bool) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if node.state.contains(flag) == on {
+            return;
+        }
+        node.state = node.state.set(flag, on);
+        let clip = node.clip;
+        self.damage.add(clip);
+    }
+
+    /// Drops a node out of hover, press and focus — used when it is removed,
+    /// hidden or disabled, so no stale id keeps receiving events.
+    fn forget(&mut self, id: NodeId) {
+        if self.subtree_contains(id, self.hovered) {
+            self.set_hovered(None);
+        }
+        if self.subtree_contains(id, self.pressed) {
+            self.pressed = None;
+        }
+        if self.subtree_contains(id, self.focused) {
+            self.set_focus(None);
+        }
+    }
+
+    fn subtree_contains(&self, root: NodeId, id: Option<NodeId>) -> bool {
+        let Some(mut cursor) = id else {
+            return false;
+        };
+        loop {
+            if cursor == root {
+                return true;
+            }
+            match self.nodes.get(cursor).and_then(|n| n.parent) {
+                Some(parent) => cursor = parent,
+                None => return false,
+            }
+        }
+    }
+
+    fn focus_step(&mut self, backwards: bool) {
+        self.ensure_order();
+        let (start, end) = self.input_span();
+        let mut candidates = Vec::new();
+        for &id in &self.order[start..end] {
+            if self.is_focusable(id) {
+                candidates.push(id);
+            }
+        }
+        if candidates.is_empty() {
+            self.set_focus(None);
+            return;
+        }
+        let current = self
+            .focused
+            .and_then(|f| candidates.iter().position(|&c| c == f));
+        let next = match (current, backwards) {
+            (Some(i), false) => (i + 1) % candidates.len(),
+            (Some(i), true) => (i + candidates.len() - 1) % candidates.len(),
+            (None, false) => 0,
+            (None, true) => candidates.len() - 1,
+        };
+        self.set_focus(Some(candidates[next]));
+    }
+
+    fn is_focusable(&self, id: NodeId) -> bool {
+        let (start, end) = self.input_span();
+        self.nodes.get(id).is_some_and(|node| {
+            node.paintable()
+                && !node.state.contains(VisualState::DISABLED)
+                && node.widget.focusable()
+                && self.order[start..end].contains(&id)
+        })
+    }
+
+    fn is_interactive(&self, node: &Node<M>) -> bool {
+        !node.state.contains(VisualState::DISABLED) && node.widget.accepts_pointer()
+    }
+
+    /// Range of `order` belonging to the topmost scene.
+    fn input_span(&self) -> (usize, usize) {
+        match self.scene_end.len() {
+            0 => (0, 0),
+            1 => (0, self.scene_end[0]),
+            n => (self.scene_end[n - 2], self.scene_end[n - 1]),
+        }
+    }
+
+    fn resize(&mut self, size: Size) {
+        if size == self.size {
+            return;
+        }
+        self.size = size;
+        self.damage.resize(size);
+        let roots: Vec<NodeId> = self.scenes.iter().map(|s| s.root).collect();
+        for root in roots {
+            if let Some(node) = self.nodes.get_mut(root) {
+                node.layout = Rect::from_size(size);
+            }
+            self.reflow(root);
+        }
+        self.damage.add_full();
+    }
+
+    fn sort_children(&mut self, parent: NodeId) {
+        // Siblings are kept in paint order, so the flatten below is a plain
+        // depth-first walk rather than a sort of the whole tree every frame.
+        let mut children = match self.nodes.get_mut(parent) {
+            Some(node) => core::mem::take(&mut node.children),
+            None => return,
+        };
+        let mut keys: Vec<(i32, NodeId)> = children
+            .iter()
+            .map(|&id| (self.nodes.get(id).map_or(0, |n| n.z), id))
+            .collect();
+        keys.sort_by_key(|&(z, _)| z);
+        children.clear();
+        children.extend(keys.into_iter().map(|(_, id)| id));
+        if let Some(node) = self.nodes.get_mut(parent) {
+            node.children = children;
+        }
+    }
+
+    fn ensure_order(&mut self) {
+        if !self.order_dirty {
+            return;
+        }
+        self.order.clear();
+        self.scene_end.clear();
+        let roots: Vec<NodeId> = self.scenes.iter().map(|s| s.root).collect();
+        let mut stack = Vec::new();
+        for root in roots {
+            stack.clear();
+            stack.push(root);
+            while let Some(id) = stack.pop() {
+                let Some(node) = self.nodes.get(id) else {
+                    continue;
+                };
+                self.order.push(id);
+                // Reversed, because the stack pops last-in first.
+                stack.extend(node.children.iter().rev().copied());
+            }
+            self.scene_end.push(self.order.len());
+        }
+        self.order_dirty = false;
+    }
+
+    fn reflow(&mut self, id: NodeId) {
+        let (origin, clip, disabled) = match self.nodes.get(id).and_then(|n| n.parent) {
+            Some(parent) => match self.nodes.get(parent) {
+                Some(node) => (
+                    Point::new(node.bounds.x, node.bounds.y),
+                    node.clip,
+                    node.state.contains(VisualState::DISABLED),
+                ),
+                None => return,
+            },
+            None => (Point::ZERO, Rect::from_size(self.size), false),
+        };
+
+        let mut stack = vec![(id, origin, clip, disabled)];
+        while let Some((id, origin, clip, disabled)) = stack.pop() {
+            let Some(node) = self.nodes.get_mut(id) else {
+                continue;
+            };
+            node.bounds = node.layout.translate(origin.x, origin.y);
+            node.clip = node.bounds.intersect(&clip).unwrap_or(Rect::ZERO);
+            let disabled = disabled || !node.enabled;
+            node.state = node.state.set(VisualState::DISABLED, disabled);
+            let child_origin = Point::new(node.bounds.x, node.bounds.y);
+            let child_clip = node.clip;
+            stack.extend(
+                node.children
+                    .iter()
+                    .map(|&c| (c, child_origin, child_clip, disabled)),
+            );
+        }
+    }
+
+    fn damage_subtree(&mut self, id: NodeId) {
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.nodes.get(id) else {
+                continue;
+            };
+            let clip = node.clip;
+            stack.extend(node.children.iter().copied());
+            self.damage.add(clip);
+        }
+    }
+
+    fn drop_subtree(&mut self, id: NodeId) {
+        self.forget(id);
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.nodes.remove(id) else {
+                continue;
+            };
+            stack.extend(node.children.iter().copied());
+        }
+    }
+}
+
+impl<M: 'static> core::fmt::Debug for Ui<M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Ui")
+            .field("nodes", &self.nodes.len())
+            .field("scenes", &self.scenes.len())
+            .field("size", &self.size)
+            .field("theme", &self.theme.name)
+            .field("focused", &self.focused)
+            .field("hovered", &self.hovered)
+            .finish_non_exhaustive()
+    }
+}
