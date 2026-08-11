@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "benches",
     "denise",
+    "denise-activex",
     "denise-drm",
     "denise-evdev",
     "denise-fbdev",
@@ -29,6 +30,7 @@ homepage = "https://github.com/bisand/denise"
 
 [workspace.dependencies]
 denise = { version = "0.0.0", path = "denise", default-features = false }
+denise-activex = { version = "0.0.0", path = "denise-activex" }
 denise-drm = { version = "0.0.0", path = "denise-drm" }
 denise-evdev = { version = "0.0.0", path = "denise-evdev" }
 denise-fbdev = { version = "0.0.0", path = "denise-fbdev" }

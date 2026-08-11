@@ -1,0 +1,23 @@
+[package]
+name = "denise-activex"
+description = "COM/ActiveX shim for Denise, so legacy Windows hosts can embed the control."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# Nothing platform-specific yet: what is here is the registration table, which
+# is a list of strings and is tested as one. The COM object will need
+# `windows` with `windows-implement` — a crate the bootstrap did not list, and
+# one more reason writing it is a separate decision.
+[dependencies]
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
