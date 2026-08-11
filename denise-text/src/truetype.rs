@@ -31,7 +31,7 @@ use alloc::vec::Vec;
 use denise::Size;
 use fontdue::{Font, FontSettings};
 
-use crate::source::{FontMetrics, GlyphMetrics, GlyphSource, Rasterised};
+use crate::source::{FontMetrics, GlyphId, GlyphMetrics, GlyphSource, Rasterised};
 
 /// A parsed TrueType or OpenType face.
 pub struct TrueTypeSource {
@@ -102,12 +102,26 @@ impl GlyphSource for TrueTypeSource {
         }
     }
 
-    fn glyph_metrics(&mut self, ch: char, size_px: u16) -> Option<GlyphMetrics> {
-        Some(Self::convert(&self.font.metrics(ch, f32::from(size_px))))
+    fn glyph_id(&self, ch: char) -> Option<GlyphId> {
+        // fontdue indexes by glyph, and index 0 is `.notdef` — the box. Keeping
+        // the index rather than the character means the cache holds one entry for
+        // every glyph the face actually has, not one per code point that maps to
+        // the same one.
+        Some(GlyphId(u32::from(self.font.lookup_glyph_index(ch))))
     }
 
-    fn rasterise(&mut self, ch: char, size_px: u16) -> Option<Rasterised<'_>> {
-        let (metrics, coverage) = self.font.rasterize(ch, f32::from(size_px));
+    fn glyph_metrics(&mut self, glyph: GlyphId, size_px: u16) -> Option<GlyphMetrics> {
+        Some(Self::convert(
+            &self
+                .font
+                .metrics_indexed(glyph.0 as u16, f32::from(size_px)),
+        ))
+    }
+
+    fn rasterise(&mut self, glyph: GlyphId, size_px: u16) -> Option<Rasterised<'_>> {
+        let (metrics, coverage) = self
+            .font
+            .rasterize_indexed(glyph.0 as u16, f32::from(size_px));
         let converted = Self::convert(&metrics);
         self.scratch.clear();
         self.scratch.extend_from_slice(&coverage);
@@ -120,6 +134,11 @@ impl GlyphSource for TrueTypeSource {
 
     fn contains(&self, ch: char) -> bool {
         self.font.lookup_glyph_index(ch) != 0
+    }
+
+    fn fallback_id(&self, _ch: char) -> Option<GlyphId> {
+        // Glyph zero is `.notdef`, which every well-formed face draws as a box.
+        Some(GlyphId(0))
     }
 }
 

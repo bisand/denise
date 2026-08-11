@@ -23,7 +23,7 @@ use alloc::vec::Vec;
 use denise::{Rect, Size};
 use denise_render::Mask;
 
-use crate::source::{FontId, GlyphMetrics, GlyphSource};
+use crate::source::{FontId, GlyphId, GlyphMetrics, GlyphSource};
 
 /// Identifies one rasterised glyph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,8 +32,20 @@ pub struct GlyphKey {
     pub font: FontId,
     /// At which pixel size.
     pub size_px: u16,
-    /// Which character.
-    pub ch: char,
+    /// Which glyph. Not a character: after shaping there is no longer one of
+    /// those per glyph.
+    pub glyph: GlyphId,
+}
+
+impl GlyphKey {
+    /// The key for a character in a source that maps them directly.
+    pub const fn from_char(font: FontId, size_px: u16, ch: char) -> Self {
+        Self {
+            font,
+            size_px,
+            glyph: GlyphId::from_char(ch),
+        }
+    }
 }
 
 /// A glyph's place in the atlas, and how to position it.
@@ -159,7 +171,7 @@ impl GlyphAtlas {
         }
         self.stats.misses += 1;
 
-        let Some(glyph) = source.rasterise(key.ch, key.size_px) else {
+        let Some(glyph) = source.rasterise(key.glyph, key.size_px) else {
             self.stats.failures += 1;
             return None;
         };

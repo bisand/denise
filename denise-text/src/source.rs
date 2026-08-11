@@ -1,5 +1,7 @@
 //! What a font has to provide, and what it says about a glyph.
 
+use alloc::vec::Vec;
+
 use denise::Size;
 
 /// Identifies a font within one [`TextEngine`](crate::TextEngine).
@@ -8,6 +10,44 @@ use denise::Size;
 /// C ABI has to carry it across `extern "C"` without a pointer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FontId(pub u16);
+
+/// Identifies a glyph *within one font*.
+///
+/// Not a `char`, and the distinction is the whole reason the shaping tier can
+/// exist. A source that maps characters straight to glyphs uses the code point
+/// here; a source that shapes uses the font's own glyph index, because after
+/// shaping there is no longer a one-to-one correspondence — `fi` may be one
+/// glyph, `é` may be two, and an Arabic letter is a different glyph in the middle
+/// of a word than at its end. A cache keyed by `char` cannot represent any of
+/// that, so this one is not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GlyphId(pub u32);
+
+impl GlyphId {
+    /// The identity a character-mapped source uses.
+    #[inline]
+    pub const fn from_char(ch: char) -> Self {
+        Self(ch as u32)
+    }
+
+    /// The character this came from, for a source that maps them directly.
+    #[inline]
+    pub const fn as_char(self) -> Option<char> {
+        char::from_u32(self.0)
+    }
+}
+
+/// One glyph, positioned by whatever laid the line out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShapedGlyph {
+    /// Which glyph.
+    pub id: GlyphId,
+    /// Pen position, relative to the start of the run.
+    pub x: i32,
+    /// Baseline offset, relative to the run's baseline. Non-zero only for a
+    /// source that positions marks vertically.
+    pub y: i32,
+}
 
 /// Vertical metrics of a font at one size, in pixels.
 ///
@@ -68,13 +108,14 @@ pub struct Rasterised<'a> {
     pub stride: usize,
 }
 
-/// A thing that can measure and rasterise glyphs.
+/// A thing that can lay out, measure and rasterise glyphs.
 ///
-/// Deliberately per-character rather than per-string: shaping — the step that
-/// turns a string into a glyph sequence — belongs to whichever backend can do it,
-/// and pretending a bitmap font can do it would be a lie in the type system. A
-/// source that shapes exposes that through its own API; this trait is the common
-/// denominator every backend really does provide.
+/// [`shape`](GlyphSource::shape) is the layout step and has a default that
+/// accumulates per-character advances — correct for every script where a
+/// character is a glyph. A backend that can do better overrides it. Keeping
+/// shaping *on this trait* rather than beside it is what lets the cache and the
+/// draw path be written once: they deal in [`GlyphId`]s and never need to know
+/// whether a shaper produced them.
 pub trait GlyphSource {
     /// Human-readable name, for logging which font a panel actually loaded.
     fn name(&self) -> &str;
@@ -82,18 +123,66 @@ pub trait GlyphSource {
     /// Vertical metrics at `size_px`.
     fn metrics(&self, size_px: u16) -> FontMetrics;
 
+    /// The glyph a character maps to, or `None` if this source has none.
+    ///
+    /// Only meaningful for text that needs no shaping. Use [`GlyphSource::shape`]
+    /// for anything else, and note that a source which shapes may return `None`
+    /// here for a character it can nonetheless render in context.
+    fn glyph_id(&self, ch: char) -> Option<GlyphId> {
+        self.contains(ch).then(|| GlyphId::from_char(ch))
+    }
+
     /// Metrics for one glyph, without rasterising it.
     ///
     /// Used for measurement, which happens far more often than drawing: a label
     /// that has not changed is measured on every layout pass and drawn on none.
-    fn glyph_metrics(&mut self, ch: char, size_px: u16) -> Option<GlyphMetrics>;
+    fn glyph_metrics(&mut self, glyph: GlyphId, size_px: u16) -> Option<GlyphMetrics>;
 
     /// Rasterises one glyph.
     ///
     /// Returning a borrow of the source's own scratch buffer rather than filling a
     /// caller's slice keeps this to one call, and lets a backend that already has
     /// the bitmap hand it over without copying it twice.
-    fn rasterise(&mut self, ch: char, size_px: u16) -> Option<Rasterised<'_>>;
+    fn rasterise(&mut self, glyph: GlyphId, size_px: u16) -> Option<Rasterised<'_>>;
+
+    /// Turns a string into positioned glyphs, appended to `out`.
+    ///
+    /// The default walks characters and accumulates advances, which is correct for
+    /// every script where a character is a glyph and a line is the sum of its
+    /// widths — Latin, Cyrillic, Greek. A source that can do better overrides this
+    /// and says so through [`GlyphSource::can_shape`].
+    /// Returns the run's total advance, which is its width.
+    fn shape(&mut self, text: &str, size_px: u16, out: &mut Vec<ShapedGlyph>) -> i32 {
+        let mut pen = 0;
+        for ch in text.chars() {
+            let Some(id) = self.glyph_id(ch).or_else(|| self.fallback_id(ch)) else {
+                continue;
+            };
+            let Some(metrics) = self.glyph_metrics(id, size_px) else {
+                continue;
+            };
+            out.push(ShapedGlyph { id, x: pen, y: 0 });
+            pen += metrics.advance;
+        }
+        pen
+    }
+
+    /// Returns `true` if [`GlyphSource::shape`] does more than accumulate widths.
+    ///
+    /// Worth logging at startup: a panel that needs ligatures and got the default
+    /// implementation will look subtly wrong rather than obviously broken.
+    fn can_shape(&self) -> bool {
+        false
+    }
+
+    /// The glyph to draw for a character this source does not have.
+    ///
+    /// `None` drops the character silently, which is almost never what anyone
+    /// wants — a visible box is a defect somebody will report.
+    fn fallback_id(&self, ch: char) -> Option<GlyphId> {
+        let _ = ch;
+        None
+    }
 
     /// Returns `true` if this source has a glyph of its own for `ch`, as opposed
     /// to a fallback box.

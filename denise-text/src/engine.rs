@@ -8,7 +8,7 @@ use denise_render::Canvas;
 
 use crate::atlas::{AtlasStats, GlyphAtlas, GlyphKey};
 use crate::bitmap::BitmapSource;
-use crate::source::{FontId, FontMetrics, GlyphSource};
+use crate::source::{FontId, FontMetrics, GlyphId, GlyphSource, ShapedGlyph};
 
 /// A font and a size, together, because neither is much use alone.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -39,8 +39,8 @@ impl TextStyle {
 /// Where a laid-out glyph goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PositionedGlyph {
-    /// The character.
-    pub ch: char,
+    /// Which glyph. Not a character — see [`GlyphId`].
+    pub glyph: GlyphId,
     /// Pen position before this glyph, relative to the start of the line.
     pub pen_x: i32,
     /// Where the ink goes, relative to the line's origin and baseline.
@@ -55,6 +55,9 @@ pub struct PositionedGlyph {
 pub struct TextEngine {
     atlas: GlyphAtlas,
     sources: Vec<Box<dyn GlyphSource>>,
+    /// Reused across calls so laying out a line allocates nothing after the
+    /// first one, which matters because measurement happens every layout pass.
+    run: Vec<ShapedGlyph>,
 }
 
 impl TextEngine {
@@ -72,6 +75,7 @@ impl TextEngine {
         let mut engine = Self {
             atlas,
             sources: Vec::new(),
+            run: Vec::new(),
         };
         engine.add_font(Box::new(BitmapSource::new()));
         engine
@@ -147,26 +151,29 @@ impl TextEngine {
         let Some(source) = self.sources.get_mut(style.font.0 as usize) else {
             return 0;
         };
-        let mut pen = 0;
-        for ch in text.chars() {
-            let Some(metrics) = source.glyph_metrics(ch, style.size_px) else {
+        // `run` and `sources` are separate fields, so the shaper can fill the
+        // scratch buffer this engine already owns.
+        self.run.clear();
+        let width = source.shape(text, style.size_px, &mut self.run);
+        for glyph in &self.run {
+            let Some(metrics) = source.glyph_metrics(glyph.id, style.size_px) else {
                 continue;
             };
-            if !metrics.is_blank() {
-                f(PositionedGlyph {
-                    ch,
-                    pen_x: pen,
-                    bounds: Rect::new(
-                        pen + metrics.bearing_x,
-                        -metrics.bearing_y,
-                        metrics.size.width as i32,
-                        metrics.size.height as i32,
-                    ),
-                });
+            if metrics.is_blank() {
+                continue;
             }
-            pen += metrics.advance;
+            f(PositionedGlyph {
+                glyph: glyph.id,
+                pen_x: glyph.x,
+                bounds: Rect::new(
+                    glyph.x + metrics.bearing_x,
+                    glyph.y - metrics.bearing_y,
+                    metrics.size.width as i32,
+                    metrics.size.height as i32,
+                ),
+            });
         }
-        pen
+        width
     }
 
     /// Width of one line, ignoring `\n`.
@@ -204,28 +211,28 @@ impl TextEngine {
         let Some(source) = self.sources.get_mut(style.font.0 as usize) else {
             return 0;
         };
-        let mut pen = 0;
-        for ch in text.chars() {
+        self.run.clear();
+        let width = source.shape(text, style.size_px, &mut self.run);
+        for glyph in &self.run {
             let key = GlyphKey {
                 font: style.font,
                 size_px: style.size_px,
-                ch,
+                glyph: glyph.id,
             };
-            // `source` and `atlas` are separate fields, so the cache can fill from
-            // the font without either being copied through a temporary.
+            // `source`, `atlas` and `run` are separate fields, so the cache fills
+            // straight from the font with nothing copied through a temporary.
             let Some(placed) = self.atlas.get_or_insert(key, source.as_mut()) else {
                 continue;
             };
             if let Some(mask) = self.atlas.mask(&placed) {
                 let at = Point::new(
-                    origin.x + pen + placed.metrics.bearing_x,
-                    origin.y - placed.metrics.bearing_y,
+                    origin.x + glyph.x + placed.metrics.bearing_x,
+                    origin.y + glyph.y - placed.metrics.bearing_y,
                 );
                 canvas.blit_mask(at, &mask, color);
             }
-            pen += placed.metrics.advance;
         }
-        pen
+        width
     }
 
     /// Draws `text` with the top-left corner of its first line at `origin`,

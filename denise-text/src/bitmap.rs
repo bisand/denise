@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use denise::Size;
 use denise_render::font::{self, BitmapFont, Glyph};
 
-use crate::source::{FontMetrics, GlyphMetrics, GlyphSource, Rasterised};
+use crate::source::{FontMetrics, GlyphId, GlyphMetrics, GlyphSource, Rasterised};
 
 /// The built-in five-by-seven font at whole-number scales.
 #[derive(Debug)]
@@ -110,11 +110,18 @@ impl GlyphSource for BitmapSource {
         }
     }
 
-    fn glyph_metrics(&mut self, ch: char, size_px: u16) -> Option<GlyphMetrics> {
-        Some(self.metrics_for(ch, size_px))
+    fn glyph_id(&self, ch: char) -> Option<GlyphId> {
+        // Every character maps to something: an unmapped one gets the missing-
+        // character box, which is a visible defect rather than a silent gap.
+        Some(GlyphId::from_char(ch))
     }
 
-    fn rasterise(&mut self, ch: char, size_px: u16) -> Option<Rasterised<'_>> {
+    fn glyph_metrics(&mut self, glyph: GlyphId, size_px: u16) -> Option<GlyphMetrics> {
+        Some(self.metrics_for(glyph.as_char()?, size_px))
+    }
+
+    fn rasterise(&mut self, glyph: GlyphId, size_px: u16) -> Option<Rasterised<'_>> {
+        let ch = glyph.as_char()?;
         let scale = Self::scale(size_px);
         let metrics = self.metrics_for(ch, size_px);
         if metrics.is_blank() {
@@ -162,6 +169,10 @@ impl GlyphSource for BitmapSource {
         self.font.contains(ch)
     }
 
+    fn fallback_id(&self, ch: char) -> Option<GlyphId> {
+        Some(GlyphId::from_char(ch))
+    }
+
     fn snap_size(&self, size_px: u16) -> u16 {
         (Self::scale(size_px) * font::CELL_HEIGHT) as u16
     }
@@ -187,7 +198,9 @@ mod tests {
     #[test]
     fn a_space_has_advance_and_no_ink() {
         let mut source = BitmapSource::new();
-        let metrics = source.glyph_metrics(' ', 16).expect("space");
+        let metrics = source
+            .glyph_metrics(GlyphId::from_char(' '), 16)
+            .expect("space");
         assert!(metrics.is_blank());
         assert_eq!(metrics.advance, font::ADVANCE * 2);
     }
@@ -196,8 +209,10 @@ mod tests {
     fn ink_is_trimmed_to_the_glyph() {
         let mut source = BitmapSource::new();
         // A full stop is one blob in the bottom left of the cell, nothing else.
-        let dot = source.glyph_metrics('.', 8).expect("full stop");
-        let m = source.glyph_metrics('M', 8).expect("M");
+        let dot = source
+            .glyph_metrics(GlyphId::from_char('.'), 8)
+            .expect("full stop");
+        let m = source.glyph_metrics(GlyphId::from_char('M'), 8).expect("M");
         assert!(
             dot.size.width < m.size.width && dot.size.height < m.size.height,
             "a full stop should not occupy an M-sized cell: {dot:?} vs {m:?}"
@@ -208,8 +223,8 @@ mod tests {
     #[test]
     fn a_descender_reaches_below_the_baseline() {
         let mut source = BitmapSource::new();
-        let g = source.glyph_metrics('g', 8).expect("g");
-        let o = source.glyph_metrics('o', 8).expect("o");
+        let g = source.glyph_metrics(GlyphId::from_char('g'), 8).expect("g");
+        let o = source.glyph_metrics(GlyphId::from_char('o'), 8).expect("o");
         // `bearing_y` is measured up from the baseline, so a descender's mask is
         // taller than its bearing and an x-height letter's is not.
         assert!(
@@ -227,7 +242,7 @@ mod tests {
         let mut source = BitmapSource::new();
         for scale in [1u16, 2, 3] {
             let size = scale * 8;
-            let glyph = source.rasterise('M', size).expect("M");
+            let glyph = source.rasterise(GlyphId::from_char('M'), size).expect("M");
             let m = glyph.metrics;
             assert_eq!(glyph.stride, m.size.width as usize);
             assert_eq!(
@@ -246,8 +261,10 @@ mod tests {
     #[test]
     fn scaling_multiplies_every_dimension() {
         let mut source = BitmapSource::new();
-        let one = source.glyph_metrics('M', 8).expect("M");
-        let three = source.glyph_metrics('M', 24).expect("M");
+        let one = source.glyph_metrics(GlyphId::from_char('M'), 8).expect("M");
+        let three = source
+            .glyph_metrics(GlyphId::from_char('M'), 24)
+            .expect("M");
         assert_eq!(three.size.width, one.size.width * 3);
         assert_eq!(three.size.height, one.size.height * 3);
         assert_eq!(three.advance, one.advance * 3);
@@ -265,7 +282,9 @@ mod tests {
     fn an_unmapped_character_still_rasterises_as_the_missing_box() {
         let mut source = BitmapSource::new();
         assert!(!source.contains('\u{4e2d}'));
-        let glyph = source.rasterise('\u{4e2d}', 16).expect("fallback box");
+        let glyph = source
+            .rasterise(GlyphId::from_char('\u{4e2d}'), 16)
+            .expect("fallback box");
         assert!(!glyph.metrics.is_blank(), "a missing glyph must be visible");
     }
 }

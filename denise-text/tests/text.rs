@@ -187,11 +187,7 @@ fn nordic_letters_survive_the_whole_path() {
 fn a_space_is_cached_without_taking_atlas_space() {
     let mut atlas = GlyphAtlas::new(Size::new(64, 64));
     let mut source = BitmapSource::new();
-    let key = GlyphKey {
-        font: FontId(0),
-        size_px: 16,
-        ch: ' ',
-    };
+    let key = GlyphKey::from_char(FontId(0), 16, ' ');
     let placed = atlas.get_or_insert(key, &mut source).expect("space");
     assert!(placed.rect.is_empty());
     assert!(placed.metrics.advance > 0, "a space still moves the pen");
@@ -204,11 +200,7 @@ fn packed_glyphs_never_overlap() {
     let mut source = BitmapSource::new();
     let mut placed = Vec::new();
     for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".chars() {
-        let key = GlyphKey {
-            font: FontId(0),
-            size_px: 16,
-            ch,
-        };
+        let key = GlyphKey::from_char(FontId(0), 16, ch);
         if let Some(p) = atlas.get_or_insert(key, &mut source) {
             placed.push((ch, p.rect));
         }
@@ -235,11 +227,7 @@ fn a_full_atlas_resets_instead_of_failing() {
     let mut source = BitmapSource::new();
     let mut drawn = 0;
     for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ".chars() {
-        let key = GlyphKey {
-            font: FontId(0),
-            size_px: 24,
-            ch,
-        };
+        let key = GlyphKey::from_char(FontId(0), 24, ch);
         if atlas.get_or_insert(key, &mut source).is_some() {
             drawn += 1;
         }
@@ -260,11 +248,7 @@ fn a_full_atlas_resets_instead_of_failing() {
 fn a_glyph_larger_than_the_whole_atlas_fails_without_looping() {
     let mut atlas = GlyphAtlas::new(Size::new(4, 4));
     let mut source = BitmapSource::new();
-    let key = GlyphKey {
-        font: FontId(0),
-        size_px: 48,
-        ch: 'M',
-    };
+    let key = GlyphKey::from_char(FontId(0), 48, 'M');
     assert_eq!(atlas.get_or_insert(key, &mut source), None);
     assert_eq!(atlas.stats().failures, 1);
 }
@@ -277,25 +261,19 @@ fn the_mask_of_a_placed_glyph_is_the_glyph() {
     // Two glyphs, so the second one is not at the atlas origin and a mask that
     // ignored the offset would return the first one's pixels.
     for ch in ['I', 'M'] {
-        let key = GlyphKey {
-            font: FontId(0),
-            size_px: 8,
-            ch,
-        };
+        let key = GlyphKey::from_char(FontId(0), 8, ch);
         atlas.get_or_insert(key, &mut source).expect("glyph");
     }
 
-    let key = GlyphKey {
-        font: FontId(0),
-        size_px: 8,
-        ch: 'M',
-    };
+    let key = GlyphKey::from_char(FontId(0), 8, 'M');
     let placed = atlas.get_or_insert(key, &mut source).expect("M");
     let mask = atlas.mask(&placed).expect("M has ink");
     assert_eq!(mask.width(), placed.metrics.size.width as i32);
     assert_eq!(mask.height(), placed.metrics.size.height as i32);
 
-    let direct = source.rasterise('M', 8).expect("M");
+    let direct = source
+        .rasterise(denise_text::GlyphId::from_char('M'), 8)
+        .expect("M");
     let mut sheet_a = Sheet::new();
     sheet_a.draw(|canvas| canvas.blit_mask(Point::new(10, 10), &mask, Color::WHITE));
     let mut sheet_b = Sheet::new();
@@ -366,7 +344,7 @@ fn layout_positions_match_the_advances() {
     let mut engine = engine();
     let style = TextStyle::built_in(16);
     let mut pens = Vec::new();
-    let total = engine.layout_line(style, "abc", |glyph| pens.push((glyph.ch, glyph.pen_x)));
+    let total = engine.layout_line(style, "abc", |glyph| pens.push((glyph.glyph, glyph.pen_x)));
     assert_eq!(pens.len(), 3);
     assert_eq!(pens[0].1, 0);
     assert!(pens[1].1 > pens[0].1 && pens[2].1 > pens[1].1);

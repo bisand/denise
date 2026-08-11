@@ -54,6 +54,8 @@ pub mod truetype;
 pub use atlas::{AtlasStats, GlyphAtlas, GlyphKey, Placed};
 pub use bitmap::BitmapSource;
 pub use engine::{PositionedGlyph, TextEngine, TextStyle};
-pub use source::{FontId, FontMetrics, GlyphMetrics, GlyphSource, Rasterised};
+pub use source::{
+    FontId, FontMetrics, GlyphId, GlyphMetrics, GlyphSource, Rasterised, ShapedGlyph,
+};
 #[cfg(feature = "truetype")]
 pub use truetype::TrueTypeSource;
