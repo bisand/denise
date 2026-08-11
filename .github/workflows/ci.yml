@@ -140,3 +140,25 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Idenise-ffi/include -o /tmp/cxx /tmp/cxx.cpp \
               -Ltarget/release -ldenise_ffi -Wl,-rpath,"$PWD/target/release"
           /tmp/cxx
+
+  windows:
+    name: the Win32 control builds and its tests run
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # This is the only machine in CI that can compile `denise-win32` at all —
+      # everywhere else it is `#![cfg(windows)]` and disappears. Its unit tests
+      # need real GDI, which is the point of running them here rather than
+      # mocking a DIB section.
+      - run: cargo clippy -p denise-win32 --all-targets -- -D warnings
+      - run: cargo test -p denise-win32
+
+      # The cdylib and its header are meant to be linked from Windows hosts, and
+      # the export list differs from the ELF one enough to be worth proving.
+      - run: cargo build -p denise-ffi --release
+      - run: cargo test -p denise-ffi

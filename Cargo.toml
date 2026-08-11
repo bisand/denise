@@ -11,6 +11,7 @@ members = [
     "denise-render",
     "denise-text",
     "denise-ui",
+    "denise-win32",
     "denise-winit",
     "examples/hello-rect",
     "examples/kiosk",
@@ -36,6 +37,7 @@ denise-macos = { version = "0.0.0", path = "denise-macos" }
 denise-render = { version = "0.0.0", path = "denise-render", default-features = false }
 denise-text = { version = "0.0.0", path = "denise-text", default-features = false }
 denise-ui = { version = "0.0.0", path = "denise-ui", default-features = false }
+denise-win32 = { version = "0.0.0", path = "denise-win32" }
 denise-winit = { version = "0.0.0", path = "denise-winit" }
 
 drm = "0.15"
@@ -55,6 +57,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std"] 
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
+windows = "0.62"
 winit = "0.30"
 softbuffer = "0.4"
 
