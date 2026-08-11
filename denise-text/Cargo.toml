@@ -16,11 +16,16 @@ std = ["denise/std", "denise-render/std"]
 # Real TrueType and OpenType fonts, anti-aliased and proportionally spaced.
 # About 145 KB of static binary, and no shaping — see the crate docs.
 truetype = ["dep:fontdue"]
+# Shaping, bidirectional text and font fallback, via cosmic-text. About 3.1 MB
+# of static binary — four times the rest of the toolkit — so this is for panels
+# that genuinely need a script the other tiers cannot draw.
+shaping = ["dep:cosmic-text", "std"]
 
 [dependencies]
 denise = { workspace = true }
 denise-render = { workspace = true }
 fontdue = { workspace = true, optional = true }
+cosmic-text = { workspace = true, optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"

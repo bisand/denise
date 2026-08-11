@@ -47,6 +47,8 @@ extern crate alloc;
 pub mod atlas;
 pub mod bitmap;
 pub mod engine;
+#[cfg(feature = "shaping")]
+pub mod shaped;
 pub mod source;
 #[cfg(feature = "truetype")]
 pub mod truetype;
@@ -54,6 +56,8 @@ pub mod truetype;
 pub use atlas::{AtlasStats, GlyphAtlas, GlyphKey, Placed};
 pub use bitmap::BitmapSource;
 pub use engine::{PositionedGlyph, TextEngine, TextStyle};
+#[cfg(feature = "shaping")]
+pub use shaped::ShapedSource;
 pub use source::{
     FontId, FontMetrics, GlyphId, GlyphMetrics, GlyphSource, Rasterised, ShapedGlyph,
 };

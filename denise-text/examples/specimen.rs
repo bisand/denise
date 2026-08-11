@@ -21,7 +21,7 @@ use denise_render::Canvas;
 use denise_text::GlyphSource as _;
 use denise_text::{TextEngine, TextStyle};
 
-const SIZE: Size = Size::new(880, 560);
+const SIZE: Size = Size::new(880, 800);
 const SAMPLE: &str = "Kjærlighet på Øy";
 const PANGRAM: &str = "Vår sære Zulu fra badeøya spilte jo whist og quickstep i min taxi.";
 const SIZES: [u16; 5] = [8, 16, 24, 32, 48];
@@ -30,6 +30,10 @@ fn main() -> std::io::Result<()> {
     let mut args = std::env::args().skip(1);
     let path = args.next().unwrap_or_else(|| "specimen.ppm".to_owned());
     let font_path = args.next();
+    // A third argument replaces the sample, which is how you check whether a
+    // given tier can actually draw the script a panel has to show.
+    let sample = args.next();
+    let sample = sample.as_deref().unwrap_or(SAMPLE);
 
     let mut engine = TextEngine::new();
     // `mut` only when a second face can be added, which is feature-dependent.
@@ -48,7 +52,18 @@ fn main() -> std::io::Result<()> {
             Err(error) => eprintln!("could not parse {font_path}: {error}"),
         }
     }
-    #[cfg(not(feature = "truetype"))]
+    #[cfg(feature = "shaping")]
+    if let Some(font_path) = &font_path {
+        let data = std::fs::read(font_path)?;
+        match denise_text::ShapedSource::from_fonts("shaped", [data]) {
+            Ok(source) => {
+                let id = engine.add_font(Box::new(source));
+                faces.push((id, "shaped (cosmic-text)".to_owned()));
+            }
+            Err(error) => eprintln!("could not build a shaper: {error}"),
+        }
+    }
+    #[cfg(not(any(feature = "truetype", feature = "shaping")))]
     if font_path.is_some() {
         eprintln!("built without --features truetype; ignoring the font path");
     }
@@ -100,7 +115,7 @@ fn main() -> std::io::Result<()> {
                     &mut canvas,
                     style,
                     Point::new(64, y),
-                    SAMPLE,
+                    sample,
                     theme.color(Role::BaseContent),
                 );
                 if snapped != size {
