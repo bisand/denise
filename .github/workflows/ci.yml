@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p denise -p denise-render -p denise-ui --no-default-features
+      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --no-default-features
 
   benches:
     name: benches compile
@@ -80,8 +80,8 @@ jobs:
       # The core is a pure rlib with no C dependencies, so this needs no
       # cross-linker. When the DRM and evdev backends land in M2 this job grows a
       # `cross` or a gcc-aarch64-linux-gnu toolchain and starts linking examples.
-      - run: cargo build -p denise -p denise-render -p denise-ui --target ${{ matrix.target }} --no-default-features
-      - run: cargo build -p denise -p denise-render -p denise-ui --target ${{ matrix.target }} --features std
+      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --no-default-features
+      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --features std
 
   isolation:
     name: core pulls in no platform code
@@ -98,7 +98,7 @@ jobs:
       - name: Assert the dependency tree stays clean
         run: |
           status=0
-          for crate in denise denise-render denise-ui; do
+          for crate in denise denise-render denise-text denise-ui; do
             tree=$(cargo tree -p "$crate" --no-default-features --edges normal --prefix none)
             echo "== $crate =="
             echo "$tree"

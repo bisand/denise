@@ -465,6 +465,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "denise-text"
+version = "0.0.0"
+dependencies = [
+ "denise",
+ "denise-render",
+]
+
+[[package]]
 name = "denise-ui"
 version = "0.0.0"
 dependencies = [
