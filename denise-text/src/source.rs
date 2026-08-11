@@ -147,30 +147,23 @@ pub trait GlyphSource {
 
     /// Turns a string into positioned glyphs, appended to `out`.
     ///
-    /// The default walks characters and accumulates advances, which is correct for
-    /// every script where a character is a glyph and a line is the sum of its
-    /// widths — Latin, Cyrillic, Greek. A source that can do better overrides this
-    /// and says so through [`GlyphSource::can_shape`].
+    /// **Only called when [`can_shape`](GlyphSource::can_shape) is `true`.** A
+    /// source that maps characters to glyphs one for one does not implement this:
+    /// the engine lays those out itself, taking each advance from the glyph cache
+    /// so that measuring a label a hundred times costs one rasterisation rather
+    /// than a hundred outline computations.
+    ///
     /// Returns the run's total advance, which is its width.
     fn shape(&mut self, text: &str, size_px: u16, out: &mut Vec<ShapedGlyph>) -> i32 {
-        let mut pen = 0;
-        for ch in text.chars() {
-            let Some(id) = self.glyph_id(ch).or_else(|| self.fallback_id(ch)) else {
-                continue;
-            };
-            let Some(metrics) = self.glyph_metrics(id, size_px) else {
-                continue;
-            };
-            out.push(ShapedGlyph { id, x: pen, y: 0 });
-            pen += metrics.advance;
-        }
-        pen
+        let _ = (text, size_px, out);
+        0
     }
 
-    /// Returns `true` if [`GlyphSource::shape`] does more than accumulate widths.
+    /// Returns `true` if this source lays out runs itself through
+    /// [`shape`](GlyphSource::shape), rather than one glyph per character.
     ///
-    /// Worth logging at startup: a panel that needs ligatures and got the default
-    /// implementation will look subtly wrong rather than obviously broken.
+    /// Worth logging at startup: a panel that needs ligatures and got a source
+    /// that cannot provide them looks subtly wrong rather than obviously broken.
     fn can_shape(&self) -> bool {
         false
     }

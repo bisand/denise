@@ -461,6 +461,7 @@ dependencies = [
  "criterion",
  "denise",
  "denise-render",
+ "denise-text",
  "denise-ui",
 ]
 

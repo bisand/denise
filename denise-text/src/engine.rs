@@ -50,8 +50,10 @@ pub struct PositionedGlyph {
 /// Fonts, a bounded glyph cache, and everything that needs both.
 ///
 /// One of these per application. It is `&mut` for measurement as well as drawing,
-/// because measuring is what populates the cache — a label that is measured and
-/// then drawn should rasterise its glyphs once, not twice.
+/// because measuring is what populates the cache: a label measured during layout
+/// and drawn a moment later rasterises its glyphs once, and a label measured on
+/// every layout pass and never redrawn pays a cache lookup rather than an outline
+/// computation each time.
 pub struct TextEngine {
     atlas: GlyphAtlas,
     sources: Vec<Box<dyn GlyphSource>>,
@@ -148,32 +150,72 @@ impl TextEngine {
         text: &str,
         mut f: impl FnMut(PositionedGlyph),
     ) -> i32 {
-        let Some(source) = self.sources.get_mut(style.font.0 as usize) else {
-            return 0;
-        };
-        // `run` and `sources` are separate fields, so the shaper can fill the
-        // scratch buffer this engine already owns.
-        self.run.clear();
-        let width = source.shape(text, style.size_px, &mut self.run);
-        for glyph in &self.run {
-            let Some(metrics) = source.glyph_metrics(glyph.id, style.size_px) else {
+        let width = self.shape_into_run(style, text);
+        for index in 0..self.run.len() {
+            let glyph = self.run[index];
+            let Some(placed) = self.placed(style, glyph.id) else {
                 continue;
             };
-            if metrics.is_blank() {
+            if placed.metrics.is_blank() {
                 continue;
             }
             f(PositionedGlyph {
                 glyph: glyph.id,
                 pen_x: glyph.x,
                 bounds: Rect::new(
-                    glyph.x + metrics.bearing_x,
-                    glyph.y - metrics.bearing_y,
-                    metrics.size.width as i32,
-                    metrics.size.height as i32,
+                    glyph.x + placed.metrics.bearing_x,
+                    glyph.y - placed.metrics.bearing_y,
+                    placed.metrics.size.width as i32,
+                    placed.metrics.size.height as i32,
                 ),
             });
         }
         width
+    }
+
+    /// Fills `self.run` with the glyphs of `text`, and returns the run's width.
+    ///
+    /// A source that shapes does its own layout. Everything else is laid out here,
+    /// taking each advance from the glyph cache — which is what makes measuring
+    /// the same label on every layout pass cost a cache lookup rather than an
+    /// outline computation.
+    fn shape_into_run(&mut self, style: TextStyle, text: &str) -> i32 {
+        self.run.clear();
+        let Some(source) = self.sources.get_mut(style.font.0 as usize) else {
+            return 0;
+        };
+        if source.can_shape() {
+            return source.shape(text, style.size_px, &mut self.run);
+        }
+
+        let mut pen = 0;
+        for ch in text.chars() {
+            let Some(id) = source.glyph_id(ch).or_else(|| source.fallback_id(ch)) else {
+                continue;
+            };
+            let key = GlyphKey {
+                font: style.font,
+                size_px: style.size_px,
+                glyph: id,
+            };
+            let Some(placed) = self.atlas.get_or_insert(key, source.as_mut()) else {
+                continue;
+            };
+            self.run.push(ShapedGlyph { id, x: pen, y: 0 });
+            pen += placed.metrics.advance;
+        }
+        pen
+    }
+
+    /// The cached placement of one glyph, rasterising it if need be.
+    fn placed(&mut self, style: TextStyle, glyph: crate::GlyphId) -> Option<crate::Placed> {
+        let source = self.sources.get_mut(style.font.0 as usize)?;
+        let key = GlyphKey {
+            font: style.font,
+            size_px: style.size_px,
+            glyph,
+        };
+        self.atlas.get_or_insert(key, source.as_mut())
     }
 
     /// Width of one line, ignoring `\n`.
@@ -208,20 +250,10 @@ impl TextEngine {
         text: &str,
         color: Color,
     ) -> i32 {
-        let Some(source) = self.sources.get_mut(style.font.0 as usize) else {
-            return 0;
-        };
-        self.run.clear();
-        let width = source.shape(text, style.size_px, &mut self.run);
-        for glyph in &self.run {
-            let key = GlyphKey {
-                font: style.font,
-                size_px: style.size_px,
-                glyph: glyph.id,
-            };
-            // `source`, `atlas` and `run` are separate fields, so the cache fills
-            // straight from the font with nothing copied through a temporary.
-            let Some(placed) = self.atlas.get_or_insert(key, source.as_mut()) else {
+        let width = self.shape_into_run(style, text);
+        for index in 0..self.run.len() {
+            let glyph = self.run[index];
+            let Some(placed) = self.placed(style, glyph.id) else {
                 continue;
             };
             if let Some(mask) = self.atlas.mask(&placed) {

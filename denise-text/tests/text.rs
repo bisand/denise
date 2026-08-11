@@ -79,9 +79,8 @@ fn a_second_lookup_of_the_same_glyph_hits_the_cache() {
     let after_first = engine.stats();
     assert_eq!(
         after_first.misses, 1,
-        "one distinct glyph, one rasterisation"
+        "three of the same letter is one rasterisation"
     );
-    assert_eq!(after_first.hits, 2);
 
     sheet.draw(|canvas| {
         engine.draw(canvas, style, Point::new(4, 40), "aaa", Color::WHITE);
@@ -91,8 +90,34 @@ fn a_second_lookup_of_the_same_glyph_hits_the_cache() {
         after_second.misses, 1,
         "drawing the same text again must not rasterise anything"
     );
-    assert_eq!(after_second.hits, 5);
-    assert_eq!(after_second.hit_rate(), Some(83));
+    assert!(
+        after_second.hits > after_first.hits,
+        "the second pass should be all hits"
+    );
+    assert!(
+        after_second.hit_rate().expect("looked something up") >= 90,
+        "a redrawn label should be almost entirely cache hits, got {:?}",
+        after_second.hit_rate()
+    );
+}
+
+#[test]
+fn measuring_a_label_repeatedly_rasterises_it_once() {
+    // A form measures its labels on every layout pass. If measurement went to the
+    // font rather than the cache, a proportional face would recompute an outline
+    // per character per pass, for text that has not changed since boot.
+    let mut engine = engine();
+    let style = TextStyle::built_in(16);
+    engine.measure(style, "Kjærlighet");
+    let after_first = engine.stats().misses;
+    for _ in 0..50 {
+        engine.measure(style, "Kjærlighet");
+    }
+    assert_eq!(
+        engine.stats().misses,
+        after_first,
+        "measuring the same string again must not rasterise anything"
+    );
 }
 
 #[test]
