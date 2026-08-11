@@ -1,15 +1,26 @@
+<div align="center">
+
+<img src="assets/logo.svg" width="148"
+     alt="Three translucent layers compositing into one, with a cursor sprite on top">
+
 # Denise
 
-A direct-rendering UI toolkit for embedded Linux and systems **without a desktop
-environment** — kiosks, digital signage, industrial HMIs, Raspberry Pi panels,
-in-vehicle displays.
+**A direct-rendering UI toolkit for embedded Linux and systems without a desktop
+environment.**
+
+[![CI](https://github.com/bisand/denise/actions/workflows/ci.yml/badge.svg)](https://github.com/bisand/denise/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/badge/licence-MIT-89B4FA)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-F9E2AF)](#constraints)
+[![Milestone](https://img.shields.io/badge/milestone-M1.1-F5C2E7)](#milestones)
+[![Core](https://img.shields.io/badge/core-forbid(unsafe__code)-A6E3A1)](#constraints)
+[![Targets](https://img.shields.io/badge/targets-aarch64_%7C_armv7_%7C_x86__64-94E2D5)](#constraints)
+
+</div>
+
+Kiosks, digital signage, industrial HMIs, Raspberry Pi panels, in-vehicle displays.
 
 No X11. No Wayland. No browser engine. No managed runtime. One static binary that
 opens the display, draws, and reads input.
-
-The name is the Amiga's display chip, which composited bitplanes and hardware
-sprites into a video signal. That is more or less the job description, cursor
-sprite included.
 
 Denise is a from-scratch Rust successor to
 [CoreCanvas](https://github.com/bisand/corecanvas), a .NET library that proved the
@@ -19,9 +30,10 @@ the runtime.
 
 ## Status: M1.1
 
-The core abstraction, the software rasteriser and the theme system exist, benchmarked, and proven
-against a desktop backend. There is no scene graph, no component model, no
-hardware backend and no text yet. See [Milestones](#milestones).
+The core abstraction, the software rasteriser and the theme system exist,
+benchmarked and proven against a desktop backend. There is no scene graph, no
+component model, no hardware backend and no text yet. See
+[Milestones](#milestones).
 
 What works today:
 
@@ -34,6 +46,39 @@ of the surface per frame. Press `T` to cycle themes; the drawing code does not
 change, because it never names a colour. Stats print to stderr once a second —
 that number is the whole point of the project, so it is measured from the first
 commit rather than asserted in a README later.
+
+## The name
+
+Denise — the MOS 8362, one of the three custom chips in the Amiga's original chip
+set alongside Agnus and Paula — was the display chip. Its job, every single frame:
+
+1. pull bitplanes out of chip RAM and turn them into pixels,
+2. combine two playfields according to priority,
+3. overlay up to eight hardware sprites,
+4. resolve it all through the colour registers,
+5. hand the result to the video output.
+
+That is this library's job description, done in software: composite z-ordered
+layers, overlay a cursor sprite, resolve to pixels, hand the buffer to the display.
+The cursor sprite is not a metaphor — it is step 4 of the
+[rendering pipeline](#rendering-pipeline) below, and it is why there is one in the
+logo.
+
+There is a second reason the name fits, and it is the one that actually decided it.
+Denise did all of the above with no operating system in the way. No compositor, no
+window server, no driver stack, no GPU. Chip RAM to display, on a fixed cycle
+budget, on hardware slower than the microcontroller in a modern keyboard. That is
+precisely the position this toolkit wants to occupy on a Raspberry Pi, and
+precisely the thing X11 and Wayland exist to stop you doing.
+
+Super Denise (8373) extended it in ECS; AGA replaced it with Lisa.
+
+### What the backends are not called
+
+Agnus, Paula and Lisa are not backend crate names, and will not become them. They
+are excellent names for a blog post and useless in a repository: `denise-drm` tells
+you what it does, `denise-paula` requires you to already know. The Amiga reference
+stops at the project name.
 
 ## What it is not
 

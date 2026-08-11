@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Denise">
+  <title>Denise</title>
+  <desc>Three translucent bitplanes compositing into one, with a hardware cursor sprite on top.</desc>
+
+  <defs>
+    <clipPath id="panel">
+      <rect x="0" y="0" width="256" height="256" rx="56"/>
+    </clipPath>
+    <!-- The lighter top edge and darker bottom edge a widget uses to honour
+         Theme::depth. No blur: it stays inside its own bounds. -->
+    <linearGradient id="depth" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.18"/>
+    </linearGradient>
+  </defs>
+
+  <!-- base-100 -->
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="#1E1E2E"/>
+
+  <!-- A video signal, scanned out one line at a time. -->
+  <g clip-path="url(#panel)" opacity="0.09">
+    <g fill="#CDD6F4">
+      <rect x="0" y="8" width="256" height="2"/><rect x="0" y="24" width="256" height="2"/>
+      <rect x="0" y="40" width="256" height="2"/><rect x="0" y="56" width="256" height="2"/>
+      <rect x="0" y="72" width="256" height="2"/><rect x="0" y="88" width="256" height="2"/>
+      <rect x="0" y="104" width="256" height="2"/><rect x="0" y="120" width="256" height="2"/>
+      <rect x="0" y="136" width="256" height="2"/><rect x="0" y="152" width="256" height="2"/>
+      <rect x="0" y="168" width="256" height="2"/><rect x="0" y="184" width="256" height="2"/>
+      <rect x="0" y="200" width="256" height="2"/><rect x="0" y="216" width="256" height="2"/>
+      <rect x="0" y="232" width="256" height="2"/><rect x="0" y="248" width="256" height="2"/>
+    </g>
+  </g>
+
+  <!-- Three bitplanes, offset and translucent, so the overlaps show the
+       compositing rather than merely implying it. Accent, secondary, primary. -->
+  <g clip-path="url(#panel)">
+    <g>
+      <rect x="40" y="46" width="128" height="88" rx="18" fill="#94E2D5" opacity="0.82"/>
+      <rect x="64" y="80" width="128" height="88" rx="18" fill="#F5C2E7" opacity="0.82"/>
+      <rect x="88" y="114" width="128" height="88" rx="18" fill="#89B4FA" opacity="0.86"/>
+      <rect x="88" y="114" width="128" height="88" rx="18" fill="url(#depth)"/>
+    </g>
+  </g>
+
+  <!-- The hardware sprite. Denise overlaid eight of them; this library still
+       composites one, which is why the cursor is in the logo. -->
+  <g transform="translate(150 128) scale(1.5)">
+    <path d="M0 0 L0 34 L8.6 25.8 L14.2 38.4 L21.4 35.2 L15.8 22.8 L27 21.6 Z"
+          fill="#11111B" stroke="#11111B" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M0 0 L0 34 L8.6 25.8 L14.2 38.4 L21.4 35.2 L15.8 22.8 L27 21.6 Z"
+          fill="#FFFFFF"/>
+  </g>
+</svg>
