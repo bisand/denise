@@ -426,20 +426,39 @@ stops a label being re-outlined on every layout pass.
 AltGr as a third level, and a Caps Lock that reaches `æøå` without turning `1`
 into `!`.
 
-```bash
-DENISE_KEYMAP=no cargo run -p panel
+The layout is read from the system: `DENISE_KEYMAP`, then `XKB_DEFAULT_LAYOUT`,
+then the console keyboard configuration files distributions actually write. On the
+Pi this was developed against, `/etc/conf.d/loadkmap` says Norwegian and the panel
+picks it up with nothing set by hand.
+
+```console
+$ /tmp/panel
+keymap  no (from /etc/conf.d/loadkmap)
 ```
 
 The composition table is generated from Unicode's own canonical composition data
 rather than typed out — a hand-written table of a hundred accented letters is a
 list of a hundred chances to be subtly wrong about one of them.
 
-Deliberately **not** libxkbcommon. It is the right answer on a desktop and the
-wrong one here: a C library with a runtime data directory defeats "one static
-binary" on a read-only root. Two layouts cost about four kilobytes and no
-filesystem at all. The trade is that this will never cover xkeyboard-config, and a
-device that needs Devanagari should be told so plainly rather than sold a
-half-implementation.
+### Why the tables are ours, when the choice is the system's
+
+Reading which layout a system wants is easy. Reading the layout *itself* is the
+part that would remove these tables, and both ways of doing it cost more than they
+save:
+
+| | What it gives | What it costs |
+|---|---|---|
+| `KDGKBENT` on a VT | The kernel's real keymap, dead-key table included | `/dev/tty0` is `root:root` mode 600 everywhere checked |
+| libxkbcommon | Every layout in xkeyboard-config | A C library and a runtime data directory |
+
+Denise otherwise runs unprivileged, needing only the `video` and `input` groups,
+and a static binary needs no data directory. Giving up either to read a keymap is
+a poor trade. So the choice comes from the system and the data comes from here.
+
+The cost is real and stated: a system configured for a layout Denise has no table
+for falls back to US, **visibly**, through the reported source — rather than by
+typing the wrong thing. Adding a table is about thirty lines, because a layout
+lists only what differs from the Latin alphabet. Needing root is forever.
 
 Control characters are never text. Enter, Tab and Backspace produce `Key` events
 and nothing else, so a field can insert everything it receives without filtering

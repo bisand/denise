@@ -9,14 +9,30 @@
 //! tested rather than inferred from a keyboard someone happened to have plugged
 //! in.
 //!
-//! # Why not libxkbcommon
+//! # Using the system's layout
 //!
-//! It is the correct answer on a desktop and the wrong one here. It is a C library
-//! with a runtime data directory, which defeats "one static binary that boots into
-//! the UI" on a device with a read-only root. Two layouts as static tables cost
-//! about four kilobytes and no filesystem at all. The trade is deliberate: this
-//! will never handle every layout in xkeyboard-config, and a device that needs
-//! Devanagari should be told so plainly rather than sold a half-implementation.
+//! [`from_system`] reads what the machine is already configured for —
+//! `DENISE_KEYMAP`, then `XKB_DEFAULT_LAYOUT`, then the console keyboard
+//! configuration files distributions actually write. On the Raspberry Pi this was
+//! developed against, `/etc/conf.d/loadkmap` says `no` and the panel picks it up
+//! with nothing set by hand.
+//!
+//! That reads the system's *choice*. Reading the system's *layout data* is a
+//! different question, and the reason this crate carries its own tables:
+//!
+//! - **The kernel's own keymap**, via `KDGKBENT` and `KDGKBDIACRUC` on a VT, is
+//!   the technically right answer and is not much code. It needs `/dev/tty0`,
+//!   which is `root:root` mode 600 on every distribution checked. Denise
+//!   otherwise runs unprivileged, needing only the `video` and `input` groups,
+//!   and giving that up to read a keymap is a poor trade.
+//! - **libxkbcommon** is the correct answer on a desktop and the wrong one here:
+//!   a C library with a runtime data directory, which defeats "one static binary"
+//!   on a read-only root.
+//!
+//! So the choice comes from the system and the data comes from here. The cost is
+//! that a system configured for a layout Denise has no table for falls back to
+//! US — visibly, through [`LayoutSource`], rather than by typing the wrong thing.
+//! Adding a table is about thirty lines; needing root is forever.
 //!
 //! # Control characters are never text
 //!
@@ -262,11 +278,18 @@ impl Composer {
             _ => {}
         }
 
-        // Ctrl or a plain Alt means a binding, not text. AltGr sets `ALT` too,
-        // which is why the level has to be consulted rather than the bit alone.
-        let chord = modifiers.contains(Modifiers::CTRL)
-            || modifiers.contains(Modifiers::SUPER)
-            || (modifiers.contains(Modifiers::ALT) && !self.level3);
+        // Ctrl or a plain Alt means a binding, not text. AltGr is neither, and
+        // while it is held it overrides both — because a great many keyboards and
+        // firmwares report AltGr as Ctrl plus Alt, and a rule that let Ctrl veto
+        // text would silently disable the whole third level on exactly those.
+        // Super still suppresses: nothing sends it alongside AltGr.
+        let chord = if self.level3 {
+            modifiers.contains(Modifiers::SUPER)
+        } else {
+            modifiers.contains(Modifiers::CTRL)
+                || modifiers.contains(Modifiers::SUPER)
+                || modifiers.contains(Modifiers::ALT)
+        };
         if chord {
             self.pending_dead = None;
             return Composed::NONE;
@@ -641,6 +664,113 @@ const COMPOSE: [(char, char, char); 118] = [
     ('\u{02da}', 'u', '\u{016f}'), // LATIN SMALL LETTER U WITH RING ABOVE
 ];
 
+/// Where a layout choice came from, for logging what a panel actually picked up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutSource {
+    /// The `DENISE_KEYMAP` environment variable.
+    Denise,
+    /// `XKB_DEFAULT_LAYOUT`, as Wayland compositors use.
+    Xkb,
+    /// A system configuration file, named here so a wrong guess is traceable.
+    File(&'static str),
+    /// Nothing said, so US.
+    Default,
+}
+
+impl core::fmt::Display for LayoutSource {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LayoutSource::Denise => f.write_str("DENISE_KEYMAP"),
+            LayoutSource::Xkb => f.write_str("XKB_DEFAULT_LAYOUT"),
+            LayoutSource::File(path) => write!(f, "{path}"),
+            LayoutSource::Default => f.write_str("default"),
+        }
+    }
+}
+
+/// Configuration files that name a console or X keyboard layout, and the key to
+/// look for in each. In priority order.
+const SYSTEM_FILES: [(&str, &str); 4] = [
+    // systemd.
+    ("/etc/vconsole.conf", "KEYMAP"),
+    // Debian and Raspberry Pi OS.
+    ("/etc/default/keyboard", "XKBLAYOUT"),
+    // Alpine and other OpenRC systems, whose value is a path to a keymap file.
+    ("/etc/conf.d/loadkmap", "KEYMAP"),
+    // Void, and some minimal images.
+    ("/etc/rc.conf", "KEYMAP"),
+];
+
+/// Reduces whatever a system wrote down to a layout name.
+///
+/// Console keymaps are named for files — `no-latin1`, `/etc/keymap/no.bmap.gz`,
+/// `uk.map.gz` — so this takes the basename, drops the extensions, and then drops
+/// any variant suffix if the full name matches nothing.
+pub fn normalise_name(raw: &str) -> &str {
+    let raw = raw.trim().trim_matches(['"', '\'']);
+    let base = raw.rsplit('/').next().unwrap_or(raw);
+    let stem = base.split('.').next().unwrap_or(base);
+    if by_name(stem).is_some() {
+        return stem;
+    }
+    stem.split('-').next().unwrap_or(stem)
+}
+
+/// Finds the layout this system is configured for.
+///
+/// Reads, in order: `DENISE_KEYMAP`, `XKB_DEFAULT_LAYOUT`, and the console
+/// keyboard configuration files distributions actually use. Falls back to US.
+///
+/// # What this does and does not do
+///
+/// It reads the system's *choice of layout*, not the layout itself. The layout
+/// still has to be one Denise has a table for; a system configured for `fr` on a
+/// build with only `us` and `no` gets US and says so through the returned
+/// [`LayoutSource`], rather than silently typing the wrong thing.
+///
+/// Reading the layout *data* would mean the kernel's own keymap, through
+/// `KDGKBENT` on a VT — which needs `/dev/tty0`, which is `root:root` mode 600 on
+/// every distribution checked. Denise otherwise runs unprivileged, needing only
+/// the `video` and `input` groups, and giving that up to read a keymap is a poor
+/// trade. Adding a layout table is about thirty lines; needing root is forever.
+pub fn from_system() -> (&'static Layout, LayoutSource) {
+    for (variable, source) in [
+        ("DENISE_KEYMAP", LayoutSource::Denise),
+        ("XKB_DEFAULT_LAYOUT", LayoutSource::Xkb),
+    ] {
+        if let Ok(value) = std::env::var(variable)
+            && let Some(layout) = by_name(normalise_name(&value))
+        {
+            return (layout, source);
+        }
+    }
+
+    for (path, key) in SYSTEM_FILES {
+        let Ok(contents) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        if let Some(value) = value_of(&contents, key)
+            && let Some(layout) = by_name(normalise_name(value))
+        {
+            return (layout, LayoutSource::File(path));
+        }
+    }
+
+    (&US, LayoutSource::Default)
+}
+
+/// Finds `KEY=value` in a shell-style configuration file, ignoring comments.
+fn value_of<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
+    contents.lines().find_map(|line| {
+        let line = line.trim();
+        if line.starts_with('#') {
+            return None;
+        }
+        let (name, value) = line.split_once('=')?;
+        (name.trim() == key).then(|| value.trim())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,6 +980,31 @@ mod tests {
     }
 
     #[test]
+    fn altgr_reaches_the_third_level_even_reported_as_ctrl_plus_alt() {
+        // Plenty of keyboards and firmwares send Ctrl alongside AltGr. A rule
+        // that let Ctrl veto text would disable the entire third level on those,
+        // silently, and only on the hardware nobody tested with.
+        let mut c = Composer::new(&NORWEGIAN);
+        c.feed(KeyCode::ControlLeft, ElementState::Down, Modifiers::CTRL);
+        c.feed(
+            KeyCode::AltRight,
+            ElementState::Down,
+            Modifiers::CTRL | Modifiers::ALT,
+        );
+        let composed = c.feed(
+            KeyCode::Digit2,
+            ElementState::Down,
+            Modifiers::CTRL | Modifiers::ALT,
+        );
+        assert_eq!(composed.as_slice(), ['@']);
+
+        // Releasing AltGr puts Ctrl back in charge, and Ctrl types nothing.
+        c.feed(KeyCode::AltRight, ElementState::Up, Modifiers::CTRL);
+        let composed = c.feed(KeyCode::Digit2, ElementState::Down, Modifiers::CTRL);
+        assert!(composed.is_empty(), "Ctrl+2 is a binding, not an at sign");
+    }
+
+    #[test]
     fn control_chords_type_nothing() {
         let mut c = Composer::new(&US);
         for modifier in [Modifiers::CTRL, Modifiers::SUPER] {
@@ -989,6 +1144,34 @@ mod tests {
             );
             assert_eq!(digits, "059", "{}", layout.name);
         }
+    }
+
+    #[test]
+    fn keymap_names_are_reduced_to_something_findable() {
+        // The shapes real systems write down. Alpine names a gzipped file path,
+        // Debian a bare code, systemd a console keymap with a variant suffix.
+        assert_eq!(normalise_name("/etc/keymap/no.bmap.gz"), "no");
+        assert_eq!(normalise_name("\"no\""), "no");
+        assert_eq!(normalise_name("no-latin1"), "no");
+        assert_eq!(normalise_name("us"), "us");
+        assert_eq!(normalise_name("/usr/share/keymaps/xkb/us.map.gz"), "us");
+        // A layout that is not shipped reduces to something that still misses,
+        // rather than to a near-match that would type the wrong characters.
+        assert!(by_name(normalise_name("fr-bepo")).is_none());
+    }
+
+    #[test]
+    fn a_configuration_file_is_parsed_the_way_a_shell_would() {
+        let alpine = "# Absolut path to the keymap.\n                      #KEYMAP=\"/usr/share/keymaps/xkb/us.map.gz\"\n                      KEYMAP=/etc/keymap/no.bmap.gz\n";
+        let value = value_of(alpine, "KEYMAP").expect("a value");
+        assert_eq!(
+            normalise_name(value),
+            "no",
+            "the commented-out line must not win"
+        );
+
+        assert_eq!(value_of("XKBLAYOUT=\"gb\"\n", "XKBLAYOUT"), Some("\"gb\""));
+        assert_eq!(value_of("# nothing here\n", "KEYMAP"), None);
     }
 
     #[test]

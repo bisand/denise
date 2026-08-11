@@ -36,24 +36,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(30)
         .clamp(1, 600);
 
-    let chosen = std::env::args()
-        .nth(2)
-        .and_then(|name| layout::by_name(&name))
-        .or_else(|| {
-            std::env::var("DENISE_KEYMAP")
-                .ok()
-                .and_then(|name| layout::by_name(&name))
-        })
-        .unwrap_or(&layout::US);
-
     let mut input = InputBackend::open_all(Size::new(1280, 800))?;
-    input.set_layout(chosen);
+    let (chosen, source) = match std::env::args().nth(2) {
+        Some(name) => match layout::by_name(layout::normalise_name(&name)) {
+            Some(layout) => {
+                input.set_layout(layout);
+                (layout, layout::LayoutSource::Denise)
+            }
+            None => {
+                eprintln!("no layout called {name:?}; falling back to the system's");
+                input.set_layout_from_system()
+            }
+        },
+        None => input.set_layout_from_system(),
+    };
 
     for device in input.devices() {
         eprintln!("input   {}: {}", device.capabilities(), device.name());
     }
     eprintln!(
-        "keymap  {}   (available: {})",
+        "keymap  {} (from {source})   (available: {})",
         chosen.name,
         layout::BUILT_IN
             .iter()

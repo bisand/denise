@@ -248,16 +248,35 @@ use a bare VT.
 ## Keyboard layout
 
 evdev reports key *positions*; what they type is a property of the layout. Denise
-defaults to US, because `KeyCode` names US positions and any other default would
-make the two disagree. On a Norwegian keyboard:
+reads the system's choice, which on Alpine lives in `/etc/conf.d/loadkmap`:
 
-```bash
-DENISE_KEYMAP=no /tmp/panel
+```console
+$ cat /etc/conf.d/loadkmap
+KEYMAP=/etc/keymap/no.bmap.gz
+
+$ /tmp/panel
+keymap  no (from /etc/conf.d/loadkmap)
 ```
 
-Without it the keyboard still works — every key produces an event and Tab, Enter
-and Escape all behave — but `Ø` types `;` and the dead keys type nothing. That is
-worth knowing because it looks like a broken keyboard rather than a wrong setting.
+`DENISE_KEYMAP=no` overrides it, and `F3` cycles layouts at runtime.
+
+If the panel reports a layout you did not expect, `examples/keys` shows exactly
+what each key produces — the position on one line, the composed character
+indented under it:
+
+```console
+$ /tmp/keys 30
+key   Semicolon
+  --> text 'ø'  U+00F8
+```
+
+The position is a fact about the hardware and the character is a fact about the
+layout, so a wrongly-labelled keyboard and a wrong keymap stop looking alike.
+
+Two things that look like faults and are not. A dead key prints a position and no
+text at all until the next key resolves it. And **the labels on the keys are not
+consulted**: with a Norwegian layout on a physically English keyboard, `ø` is on
+the key printed `;`, `æ` on `'`, and `å` on `[`.
 
 ## Known gaps
 

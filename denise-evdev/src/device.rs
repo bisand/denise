@@ -189,18 +189,20 @@ impl InputBackend {
         }
     }
 
-    /// Reads every keyboard with the layout named by `DENISE_KEYMAP`, if it is set
-    /// and names one that exists. Returns the layout in force either way.
+    /// Reads every keyboard with the layout this system is configured for.
     ///
-    /// Environment rather than a config file: this is for getting a demo onto a
-    /// Norwegian keyboard over SSH, not a configuration system.
-    pub fn set_layout_from_env(&mut self) -> &'static Layout {
-        let chosen = std::env::var("DENISE_KEYMAP")
-            .ok()
-            .and_then(|name| layout::by_name(&name))
-            .unwrap_or(&layout::US);
+    /// Checks `DENISE_KEYMAP`, then `XKB_DEFAULT_LAYOUT`, then the console
+    /// keyboard configuration files distributions actually write — so a Pi whose
+    /// `/etc/conf.d/loadkmap` says Norwegian gets Norwegian without anyone having
+    /// to remember an environment variable.
+    ///
+    /// Returns what was chosen and where it came from, which is worth logging: a
+    /// system configured for a layout Denise has no table for falls back to US,
+    /// and that is far easier to diagnose when the panel says so.
+    pub fn set_layout_from_system(&mut self) -> (&'static Layout, layout::LayoutSource) {
+        let (chosen, source) = layout::from_system();
         self.set_layout(chosen);
-        chosen
+        (chosen, source)
     }
 
     /// Descriptors to wait on.
