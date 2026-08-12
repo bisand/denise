@@ -36,6 +36,9 @@ windows = { workspace = true, features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_Registry",
+    # VARIANT and VariantChangeType: every value a script assigns arrives as one,
+    # tagged with whatever type the host felt like sending.
+    "Win32_System_Variant",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

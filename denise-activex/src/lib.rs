@@ -8,26 +8,60 @@
 //! # Status
 //!
 //! The server is here: the four `Dll*` exports, a class factory, and a control
-//! implementing `IOleObject`, `IOleInPlaceObject`, `IOleWindow`, `IOleControl`
-//! and `IPersistStreamInit`. A container can instantiate it, site it, activate it
-//! in place — at which point it creates a real [`denise_win32`] child window — and
-//! tear it down again.
+//! implementing `IOleObject`, `IOleInPlaceObject`, `IOleWindow`, `IOleControl`,
+//! `IPersistStreamInit`, `IDispatch` and the connection point that carries its
+//! events. A container can instantiate it, site it, activate it in place — at
+//! which point it creates a real [`denise_win32`] child window — script it by
+//! name, sink its events, and tear it down again.
 //!
-//! `registry` is the half that can be tested without Windows, and it is also the
-//! half that most often goes wrong: a control fails to appear in a host's toolbox
-//! for one of about four reasons, all of them a missing or wrong registry value,
-//! and none of them producing an error anywhere. So that list is data, and the
-//! tests check it as data.
+//! `registry`, `himetric` and `dispatch` are the halves that can be tested
+//! without Windows, and they are also the halves that most often go wrong: a
+//! control fails to appear in a host's toolbox for one of about four reasons, all
+//! of them a missing or wrong registry value, and none of them producing an error
+//! anywhere. So those lists are data, and the tests check them as data.
+//!
+//! # Scripting it
+//!
+//! There is no type library, so every host is late-bound. That works everywhere —
+//! VBScript, PowerShell, VB6 through an `Object` variable, MFC's
+//! `COleDispatchDriver` — and it costs a designer's property sheet and an object
+//! browser's member list. Which is why the surface is short: without a type
+//! library each member is something a person has to be told about rather than
+//! discover, so each one has to earn its place.
+//!
+//! | Member | Dispid | |
+//! |---|---|---|
+//! | `Text` | 1 | property, read/write — the field's contents |
+//! | `Caption` | 2 | property, read/write — the heading |
+//! | `Enabled` | 3 | property, read/write — whether the field and button take input |
+//! | `Refresh` | 4 | method — repaint everything |
+//! | `Change` | 1 | event — somebody typed in the field |
+//! | `Click` | -600 | event — the button was pressed (`DISPID_CLICK`) |
+//!
+//! ```text
+//! $panel = New-Object -ComObject Denise.Panel
+//! $panel.Caption = "Hei"
+//! $panel.Caption
+//! ```
+//!
+//! Events arrive through a connection point. Ask for
+//! [`DIID_DENISE_PANEL_EVENTS`] with `IConnectionPointContainer::FindConnectionPoint`
+//! and advise an object implementing `IDispatch`; there is no vtable to match and
+//! nothing to compile against, only `Invoke` with one of the two dispids above.
 //!
 //! # What is not here yet
 //!
-//! **`IDispatch`.** Without it a container can host the control and cannot script
-//! it: no properties, no methods, no events. The tree behind the control emits
-//! messages already; delivering them to the host is what this would add.
+//! **A type library.** Without one a form designer shows no properties and an
+//! object browser no members, and a host cannot early-bind.
 //!
 //! **`IViewObject2::Draw`.** The design-time view a form editor asks for before
 //! the control is ever activated. Without it a control dropped on a form is a
 //! blank rectangle until the form runs.
+//!
+//! **The scripting safety categories.** `IObjectSafety` and the "safe for
+//! scripting" registry entries are deliberately absent: they are an assertion
+//! about untrusted callers that has not been thought through, and claiming it
+//! carelessly is worse than not claiming it.
 //!
 //! # What has been verified
 //!
@@ -48,16 +82,26 @@
 //! file, so a new one on every build would break every project that ever embedded
 //! the control.
 
+pub mod connections;
+pub mod dispatch;
 pub mod himetric;
 pub mod registry;
 
+#[cfg(windows)]
+mod automation;
 #[cfg(windows)]
 mod control;
 #[cfg(windows)]
 mod factory;
 #[cfg(windows)]
+mod model;
+#[cfg(windows)]
 mod server;
+#[cfg(windows)]
+mod variant;
 
+#[cfg(windows)]
+pub use automation::DIID_DENISE_PANEL_EVENTS;
 #[cfg(windows)]
 pub use control::DenisePanel;
 #[cfg(windows)]

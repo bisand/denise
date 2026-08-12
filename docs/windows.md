@@ -196,16 +196,38 @@ step prints, and each fails distinctly:
 4. **`DoVerb(INPLACEACTIVATE)`** — the control asks the site for a parent window
    and creates its child `HWND` inside it. A window appearing means the whole
    path works.
+5. **`FindConnectionPoint` and `Advise`** — the control accepts an event sink.
+6. **`GetIDsOfNames` and `Invoke`** — `Caption`, `Text` and `Enabled` are set and
+   read **by name**, which is exactly what a script does.
 
-A quicker smoke test needing no build at all, once the DLL is registered:
+Then it is interactive, and this is the part to actually try:
+
+- Type in the field. Each keystroke prints `event: Change` with the new text,
+  which the handler reads back off the control through `IDispatch`.
+- Press the button. It prints `event: Click`, and the handler assigns to
+  `Caption` — from inside the event the control itself raised. The heading
+  changing is the re-entrant path working.
+
+### Scripting it from PowerShell
+
+Once the DLL is registered, with no build at all:
 
 ```powershell
-New-Object -ComObject Denise.Panel
+$panel = New-Object -ComObject Denise.Panel
+$panel.Caption = "Hei"
+$panel.Caption
+$panel.Enabled = $false
+$panel.Enabled
 ```
 
-That covers step 1 only — PowerShell is not a control container, so nothing is
-ever sited and no window appears. It printing `System.__ComObject` with no members
-is expected: there is no `IDispatch` yet, so there is nothing to enumerate.
+PowerShell is not a control container, so nothing is ever sited and no window
+appears — but the properties are live, and this is the shortest proof that
+`GetIDsOfNames` and `Invoke` work through the real automation layer rather than
+through a container written in this repository.
+
+`Get-Member` showing almost nothing is expected. There is no type library, so
+every host is late-bound: a name works, discovering the names does not. They are
+`Text`, `Caption`, `Enabled` and `Refresh`.
 
 Common failures, and what each means:
 

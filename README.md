@@ -131,13 +131,14 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-ffi` | Stable C ABI, `cdylib`, hand-written header | ✅ M5 |
 | `denise-macos` | Embeddable `NSView` over a CoreGraphics bitmap context | ✅ M5 |
 | `denise-win32` | Windows child-`HWND` control over a DIB section | ✅ M5 |
-| `denise-activex` | COM/ActiveX shim for legacy Windows hosts | ✅ M5 |
+| `denise-activex` | COM/ActiveX shim for legacy Windows hosts, scriptable over `IDispatch` | ✅ M5 |
 
 Everything through M5 has run on real hardware. On Windows 11 ARM64, `denise-win32`
 puts a window on screen where Tab reaches the control, AltGr composes `@` and the
 dead keys produce `é` and `ö`; and `denise-activex` registers with `regsvr32`,
 instantiates through `CoCreateInstance`, sites, activates in place and renders
-inside a container that knows nothing about it.
+inside a container that knows nothing about it — which can then set its properties
+by name and receive its events.
 
 `denise-ui` is a crate of its own rather than part of the core because widgets
 need both the platform contract and the rasteriser, and the rasteriser already
@@ -536,6 +537,47 @@ the same split `denise-drm` and `denise-evdev` already made. A table of a hundre
 numbers is exactly the thing that breaks, and a CI runner is a slow place to find
 out.
 
+### Scripting the ActiveX control
+
+Embedding a control and *driving* one are different problems, and the second is
+`IDispatch`. The surface is four members and two events:
+
+| Member | Dispid | |
+|---|---|---|
+| `Text` | 1 | property, read/write — the field's contents |
+| `Caption` | 2 | property, read/write — the heading |
+| `Enabled` | 3 | property, read/write |
+| `Refresh` | 4 | method |
+| `Change` | 1 | event — somebody typed |
+| `Click` | -600 | event — the button, at OLE's standard `DISPID_CLICK` |
+
+```powershell
+$panel = New-Object -ComObject Denise.Panel
+$panel.Caption = "Hei"
+$panel.Caption
+```
+
+There is no type library, so every host is late-bound. That works everywhere and
+tells nobody anything, which is why the surface is short: each member is something
+a person has to be told about rather than discover, so each has to earn its place.
+
+Two things are worth naming. The first is that **a host is not tidy about
+`wFlags`** — VBScript sends `METHOD | PROPERTYGET` for anything whose result it
+uses, because at the call site it does not know which the object has. So the flags
+are a set of things the host would accept, and the control picks the one the member
+offers. That decision is a pure function of a table, so it lives outside
+`cfg(windows)` with tests, next to the HIMETRIC arithmetic and for the same reason.
+
+The second is **re-entrancy**, which is where a control like this actually breaks.
+A click handler assigning to `Caption` is an ordinary thing for a script to do, and
+it arrives while the tree that raised the click is still running — with the
+control's own `RefCell` borrowed around it. Pushing it straight back in would
+panic, unwinding out through a COM method into somebody's script engine. So a
+property put made while the tree is running records the change and stops, and the
+tree applies whatever a handler left behind in a second pass before it returns. One
+extra pass, deliberately not a loop: a handler that assigns on every event would
+otherwise never hand control back.
+
 ### The header is the contract
 
 `denise-ffi`'s header is written by hand and the Rust is checked against it, not
@@ -660,9 +702,11 @@ drawn it slightly too small forever and nothing would have pointed at a constant
 
 Still outstanding, and deliberately not hidden:
 
-- **The control cannot be scripted.** No `IDispatch`, so a container can embed it
-  and cannot set a property, call a method or receive an event. The tree emits
-  messages already; delivering them across COM is what this would add.
+- **No type library.** `IDispatch` is there, so a host can set `Text`, `Caption`
+  and `Enabled`, call `Refresh` and sink `Change` and `Click` — all by name. What
+  a type library would add is *discovering* those names: a designer's property
+  sheet, an object browser's member list, and early binding. Without one every
+  host is late-bound, which works everywhere and tells nobody anything.
 - **No design-time view.** `IViewObject2::Draw` is what a form editor asks for
   before the control is ever activated, so a control dropped on a form is a blank
   rectangle until the form runs.

@@ -14,16 +14,17 @@
 //! runs on. That is what makes a `RefCell` the right tool rather than a lock.
 
 use std::cell::RefCell;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Instant;
 
 use denise::{InputEvent, Rect, Role, Size, Surface, Theme};
-use denise_ui::Ui;
 use denise_ui::widgets::{Button, Label, Panel, TextInput};
+use denise_ui::{NodeId, Ui};
 use denise_win32::{ControlDelegate, DeniseControl, DibSurface};
 use windows::Win32::Foundation::{E_FAIL, E_POINTER, HWND, RECT, SIZE};
 use windows::Win32::System::Com::{
-    CoTaskMemAlloc, DVASPECT, IAdviseSink, IDataObject, IEnumSTATDATA, IMoniker, IPersist_Impl,
-    IPersistStreamInit_Impl, IStream,
+    CoTaskMemAlloc, DISPATCH_METHOD, DISPPARAMS, DVASPECT, IAdviseSink, IDataObject, IEnumSTATDATA,
+    IMoniker, IPersist_Impl, IPersistStreamInit_Impl, IStream,
 };
 use windows::Win32::System::Ole::{
     IEnumOLEVERB, IOleClientSite, IOleControl_Impl, IOleInPlaceObject_Impl, IOleInPlaceSite,
@@ -34,7 +35,9 @@ use windows::Win32::System::Ole::{
 use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, SWP_NOZORDER, SetWindowPos};
 use windows_core::{BOOL, GUID, HRESULT, Interface, Ref, implement};
 
+use crate::dispatch;
 use crate::himetric::{himetric_to_pixels, pixels_to_himetric};
+use crate::model::{Model, Shared};
 use crate::registry::MISC_STATUS;
 use crate::server::CLSID_DENISE_PANEL;
 
@@ -49,13 +52,21 @@ const MSG_ACTIVATED: u32 = 1;
     windows::Win32::System::Ole::IOleObject,
     windows::Win32::System::Ole::IOleInPlaceObject,
     windows::Win32::System::Ole::IOleControl,
-    windows::Win32::System::Com::IPersistStreamInit
+    windows::Win32::System::Com::IPersistStreamInit,
+    windows::Win32::System::Com::IDispatch,
+    windows::Win32::System::Com::IConnectionPointContainer,
+    windows::Win32::System::Com::IConnectionPoint
 )]
 pub struct DenisePanel {
-    state: RefCell<PanelState>,
+    pub(crate) state: RefCell<PanelState>,
+    /// The scriptable half, shared with the tree inside the child window. A
+    /// separate cell from `state` on purpose: a property put reaches both, and
+    /// one lock over the two would deadlock against itself the first time an
+    /// event handler assigned to a property.
+    pub(crate) model: Shared,
 }
 
-struct PanelState {
+pub(crate) struct PanelState {
     /// The container's site, from `SetClientSite`. `None` before it arrives and
     /// after `Close`.
     site: Option<IOleClientSite>,
@@ -92,6 +103,7 @@ impl DenisePanel {
                 position: RECT::default(),
                 initialised: false,
             }),
+            model: Model::new(),
         }
     }
 }
@@ -140,7 +152,8 @@ impl DenisePanel_Impl {
             )
         };
         let size = Size::new(bounds.width as u32, bounds.height as u32);
-        let control = DeniseControl::new(parent, bounds, 1.0, Box::new(Demo::new(size)))
+        let tree = Tree::new(size, self.model.clone());
+        let control = DeniseControl::new(parent, bounds, 1.0, Box::new(tree))
             .map_err(|_| windows_core::Error::from(E_FAIL))?;
 
         self.state.borrow_mut().control = Some(control);
@@ -156,6 +169,31 @@ impl DenisePanel_Impl {
             unsafe {
                 let _ = DestroyWindow(control.hwnd());
             }
+        }
+    }
+
+    /// Pushes a property change into the live tree.
+    ///
+    /// Called from every property put, which arrives from two places that look
+    /// identical from here: a script, and an event handler the tree itself is in
+    /// the middle of calling. The second must not reach the tree.
+    /// [`DeniseControl::update`] holds the control's own `RefCell` across the
+    /// whole delegate call, so running it again from inside would borrow it twice
+    /// and panic out through a COM method into the host. The delegate holds the
+    /// flag for its entire pass — including while an event is being raised — and
+    /// applies whatever a handler left behind before it returns.
+    pub(crate) fn sync(&self) {
+        if self.model.borrow().inside {
+            return;
+        }
+        // Copied out before the call: `update` runs the tree, which can raise an
+        // event, whose handler can land straight back in this object.
+        let control = self.state.borrow().control;
+        if let Some(control) = control {
+            // A panic in the tree must not unwind into a host's script engine,
+            // which is what a `catch_unwind` at this boundary buys. The window
+            // procedure has the same wrapper for input; this is the other door in.
+            let _ = catch_unwind(AssertUnwindSafe(|| control.update()));
         }
     }
 }
@@ -188,6 +226,10 @@ impl IOleObject_Impl for DenisePanel_Impl {
     fn Close(&self, _save: &OLECLOSE) -> windows_core::Result<()> {
         self.deactivate();
         self.state.borrow_mut().site = None;
+        // A sink holds the control and the control holds the sink. A container
+        // that unadvises has already broken that cycle; one that forgot has just
+        // said it is finished, and this is the last chance to break it for them.
+        self.model.borrow_mut().clear_sinks();
         Ok(())
     }
 
@@ -258,9 +300,10 @@ impl IOleObject_Impl for DenisePanel_Impl {
     }
 
     fn Update(&self) -> windows_core::Result<()> {
-        if let Some(control) = self.state.borrow().control {
-            control.update();
-        }
+        // Through `sync` rather than straight to the control: a container is
+        // entitled to call this from inside an event handler, and that is the one
+        // moment the tree must not be run again.
+        self.sync();
         Ok(())
     }
 
@@ -465,62 +508,241 @@ impl IPersistStreamInit_Impl for DenisePanel_Impl {
     }
 }
 
-/// What a container sees: a small tree with a field and a button.
-struct Demo {
+/// The nodes a script can reach, once they exist.
+///
+/// `Option` because [`Ui::add`] can refuse, and a control whose tree failed to
+/// build should draw nothing rather than panic inside a host's message loop.
+#[derive(Clone, Copy, Default)]
+struct Nodes {
+    label: Option<NodeId>,
+    input: Option<NodeId>,
+    button: Option<NodeId>,
+}
+
+/// What a container sees, and what a script drives: a heading, a field and a
+/// button.
+struct Tree {
     ui: Ui<u32>,
+    nodes: Nodes,
+    model: Shared,
     started: Instant,
 }
 
-impl Demo {
-    fn new(size: Size) -> Self {
-        let mut ui: Ui<u32> = Ui::new(size, Theme::DARK);
-        // The container's window system draws a pointer already.
-        ui.show_cursor(false);
-        let root = ui.root();
-        let width = size.width as i32;
-        let height = size.height as i32;
-
-        if let Some(card) = ui.add(
-            root,
-            Panel::default(),
-            Rect::new(8, 8, (width - 16).max(1), (height - 16).max(1)),
-        ) {
-            ui.add(
-                card,
-                Label::new("Denise"),
-                Rect::new(12, 10, (width - 40).max(1), 22),
-            );
-            ui.add(
-                card,
-                TextInput::<u32>::new().with_placeholder("Tekst"),
-                Rect::new(12, 38, (width - 40).max(1), 32),
-            );
-            ui.add(
-                card,
-                Button::new("OK", MSG_ACTIVATED).with_role(Role::Primary),
-                Rect::new(12, 78, 96, 30),
-            );
-        }
-
+impl Tree {
+    fn new(size: Size, model: Shared) -> Self {
+        let (ui, nodes) = build(size, &model);
         Self {
             ui,
+            nodes,
+            model,
             started: Instant::now(),
+        }
+    }
+
+    /// Writes anything a script assigned into the widgets.
+    ///
+    /// Runs with `inside` already set, so a property put from an event handler
+    /// cannot reach back in behind it.
+    fn apply(&mut self) {
+        let (text, caption, enabled, dirty, refresh) = {
+            let mut model = self.model.borrow_mut();
+            let pending = (
+                model.text.clone(),
+                model.caption.clone(),
+                model.enabled,
+                model.dirty,
+                model.refresh,
+            );
+            model.dirty = false;
+            model.refresh = false;
+            pending
+        };
+
+        if refresh {
+            self.ui.invalidate_all();
+        }
+        if !dirty {
+            return;
+        }
+
+        if let Some(label) = self
+            .nodes
+            .label
+            .and_then(|id| self.ui.widget_mut::<Label>(id))
+        {
+            label.set_text(caption);
+        }
+
+        // Only when it differs. `set_text` puts the caret at the end, so writing
+        // the same string on every pass would move the caret out from under
+        // anyone editing in the middle of a word.
+        let stale = self.nodes.input.filter(|id| {
+            self.ui
+                .widget::<TextInput<u32>>(*id)
+                .is_some_and(|field| field.text() != text)
+        });
+        if let Some(field) = stale.and_then(|id| self.ui.widget_mut::<TextInput<u32>>(id)) {
+            field.set_text(text);
+        }
+
+        for id in [self.nodes.input, self.nodes.button].into_iter().flatten() {
+            self.ui.set_enabled(id, enabled);
+        }
+    }
+
+    /// Mirrors the field back into the model and decides what to raise.
+    fn collect(&mut self) -> Vec<i32> {
+        // `any` short-circuits, and the queue is still emptied: a `Drain` removes
+        // its whole range when it is dropped, whether or not it was consumed. The
+        // queue growing without bound is the failure this has to avoid.
+        let clicked = self
+            .ui
+            .drain_messages()
+            .any(|message| message == MSG_ACTIVATED);
+
+        let current = self
+            .nodes
+            .input
+            .and_then(|id| self.ui.widget::<TextInput<u32>>(id))
+            .map(|field| field.text().to_string());
+
+        match current {
+            Some(current) => {
+                let raised = dispatch::events_raised(&self.model.borrow().text, &current, clicked);
+                self.model.borrow_mut().text = current;
+                raised
+            }
+            // No field to read, so nothing can have changed in one.
+            None => dispatch::events_raised("", "", clicked),
+        }
+    }
+
+    /// Calls every advised sink, with no borrows held.
+    fn raise(&self, dispid: i32) {
+        let sinks = self.model.borrow().sinks();
+        let params = DISPPARAMS::default();
+        for sink in sinks {
+            // SAFETY: `sink` is the host's object, kept alive by the clone;
+            // `params` is a live local describing no arguments. Neither event
+            // takes any or returns anything, so there is nothing to marshal.
+            //
+            // The result is dropped on purpose: a handler that fails is the
+            // host's problem, and it is not a reason for the panel to stop
+            // drawing.
+            unsafe {
+                let _ = sink.Invoke(
+                    dispid,
+                    &GUID::zeroed(),
+                    0,
+                    DISPATCH_METHOD,
+                    &params,
+                    None,
+                    None,
+                    None,
+                );
+            }
         }
     }
 }
 
-impl ControlDelegate for Demo {
+/// Marks the tree as running for as long as it exists.
+///
+/// A guard rather than two assignments, because the flag has to come down even
+/// when the pass ends badly. The window procedure turns a panic into
+/// `DefWindowProc` and carries on, and a flag left standing after one would
+/// silently stop every later property put from ever reaching the tree — a control
+/// that quietly stops responding to script, with nothing in the logs.
+struct Running(Shared);
+
+impl Running {
+    /// Holds an `Rc` rather than a borrow so the caller keeps its `&mut self`.
+    fn enter(model: &Shared) -> Self {
+        model.borrow_mut().inside = true;
+        Self(model.clone())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.borrow_mut().inside = false;
+    }
+}
+
+/// Builds the tree from whatever the model currently holds.
+///
+/// Reads the model rather than hard-coding the strings, so a resize — which
+/// rebuilds everything — does not throw away what a script assigned.
+fn build(size: Size, model: &Shared) -> (Ui<u32>, Nodes) {
+    let (text, caption, enabled) = {
+        let model = model.borrow();
+        (model.text.clone(), model.caption.clone(), model.enabled)
+    };
+
+    let mut ui: Ui<u32> = Ui::new(size, Theme::DARK);
+    // The container's window system draws a pointer already.
+    ui.show_cursor(false);
+    let root = ui.root();
+    let width = size.width as i32;
+    let height = size.height as i32;
+    let mut nodes = Nodes::default();
+
+    if let Some(card) = ui.add(
+        root,
+        Panel::default(),
+        Rect::new(8, 8, (width - 16).max(1), (height - 16).max(1)),
+    ) {
+        nodes.label = ui.add(
+            card,
+            Label::new(caption),
+            Rect::new(12, 10, (width - 40).max(1), 22),
+        );
+        let mut field = TextInput::<u32>::new().with_placeholder("Tekst");
+        field.set_text(text);
+        nodes.input = ui.add(card, field, Rect::new(12, 38, (width - 40).max(1), 32));
+        nodes.button = ui.add(
+            card,
+            Button::new("OK", MSG_ACTIVATED).with_role(Role::Primary),
+            Rect::new(12, 78, 96, 30),
+        );
+    }
+
+    for id in [nodes.input, nodes.button].into_iter().flatten() {
+        ui.set_enabled(id, enabled);
+    }
+
+    (ui, nodes)
+}
+
+impl ControlDelegate for Tree {
     fn update(&mut self, surface: &mut DibSurface, events: &[InputEvent], damage: &mut Vec<Rect>) {
         if surface.size() != self.ui.size() {
-            self.ui = Demo::new(surface.size()).ui;
+            let (ui, nodes) = build(surface.size(), &self.model);
+            self.ui = ui;
+            self.nodes = nodes;
             self.ui.invalidate_all();
         }
+
+        // Held for the whole pass, raising included. `DeniseControl::update` has
+        // the control's `RefCell` borrowed around this call, so anything a handler
+        // does that would run the tree again has to be turned away here rather
+        // than panic there.
+        let _running = Running::enter(&self.model);
+
+        self.apply();
         self.ui.handle(events);
         self.ui.tick(self.started.elapsed().as_millis() as u64);
-        // Messages are drained so the queue cannot grow without bound. Delivering
-        // them to the container is `IDispatch`'s job and is not written yet.
-        let _: Vec<u32> = self.ui.drain_messages().collect();
 
+        for dispid in self.collect() {
+            self.raise(dispid);
+        }
+
+        // A handler is allowed to assign to a property, and could not reach the
+        // tree while it ran. One further pass, deliberately not a loop: a handler
+        // that assigns on every event would otherwise never hand control back.
+        self.apply();
+
+        // Painted last, so a handler that set `Caption` sees it drawn in the same
+        // frame as the click that called it.
         if !self.ui.needs_paint() {
             return;
         }

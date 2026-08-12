@@ -30,13 +30,21 @@
 //! 5. `DoVerb(INPLACEACTIVATE)` — the control asks the site for a parent window
 //!    and creates its child `HWND` inside it. A window appearing means the whole
 //!    path works.
+//! 6. `FindConnectionPoint` and `Advise` — the control accepts an event sink.
+//! 7. `GetIDsOfNames` and `Invoke` — properties are set and read **by name**,
+//!    which is precisely what a script does. Nothing here early-binds, so what
+//!    this exercises is the same path VBScript and PowerShell take.
+//!
+//! Then it is interactive: typing in the field raises `Change`, pressing the
+//! button raises `Click`, and the click handler assigns to `Caption` — from
+//! inside the event the control itself raised, which is the re-entrant case the
+//! control is written to survive.
 //!
 //! # What a real container does that this does not
 //!
-//! Menus, accelerators, ambient properties, an undo stack, and `IDispatch` for
-//! events and scripting. Every one of those methods is a stub here, and they are
-//! stubs a container is allowed to have — `E_NOTIMPL` from `GetMoniker` is a
-//! perfectly ordinary answer.
+//! Menus, accelerators, ambient properties and an undo stack. Every one of those
+//! methods is a stub here, and they are stubs a container is allowed to have —
+//! `E_NOTIMPL` from `GetMoniker` is a perfectly ordinary answer.
 
 #[cfg(not(windows))]
 fn main() {
@@ -51,28 +59,40 @@ fn main() -> windows_core::Result<()> {
 #[cfg(windows)]
 mod app {
 
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
+    use std::mem::ManuallyDrop;
 
-    use denise_activex::CLSID_DENISE_PANEL;
-    use windows::Win32::Foundation::{E_NOTIMPL, HWND, LPARAM, LRESULT, RECT, S_OK, SIZE, WPARAM};
+    use denise_activex::dispatch::{self, DISPID_CHANGE, DISPID_CLICK};
+    use denise_activex::{CLSID_DENISE_PANEL, DIID_DENISE_PANEL_EVENTS};
+    use windows::Win32::Foundation::{
+        DISP_E_MEMBERNOTFOUND, E_NOTIMPL, HWND, LPARAM, LRESULT, RECT, S_OK, SIZE, VARIANT_FALSE,
+        VARIANT_TRUE, WPARAM,
+    };
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-        CoUninitialize, IMoniker, IPersistStreamInit,
+        CoUninitialize, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
+        DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO, IConnectionPoint, IConnectionPointContainer,
+        IDispatch, IDispatch_Impl, IMoniker, IPersistStreamInit, ITypeInfo,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Ole::{
-        IOleClientSite, IOleClientSite_Impl, IOleContainer, IOleInPlaceActiveObject,
-        IOleInPlaceFrame, IOleInPlaceFrame_Impl, IOleInPlaceSite, IOleInPlaceSite_Impl,
-        IOleInPlaceUIWindow, IOleInPlaceUIWindow_Impl, IOleObject, IOleWindow_Impl,
-        OLECLOSE_NOSAVE, OLEGETMONIKER, OLEINPLACEFRAMEINFO, OLEIVERB_INPLACEACTIVATE,
-        OLEMENUGROUPWIDTHS, OLEWHICHMK,
+        DISPID_PROPERTYPUT, IOleClientSite, IOleClientSite_Impl, IOleContainer,
+        IOleInPlaceActiveObject, IOleInPlaceFrame, IOleInPlaceFrame_Impl, IOleInPlaceSite,
+        IOleInPlaceSite_Impl, IOleInPlaceUIWindow, IOleInPlaceUIWindow_Impl, IOleObject,
+        IOleWindow_Impl, OLECLOSE_NOSAVE, OLEGETMONIKER, OLEINPLACEFRAMEINFO,
+        OLEIVERB_INPLACEACTIVATE, OLEMENUGROUPWIDTHS, OLEWHICHMK,
+    };
+    use windows::Win32::System::Variant::{
+        VARENUM, VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_BSTR, VariantClear,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
         GetMessageW, HMENU, MSG, PostQuitMessage, RegisterClassExW, SW_SHOW, ShowWindow,
         TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
     };
-    use windows_core::{BOOL, IUnknownImpl, Interface, OutRef, PCWSTR, Ref, implement, w};
+    use windows_core::{
+        BOOL, BSTR, GUID, IUnknownImpl, Interface, OutRef, PCWSTR, Ref, implement, w,
+    };
 
     pub fn start() -> windows_core::Result<()> {
         // SAFETY: apartment threading, which is what the control is registered for
@@ -130,7 +150,48 @@ mod app {
             )
         }?;
         println!("  ok — the control should now have a window\n");
-        println!("close the window to quit");
+
+        // 5. Events. `FindConnectionPoint` is how every host that sinks a
+        //    control's events finds them, and `IDispatch` is the only thing the
+        //    control asks of a sink.
+        let dispatch: IDispatch = object.cast()?;
+        println!("automation surface:");
+        print!("{}", dispatch::describe());
+
+        let container: IConnectionPointContainer = object.cast()?;
+        // SAFETY: a live interface on the control, and a GUID this example owns
+        // for the call.
+        let point: IConnectionPoint =
+            unsafe { container.FindConnectionPoint(&DIID_DENISE_PANEL_EVENTS) }?;
+        let sink: IDispatch = Sink {
+            panel: dispatch.clone(),
+            clicks: Cell::new(0),
+        }
+        .into();
+        // SAFETY: `sink` is a live object this example owns for the whole run.
+        let cookie = unsafe { point.Advise(&sink) }?;
+        println!("\n  ok — Advise, cookie {cookie}");
+
+        // 6. Scripting it: by name, through `GetIDsOfNames` and `Invoke`, with no
+        //    type library anywhere. The same path VBScript takes.
+        put_string(&dispatch, "Caption", "Skrevet av verten")?;
+        put_string(&dispatch, "Text", "hallo")?;
+        println!("  ok — Caption and Text assigned by name");
+        println!(
+            "       Text reads back as {:?}",
+            get_string(&dispatch, "Text")?
+        );
+
+        // And a boolean, the one type Basic spells differently from everyone
+        // else: `True` is -1.
+        put_bool(&dispatch, "Enabled", false)?;
+        println!(
+            "  ok — Enabled = False reads back as {}",
+            get_bool(&dispatch, "Enabled")?
+        );
+        put_bool(&dispatch, "Enabled", true)?;
+
+        println!("\ntype in the field and press the button; close the window to quit");
 
         // SAFETY: `window` is live.
         unsafe {
@@ -147,6 +208,15 @@ mod app {
             }
         }
 
+        // The sink holds the control and the control holds the sink. `Close` would
+        // break that cycle anyway, but a container that leans on the control to
+        // tidy up after it is a container that leaks against a control that does
+        // not.
+        // SAFETY: `cookie` is the one `Advise` returned, released once.
+        unsafe {
+            let _ = point.Unadvise(cookie);
+        }
+
         // A container that drops a control without closing it leaves the control's
         // window parented to a destroyed one.
         // SAFETY: the control is still live here.
@@ -156,6 +226,218 @@ mod app {
         }
         Ok(())
     }
+
+    // ---------------------------------------------------------------- the sink
+
+    /// The whole of what a host needs to receive events: `IDispatch`, and a match
+    /// on two numbers.
+    ///
+    /// There is no type library and no vtable to implement, which is both halves
+    /// of the trade the control makes — a sink is this short, and in exchange
+    /// nothing but documentation can tell you what the dispids are.
+    #[implement(IDispatch)]
+    struct Sink {
+        /// The control, so a handler can script it back. This is the reference
+        /// that makes the cycle `Unadvise` exists to break.
+        panel: IDispatch,
+        clicks: Cell<u32>,
+    }
+
+    impl IDispatch_Impl for Sink_Impl {
+        fn GetTypeInfoCount(&self) -> windows_core::Result<u32> {
+            Ok(0)
+        }
+
+        fn GetTypeInfo(&self, _index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
+            Err(E_NOTIMPL.into())
+        }
+
+        fn GetIDsOfNames(
+            &self,
+            _riid: *const GUID,
+            _names: *const PCWSTR,
+            _count: u32,
+            _lcid: u32,
+            _out: *mut i32,
+        ) -> windows_core::Result<()> {
+            // A sink is called, never queried: the control already knows the
+            // numbers it is going to invoke.
+            Err(E_NOTIMPL.into())
+        }
+
+        fn Invoke(
+            &self,
+            dispid: i32,
+            _riid: *const GUID,
+            _lcid: u32,
+            _flags: DISPATCH_FLAGS,
+            _params: *const DISPPARAMS,
+            _result: *mut VARIANT,
+            _exception: *mut EXCEPINFO,
+            _argument_error: *mut u32,
+        ) -> windows_core::Result<()> {
+            match dispid {
+                DISPID_CHANGE => {
+                    println!(
+                        "  event: Change — Text is now {:?}",
+                        get_string(&self.panel, "Text")?
+                    );
+                    Ok(())
+                }
+                DISPID_CLICK => {
+                    let clicks = self.clicks.get() + 1;
+                    self.clicks.set(clicks);
+                    println!("  event: Click ({clicks})");
+                    // Assigning to the control from inside an event the control
+                    // itself raised. This is the re-entrant path, and the reason a
+                    // property put made while the tree is running records the
+                    // change rather than pushing it straight back in.
+                    put_string(&self.panel, "Caption", &format!("Klikket {clicks} ganger"))
+                }
+                _ => Err(DISP_E_MEMBERNOTFOUND.into()),
+            }
+        }
+    }
+
+    // ----------------------------------------------------- driving it by name
+
+    /// Looks a member up by name, exactly as a script does.
+    fn dispid_of(object: &IDispatch, name: &str) -> windows_core::Result<i32> {
+        let wide: Vec<u16> = name.encode_utf16().chain(core::iter::once(0)).collect();
+        let name = PCWSTR(wide.as_ptr());
+        let mut dispid = 0i32;
+        // SAFETY: `wide` outlives the call, one name is passed and one dispid is
+        // written. `riid` is reserved and must be `IID_NULL`; the locale is
+        // ignored by a control with no type library.
+        unsafe { object.GetIDsOfNames(&GUID::zeroed(), &name, 1, 0, &mut dispid) }?;
+        Ok(dispid)
+    }
+
+    /// Assigns a string to a property by name.
+    fn put_string(object: &IDispatch, name: &str, value: &str) -> windows_core::Result<()> {
+        let mut argument = variant(
+            VT_BSTR,
+            VARIANT_0_0_0 {
+                bstrVal: ManuallyDrop::new(BSTR::from(value)),
+            },
+        );
+        let result = invoke_put(object, name, &mut argument);
+        // SAFETY: `argument` is ours and holds the only reference to that `BSTR`.
+        unsafe {
+            let _ = VariantClear(&mut argument);
+        }
+        result
+    }
+
+    /// Assigns a boolean to a property by name.
+    fn put_bool(object: &IDispatch, name: &str, value: bool) -> windows_core::Result<()> {
+        let mut argument = variant(
+            VT_BOOL,
+            VARIANT_0_0_0 {
+                boolVal: if value { VARIANT_TRUE } else { VARIANT_FALSE },
+            },
+        );
+        invoke_put(object, name, &mut argument)
+    }
+
+    /// The two fiddly parts of a property put, both of which every hand-written
+    /// container gets wrong once: it carries the named argument
+    /// `DISPID_PROPERTYPUT` saying which slot holds the value, and `rgvarg` is in
+    /// **reverse** order. With one argument the two conventions coincide, which is
+    /// exactly why this looks right in every example and is right by accident.
+    fn invoke_put(
+        object: &IDispatch,
+        name: &str,
+        argument: &mut VARIANT,
+    ) -> windows_core::Result<()> {
+        let dispid = dispid_of(object, name)?;
+        let mut named = DISPID_PROPERTYPUT;
+        let params = DISPPARAMS {
+            rgvarg: argument,
+            rgdispidNamedArgs: &mut named,
+            cArgs: 1,
+            cNamedArgs: 1,
+        };
+        // SAFETY: `params` borrows two live locals for the length of the call and
+        // describes them correctly. No result is wanted.
+        unsafe {
+            object.Invoke(
+                dispid,
+                &GUID::zeroed(),
+                0,
+                DISPATCH_PROPERTYPUT,
+                &params,
+                None,
+                None,
+                None,
+            )
+        }
+    }
+
+    /// Reads a string property by name.
+    fn get_string(object: &IDispatch, name: &str) -> windows_core::Result<String> {
+        let mut result = invoke_get(object, name)?;
+        // SAFETY: the control answers `Text` and `Caption` with a `VT_BSTR`, and a
+        // null `BSTR` reads as the empty string.
+        let text = unsafe { result.Anonymous.Anonymous.Anonymous.bstrVal.to_string() };
+        // SAFETY: `result` is ours, and the `BSTR` in it is the caller's to free.
+        unsafe {
+            let _ = VariantClear(&mut result);
+        }
+        Ok(text)
+    }
+
+    /// Reads a boolean property by name.
+    fn get_bool(object: &IDispatch, name: &str) -> windows_core::Result<bool> {
+        let result = invoke_get(object, name)?;
+        // SAFETY: the control answers `Enabled` with a `VT_BOOL`. Compared against
+        // zero, not against 1: Basic's `True` is -1.
+        Ok(unsafe { result.Anonymous.Anonymous.Anonymous.boolVal.0 != 0 })
+    }
+
+    fn invoke_get(object: &IDispatch, name: &str) -> windows_core::Result<VARIANT> {
+        let dispid = dispid_of(object, name)?;
+        let params = DISPPARAMS::default();
+        let mut result = VARIANT::default();
+        // SAFETY: `params` describes no arguments, and `result` is a live local
+        // initialised to `VT_EMPTY`, which is what the contract asks of a caller.
+        unsafe {
+            object.Invoke(
+                dispid,
+                &GUID::zeroed(),
+                0,
+                DISPATCH_PROPERTYGET,
+                &params,
+                Some(&mut result),
+                None,
+                None,
+            )
+        }?;
+        Ok(result)
+    }
+
+    /// Assembles a `VARIANT` from its tag and one arm of its union.
+    ///
+    /// Built whole rather than field by field: a `VARIANT` is three nested unions
+    /// deep, and assigning through them writes *over* whatever arm was there
+    /// before — which is how a `BSTR` gets leaked or freed twice.
+    fn variant(vt: VARENUM, payload: VARIANT_0_0_0) -> VARIANT {
+        VARIANT {
+            Anonymous: VARIANT_0 {
+                Anonymous: ManuallyDrop::new(VARIANT_0_0 {
+                    vt,
+                    wReserved1: 0,
+                    wReserved2: 0,
+                    wReserved3: 0,
+                    Anonymous: payload,
+                }),
+            },
+        }
+    }
+
+    /// Keeps `DISPATCH_METHOD` named: it is what the control sends this sink, and
+    /// a reader looking for the other side of the call should find it here.
+    const _: DISPATCH_FLAGS = DISPATCH_METHOD;
 
     fn create_window() -> windows_core::Result<HWND> {
         // SAFETY: a null module name asks for this process's handle.
