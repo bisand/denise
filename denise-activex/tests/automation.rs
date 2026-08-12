@@ -30,20 +30,55 @@ fn panel() -> IDispatch {
     DenisePanel::new().into()
 }
 
-/// Zero, and it is a decision. PowerShell is the host this costs, and the note in
-/// `automation.rs` is why the answer is not to claim otherwise: a
-/// `CreateDispTypeInfo` description is a `TKIND_INTERFACE`, PowerShell wants a
-/// dispinterface, and it produces an object with no members and no complaint.
-/// Anyone changing this is taking on a registered type library.
+/// The control answers with type information exactly when it has some.
+///
+/// This started life asserting zero, back when there was no library and the
+/// comment said that anyone changing it was taking on writing one. Somebody did.
+/// What survives is the rule underneath: claiming type information and then
+/// failing `GetTypeInfo` is worse than declining, because a host that would have
+/// fallen back to `GetIDsOfNames` gives up instead.
+///
+/// So this proves both halves, using the file the server would have written. The
+/// library lands beside the test binary, which is where `GetTypeInfo` looks when
+/// nothing is registered — the same fallback a control gets in a build tree.
 #[test]
-fn the_control_offers_no_type_information_on_purpose() {
+fn the_control_describes_itself_once_the_library_is_beside_it() {
+    let beside = std::env::current_exe()
+        .expect("the test binary's path")
+        .with_extension("tlb");
+    let _ = std::fs::remove_file(&beside);
+
+    // Nothing to read: it must say so rather than promise and fail.
     // SAFETY: `panel` is a live object owned for the call.
     let count = unsafe { panel().GetTypeInfoCount() }.expect("GetTypeInfoCount");
     assert_eq!(
         count, 0,
-        "claiming type information and then failing GetTypeInfo is worse than \
-         declining: a host that would have fallen back to GetIDsOfNames gives up"
+        "with no library anywhere, promising one and then failing GetTypeInfo \
+         makes a host give up instead of falling back to GetIDsOfNames"
     );
+
+    denise_activex::typelib::build(&beside.to_string_lossy()).expect("build the library");
+
+    let panel = panel();
+    // SAFETY: as above.
+    let count = unsafe { panel.GetTypeInfoCount() }.expect("GetTypeInfoCount");
+    assert_eq!(count, 1, "the library is right there");
+
+    // SAFETY: index zero is the only description a control with one has.
+    let info = unsafe { panel.GetTypeInfo(0, 0) }.expect("GetTypeInfo");
+    // The name a script writes, resolved through the description rather than
+    // through the object — which is the path PowerShell takes and the whole
+    // reason the library exists.
+    let wide: Vec<u16> = "caption"
+        .encode_utf16()
+        .chain(core::iter::once(0))
+        .collect();
+    let mut dispid = 0i32;
+    // SAFETY: `wide` outlives the call; one name in, one dispid out.
+    unsafe { info.GetIDsOfNames(&PCWSTR(wide.as_ptr()), 1, &mut dispid) }.expect("Caption");
+    assert_eq!(dispid, dispatch::DISPID_CAPTION);
+
+    let _ = std::fs::remove_file(&beside);
 }
 
 /// The path every OLE container takes. Case-insensitively, because Basic is.

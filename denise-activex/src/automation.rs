@@ -44,12 +44,15 @@ pub const DIID_DENISE_PANEL_EVENTS: GUID =
 
 impl IDispatch_Impl for DenisePanel_Impl {
     fn GetTypeInfoCount(&self) -> windows_core::Result<u32> {
-        // One. This answered zero for most of its life, which was honest — there
-        // was no library — and cost PowerShell entirely: it builds its member
-        // table from type information and will not ask for a name it has not been
-        // told about. See [`crate::typelib`] for what had to be built and what was
-        // tried first.
-        Ok(1)
+        // One if the library can actually be produced, zero if it cannot.
+        //
+        // Not a constant, because claiming type information and then failing
+        // `GetTypeInfo` is worse than declining: a host that would have fallen
+        // back to `GetIDsOfNames` gives up instead. A registered control answers
+        // one. A control created from a test, or from a build tree with nothing
+        // registered and no `.tlb` beside the binary, has nothing to describe
+        // itself with and says so.
+        Ok(u32::from(self.type_info().is_ok()))
     }
 
     fn GetTypeInfo(&self, index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
@@ -57,16 +60,7 @@ impl IDispatch_Impl for DenisePanel_Impl {
         if index != 0 {
             return Err(TYPE_E_ELEMENTNOTFOUND.into());
         }
-        if let Some(info) = self.state.borrow().type_info.clone() {
-            return Ok(info);
-        }
-        // Registered first, then the file beside the DLL — so a control created
-        // without `regsvr32`, from a test or by a per-user registration, still
-        // describes itself. Kept afterwards: it describes a table that cannot
-        // change while the process runs.
-        let info = typelib::panel_type_info(crate::server::library_path().as_deref())?;
-        self.state.borrow_mut().type_info = Some(info.clone());
-        Ok(info)
+        self.type_info()
     }
 
     fn GetIDsOfNames(
@@ -191,6 +185,22 @@ impl IDispatch_Impl for DenisePanel_Impl {
                 _ => Err(DISP_E_MEMBERNOTFOUND.into()),
             },
         }
+    }
+}
+
+impl DenisePanel_Impl {
+    /// The library's description of this control, loaded once and kept.
+    ///
+    /// Registered first, then the file beside the DLL — so a control created
+    /// without `regsvr32`, from a test or by a per-user registration, still
+    /// describes itself if the library is where the server would have put it.
+    fn type_info(&self) -> windows_core::Result<ITypeInfo> {
+        if let Some(info) = self.state.borrow().type_info.clone() {
+            return Ok(info);
+        }
+        let info = typelib::panel_type_info(crate::server::library_path().as_deref())?;
+        self.state.borrow_mut().type_info = Some(info.clone());
+        Ok(info)
     }
 }
 

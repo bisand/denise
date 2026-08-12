@@ -32,7 +32,7 @@
 //! VBScript, JScript, VB6 through an `Object` variable, MFC's
 //! `COleDispatchDriver`, every OLE container — never needed one and are unchanged.
 //! PowerShell did: it builds its member table from type information and will not
-//! ask for a name it has not been told about. See [`typelib`] for what that took
+//! ask for a name it has not been told about. See the `typelib` module for what that took
 //! and what was tried first.
 //!
 //! The surface is still short. A type library makes each member *discoverable*,

@@ -9,8 +9,8 @@
 //!
 //! # One table, two readers
 //!
-//! `Invoke` reads this to answer a host that binds names late, and
-//! [`crate::typelib`] reads it to *generate* the type library for a host that will
+//! `Invoke` reads this to answer a host that binds names late, and the
+//! `typelib` module reads it to *generate* the type library for a host that will
 //! not. Both from here, so the description a host is handed cannot drift from the
 //! behaviour it describes — a library compiled from separate `.idl` source could,
 //! and that is the usual way a control comes to lie about itself.
