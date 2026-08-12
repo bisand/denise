@@ -25,7 +25,8 @@
 use std::time::{Duration, Instant};
 
 use denise::{CursorPlane, PixelFormat, Rect, Size, Surface, SurfaceError};
-use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
+pub use denise_drm::PresentMode;
+use denise_drm::{DrmSurface, SurfaceConfig};
 use denise_evdev::layout::Layout;
 use denise_evdev::{Console, EvdevError, InputBackend};
 use denise_fbdev::FbdevSurface;

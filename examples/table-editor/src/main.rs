@@ -26,10 +26,23 @@
 //!
 //! # One application, several machines
 //!
-//! `app.rs` never learns where it is running. This file has the two backends —
-//! a window on macOS, Windows and desktop Linux, and the display itself on a
-//! Raspberry Pi with `--drm` — and each is about forty lines. That split is the
-//! library's whole claim, made small enough to check.
+//! `app.rs` never learns where it is running. This file holds the two backends and
+//! each is about fifty lines: a window on any desktop, and the display itself on a
+//! Linux machine that has no desktop at all.
+//!
+//! **Which one is decided here, and decided at compile time**, by a cargo feature:
+//!
+//! ```text
+//! cargo run -p table-editor                                            # a window
+//! cargo run -p table-editor --no-default-features --features kiosk     # the display
+//! ```
+//!
+//! The toolkit does not choose and offers no way to. It cannot:
+//! `aarch64-unknown-linux-gnu` is the same target on a kiosk Pi and on a Pi running
+//! the desktop image, so any probe in a library would be wrong half the time — and
+//! wrong means a program that opens nothing, on a machine somebody has already
+//! shipped. The application knows what it is being built for; nothing below it
+//! does.
 
 mod app;
 mod table;
@@ -62,14 +75,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut path = "people.csv".to_string();
     let mut font: Option<String> = None;
     let mut snapshot: Option<String> = None;
-    let mut drm = false;
+    // Kiosk builds have no window to close, so a run length is the way out. Zero
+    // means "until Escape".
+    let mut seconds: u64 = 0;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--font" => font = args.next(),
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "table.ppm".into())),
-            "--drm" => drm = true,
+            "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             other => path = other.to_string(),
         }
     }
@@ -82,39 +97,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut ui_font = None;
-    let mut app = App::new(
-        WINDOW,
+    let setup = Setup {
         path,
         table,
-        TextStyle::built_in(16),
-        TextStyle::built_in(24),
-    );
+        font: load_font(font.as_deref()),
+    };
 
-    // The font is registered *after* the tree is built, because registering one
-    // damages the whole surface — everything on screen may change width — and
-    // doing it once at startup is the cheapest possible time for that.
-    if let Some((name, source)) = load_font(font.as_deref()) {
-        let id = app.ui.add_font(source);
-        eprintln!("using {name}");
-        ui_font = Some(id);
-    } else {
-        eprintln!("no TrueType font found; using the built-in 8x8 bitmap font");
+    if let Some(out) = snapshot {
+        return write_snapshot(&mut setup.build(WINDOW), &out).map_err(Into::into);
     }
-    if let Some(id) = ui_font {
-        app.set_font(id);
-    }
+    backend::run(setup, seconds)
+}
 
-    if let Some(path) = snapshot {
-        return write_snapshot(&mut app, &path).map_err(Into::into);
-    }
-    if drm {
-        eprintln!(
-            "the DRM backend is not wired into this example yet; \
-             `examples/panel` is the one that drives a display directly"
+/// Everything needed to build the tree, held until a backend says how big.
+///
+/// A window has a size the application chooses; a display has one it is given. So
+/// the tree cannot be built here — it is built by whichever backend learns the
+/// answer first, and this is what that takes.
+pub struct Setup {
+    path: String,
+    table: table::Table,
+    font: Option<(String, Box<dyn denise_text::GlyphSource>)>,
+}
+
+impl Setup {
+    pub fn build(self, size: Size) -> App {
+        let mut app = App::new(
+            size,
+            self.path,
+            self.table,
+            TextStyle::built_in(16),
+            TextStyle::built_in(24),
         );
+        // The font is registered *after* the tree exists, because registering one
+        // damages the whole surface — every string on screen may change width —
+        // and startup is the cheapest possible time to pay that.
+        match self.font {
+            Some((name, source)) => {
+                eprintln!("using {name}");
+                let id = app.ui.add_font(source);
+                app.set_font(id);
+            }
+            None => eprintln!("no TrueType font found; using the built-in 8x8 bitmap font"),
+        }
+        app
     }
-    window_backend::run(app)
 }
 
 /// Loads the named font, or the first system one that exists.
@@ -167,13 +194,26 @@ fn write_snapshot(app: &mut App, path: &str) -> std::io::Result<()> {
 
 // ---------------------------------------------------------------- the backends
 
-/// A window, on any desktop. Forty lines, all of them plumbing.
+#[cfg(feature = "desktop")]
+use window_backend as backend;
+
+#[cfg(all(feature = "kiosk", target_os = "linux"))]
+use kiosk_backend as backend;
+
+/// A window, on any desktop. Fifty lines, all of them plumbing.
+#[cfg(feature = "desktop")]
 mod window_backend {
-    use super::{App, Message, WINDOW};
+    use super::{App, Message, Setup, WINDOW};
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
     use denise_winit::{DeniseApp, WindowConfig, run as run_window};
 
-    pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(setup: Setup, _seconds: u64) -> Result<(), Box<dyn std::error::Error>> {
+        // A window's size is the application's choice, so this one is `WINDOW`.
+        let mut app = setup.build(WINDOW);
+        // The window system already draws a pointer; the tree must not draw a
+        // second one over it. On the kiosk backend there is nothing else drawing
+        // one, so it keeps its own — the same tree, a different right answer.
+        app.ui.show_cursor(false);
         run_window(
             WindowConfig {
                 title: "Denise — table editor".into(),
@@ -225,5 +265,124 @@ mod window_backend {
         fn exit_requested(&self) -> bool {
             self.0.exit
         }
+    }
+}
+
+/// The display itself, on a Linux machine with no desktop.
+///
+/// Same application above this line; a different fifty lines below it. `bare-linux`
+/// supplies the pieces — the display with its fbdev fallback, input, the console
+/// guard, the poll timeout — and the loop stays here, because where input is read
+/// relative to the display wait is a decision with a measurable cost and it is
+/// this program's to make.
+#[cfg(all(feature = "kiosk", target_os = "linux"))]
+mod kiosk_backend {
+    use std::os::fd::BorrowedFd;
+    use std::time::{Duration, Instant};
+
+    use super::{App, Message, Setup};
+    use bare_linux::{Display, capture, mute_console, open_input, poll_timeout};
+    use denise::{ElementState, InputEvent, InputSource, KeyCode, Surface};
+    use rustix::event::{PollFd, PollFlags, poll};
+
+    /// Where F12 writes. `/tmp` because a kiosk image is very often read-only
+    /// everywhere else.
+    const SHOT_PATH: &str = "/tmp/denise-table-editor.ppm";
+
+    pub fn run(setup: Setup, seconds: u64) -> Result<(), Box<dyn std::error::Error>> {
+        // Immediate rather than vsync: this panel is driven by a keypad and a
+        // pointer, so latency matters more to it than tearing does.
+        let mut surface = Display::open(bare_linux::PresentMode::Immediate)?;
+        let size = surface.size();
+        let (mut input, _keymap) = open_input(size)?;
+        // Held for the whole run: dropping it puts the console back as it was.
+        let _console = mute_console();
+
+        // Built at the display's size, not a window's — which is the whole reason
+        // the tree is not constructed until a backend knows how big it is.
+        let mut app = setup.build(size);
+        eprintln!("\nTab moves, Enter applies, F2 theme, F12 screenshot, Escape quits\n");
+
+        // Built once: the device set does not change, and `poll` updates each
+        // entry's revents in place.
+        let raw_fds = input.raw_fds();
+        let borrowed: Vec<BorrowedFd<'_>> = raw_fds
+            .iter()
+            // SAFETY: every descriptor belongs to `input`, which outlives this loop
+            // and holds each device open until the process exits.
+            .map(|&fd| unsafe { BorrowedFd::borrow_raw(fd) })
+            .collect();
+        let mut poll_fds: Vec<PollFd<'_>> = borrowed
+            .iter()
+            .map(|fd| PollFd::new(fd, PollFlags::IN))
+            .collect();
+
+        let started = Instant::now();
+        let deadline = started
+            + if seconds == 0 {
+                Duration::from_secs(60 * 60 * 24)
+            } else {
+                Duration::from_secs(seconds)
+            };
+        let mut events = Vec::new();
+        let mut shoot = false;
+
+        while Instant::now() < deadline {
+            let now = || started.elapsed().as_millis() as u64;
+
+            // Blocks until input arrives or the caret owes a blink. With nothing
+            // focused there is no timeout at all and the process uses no CPU.
+            let timeout = poll_timeout(app.ui.next_wake_ms(), now(), deadline);
+            poll(&mut poll_fds, timeout.as_ref())?;
+
+            events.clear();
+            input.poll(&mut events);
+            if !shortcuts(&mut app, &events, &mut shoot) {
+                break;
+            }
+            app.ui.handle(&events);
+            app.ui.tick(now());
+            app.handle(now());
+
+            if !app.ui.needs_paint() && !shoot {
+                continue;
+            }
+
+            let mut frame = surface.acquire()?;
+            app.ui.paint(&mut frame);
+            if core::mem::take(&mut shoot) {
+                match capture(&frame, SHOT_PATH) {
+                    Ok(()) => eprintln!("wrote {SHOT_PATH}"),
+                    Err(e) => eprintln!("could not write {SHOT_PATH}: {e}"),
+                }
+            }
+            drop(frame);
+            surface.present(app.ui.damage())?;
+            app.ui.presented();
+        }
+        Ok(())
+    }
+
+    /// Keys this application claims before the tree sees them.
+    fn shortcuts(app: &mut App, events: &[InputEvent], shoot: &mut bool) -> bool {
+        for event in events {
+            let InputEvent::Key {
+                code,
+                state: ElementState::Down,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            match code {
+                KeyCode::Escape => return false,
+                KeyCode::ArrowUp if !app.is_confirming() => app.move_selection(-1),
+                KeyCode::ArrowDown if !app.is_confirming() => app.move_selection(1),
+                KeyCode::F2 => app.on_message(Message::NextTheme),
+                KeyCode::F12 => *shoot = true,
+                _ => {}
+            }
+        }
+        true
     }
 }

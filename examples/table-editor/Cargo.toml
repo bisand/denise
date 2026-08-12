@@ -10,10 +10,36 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+# Which display this binary talks to, decided here and decided at compile time.
+#
+# There is no runtime detection and the toolkit offers none: `aarch64-unknown-linux-gnu`
+# is the same target on a kiosk Pi and on a Pi running the desktop image, so no
+# probe in a library could get it right for both — and a wrong guess is a program
+# that opens nothing on a machine somebody has already shipped. The application
+# knows which one it is being built for. Nothing else does.
+#
+#   cargo run -p table-editor                      # a window, on any desktop
+#   cargo run -p table-editor --no-default-features --features kiosk
+#
+# The second is also a smaller binary: winit and softbuffer are not merely unused,
+# they are never compiled.
+[features]
+default = ["desktop"]
+desktop = ["dep:denise-winit"]
+kiosk = ["dep:bare-linux", "dep:denise-evdev", "dep:rustix"]
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 # `truetype` pulls fontdue, which is what `--font` needs. Without the feature the
 # example still builds and draws with the built-in 8x8 bitmap font.
 denise-text = { workspace = true, features = ["truetype"] }
 denise-ui = { workspace = true, features = ["truetype"] }
-denise-winit = { workspace = true }
+denise-winit = { workspace = true, optional = true }
+
+# The kiosk backend exists on Linux and nowhere else, so asking for it anywhere
+# else gets you a build that says so rather than one that mysteriously has no
+# display.
+[target.'cfg(target_os = "linux")'.dependencies]
+bare-linux = { path = "../bare-linux", optional = true }
+denise-evdev = { workspace = true, optional = true }
+rustix = { workspace = true, features = ["event", "std"], optional = true }

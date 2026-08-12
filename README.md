@@ -80,9 +80,22 @@ scrolling grid, an edit form, validation, a confirmation modal, CSV persistence
 and a real font.
 
 ```bash
-cargo run -p table-editor
+cargo run -p table-editor                                          # a window
+cargo run -p table-editor --no-default-features --features kiosk   # the display itself
 cargo run -p table-editor -- --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 ```
+
+The same application, both times. `app.rs` — the tree, the widgets, all 470 lines
+of it — never learns which; only `main.rs` differs, and only by about fifty lines
+per backend.
+
+**The choice is the application's, and it is made at compile time.** The toolkit
+does not choose and offers no way to, because it cannot:
+`aarch64-unknown-linux-gnu` is the same target on a kiosk Pi and on a Pi running
+the desktop image, so a probe in a library would be wrong half the time — and wrong
+means a binary that opens nothing on a machine somebody has already shipped. A
+cargo feature settles it, which also means the kiosk build never compiles winit at
+all.
 
 <img src="assets/screenshots/table-editor-win.png" width="860"
      alt="The record editor running on Windows 11: a five-row grid with a selected row, an edit form and a status line">
@@ -192,7 +205,7 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 | | |
 |---|---|
 | [`hello`](examples/hello) | **Start here.** Eighty lines: a message enum, a tree, an event loop. |
-| [`table-editor`](examples/table-editor) | A record editor with a grid, a form, validation, a modal and real fonts. |
+| [`table-editor`](examples/table-editor) | A record editor with a grid, a form, validation, a modal and real fonts. Builds for a window *or* for a bare display. |
 | [`hello-rect`](examples/hello-rect) | The damage proof: a bouncing rectangle that repaints two rectangles, not a window. |
 | [`panel`](examples/panel) | The widget tree, a modal and a cursor sprite, on bare Linux with no X. |
 | [`kiosk`](examples/kiosk) | The instrumented loop: input latency and frame-time percentiles. |

@@ -2063,10 +2063,13 @@ dependencies = [
 name = "table-editor"
 version = "0.0.1"
 dependencies = [
+ "bare-linux",
  "denise",
+ "denise-evdev",
  "denise-text",
  "denise-ui",
  "denise-winit",
+ "rustix 1.1.4",
 ]
 
 [[package]]
