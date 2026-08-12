@@ -24,3 +24,6 @@ target
 # not by cargo, so cargo's `target` rule does not cover them.
 /denise-ffi/examples/panel
 *.ppm
+
+# Finder leaves these in every directory it is asked to open.
+.DS_Store
