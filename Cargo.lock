@@ -449,18 +449,18 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "denise"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "denise-activex"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "denise-benches"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "criterion",
  "denise",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "denise-drm"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-render",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "denise-evdev"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "evdev",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "denise-fbdev"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "bytemuck",
  "denise",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "denise-ffi"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-render",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "denise-macos"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-render",
@@ -528,14 +528,14 @@ dependencies = [
 
 [[package]]
 name = "denise-render"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
 ]
 
 [[package]]
 name = "denise-text"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "cosmic-text",
  "denise",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "denise-ui"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-render",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "denise-win32"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-render",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "denise-winit"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-render",
@@ -899,7 +899,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hello-rect"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-render",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "kiosk"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-drm",
@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "panel"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "denise",
  "denise-drm",
