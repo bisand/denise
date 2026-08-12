@@ -32,8 +32,11 @@
 //!    path works.
 //! 6. `FindConnectionPoint` and `Advise` — the control accepts an event sink.
 //! 7. `GetIDsOfNames` and `Invoke` — properties are set and read **by name**,
-//!    which is precisely what a script does. Nothing here early-binds, so what
-//!    this exercises is the same path VBScript and PowerShell take.
+//!    which is precisely what a script does.
+//! 8. `GetTypeInfo` — the type library `regsvr32` installed, read back out of the
+//!    registered server. The unit tests build a library into a temporary file and
+//!    check it; only this can check that the `.tlb` ended up beside the DLL, that
+//!    the registry points at it, and that the control hands it over.
 //!
 //! Then it is interactive: typing in the field raises `Change`, pressing the
 //! button raises `Click`, and the click handler assigns to `Caption` — from
@@ -123,6 +126,7 @@ mod app {
         let dispatch: IDispatch = object.cast().map_err(|_| stale("IDispatch"))?;
         println!("\nautomation surface:");
         print!("{}", dispatch::describe());
+        describe_from_the_library(&dispatch);
         println!();
 
         // 2. A container for it to talk back to.
@@ -234,6 +238,49 @@ mod app {
             let _ = object.SetClientSite(None);
         }
         Ok(())
+    }
+
+    /// Reads the control's own type library back, the way PowerShell does.
+    ///
+    /// The tests build a library into a temporary file and check it. This asks the
+    /// *registered* server for the one `regsvr32` installed, which is the half a
+    /// test cannot reach: it proves the `.tlb` was written beside the DLL, that
+    /// the registry points at it, and that the control hands it over.
+    fn describe_from_the_library(object: &IDispatch) {
+        // SAFETY: `object` is the control, live for the call.
+        let count = unsafe { object.GetTypeInfoCount() }.unwrap_or(0);
+        if count == 0 {
+            println!(
+                "\n  no type library — either this DLL predates it, or the .tlb is not\n  \
+                 beside the DLL where registration put it. PowerShell will show no members."
+            );
+            return;
+        }
+
+        // SAFETY: index zero is the only description a control with one has.
+        let info = match unsafe { object.GetTypeInfo(0, 0) } {
+            Ok(info) => info,
+            Err(e) => {
+                println!("\n  GetTypeInfo failed: {e}");
+                return;
+            }
+        };
+
+        println!("\nfrom the registered type library:");
+        for member in dispatch::MEMBERS {
+            let wide: Vec<u16> = member
+                .name
+                .encode_utf16()
+                .chain(core::iter::once(0))
+                .collect();
+            let mut dispid = 0i32;
+            // SAFETY: `wide` outlives the call; one name in, one dispid out.
+            let found = unsafe { info.GetIDsOfNames(&PCWSTR(wide.as_ptr()), 1, &mut dispid) };
+            match found {
+                Ok(()) => println!("  {:<10} dispid {dispid}", member.name),
+                Err(e) => println!("  {:<10} NOT NAMED — {e}", member.name),
+            }
+        }
     }
 
     /// The error for an interface the registered server does not have.
