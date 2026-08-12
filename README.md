@@ -137,8 +137,9 @@ Everything through M5 has run on real hardware. On Windows 11 ARM64, `denise-win
 puts a window on screen where Tab reaches the control, AltGr composes `@` and the
 dead keys produce `é` and `ö`; and `denise-activex` registers with `regsvr32`,
 instantiates through `CoCreateInstance`, sites, activates in place and renders
-inside a container that knows nothing about it — which can then set its properties
-by name and receive its events.
+inside a container that knows nothing about it — which then sets its properties by
+name over `IDispatch`, sinks its `Change` and `Click` events, and assigns back to
+it from inside its own event handlers.
 
 `denise-ui` is a crate of its own rather than part of the core because widgets
 need both the platform contract and the rasteriser, and the rasteriser already
@@ -586,6 +587,10 @@ property put made while the tree is running records the change and stops, and th
 tree applies whatever a handler left behind in a second pass before it returns. One
 extra pass, deliberately not a loop: a handler that assigns on every event would
 otherwise never hand control back.
+
+On the ARM64 machine that is a few hundred round trips — a `Change` handler reading
+`Text` on every keystroke of a sentence, and eighteen clicks each assigning
+`Caption` — with the borrow held around all of them.
 
 ### The header is the contract
 

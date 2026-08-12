@@ -76,9 +76,18 @@
 //!
 //! On Windows 11 ARM64: registered with `regsvr32`, instantiated through
 //! `CoCreateInstance`, sited, activated in place, and rendering — with text typed
-//! into it, including AltGr and dead keys. `examples/host.rs` is the container
-//! that did it, and it goes through the registry rather than around it, so what
-//! it proves is the *registered* server.
+//! into it, including AltGr and dead keys. Then scripted: `Caption`, `Text` and
+//! `Enabled` set and read **by name** through `GetIDsOfNames` and `Invoke`, a sink
+//! advised on the connection point, and `Change` and `Click` arriving at it.
+//!
+//! The part worth naming is the re-entrancy. The click handler assigns to
+//! `Caption` and the change handler reads `Text`, both from inside the event the
+//! control raised — a few hundred round trips over eighteen clicks and every
+//! keystroke of a sentence, with the control's `RefCell` borrowed around all of
+//! them.
+//!
+//! `examples/host.rs` is the container that did it, and it goes through the
+//! registry rather than around it, so what it proves is the *registered* server.
 //!
 //! # Registering it
 //!
