@@ -1,3 +1,10 @@
+// No console window in a release build. A Rust binary defaults to the console
+// subsystem, so Windows allocates one and it appears behind the app; this switches
+// the PE header so it never does. Debug builds keep it, because that is where a
+// panic message or a startup error is worth reading — with the windows subsystem
+// there is nowhere for stderr to go.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! A Denise panel as a child control in an ordinary Win32 window.
 //!
 //! ```text

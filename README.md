@@ -130,11 +130,12 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-evdev` | Linux input, keyboard layouts, dead keys, console muting | ✅ M2, M4, M5 |
 | `denise-ffi` | Stable C ABI, `cdylib`, hand-written header | ✅ M5 |
 | `denise-macos` | Embeddable `NSView` over a CoreGraphics bitmap context | ✅ M5 |
-| `denise-win32` | Windows child-`HWND` control over a DIB section | ⚠️ M5, unrun |
+| `denise-win32` | Windows child-`HWND` control over a DIB section | ✅ M5 |
 | `denise-activex` | COM/ActiveX shim for legacy Windows hosts | ◐ M5, registration only |
 
-Everything through M4 has run on hardware. `denise-win32` compiles and its tests
-pass on a Windows runner; nothing has hosted it in a real application yet.
+Everything through M5 has run on real hardware, `denise-win32` included — on
+Windows 11 ARM64, where Tab reaches the control inside a window, AltGr composes
+`@`, the dead keys produce `é` and `ö`, and damage stays at one rectangle.
 `denise-activex` has its registration table and not its COM object — see
 [Milestones](#milestones) for why that is where it stopped.
 
@@ -657,13 +658,13 @@ shim against a host that can load it.
 Still outstanding, and deliberately not hidden:
 
 - **The ActiveX COM object is not written.** See above.
-- **`denise-win32` has never run.** It compiles for `x86_64-pc-windows-msvc` and
-  its unit tests pass on a Windows runner; its keymap is platform-independent and
-  tested everywhere. The parts most likely to be wrong are the ones no compiler
-  checks: message ordering, focus behaviour inside a dialog, and DPI changes.
-  [docs/windows.md](docs/windows.md) is the checklist for finding out — its
-  example reports every key, character and damage count on screen, the way
-  `denise-evdev`'s `keys` does on Linux.
+- **`denise-win32`'s edges are unverified.** It runs, and the input path is
+  confirmed on Windows 11 ARM64 — Tab, AltGr, dead keys, hover and mouse-leave.
+  Not yet exercised: `SetCapture` on a drag off a pressed button, the wheel's
+  screen-to-client conversion, and DPI changes, which is the one I trust least
+  because `WM_DPICHANGED` reaches top-level windows only. It has never been
+  hosted inside a dialog, which is what `WM_GETDLGCODE` exists for.
+  [docs/windows.md](docs/windows.md) is the checklist.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.

@@ -24,6 +24,30 @@
 //!   stays off: `Ui::show_cursor(false)`, which since M5 is a decision that sticks
 //!   rather than one the next mouse move overrides.
 //!
+//! # No console window
+//!
+//! A Rust binary defaults to the **console** subsystem, so Windows allocates a
+//! console and it sits behind the app looking like a mistake. The `.exe` that
+//! hosts the control — not this library — decides that, with a crate-level
+//! attribute:
+//!
+//! ```ignore
+//! #![windows_subsystem = "windows"]
+//! ```
+//!
+//! The cost is that `stdout` and `stderr` go nowhere, including panic messages
+//! and anything printed before a window exists. So the usual form keeps the
+//! console while developing and drops it for the build that ships:
+//!
+//! ```ignore
+//! #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+//! ```
+//!
+//! It is ignored on non-Windows targets, so it needs no `cfg(windows)` of its
+//! own. A host that wants both — no console, and somewhere for diagnostics to go
+//! — should log to a file or `OutputDebugString` rather than to a stream nothing
+//! is reading.
+//!
 //! # Testing
 //!
 //! [`keymap`] is platform-independent and its tests run everywhere. That is not
