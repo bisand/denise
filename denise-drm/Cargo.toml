@@ -1,11 +1,11 @@
 [package]
 name = "denise-drm"
 description = "Linux DRM/KMS backend for Denise. Scans out straight to the display with no compositor."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "../README.md"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

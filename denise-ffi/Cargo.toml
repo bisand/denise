@@ -1,11 +1,11 @@
 [package]
 name = "denise-ffi"
 description = "Stable C ABI for Denise. A cdylib for hosts that are not written in Rust."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "../README.md"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

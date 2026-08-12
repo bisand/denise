@@ -1,11 +1,11 @@
 [package]
 name = "denise-macos"
 description = "Embeddable NSView backend for Denise, for a panel inside a Cocoa application."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "../README.md"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

@@ -1,11 +1,11 @@
 [package]
 name = "denise-ui"
 description = "Scene graph, widgets and compositor for Denise."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "../README.md"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

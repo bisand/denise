@@ -1,11 +1,11 @@
 [package]
 name = "denise-win32"
 description = "Windows child-window control for Denise, for a panel inside an existing Win32 application."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "../README.md"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

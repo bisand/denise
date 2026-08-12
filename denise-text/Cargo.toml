@@ -1,11 +1,11 @@
 [package]
 name = "denise-text"
 description = "Glyph sources, a bounded glyph atlas and line layout for Denise."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "../README.md"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

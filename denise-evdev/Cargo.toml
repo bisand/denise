@@ -1,11 +1,11 @@
 [package]
 name = "denise-evdev"
 description = "Linux evdev input for Denise: mouse, touch and keyboard, with no display server."
-publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+readme = "../README.md"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
