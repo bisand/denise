@@ -26,16 +26,22 @@
 //! invokes it. VBScript, JScript, VB6 through an `Object` variable and MFC's
 //! `COleDispatchDriver` all work that way.
 //!
-//! PowerShell does not. It builds its member table from `ITypeInfo` and will not
-//! ask for a name it has not been told about — an object that answers
-//! `GetTypeInfoCount` with zero is adapted as a bare `System.__ComObject` with no
-//! members, and every property fails before a single COM call is made. So the
-//! control describes itself on demand with `CreateDispTypeInfo`, built from the
-//! same table `Invoke` reads. See [`dispatch`] and the `typeinfo` module.
+//! **PowerShell does not**, and it is the one host here that does not. It builds
+//! its member table from `ITypeInfo` and will not ask for a name it has not been
+//! told about, so `$panel.Caption` fails with "cannot be found on this object"
+//! before a single COM call is made. Reach the control this way instead — it goes
+//! straight to `Invoke`:
 //!
-//! Either way the surface is short: without a type library each member is
-//! something a person has to be told about rather than discover, so each one has
-//! to earn its place.
+//! ```text
+//! $panel = New-Object -ComObject Denise.Panel
+//! $f = [System.Reflection.BindingFlags]
+//! [System.__ComObject].InvokeMember("Caption", $f::SetProperty, $null, $panel, @("Hei"))
+//! [System.__ComObject].InvokeMember("Caption", $f::GetProperty, $null, $panel, @())
+//! ```
+//!
+//! The surface is short because of all this: without a type library each member
+//! is something a person has to be told about rather than discover, so each one
+//! has to earn its place.
 //!
 //! | Member | Dispid | |
 //! |---|---|---|
@@ -59,9 +65,16 @@
 //!
 //! # What is not here yet
 //!
-//! **A registered type library.** `GetTypeInfo` answers, but there is no `.tlb`
-//! and no `LIBID` in the registry, which is what a form designer's property sheet
-//! and an object browser read, and what early binding needs.
+//! **A type library.** There is no `.tlb` and no `LIBID`, which is what a form
+//! designer's property sheet reads, what an object browser lists, what early
+//! binding needs, and what PowerShell wants.
+//!
+//! `CreateDispTypeInfo` was tried as a cheaper substitute and does not work. It
+//! builds a vtable-shaped description — `TKIND_INTERFACE`, not `TKIND_DISPATCH` —
+//! and PowerShell's adapter looks for a dispinterface, does not find one, and
+//! produces an object with no members and no complaint. Nothing in the method
+//! table changes the kind; that is what the API makes. So [`IDispatch::GetTypeInfoCount`]
+//! answers zero, which is honest and which every late-binding host is happy with.
 //!
 //! **`IViewObject2::Draw`.** The design-time view a form editor asks for before
 //! the control is ever activated. Without it a control dropped on a form is a
@@ -115,8 +128,6 @@ mod factory;
 mod model;
 #[cfg(windows)]
 mod server;
-#[cfg(windows)]
-mod typeinfo;
 #[cfg(windows)]
 mod variant;
 

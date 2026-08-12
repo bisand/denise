@@ -29,7 +29,6 @@ use windows_core::{GUID, IUnknown, IUnknownImpl, Interface, PCWSTR, Ref};
 
 use crate::control::DenisePanel_Impl;
 use crate::dispatch::{self, Action};
-use crate::typeinfo;
 use crate::variant;
 
 /// The outgoing dispinterface a container sinks events on.
@@ -43,28 +42,31 @@ pub const DIID_DENISE_PANEL_EVENTS: GUID =
 
 impl IDispatch_Impl for DenisePanel_Impl {
     fn GetTypeInfoCount(&self) -> windows_core::Result<u32> {
-        // One. This started as zero — honest, since there is no type library, and
-        // free for VBScript and every container that asks for a name and invokes
-        // it. PowerShell does not: its COM support builds a member table from
-        // `ITypeInfo`, and an object that declines is adapted as a bare
-        // `System.__ComObject` with no members, so every property fails before a
-        // single COM call is made. See [`crate::typeinfo`].
-        Ok(1)
+        // Zero, and it is a decision rather than a stub. There is no type library,
+        // so there is no type information, and saying so is what makes a host fall
+        // back to `GetIDsOfNames` — which works. Claiming one and then failing
+        // `GetTypeInfo` is what makes a host give up instead.
+        //
+        // What it costs is PowerShell, which builds its member table from
+        // `ITypeInfo` and adapts an object that has none as a bare
+        // `System.__ComObject`: `$panel.Caption` then fails with "cannot be found
+        // on this object" before a single COM call is made.
+        //
+        // `CreateDispTypeInfo` was tried here and does not answer it. It builds a
+        // vtable-shaped description — `TKIND_INTERFACE`, not `TKIND_DISPATCH` —
+        // and PowerShell's adapter looks for a dispinterface, does not find one,
+        // and produces an object with no members and no complaint. Nothing in the
+        // method table changes the kind; that is what the API makes. The real
+        // answer is a registered type library, which is a `.tlb`, a `LIBID` and a
+        // second file to deploy, and which nothing else here needs: VB6, MFC,
+        // Delphi, VBScript and every OLE container bind names late and already
+        // work. PowerShell reaches this control through
+        // `[System.__ComObject].InvokeMember`, which goes straight to `Invoke`.
+        Ok(0)
     }
 
-    fn GetTypeInfo(&self, index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
-        // One dispinterface, so index zero and nothing else.
-        if index != 0 {
-            return Err(TYPE_E_ELEMENTNOTFOUND.into());
-        }
-        if let Some(info) = self.state.borrow().type_info.clone() {
-            return Ok(info);
-        }
-        // Built once per control and kept: it describes a table that cannot change
-        // while the process runs.
-        let info = typeinfo::describe()?;
-        self.state.borrow_mut().type_info = Some(info.clone());
-        Ok(info)
+    fn GetTypeInfo(&self, _index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
+        Err(TYPE_E_ELEMENTNOTFOUND.into())
     }
 
     fn GetIDsOfNames(

@@ -552,24 +552,42 @@ Embedding a control and *driving* one are different problems, and the second is
 | `Change` | 1 | event — somebody typed |
 | `Click` | -600 | event — the button, at OLE's standard `DISPID_CLICK` |
 
-```powershell
-$panel = New-Object -ComObject Denise.Panel
-$panel.Caption = "Hei"
-$panel.Caption
+```vbscript
+Set p = CreateObject("Denise.Panel")
+p.Caption = "Hei"
 ```
 
 There is no type library, so a host is late-bound: it asks for a name and invokes
-it. VBScript, JScript, VB6 through an `Object` variable and MFC's
-`COleDispatchDriver` all work that way and need nothing else.
+it. VBScript, JScript, VB6 through an `Object` variable, MFC's
+`COleDispatchDriver` and every OLE container work that way and need nothing else.
 
-PowerShell does not, which the first attempt got wrong. It builds its member table
-from `ITypeInfo` and will not ask for a name it has not been told about — an object
-answering `GetTypeInfoCount` with zero is adapted as a bare `System.__ComObject`
-with no members, and `$panel.Caption` fails with "cannot be found on this object"
-before a single COM call is made. Nothing is wrong with the control at that point;
-it has never been asked anything. So it now describes itself on demand with
-`CreateDispTypeInfo`, built from the same table `Invoke` reads — a great deal
-smaller than a type library, and with nothing that can drift.
+**PowerShell is the exception, and chasing it was the most instructive part of
+this.** It builds its member table from `ITypeInfo` and will not ask for a name it
+has not been told about, so `$panel.Caption` fails with "cannot be found on this
+object" before a single COM call is made — nothing is wrong with the control, it
+has simply never been asked anything.
+
+`CreateDispTypeInfo` looked like a cheap way out: hand it a method table and it
+builds an `ITypeInfo` in memory, no `.tlb`, no `LIBID`, nothing to keep in step.
+Two rounds of that produced two better errors and no fix. The first was mine —
+every put claimed to return `VT_EMPTY`, which is a variant that *holds* nothing
+rather than a call that *returns* nothing, and PowerShell duly unwrapped a null.
+The second was the API's: `CreateDispTypeInfo` builds a vtable-shaped description,
+`TKIND_INTERFACE` and not `TKIND_DISPATCH`, so PowerShell looked for a
+dispinterface, did not find one, and produced an object with no members and no
+complaint at all. Nothing in the method table changes the kind.
+
+So it was removed. `GetTypeInfoCount` answers zero, which is honest, and PowerShell
+reaches the control through `[System.__ComObject].InvokeMember` — which goes
+straight to `Invoke` and works. The real fix is a registered type library, and it
+buys a form designer's property sheet and early binding at the same time; it is on
+the outstanding list rather than half-built.
+
+The lesson worth keeping is about what the diagnostics cost. Each round was a
+rebuild on a VM, a screenshot, and a guess about a COM adapter that cannot be run
+from the machine the code is written on. What ended it was not a better guess but
+making the object describe itself and printing that — at which point the answer was
+one word wide.
 
 Two more things are worth naming. The first is that **a host is not tidy about
 `wFlags`** — VBScript sends `METHOD | PROPERTYGET` for anything whose result it
@@ -716,11 +734,12 @@ drawn it slightly too small forever and nothing would have pointed at a constant
 
 Still outstanding, and deliberately not hidden:
 
-- **No registered type library.** `IDispatch` is there and `GetTypeInfo` answers,
-  so a host can set `Text`, `Caption` and `Enabled`, call `Refresh` and sink
-  `Change` and `Click`. What a `.tlb` and a `LIBID` in the registry would add is a
-  form designer's property sheet, an object browser's member list, and early
-  binding.
+- **No type library.** `IDispatch` works, so any late-binding host can set `Text`,
+  `Caption` and `Enabled`, call `Refresh` and sink `Change` and `Click`. A `.tlb`
+  and a `LIBID` would add a form designer's property sheet, an object browser's
+  member list, early binding, and PowerShell without `InvokeMember`.
+  `CreateDispTypeInfo` was tried as a substitute and cannot do it — it produces a
+  `TKIND_INTERFACE`, and PowerShell wants a dispinterface.
 - **No design-time view.** `IViewObject2::Draw` is what a form editor asks for
   before the control is ever activated, so a control dropped on a form is a blank
   rectangle until the form runs.

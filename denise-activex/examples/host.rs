@@ -72,7 +72,7 @@ mod app {
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
         CoUninitialize, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
         DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO, IConnectionPoint, IConnectionPointContainer,
-        IDispatch, IDispatch_Impl, IMoniker, IPersistStreamInit, ITypeInfo, TKIND_DISPATCH,
+        IDispatch, IDispatch_Impl, IMoniker, IPersistStreamInit, ITypeInfo,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Ole::{
@@ -123,7 +123,6 @@ mod app {
         let dispatch: IDispatch = object.cast().map_err(|_| stale("IDispatch"))?;
         println!("\nautomation surface:");
         print!("{}", dispatch::describe());
-        interrogate(&dispatch);
         println!();
 
         // 2. A container for it to talk back to.
@@ -235,118 +234,6 @@ mod app {
             let _ = object.SetClientSite(None);
         }
         Ok(())
-    }
-
-    /// Reads the control's type description back the way a host that will not
-    /// bind names late reads it, and prints what it finds.
-    ///
-    /// This exists because PowerShell's failure is silent. It builds its member
-    /// table from `ITypeInfo` and, when something in the description does not suit
-    /// it, produces an object with no members and no complaint —
-    /// indistinguishable from an object that had no description at all. Printing
-    /// the description from inside a host that *did* load the registered DLL turns
-    /// that silence into something a person can read.
-    ///
-    /// `GetDocumentation` is called for each member because that is where a host
-    /// gets a member's *name*, and a description whose names cannot be read is a
-    /// description with no usable members.
-    fn interrogate(object: &IDispatch) {
-        println!("\ntype description, as a host that reads one would see it:");
-
-        // SAFETY: `object` is the control, live for the call.
-        let count = unsafe { object.GetTypeInfoCount() }.unwrap_or(0);
-        println!("  GetTypeInfoCount  {count}");
-        if count == 0 {
-            println!("  -> no description at all. A host that builds its member table from");
-            println!("     ITypeInfo will find nothing here, and will say so in its own words.");
-            return;
-        }
-
-        // SAFETY: index zero is the only description a control with one has.
-        let info = match unsafe { object.GetTypeInfo(0, 0) } {
-            Ok(info) => info,
-            Err(e) => {
-                println!("  -> GetTypeInfo failed: {e}");
-                return;
-            }
-        };
-
-        // SAFETY: `info` is live; the attributes are released immediately below.
-        let attributes = match unsafe { info.GetTypeAttr() } {
-            Ok(attributes) => attributes,
-            Err(e) => {
-                println!("  -> GetTypeAttr failed: {e}");
-                return;
-            }
-        };
-        // SAFETY: the pointer came from `GetTypeAttr` and is readable until
-        // released.
-        let (kind, functions, variables, flags) = unsafe {
-            (
-                (*attributes).typekind,
-                (*attributes).cFuncs,
-                (*attributes).cVars,
-                (*attributes).wTypeFlags,
-            )
-        };
-        // SAFETY: paired with the `GetTypeAttr` above.
-        unsafe { info.ReleaseTypeAttr(attributes) };
-
-        println!(
-            "  typekind          {} ({})",
-            kind.0,
-            if kind == TKIND_DISPATCH {
-                "TKIND_DISPATCH"
-            } else {
-                "NOT a dispinterface — a host will look for a vtable"
-            }
-        );
-        println!("  functions         {functions}");
-        println!("  variables         {variables}");
-        println!("  type flags        0x{flags:04X}");
-
-        for index in 0..u32::from(functions) {
-            // SAFETY: `index` is below `cFuncs`, which is what bounds it.
-            let description = match unsafe { info.GetFuncDesc(index) } {
-                Ok(description) => description,
-                Err(e) => {
-                    println!("  [{index}] GetFuncDesc failed: {e}");
-                    continue;
-                }
-            };
-            // SAFETY: the pointer came from `GetFuncDesc` and is readable until
-            // released.
-            let (memid, invoke, parameters, returns, function_flags) = unsafe {
-                (
-                    (*description).memid,
-                    (*description).invkind,
-                    (*description).cParams,
-                    (*description).elemdescFunc.tdesc.vt,
-                    (*description).wFuncFlags,
-                )
-            };
-            // SAFETY: paired with the `GetFuncDesc` above.
-            unsafe { info.ReleaseFuncDesc(description) };
-
-            // Where a host gets the name. If this fails, the member has no name a
-            // host can offer, and a member with no name is not a member.
-            let mut name = BSTR::default();
-            let mut help = 0u32;
-            // SAFETY: `name` and `help` are live locals; the other outputs are
-            // declined.
-            let documented =
-                unsafe { info.GetDocumentation(memid, Some(&mut name), None, &mut help, None) };
-
-            let named = match &documented {
-                Ok(()) => format!("{:?}", name.to_string()),
-                Err(e) => format!("GetDocumentation FAILED {:?}", e.code()),
-            };
-            println!(
-                "  [{index}] dispid {memid:<5} invkind {:<2} args {parameters} \
-                 returns vt {:<3} flags 0x{:04X}  name {named}",
-                invoke.0, returns.0, function_flags.0
-            );
-        }
     }
 
     /// The error for an interface the registered server does not have.

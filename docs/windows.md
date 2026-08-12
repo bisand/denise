@@ -215,39 +215,16 @@ Then it is interactive, and this is the part to actually try:
   `Caption` — from inside the event the control itself raised. The heading
   changing is the re-entrant path working.
 
-### Scripting it from PowerShell
+### Scripting it without a container
 
-Once the DLL is registered, with no build at all:
-
-```powershell
-$panel = New-Object -ComObject Denise.Panel
-$panel.Caption = "Hei"
-$panel.Caption
-$panel.Enabled = $false
-$panel.Enabled
-```
-
-PowerShell is not a control container, so nothing is ever sited and no window
-appears — but the properties are live, and this is the shortest proof that
+The members are `Text`, `Caption`, `Enabled` and `Refresh`. None of the following
+sites the control or opens a window — PowerShell and `cscript` are not control
+containers — but the properties are live, which is the shortest proof that
 `GetIDsOfNames` and `Invoke` work through the real automation layer rather than
 through a container written in this repository.
 
-If that fails with **"The property 'Caption' cannot be found on this object"**,
-the control is not being asked anything at all. PowerShell builds its member table
-from `ITypeInfo` rather than binding names late, and an object that answers
-`GetTypeInfoCount` with zero is adapted as a bare `System.__ComObject` with no
-members. That is what `CreateDispTypeInfo` in `typeinfo.rs` fixes, so a build from
-before it will fail exactly this way. The path that works regardless, because it
-goes straight to `IDispatch`:
-
-```powershell
-$f = [System.Reflection.BindingFlags]
-[System.__ComObject].InvokeMember("Caption", $f::SetProperty, $null, $panel, @("Hei"))
-[System.__ComObject].InvokeMember("Caption", $f::GetProperty, $null, $panel, @())
-```
-
-VBScript never needed either — it binds names late, which is the whole of what
-`GetIDsOfNames` is for:
+VBScript binds names late, which is the whole of what `GetIDsOfNames` is for, and
+is the shape every OLE host uses:
 
 ```vbscript
 Set p = CreateObject("Denise.Panel")
@@ -255,7 +232,26 @@ p.Caption = "Hei"
 WScript.Echo p.Caption
 ```
 
-The members are `Text`, `Caption`, `Enabled` and `Refresh`.
+**PowerShell is the exception**, and `$panel.Caption` will tell you the property
+"cannot be found on this object". That is not the control failing — it is
+PowerShell never asking. It builds its member table from `ITypeInfo` rather than
+binding names late, and this control has none, so it gets adapted as a bare
+`System.__ComObject` with no members at all. Go straight to `IDispatch` instead:
+
+```powershell
+$panel = New-Object -ComObject Denise.Panel
+$f = [System.Reflection.BindingFlags]
+[System.__ComObject].InvokeMember("Caption", $f::SetProperty, $null, $panel, @("Hei"))
+[System.__ComObject].InvokeMember("Caption", $f::GetProperty, $null, $panel, @())
+```
+
+`Get-Member` listing nothing is the same thing and is expected.
+
+`CreateDispTypeInfo` was tried as a way to satisfy PowerShell without a type
+library, and does not: it builds a vtable-shaped description — `TKIND_INTERFACE`,
+not `TKIND_DISPATCH` — so PowerShell looks for a dispinterface, does not find one,
+and produces an object with no members and *no error*. Nothing in the method table
+changes the kind. The real fix is a registered type library, which is outstanding.
 
 Common failures, and what each means:
 
