@@ -24,7 +24,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-authors = ["BogenTech <andre@biseth.net>"]
+authors = ["André Biseth <andre@biseth.net>"]
 repository = "https://github.com/bisand/denise"
 homepage = "https://github.com/bisand/denise"
 
