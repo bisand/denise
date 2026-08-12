@@ -95,6 +95,23 @@ impl<M> Button<M> {
         self.message = message;
     }
 
+    /// Replaces the colour role.
+    ///
+    /// What a list of buttons uses to show which one is selected, since a role
+    /// survives a theme change and a colour does not.
+    pub fn set_role(&mut self, role: Role) {
+        self.role = role;
+    }
+
+    /// Replaces the font and size.
+    ///
+    /// For an application that registers a font after building its tree, which is
+    /// the ordinary case: the tree has to exist before anyone knows whether the
+    /// font file was there.
+    pub fn set_style(&mut self, style: TextStyle) {
+        self.style = style;
+    }
+
     /// Width this button needs for its label plus comfortable padding.
     ///
     /// Takes the engine because with a proportional font the answer is not the

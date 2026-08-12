@@ -126,6 +126,11 @@ impl<M> TextInput<M> {
         self.first_visible = 0;
     }
 
+    /// Replaces the font and size.
+    pub fn set_style(&mut self, style: TextStyle) {
+        self.style = style;
+    }
+
     /// Empties the field.
     pub fn clear(&mut self) {
         self.set_text(String::new());

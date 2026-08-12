@@ -1,0 +1,19 @@
+[package]
+name = "table-editor"
+description = "A record editor: a scrolling grid, an edit form, validation and a modal."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+# `truetype` pulls fontdue, which is what `--font` needs. Without the feature the
+# example still builds and draws with the built-in 8x8 bitmap font.
+denise-text = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype"] }
+denise-winit = { workspace = true }

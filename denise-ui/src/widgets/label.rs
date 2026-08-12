@@ -78,6 +78,20 @@ impl Label {
         self.text = text.into();
     }
 
+    /// Replaces the font and size.
+    ///
+    /// For an application that registers a font after building its tree, which is
+    /// the ordinary case: the tree has to exist before anyone knows whether the
+    /// font file was there.
+    pub fn set_style(&mut self, style: TextStyle) {
+        self.style = style;
+    }
+
+    /// Replaces the colour role.
+    pub fn set_role(&mut self, role: Role) {
+        self.role = role;
+    }
+
     /// Replaces the text only if it differs, reporting whether it changed.
     ///
     /// For the common case of writing a reading into a label every tick: an

@@ -2048,6 +2048,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "table-editor"
+version = "0.0.1"
+dependencies = [
+ "denise",
+ "denise-text",
+ "denise-ui",
+ "denise-winit",
+]
+
+[[package]]
 name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
