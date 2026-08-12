@@ -36,73 +36,15 @@ mod app {
     use std::os::fd::BorrowedFd;
     use std::time::{Duration, Instant};
 
+    use bare_linux::{Display, capture, mute_console, open_input, poll_timeout};
     use denise::{
-        CursorPlane, ElementState, InputEvent, InputSource, KeyCode, Radius, Rect, Role, Size,
-        Surface, Theme,
+        ElementState, InputEvent, InputSource, KeyCode, Radius, Rect, Role, Size, Surface, Theme,
     };
-    use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
-    use denise_evdev::{Console, InputBackend, layout};
-    use denise_fbdev::FbdevSurface;
+    use denise_drm::PresentMode;
+    use denise_evdev::{InputBackend, layout};
     use denise_ui::widgets::{Align, Button, Label, Panel, TextInput};
     use denise_ui::{NodeId, Ui};
-    use rustix::event::{PollFd, PollFlags, Timespec, poll};
-
-    /// The display, kept concrete so the hardware cursor plane stays reachable.
-    ///
-    /// `Box<dyn Surface>` would have been shorter and would have thrown the plane
-    /// away with the type: a cursor plane is not part of the `Surface` contract,
-    /// because most backends have nothing to implement it with.
-    // One of these exists per process and it lives for the whole run, so the
-    // variants differing in size costs a few hundred bytes once. Boxing to even
-    // them out would trade that for a pointer chase on every `acquire`.
-    #[allow(clippy::large_enum_variant)]
-    enum Display {
-        Drm(DrmSurface),
-        Fbdev(FbdevSurface),
-    }
-
-    impl Display {
-        /// The hardware cursor plane, if this display has one.
-        fn cursor_plane(&mut self) -> Option<&mut dyn CursorPlane> {
-            match self {
-                Display::Drm(drm) => Some(drm),
-                Display::Fbdev(_) => None,
-            }
-        }
-    }
-
-    impl Surface for Display {
-        fn size(&self) -> Size {
-            match self {
-                Display::Drm(d) => d.size(),
-                Display::Fbdev(f) => f.size(),
-            }
-        }
-        fn scale_factor(&self) -> f32 {
-            match self {
-                Display::Drm(d) => d.scale_factor(),
-                Display::Fbdev(f) => f.scale_factor(),
-            }
-        }
-        fn format(&self) -> denise::PixelFormat {
-            match self {
-                Display::Drm(d) => d.format(),
-                Display::Fbdev(f) => f.format(),
-            }
-        }
-        fn acquire(&mut self) -> Result<denise::Frame<'_>, denise::SurfaceError> {
-            match self {
-                Display::Drm(d) => d.acquire(),
-                Display::Fbdev(f) => f.acquire(),
-            }
-        }
-        fn present(&mut self, damage: &[Rect]) -> Result<(), denise::SurfaceError> {
-            match self {
-                Display::Drm(d) => d.present(damage),
-                Display::Fbdev(f) => f.present(damage),
-            }
-        }
-    }
+    use rustix::event::{PollFd, PollFlags, poll};
 
     /// Resolves the tree's cursor sprite and hands it to the hardware plane.
     ///
@@ -402,68 +344,12 @@ mod app {
             _ => PresentMode::Immediate,
         };
 
-        let mut surface: Display = match DrmSurface::open(SurfaceConfig {
-            present_mode: requested,
-            ..SurfaceConfig::default()
-        }) {
-            Ok(drm) => {
-                eprintln!(
-                    "display DRM/KMS {} — {} buffers, {}",
-                    drm.mode_name(),
-                    drm.buffer_count(),
-                    match drm.present_mode() {
-                        PresentMode::Vsync => "vsync: tear-free, paced by vblank",
-                        PresentMode::Immediate => "immediate: async flips, no vblank wait",
-                    }
-                );
-                Display::Drm(drm)
-            }
-            Err(drm_error) => match FbdevSurface::open_first() {
-                Ok(fb) => {
-                    eprintln!("display fbdev {} ({})", fb.info(), fb.path().display());
-                    eprintln!("        no DRM: {drm_error}");
-                    Display::Fbdev(fb)
-                }
-                Err(fb_error) => {
-                    return Err(format!("no display — DRM: {drm_error}; fbdev: {fb_error}").into());
-                }
-            },
-        };
-
+        let mut surface = Display::open(requested)?;
         let size = surface.size();
-        let mut input = InputBackend::open_all(size)?;
-        // Whatever this system is configured for, with `DENISE_KEYMAP` as an
-        // override and F3 to switch at runtime.
-        let (keymap, source) = input.set_layout_from_system();
-        for device in input.devices() {
-            eprintln!("input   {}: {}", device.capabilities(), device.name());
-        }
-        eprintln!("keymap  {} (from {source})", keymap.name);
-
+        let (mut input, keymap) = open_input(size)?;
         // Held for the whole run: dropping it puts the console back exactly as it
-        // was. Over SSH there is no console to take, and `open_if_present` says so
-        // by returning `None` rather than by failing.
-        let _console = if std::env::var_os("DENISE_KEEP_CONSOLE").is_some() {
-            eprintln!("console left alone (DENISE_KEEP_CONSOLE)");
-            None
-        } else {
-            match Console::open_if_present() {
-                Some(mut console) => {
-                    let result = console
-                        .mute_keyboard()
-                        .and_then(|()| console.graphics_mode());
-                    match result {
-                        Ok(()) => eprintln!("console muted — restored on exit"),
-                        Err(e) => eprintln!("console found but not muted: {e}"),
-                    }
-                    Some(console)
-                }
-                None => {
-                    eprintln!("console none (over SSH, so nothing to mute)");
-                    None
-                }
-            }
-        };
+        // was.
+        let _console = mute_console();
 
         eprintln!("\nTab / Enter to drive it, F2 theme, F3 keyboard layout, Escape quits\n");
 
@@ -623,50 +509,11 @@ mod app {
 
     /// How long `poll` may block: until the next caret blink, or until the run
     /// ends, whichever comes first. `None` blocks indefinitely.
-    fn poll_timeout(next_wake: Option<u64>, now_ms: u64, deadline: Instant) -> Option<Timespec> {
-        let until_deadline = deadline.saturating_duration_since(Instant::now());
-        let wait = match next_wake {
-            Some(at) => Duration::from_millis(at.saturating_sub(now_ms)).min(until_deadline),
-            None => until_deadline,
-        };
-        Some(Timespec {
-            tv_sec: wait.as_secs() as i64,
-            tv_nsec: wait.subsec_nanos() as i64,
-        })
-    }
-
     /// Keys the application claims before the tree sees them. Returns `false` to
     /// quit.
     /// Where F12 writes. `/tmp` because a kiosk image is very often read-only
     /// everywhere else, and because this is a diagnostic rather than a document.
     const SHOT_PATH: &str = "/tmp/denise-panel.ppm";
-
-    /// Writes what is about to reach the display, as a PPM.
-    ///
-    /// `frame` is the scanout buffer *after* painting, so this is the composited
-    /// result including the cursor sprite — a capture, not a re-render that might
-    /// differ from what somebody is looking at.
-    ///
-    /// This exists because a machine with no desktop has no screenshot tool: there
-    /// is no compositor to ask and no window server to ask it of. The program
-    /// holding the buffer is the only thing that can answer, so it should offer to.
-    fn capture(frame: &denise::Frame<'_>, path: &str) -> std::io::Result<()> {
-        use std::io::Write as _;
-
-        let size = frame.size();
-        let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-        write!(out, "P6\n{} {}\n255\n", size.width, size.height)?;
-        for y in 0..size.height {
-            // Row by row, because a surface's stride is not its width — a scanout
-            // buffer is very often padded, and reading it as one flat slice
-            // produces a picture that shears further right on every line.
-            let Some(row) = frame.row(y) else { continue };
-            for word in &row[..size.width as usize] {
-                out.write_all(&[(word >> 16) as u8, (word >> 8) as u8, *word as u8])?;
-            }
-        }
-        out.flush()
-    }
 
     fn handle_shortcuts(
         app: &mut App,

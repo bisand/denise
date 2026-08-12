@@ -1,6 +1,6 @@
 [package]
-name = "panel"
-description = "M3 demo: a widget tree, a modal dialog and a cursor sprite, with no desktop."
+name = "bare-linux"
+description = "Example support: opening a display, input and the console with no desktop."
 publish = false
 version.workspace = true
 edition.workspace = true
@@ -14,9 +14,10 @@ homepage.workspace = true
 denise = { workspace = true, features = ["std"] }
 denise-ui = { workspace = true, features = ["std"] }
 
-# Linux-only, so the workspace still builds on a development machine.
+# Linux-only, so the workspace still builds on a development machine. On anything
+# else this crate compiles to nothing at all.
 [target.'cfg(target_os = "linux")'.dependencies]
-bare-linux = { path = "../bare-linux" }
 denise-drm = { workspace = true }
 denise-evdev = { workspace = true }
+denise-fbdev = { workspace = true }
 rustix = { workspace = true, features = ["event", "std"] }
