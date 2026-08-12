@@ -22,7 +22,7 @@ use denise_ui::widgets::{Button, Label, Panel, TextInput};
 use denise_ui::{NodeId, Ui};
 use denise_win32::{ControlDelegate, DeniseControl, DibSurface};
 use windows::Win32::Foundation::{
-    DV_E_DVASPECT, E_FAIL, E_NOTIMPL, E_POINTER, HWND, RECT, RECTL, SIZE,
+    DV_E_DVASPECT, E_FAIL, E_NOINTERFACE, E_NOTIMPL, E_POINTER, HWND, RECT, RECTL, SIZE,
 };
 use windows::Win32::Graphics::Gdi::{
     HALFTONE, HDC, LOGPALETTE, RestoreDC, SRCCOPY, SaveDC, SetBrushOrgEx, SetStretchBltMode,
@@ -30,9 +30,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{
     ADVF_ONLYONCE, CoTaskMemAlloc, DISPATCH_METHOD, DISPPARAMS, DVASPECT, DVASPECT_CONTENT,
-    DVTARGETDEVICE, IAdviseSink, IDataObject, IEnumSTATDATA, IMoniker, IPersist_Impl,
-    IPersistStreamInit_Impl, IStream, ITypeInfo,
+    DVTARGETDEVICE, IAdviseSink, IDataObject, IDispatch, IEnumSTATDATA, IMoniker, IPersist,
+    IPersist_Impl, IPersistStreamInit, IPersistStreamInit_Impl, IStream, ITypeInfo,
 };
+use windows::Win32::System::Diagnostics::Debug::IObjectSafety_Impl;
 use windows::Win32::System::Ole::{
     IEnumOLEVERB, IOleClientSite, IOleControl_Impl, IOleInPlaceObject_Impl, IOleInPlaceSite,
     IOleObject_Impl, IOleWindow_Impl, IViewObject_Impl, IViewObject2_Impl, OLECLOSE, OLEGETMONIKER,
@@ -46,6 +47,7 @@ use crate::dispatch;
 use crate::himetric::{himetric_to_pixels, pixels_to_himetric};
 use crate::model::{Model, Shared};
 use crate::registry::MISC_STATUS;
+use crate::safety;
 use crate::server::CLSID_DENISE_PANEL;
 use crate::view;
 
@@ -64,7 +66,8 @@ const MSG_ACTIVATED: u32 = 1;
     windows::Win32::System::Com::IDispatch,
     windows::Win32::System::Com::IConnectionPointContainer,
     windows::Win32::System::Com::IConnectionPoint,
-    windows::Win32::System::Ole::IViewObject2
+    windows::Win32::System::Ole::IViewObject2,
+    windows::Win32::System::Diagnostics::Debug::IObjectSafety
 )]
 pub struct DenisePanel {
     pub(crate) state: RefCell<PanelState>,
@@ -727,6 +730,95 @@ impl IViewObject2_Impl for DenisePanel_Impl {
         Ok(self.state.borrow().extent)
     }
 }
+
+// -------------------------------------------------------------- IObjectSafety
+
+/// The claim, answered per interface.
+///
+/// What is being claimed, and why it is true of this control, is in
+/// [`safety`](crate::safety) — the short version is that the entire scriptable
+/// surface is two strings, a boolean and a repaint. The mapping from an
+/// interface id to a question is here because it needs the ids; the answer to
+/// each question is there, where it can be tested anywhere.
+impl IObjectSafety_Impl for DenisePanel_Impl {
+    fn GetInterfaceSafetyOptions(
+        &self,
+        riid: *const GUID,
+        supported: *mut u32,
+        enabled: *mut u32,
+    ) -> windows_core::Result<()> {
+        if supported.is_null() || enabled.is_null() {
+            return Err(E_POINTER.into());
+        }
+        let options = safety::supported(asked_about(riid));
+        if options == 0 {
+            // No claim about that interface, which is not the same as claiming
+            // it is unsafe — the host asked about something this control has
+            // nothing to say about.
+            return Err(E_NOINTERFACE.into());
+        }
+        // Supported and enabled are the same value on purpose. There is no mode
+        // to switch into: the control is safe because of what its members do,
+        // not because a host asked it to behave.
+        // SAFETY: both pointers were checked non-null above, and the caller owns
+        // a `u32` behind each.
+        unsafe {
+            *supported = options;
+            *enabled = options;
+        }
+        Ok(())
+    }
+
+    fn SetInterfaceSafetyOptions(
+        &self,
+        riid: *const GUID,
+        mask: u32,
+        _enabled: u32,
+    ) -> windows_core::Result<()> {
+        let options = safety::supported(asked_about(riid));
+        if options == 0 {
+            return Err(E_NOINTERFACE.into());
+        }
+        // The requested values are ignored, and only the mask is checked. A host
+        // switching a guarantee off cannot make this control unsafe, and one
+        // asking for a guarantee that was never offered must be told no rather
+        // than quietly agreed with.
+        if safety::accepts(options, mask) {
+            Ok(())
+        } else {
+            Err(E_FAIL.into())
+        }
+    }
+}
+
+/// Which of the two questions an interface id is asking.
+///
+/// `IDispatchEx` is named without being implemented: a host that asks about it
+/// is asking about scripting, and the honest answer to "is script safe here" does
+/// not depend on which scripting interface it came through. The `IPersist`
+/// family is the other question — untrusted *data* rather than untrusted callers
+/// — and `IPersistStreamInit` is the one this control actually has.
+fn asked_about(riid: *const GUID) -> safety::Asked {
+    if riid.is_null() {
+        return safety::Asked::Other;
+    }
+    // SAFETY: non-null, and the caller promises a readable GUID.
+    let riid = unsafe { *riid };
+    if riid == IDispatch::IID || riid == IID_IDISPATCHEX {
+        safety::Asked::Automation
+    } else if riid == IPersistStreamInit::IID || riid == IPersist::IID {
+        safety::Asked::Persistence
+    } else {
+        safety::Asked::Other
+    }
+}
+
+/// `IID_IDispatchEx`, which this control does not implement.
+///
+/// Written out because the interface is not in the crate's enabled features and
+/// pulling in a whole module for one identity is worse than a constant. A host
+/// that asks about it is asking the scripting question either way.
+const IID_IDISPATCHEX: GUID = GUID::from_u128(0xa6ef9860_c720_11d0_9337_00a0c90dcaa9);
 
 // ---------------------------------------------------- IPersist / StreamInit
 

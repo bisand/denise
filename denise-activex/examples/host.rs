@@ -37,10 +37,12 @@
 //!    registered server. The unit tests build a library into a temporary file and
 //!    check it; only this can check that the `.tlb` ended up beside the DLL, that
 //!    the registry points at it, and that the control hands it over.
-//! 9. `IViewObject2::Draw` — the design-time view, drawn into a memory device
-//!    context *before* the control is sited and printed as text. A form editor
-//!    asks for this with no window and no container anywhere, so it is the one
-//!    step here that deliberately happens before step 3.
+//! 9. `IObjectSafety` — what the control claims about untrusted script and
+//!    untrusted data, out of the registered server rather than out of a table.
+//! 10. `IViewObject2::Draw` — the design-time view, drawn into a memory device
+//!     context *before* the control is sited and printed as text. A form editor
+//!     asks for this with no window and no container anywhere, so it is the one
+//!     step here that deliberately happens before step 3.
 //!
 //! Then it is interactive: typing in the field raises `Change`, pressing the
 //! button raises `Click`, and the click handler assigns to `Caption` — from
@@ -87,6 +89,7 @@ mod app {
         IConnectionPointContainer, IDispatch, IDispatch_Impl, IMoniker, IPersistStreamInit,
         ITypeInfo,
     };
+    use windows::Win32::System::Diagnostics::Debug::IObjectSafety;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Ole::{
         DISPID_PROPERTYPUT, IOleClientSite, IOleClientSite_Impl, IOleContainer,
@@ -138,6 +141,8 @@ mod app {
         print!("{}", dispatch::describe());
         describe_from_the_library(&dispatch);
         println!();
+
+        ask_what_it_claims_about_safety(&object);
 
         // The design-time view, before the control is sited: no container, no
         // window, no activation. See the function.
@@ -295,6 +300,40 @@ mod app {
                 Err(e) => println!("  {:<10} NOT NAMED — {e}", member.name),
             }
         }
+    }
+
+    /// What the control says when a scripting host asks whether it is safe.
+    ///
+    /// The unit tests ask the same questions of a control they constructed. This
+    /// asks the *registered* one, which is the half that can be stale: a host
+    /// that reads the registry categories would see the claim while an older DLL
+    /// answered nothing, and the two disagreeing is worse than neither.
+    fn ask_what_it_claims_about_safety(object: &IOleObject) {
+        let Ok(safety) = object.cast::<IObjectSafety>() else {
+            println!("  no IObjectSafety — a scripting host would refuse it\n");
+            return;
+        };
+
+        println!("safety, as the registered server answers it:");
+        for (question, riid) in [
+            ("untrusted script  (IDispatch)", IDispatch::IID),
+            (
+                "untrusted data    (IPersistStreamInit)",
+                IPersistStreamInit::IID,
+            ),
+            ("nothing claimed   (IOleObject)", IOleObject::IID),
+        ] {
+            let mut supported = 0u32;
+            let mut enabled = 0u32;
+            // SAFETY: `riid` and both counters are live locals.
+            let answer =
+                unsafe { safety.GetInterfaceSafetyOptions(&riid, &mut supported, &mut enabled) };
+            match answer {
+                Ok(()) => println!("  {question}  supported {supported:#x}, enabled {enabled:#x}"),
+                Err(e) => println!("  {question}  no claim — {}", e.code().0),
+            }
+        }
+        println!();
     }
 
     /// The design-time view: what a form editor draws before the control runs.

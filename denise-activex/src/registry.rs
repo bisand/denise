@@ -6,6 +6,8 @@
 //! any machine, including the ones with no registry at all — which is every
 //! machine this repository is developed on.
 
+use crate::safety::{CATID_SAFE_FOR_INITIALIZING, CATID_SAFE_FOR_SCRIPTING};
+
 /// The control's class id.
 ///
 /// Generated once and never changed: a host stores this in its form, so a new
@@ -123,6 +125,24 @@ pub fn entries(server_path: &str) -> Vec<Entry> {
             "",
             format!("{server_path}, 1"),
         ),
+        // The scripting safety categories. Empty keys, because a component
+        // category is a claim by its presence and has no value to carry.
+        //
+        // The same two claims `IObjectSafety` answers with, written twice
+        // because hosts are split on which one they ask — and a control whose
+        // registry and interface disagree is one that behaves differently
+        // depending on which. See `safety` for what is being claimed and why it
+        // is true of this control.
+        Entry::new(
+            format!("{clsid}\\Implemented Categories\\{CATID_SAFE_FOR_SCRIPTING}"),
+            "",
+            "",
+        ),
+        Entry::new(
+            format!("{clsid}\\Implemented Categories\\{CATID_SAFE_FOR_INITIALIZING}"),
+            "",
+            "",
+        ),
     ]
 }
 
@@ -134,6 +154,9 @@ pub fn entries(server_path: &str) -> Vec<Entry> {
 pub fn keys_to_remove() -> Vec<String> {
     let clsid = format!("CLSID\\{CLSID_TEXT}");
     vec![
+        format!("{clsid}\\Implemented Categories\\{CATID_SAFE_FOR_SCRIPTING}"),
+        format!("{clsid}\\Implemented Categories\\{CATID_SAFE_FOR_INITIALIZING}"),
+        format!("{clsid}\\Implemented Categories"),
         format!("{clsid}\\MiscStatus\\1"),
         format!("{clsid}\\MiscStatus"),
         format!("{clsid}\\ToolboxBitmap32"),
@@ -195,6 +218,29 @@ mod tests {
             value_of(&entries, &format!("{clsid}\\ProgID"), ""),
             Some(PROG_ID.to_string())
         );
+    }
+
+    /// The safety claim, in the half a host may read *instead of* asking the
+    /// object.
+    ///
+    /// Some hosts call `IObjectSafety` and some read the component categories,
+    /// and the two disagreeing is a control that is safe for scripting depending
+    /// on who is asking. Both come from `safety`, so this checks the wiring
+    /// rather than the values.
+    #[test]
+    fn both_safety_categories_are_claimed_in_the_registry() {
+        let entries = entries(PATH);
+        let categories = format!("CLSID\\{CLSID_TEXT}\\Implemented Categories");
+
+        for catid in [CATID_SAFE_FOR_SCRIPTING, CATID_SAFE_FOR_INITIALIZING] {
+            assert!(
+                entries
+                    .iter()
+                    .any(|e| e.key == format!("{categories}\\{catid}")),
+                "a host that reads the categories rather than calling \
+                 IObjectSafety would not find {catid}"
+            );
+        }
     }
 
     /// A host stores the ProgID in a form file and resolves it to a CLSID later,

@@ -68,17 +68,29 @@
 //! implementing `IDispatch`: there is no vtable to match and nothing to compile
 //! against, only `Invoke` with one of the two dispids above.
 //!
+//! # Safe for scripting
+//!
+//! The control claims it, through `IObjectSafety` and through the two component
+//! categories in the registry, because hosts are split on which one they ask.
+//!
+//! The claim is worth stating precisely, since claiming it carelessly is how
+//! ActiveX earned its reputation. The scriptable surface is the six rows above:
+//! two strings, a boolean and a repaint. Nothing in it opens a file, spawns a
+//! process, reads the registry, resolves a host name, or takes a pointer or a
+//! window handle from the caller — and `Load` reads nothing, so untrusted *data*
+//! has nothing to be untrusted with. A script that drives this control as far as
+//! it goes has changed some text on a panel.
+//!
+//! That is a claim about the surface as it stands. Add a member that reaches
+//! outside the control and it has to be argued again rather than inherited; the
+//! [`safety`] module is where the argument lives, next to the code that makes it.
+//!
 //! # What is not here yet
 //!
 //! **A form editor that has actually hosted it.** The two pieces one needs are
 //! both here — a type library to read and a design-time view to draw — and both
 //! are checked on every push. Neither has been in front of VB6 or an MFC dialog
 //! editor.
-//!
-//! **The scripting safety categories.** `IObjectSafety` and the "safe for
-//! scripting" registry entries are deliberately absent: they are an assertion
-//! about untrusted callers that has not been thought through, and claiming it
-//! carelessly is worse than not claiming it.
 //!
 //! # What has been verified
 //!
@@ -141,6 +153,7 @@ pub mod connections;
 pub mod dispatch;
 pub mod himetric;
 pub mod registry;
+pub mod safety;
 pub mod view;
 
 #[cfg(windows)]

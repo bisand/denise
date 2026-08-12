@@ -207,6 +207,28 @@ Each step prints, and each fails distinctly:
 6. **`GetIDsOfNames` and `Invoke`** — `Caption`, `Text` and `Enabled` are set and
    read **by name**, which is exactly what a script does.
 
+Then **`IObjectSafety`**, which is what a scripting host asks before it will let
+untrusted code near a control. The example prints the answer for three interface
+ids: `IDispatch` should report `0x1` — safe for untrusted callers — and
+`IPersistStreamInit` `0x2`, safe for untrusted data. `IOleObject` should report
+*no claim at all*, and that is the interesting one: a control that answers yes to
+every question has told the host nothing.
+
+The same claim is written into the registry as two component categories under
+`Implemented Categories`, because hosts are split on which they ask. To check
+that half:
+
+```powershell
+Get-ChildItem "HKLM:\SOFTWARE\Classes\CLSID\{7F1B483A-5853-4348-9081-D5BD502B51E8}\Implemented Categories"
+```
+
+Two keys, `{7DD95801-…}` for scripting and `{7DD95802-…}` for initialising. One
+digit apart, which is exactly the pair that gets copied wrong.
+
+What none of that settles is whether the claim is *true* — that is an argument
+about what the four scriptable members can reach, and it is written down in
+`src/safety.rs` rather than tested.
+
 There is one more, and it happens *before* step 2, which is the whole point of
 it: **`IViewObject2::Draw`**, the design-time view. A form editor drops a control
 on a design surface and asks what it looks like — no site, no window, nothing
