@@ -15,13 +15,14 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::Ui;
-use denise_ui::widgets::{Align, Button, Label, Panel, TextInput};
+use denise_ui::widgets::{Align, Button, Checkbox, Label, Panel, TextInput};
 
-const SIZE: Size = Size::new(800, 620);
+const SIZE: Size = Size::new(800, 700);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Msg {
     Noop,
+    Remember(bool),
 }
 
 fn main() -> std::io::Result<()> {
@@ -143,7 +144,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 130))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 166))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -169,6 +170,29 @@ fn build(theme: Theme) -> Ui<Msg> {
         Rect::new(16, 90, 728, 24),
     )
     .expect("charset");
+
+    // Both states side by side, and a disabled one, since a checkbox that only
+    // ever appears unticked in a picture proves nothing about the tick.
+    ui.add(
+        form,
+        Checkbox::new("Husk meg", Msg::Remember).with_checked(true),
+        Rect::new(16, 120, 220, 28),
+    )
+    .expect("remember");
+    ui.add(
+        form,
+        Checkbox::new("Send rapport", Msg::Remember),
+        Rect::new(256, 120, 220, 28),
+    )
+    .expect("report");
+    let locked = ui
+        .add(
+            form,
+            Checkbox::new("Låst", Msg::Remember).with_checked(true),
+            Rect::new(496, 120, 220, 28),
+        )
+        .expect("locked");
+    ui.set_enabled(locked, false);
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

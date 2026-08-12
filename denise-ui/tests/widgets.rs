@@ -3,7 +3,7 @@
 use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
-use denise_ui::widgets::{Button, Label, Panel, TextInput};
+use denise_ui::widgets::{Button, Checkbox, Label, Panel, TextInput};
 use denise_ui::{NodeId, Ui};
 
 const SIZE: Size = Size::new(400, 240);
@@ -13,6 +13,7 @@ enum Msg {
     Save,
     Cancel,
     Submitted,
+    Logging(bool),
 }
 
 fn keys(code: KeyCode, times: usize) -> Vec<InputEvent> {
@@ -415,5 +416,223 @@ fn the_caret_is_measured_not_counted() {
     assert!(
         deltas[3] > deltas[2] * 3,
         "the wide character should advance much further: {deltas:?}"
+    );
+}
+
+// ------------------------------------------------------------------- checkbox
+
+/// A checkbox at 20,20 measuring 200x30, alone in a tree.
+fn checkbox() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Checkbox::new("Enable logging", Msg::Logging),
+            Rect::new(20, 20, 200, 30),
+        )
+        .expect("checkbox");
+    (ui, id)
+}
+
+fn checked(ui: &Ui<Msg>, id: NodeId) -> bool {
+    ui.widget::<Checkbox<Msg>>(id).expect("checkbox").checked()
+}
+
+/// The message carries the value it became, so an application matches on the new
+/// state rather than looking the widget up afterwards.
+#[test]
+fn a_checkbox_emits_the_value_it_changed_to() {
+    let (mut ui, id) = checkbox();
+
+    ui.handle(&click(30, 35));
+    assert!(checked(&ui, id));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Logging(true)]
+    );
+
+    ui.handle(&click(30, 35));
+    assert!(!checked(&ui, id));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Logging(false)],
+        "and the value it became on the way back, not a bare 'it changed'"
+    );
+}
+
+/// The label is part of the target. A 20-pixel box on its own is not something a
+/// finger can hit, which is the whole reason the hit area is the widget rather
+/// than the box.
+#[test]
+fn clicking_the_label_toggles_it_too() {
+    let (mut ui, id) = checkbox();
+    // 150 is well past the box, inside the label's half of the widget.
+    ui.handle(&click(150, 35));
+    assert!(checked(&ui, id));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Logging(true)]
+    );
+}
+
+/// Space toggles. Enter does **not**: it belongs to the form's default action,
+/// and a checkbox that swallows it is why a dialog stops submitting when focus
+/// happens to be sitting on one.
+#[test]
+fn space_toggles_a_focused_checkbox_and_enter_is_left_alone() {
+    let (mut ui, id) = checkbox();
+    ui.focus(Some(id));
+
+    ui.handle(&[key(KeyCode::Space)]);
+    assert!(checked(&ui, id));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Logging(true)]
+    );
+
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert!(checked(&ui, id), "Enter must not have toggled it");
+    assert!(ui.messages().is_empty(), "nor emitted anything");
+}
+
+/// A held Space is one toggle, not one per repeat. Autorepeat on a checkbox
+/// would otherwise flicker the value dozens of times a second.
+#[test]
+fn holding_space_does_not_toggle_on_every_repeat() {
+    let (mut ui, id) = checkbox();
+    ui.focus(Some(id));
+    ui.handle(&[
+        key(KeyCode::Space),
+        InputEvent::Key {
+            code: KeyCode::Space,
+            state: ElementState::Down,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        },
+        InputEvent::Key {
+            code: KeyCode::Space,
+            state: ElementState::Down,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    assert!(checked(&ui, id));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>().len(), 1);
+}
+
+/// Disabled means inert to both the pointer and the keyboard, and not a tab stop.
+#[test]
+fn a_disabled_checkbox_neither_toggles_nor_takes_focus() {
+    let (mut ui, id) = checkbox();
+    ui.set_enabled(id, false);
+
+    ui.handle(&click(30, 35));
+    assert!(!checked(&ui, id));
+    assert!(ui.messages().is_empty());
+
+    ui.focus(Some(id));
+    assert_eq!(ui.focused(), None);
+}
+
+/// A press dragged off the widget and released elsewhere is cancelled, the same
+/// way a button's is. On a touchscreen this is how a finger that landed on the
+/// wrong control gets taken back.
+#[test]
+fn a_press_dragged_off_the_checkbox_does_not_toggle_it() {
+    let (mut ui, id) = checkbox();
+    ui.handle(&[
+        InputEvent::PointerMoved {
+            position: Point::new(30, 35),
+        },
+        InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state: ElementState::Down,
+            position: Point::new(30, 35),
+            modifiers: Modifiers::NONE,
+        },
+        InputEvent::PointerMoved {
+            position: Point::new(30, 200),
+        },
+        InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state: ElementState::Up,
+            position: Point::new(30, 200),
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    assert!(!checked(&ui, id));
+    assert!(ui.messages().is_empty());
+}
+
+/// Assigning is not the same as somebody clicking. An application that assigned
+/// here and got its own message back would either loop or have to guard against
+/// itself.
+#[test]
+fn setting_a_checkbox_from_the_application_emits_nothing() {
+    let (mut ui, id) = checkbox();
+    ui.widget_mut::<Checkbox<Msg>>(id)
+        .expect("checkbox")
+        .set_checked(true);
+    assert!(checked(&ui, id));
+    assert!(ui.messages().is_empty());
+}
+
+/// The drawing, which no behavioural test reaches.
+///
+/// A checkbox whose `checked` flag flips but whose box looks identical is a
+/// control nobody can read, and every test above it would still pass. So: paint
+/// both states into a buffer and compare the pixels inside the box.
+///
+/// The tick is drawn with `draw_line`, which is one pixel wide and has no
+/// thickness parameter, so it is faked by drawing the pair several times offset
+/// downwards. This is what would catch that fake collapsing to nothing.
+#[test]
+fn ticking_the_box_actually_changes_the_pixels_in_it() {
+    fn paint(checked: bool) -> Vec<u32> {
+        use denise::{BufferAge, Frame, PixelFormat};
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        ui.add(
+            root,
+            Checkbox::new("Enable logging", Msg::Logging).with_checked(checked),
+            Rect::new(20, 20, 200, 30),
+        )
+        .expect("checkbox");
+
+        let mut pixels = vec![0u32; (SIZE.width * SIZE.height) as usize];
+        let mut frame = Frame::new(
+            &mut pixels,
+            SIZE,
+            SIZE.width,
+            PixelFormat::Xrgb8888,
+            BufferAge::Frames(1),
+        )
+        .expect("frame");
+        ui.paint(&mut frame);
+        drop(frame);
+        pixels
+    }
+
+    let (off, on) = (paint(false), paint(true));
+    assert_ne!(off, on, "checking the box changed nothing on screen");
+
+    // Not merely different — different *inside the box*, and by more than a
+    // couple of pixels. A one-pixel difference would pass the assert above while
+    // being invisible on a panel at arm's length.
+    let side = theme::DARK.metrics.size_selector as usize;
+    let mut differing = 0;
+    for y in 20..20 + side {
+        for x in 20..20 + side {
+            let i = y * SIZE.width as usize + x;
+            if off[i] != on[i] {
+                differing += 1;
+            }
+        }
+    }
+    assert!(
+        differing > side * 2,
+        "only {differing} pixels differ inside a {side}x{side} box — the tick is \
+         not being drawn, or has collapsed to a hairline"
     );
 }
