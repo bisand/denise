@@ -60,6 +60,7 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
 windows = "0.62"
+windows-core = "0.62"
 winit = "0.30"
 softbuffer = "0.4"
 

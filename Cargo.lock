@@ -457,6 +457,13 @@ dependencies = [
 [[package]]
 name = "denise-activex"
 version = "0.0.1"
+dependencies = [
+ "denise",
+ "denise-ui",
+ "denise-win32",
+ "windows",
+ "windows-core",
+]
 
 [[package]]
 name = "denise-benches"

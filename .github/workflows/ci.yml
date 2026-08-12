@@ -158,6 +158,12 @@ jobs:
       - run: cargo clippy -p denise-win32 --all-targets -- -D warnings
       - run: cargo test -p denise-win32
 
+      # The COM server is the only crate here that produces a DLL Windows loads
+      # by class id, and it compiles nowhere else.
+      - run: cargo clippy -p denise-activex --all-targets -- -D warnings
+      - run: cargo test -p denise-activex
+      - run: cargo build -p denise-activex --release
+
       # The cdylib and its header are meant to be linked from Windows hosts, and
       # the export list differs from the ELF one enough to be worth proving.
       - run: cargo build -p denise-ffi --release
