@@ -232,7 +232,7 @@ mod app {
             let status = ui
                 .add(
                     card,
-                    Label::new("F3 switches keyboard layout")
+                    Label::new("F3 switches keyboard layout, F12 screenshots")
                         .with_role(Role::Base300)
                         .with_align(Align::Center, Align::Center),
                     Rect::new(pad, y, inner, 24),
@@ -260,7 +260,7 @@ mod app {
 
         /// Names the active keyboard layout in the status line.
         fn show_layout(&mut self, name: &str) {
-            let text = format!("keyboard: {name}  —  F3 switches it");
+            let text = format!("keyboard: {name}  —  F3 switches it, F12 screenshots");
             self.set_status(&text);
         }
 
@@ -515,6 +515,8 @@ mod app {
         let mut frames = 0u64;
         let mut wakeups = 0u64;
         let mut painted = 0u64;
+        // Set by F12, served by the paint loop while it still holds the frame.
+        let mut capture_requested = false;
         let mut input_events = 0u64;
         let mut timer_wakes = 0u64;
 
@@ -546,7 +548,13 @@ mod app {
             input_events += events.len() as u64;
             app.ui.handle(&events);
             app.ui.tick(now());
-            if !handle_shortcuts(&mut app, &events, &mut input, &mut layout_index) {
+            if !handle_shortcuts(
+                &mut app,
+                &events,
+                &mut input,
+                &mut layout_index,
+                &mut capture_requested,
+            ) {
                 break;
             }
             app.dispatch();
@@ -582,6 +590,17 @@ mod app {
             input_events += events.len() as u64;
             app.ui.paint(&mut frame);
             painted += app.ui.damage().iter().map(Rect::area).sum::<u64>();
+
+            if core::mem::take(&mut capture_requested) {
+                // Everything damaged has been painted and nothing has been
+                // presented yet, so the buffer is exactly what the display is
+                // about to show. A moment later it belongs to the scanout engine.
+                match capture(&frame, SHOT_PATH) {
+                    Ok(()) => eprintln!("wrote {SHOT_PATH}"),
+                    Err(e) => eprintln!("could not write {SHOT_PATH}: {e}"),
+                }
+            }
+
             drop(frame);
             surface.present(app.ui.damage())?;
             app.ui.presented();
@@ -618,11 +637,43 @@ mod app {
 
     /// Keys the application claims before the tree sees them. Returns `false` to
     /// quit.
+    /// Where F12 writes. `/tmp` because a kiosk image is very often read-only
+    /// everywhere else, and because this is a diagnostic rather than a document.
+    const SHOT_PATH: &str = "/tmp/denise-panel.ppm";
+
+    /// Writes what is about to reach the display, as a PPM.
+    ///
+    /// `frame` is the scanout buffer *after* painting, so this is the composited
+    /// result including the cursor sprite — a capture, not a re-render that might
+    /// differ from what somebody is looking at.
+    ///
+    /// This exists because a machine with no desktop has no screenshot tool: there
+    /// is no compositor to ask and no window server to ask it of. The program
+    /// holding the buffer is the only thing that can answer, so it should offer to.
+    fn capture(frame: &denise::Frame<'_>, path: &str) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        let size = frame.size();
+        let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+        write!(out, "P6\n{} {}\n255\n", size.width, size.height)?;
+        for y in 0..size.height {
+            // Row by row, because a surface's stride is not its width — a scanout
+            // buffer is very often padded, and reading it as one flat slice
+            // produces a picture that shears further right on every line.
+            let Some(row) = frame.row(y) else { continue };
+            for word in &row[..size.width as usize] {
+                out.write_all(&[(word >> 16) as u8, (word >> 8) as u8, *word as u8])?;
+            }
+        }
+        out.flush()
+    }
+
     fn handle_shortcuts(
         app: &mut App,
         events: &[InputEvent],
         input: &mut InputBackend,
         layout_index: &mut usize,
+        capture: &mut bool,
     ) -> bool {
         for event in events {
             let InputEvent::Key {
@@ -640,6 +691,11 @@ mod app {
                     }
                 }
                 KeyCode::F2 => app.cycle_theme(),
+                // A screenshot of a machine with no desktop. The application is
+                // holding the buffer that is about to be scanned out, so the
+                // honest way to photograph the screen is to ask the program
+                // showing it — no capture tool, no root, no compositor to ask.
+                KeyCode::F12 => *capture = true,
                 KeyCode::F3 => {
                     *layout_index = (*layout_index + 1) % layout::BUILT_IN.len();
                     let next = layout::BUILT_IN[*layout_index];

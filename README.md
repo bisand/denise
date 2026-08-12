@@ -174,7 +174,9 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 
 Several examples take `--snapshot out.ppm`, which draws one frame and exits. No
 display needed — useful over SSH, for reviewing a layout, and for diffing a theme
-change before and after.
+change before and after. `panel` also writes its live scanout buffer on **F12**,
+which is how you screenshot a machine that has no desktop to screenshot: see
+[docs/raspberry-pi.md](docs/raspberry-pi.md#taking-a-screenshot-with-no-desktop).
 
 ```bash
 cargo run -p hello -- --snapshot hello.ppm

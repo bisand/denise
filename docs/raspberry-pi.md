@@ -352,6 +352,48 @@ text at all until the next key resolves it. And **the labels on the keys are not
 consulted**: with a Norwegian layout on a physically English keyboard, `ø` is on
 the key printed `;`, `æ` on `'`, and `å` on `[`.
 
+## Taking a screenshot with no desktop
+
+There is no screenshot tool, because there is no compositor to ask and no window
+server to ask it of. Three ways round that, best first.
+
+**Ask the program.** `panel` writes `/tmp/denise-panel.ppm` on **F12**. It captures
+the scanout buffer after painting and before presenting, so what lands in the file
+is exactly what the display is about to show, cursor sprite included — a capture,
+not a re-render that might differ. No root, no extra package, and it works
+identically on DRM and on fbdev.
+
+```bash
+# on the Pi, with the panel running: press F12, then
+pnmtopng /tmp/denise-panel.ppm > shot.png     # netpbm
+# or from your own machine
+scp pi@raspberrypi:/tmp/denise-panel.ppm . && magick denise-panel.ppm shot.png
+```
+
+Twenty lines of any application can do the same thing; `capture` in
+[examples/panel](../examples/panel/src/main.rs) is the whole of it. A panel in the
+field that can mail you a picture of what the operator is looking at is worth
+rather more than a screenshot key on a desktop.
+
+**Render one without a display at all.** Several examples take `--snapshot
+out.ppm`, which draws one frame and exits. Deterministic, needs no Pi, and diffs
+cleanly between two builds — but it shows what the tree *would* draw, not what is
+on the screen right now.
+
+**Grab the scanout from outside.** `ffmpeg`'s `kmsgrab` reads the active KMS plane
+directly:
+
+```bash
+sudo ffmpeg -f kmsgrab -i - -frames:v 1 -vf hwdownload,format=bgr0 shot.png
+```
+
+It needs `CAP_SYS_ADMIN` and a DRM master that is not exclusive, so it will not
+always cooperate with an application that has taken the display — which is most of
+the point of this toolkit. `cat /dev/fb0` has the same problem in reverse: with the
+vc4 KMS driver `/dev/fb0` is an emulation, and while a DRM client holds the CRTC it
+often shows the console underneath rather than what is on screen. Try them, but
+believe the first method over either.
+
 ## Known gaps
 
 - **The VT keyboard is not muted** while Denise holds DRM master, so keystrokes
