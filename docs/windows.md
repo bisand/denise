@@ -39,6 +39,36 @@ rustup show          # confirm the host triple
 cargo --version
 ```
 
+### Two traps before any of this works
+
+**`winget` reports success without installing anything.** This looks like it
+worked and does not:
+
+```bat
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override "..."
+```
+
+It downloads a 4.25 MB `vs_BuildTools.exe` bootstrapper, declares success, and
+returns in seconds — while the actual workload is several gigabytes. Install
+through the **Visual Studio Installer** GUI instead, where the progress bar is
+honest, and verify afterwards:
+
+```bat
+"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -products * -property installationPath
+```
+
+Empty output means nothing is installed. A path containing `BuildTools` is what
+you want — beware that SQL Server Management Studio registers as a Visual Studio
+instance too, because it is built on the VS shell, and it contains no compiler.
+
+**Do not build from an MSYS2 or Git-Bash shell.** A `CLANGARM64` or `MINGW64`
+prompt puts its own `/usr/bin` ahead of everything on `PATH`, which is exactly how
+GNU coreutils' `link.exe` ends up shadowing the linker. It also eats the
+backslashes out of `cd C:\Users\...`. Use the **ARM64 Native Tools Command
+Prompt for VS 2022** from the Start menu: it is `cmd`, it has no coreutils, and it
+sets `PATH`, `LIB` and `INCLUDE` together — `PATH` alone is not enough, because
+the linker needs `LIB` to find `kernel32.lib`.
+
 ### When `link.exe` is the wrong `link.exe`
 
 A build that dies like this is **not** a missing C++ workload, whatever rustc's
