@@ -583,11 +583,19 @@ straight to `Invoke` and works. The real fix is a registered type library, and i
 buys a form designer's property sheet and early binding at the same time; it is on
 the outstanding list rather than half-built.
 
-The lesson worth keeping is about what the diagnostics cost. Each round was a
-rebuild on a VM, a screenshot, and a guess about a COM adapter that cannot be run
-from the machine the code is written on. What ended it was not a better guess but
-making the object describe itself and printing that — at which point the answer was
-one word wide.
+There was a third thing wrong, and CI found it first: reading that description
+crashed the Windows runner outright, `STATUS_ACCESS_VIOLATION`. The module holding
+the method table freed its own name buffers when the builder returned, on the
+strength of a comment asserting that `CreateDispTypeInfo` copies what it is given
+— written as a fact and never checked. So the description outlived its own strings.
+It was unsound before it was useless.
+
+The lesson worth keeping is not about COM. Each round of this was a rebuild on a
+VM, a screenshot, and a guess about an adapter that cannot be run from the machine
+the code is written on — while the answer sat in a CI log nobody opened, on the
+very commit that added the tests meant to answer it. The cheap diagnostic already
+existed. Writing one and then not reading it is worse than not writing it, because
+it buys the feeling of having checked.
 
 Two more things are worth naming. The first is that **a host is not tidy about
 `wFlags`** — VBScript sends `METHOD | PROPERTYGET` for anything whose result it
