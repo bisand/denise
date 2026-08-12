@@ -29,10 +29,13 @@
 //! the control is ever activated. Without it a control dropped on a form is a
 //! blank rectangle until the form runs.
 //!
-//! **Any evidence it works.** This has never been loaded by a container. The
-//! Win32 control underneath it now has been — that was the gate — but COM has
-//! failure modes a compiler cannot see, and every one of them will be found by a
-//! host rather than by CI.
+//! # What has been verified
+//!
+//! On Windows 11 ARM64: registered with `regsvr32`, instantiated through
+//! `CoCreateInstance`, sited, activated in place, and rendering — with text typed
+//! into it, including AltGr and dead keys. `examples/host.rs` is the container
+//! that did it, and it goes through the registry rather than around it, so what
+//! it proves is the *registered* server.
 //!
 //! # Registering it
 //!

@@ -131,13 +131,13 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-ffi` | Stable C ABI, `cdylib`, hand-written header | ✅ M5 |
 | `denise-macos` | Embeddable `NSView` over a CoreGraphics bitmap context | ✅ M5 |
 | `denise-win32` | Windows child-`HWND` control over a DIB section | ✅ M5 |
-| `denise-activex` | COM/ActiveX shim for legacy Windows hosts | ◐ M5, registration only |
+| `denise-activex` | COM/ActiveX shim for legacy Windows hosts | ✅ M5 |
 
-Everything through M5 has run on real hardware, `denise-win32` included — on
-Windows 11 ARM64, where Tab reaches the control inside a window, AltGr composes
-`@`, the dead keys produce `é` and `ö`, and damage stays at one rectangle.
-`denise-activex` has its registration table and not its COM object — see
-[Milestones](#milestones) for why that is where it stopped.
+Everything through M5 has run on real hardware. On Windows 11 ARM64, `denise-win32`
+puts a window on screen where Tab reaches the control, AltGr composes `@` and the
+dead keys produce `é` and `ö`; and `denise-activex` registers with `regsvr32`,
+instantiates through `CoCreateInstance`, sites, activates in place and renders
+inside a container that knows nothing about it.
 
 `denise-ui` is a crate of its own rather than part of the core because widgets
 need both the platform contract and the rasteriser, and the rasteriser already
@@ -620,7 +620,7 @@ somebody paid for.
 | **M2** | DRM/KMS with legacy modesetting and page flip; fbdev fallback; evdev input. Runs with no X. | ✅ |
 | **M3** | Scene stack, z-index, modal dialogs, cursor sprite. Label, Button, TextInput. CoreCanvas 0.4 parity. | ✅ |
 | **M4** | Text: three font tiers behind feature flags, a bounded glyph atlas, keyboard layouts with dead keys. | ✅ |
-| **M5** | C ABI, macOS `NSView`, Windows child-HWND control. ActiveX shim: registration only. | ◐ |
+| **M5** | C ABI, macOS `NSView`, Windows child-HWND control, ActiveX shim. | ✅ |
 
 M2 does not start until M1 is benchmarked. M5 does not start until the Pi story is
 solid — that is the entire point of the project.
@@ -647,17 +647,25 @@ keyboard was still unmuted, so every character typed into a Denise text field wa
 also typed at the login shell behind it. That is fixed first — `Console` in
 `denise-evdev`, restoring on drop — and then the milestone starts.
 
-**M5's ActiveX shim stops at registration.** The registry table is there and
-tested; the COM object is not. It would sit entirely on top of `denise-win32`,
-which has itself never run on Windows, and nothing available here can check it
-beyond "it compiles" — a long way from "a VB6 form can host it". A thousand lines
-of unverifiable COM stacked on an unverified control produces something that looks
-finished and is not. The right order is: run the control on Windows, then write the
-shim against a host that can load it.
+M5's ActiveX shim was written twice, and the first attempt was abandoned on
+purpose. It would have sat entirely on top of `denise-win32`, which at the time had
+never run, and nothing available could have checked it beyond "it compiles" — a
+long way from "a container can host it". So the registration table shipped alone,
+and the COM object waited until the control underneath it had put a window on a
+screen. It then took one sitting, and the container found no bugs in it at all.
+
+What did find one was a test: `2540 / 96` as an integer constant is 26 rather than
+26.458, so every extent the control reported was 1.7% short. A container would have
+drawn it slightly too small forever and nothing would have pointed at a constant.
 
 Still outstanding, and deliberately not hidden:
 
-- **The ActiveX COM object is not written.** See above.
+- **The control cannot be scripted.** No `IDispatch`, so a container can embed it
+  and cannot set a property, call a method or receive an event. The tree emits
+  messages already; delivering them across COM is what this would add.
+- **No design-time view.** `IViewObject2::Draw` is what a form editor asks for
+  before the control is ever activated, so a control dropped on a form is a blank
+  rectangle until the form runs.
 - **`denise-win32`'s edges are unverified.** It runs, and the input path is
   confirmed on Windows 11 ARM64 — Tab, AltGr, dead keys, hover and mouse-leave.
   Not yet exercised: `SetCapture` on a drag off a pressed button, the wheel's
