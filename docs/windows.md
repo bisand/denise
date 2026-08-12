@@ -155,9 +155,17 @@ In rough order of how likely each is to be broken:
 | 9 | **Move the pointer out** | `mouse left the control`, hover clears | `TrackMouseEvent` is not being re-armed after each leave |
 | 10 | **Move to a display with different DPI** | Everything rescales | `WM_DPICHANGED` reaches top-level windows only; a child control finds out from its parent or not at all |
 
-The ones I would bet on being wrong are 1, 2 and 10 — message ordering, the
-extended bit, and DPI — because they are exactly the parts no compiler checks and
-no unit test reaches.
+Items 4, 5 and 6 no longer need a hand: `tests/messages.rs` creates a real control
+in an off-screen window and drives it with `SendMessage`, checking that a press
+captures the mouse and a release gives it back, that a drag past the left edge
+reports a negative x rather than 65533, and that the wheel's screen coordinates
+are converted. Those run on every push, on the Windows CI runner.
+
+What that does *not* prove is that Windows sends the messages — real capture
+behaviour, with the pointer outside the window and the events still arriving, is
+the operating system's promise rather than this code's. Nor does it touch item 10:
+a DPI change needs a second display at a different scale factor, and there is no
+honest way to fake one.
 
 ## Reporting back
 
