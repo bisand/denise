@@ -658,6 +658,9 @@ Still outstanding, and deliberately not hidden:
   its unit tests pass on a Windows runner; its keymap is platform-independent and
   tested everywhere. The parts most likely to be wrong are the ones no compiler
   checks: message ordering, focus behaviour inside a dialog, and DPI changes.
+  [docs/windows.md](docs/windows.md) is the checklist for finding out — its
+  example reports every key, character and damage count on screen, the way
+  `denise-evdev`'s `keys` does on Linux.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.

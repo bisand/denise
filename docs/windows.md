@@ -1,0 +1,105 @@
+# Running the Win32 control
+
+`denise-win32` was written against the documentation and has never run. It
+compiles for `x86_64-pc-windows-msvc`, its keymap is tested everywhere and its
+DIB tests pass on a Windows CI runner — none of which says anything about whether
+a real window behaves.
+
+This is how to find out, in a UTM VM on a Mac.
+
+## The VM
+
+UTM on Apple Silicon runs **Windows 11 ARM64** natively through Apple's
+hypervisor, which is fast enough that the panel's frame timing means something.
+An x86-64 Windows VM works too but runs under emulation, so treat any performance
+number from it as fiction.
+
+Two things to set in UTM before installing:
+
+- **At least 4 GB of RAM and 4 cores.** `rustc` and the MSVC linker are the load
+  here, not Denise.
+- **Enable clipboard and directory sharing.** Getting the repository in and the
+  screenshots out is otherwise the slowest part of the whole exercise.
+
+## The toolchain
+
+Inside the VM:
+
+1. **Visual Studio Build Tools**, with the *Desktop development with C++*
+   workload. Rust's MSVC targets need the linker and the Windows SDK; there is no
+   way around it and `rustup` will say so if it is missing.
+2. **rustup** from <https://rustup.rs>. On ARM64 Windows the host toolchain is
+   `aarch64-pc-windows-msvc`, which is what you want — the code has no
+   x86 assumptions, and the one place pointer width matters
+   (`SetWindowLongPtrW` versus `SetWindowLongW`) is already handled by
+   `cfg(target_pointer_width)`.
+
+```powershell
+rustup show          # confirm the host triple
+cargo --version
+```
+
+## Getting the code in
+
+Either clone it:
+
+```powershell
+git clone https://github.com/bisand/denise
+cd denise
+```
+
+or mount the Mac's checkout through UTM's directory sharing. Cloning is usually
+less annoying — a shared folder makes `cargo` rebuild constantly because file
+timestamps come back different.
+
+## Running it
+
+```powershell
+cargo run -p denise-win32 --example embed
+```
+
+A 520x400 window with the panel in it. If it opens and draws, the DIB section,
+the top-down row order, the `BitBlt` path and `WM_PAINT` are all correct, which is
+most of the backend.
+
+## What to actually test
+
+The example is a **diagnostic**, not just a demo: three lines under the panel
+report the last key position with its modifiers, the last committed character
+with its codepoint, and the last pointer position with the number of damage
+rectangles the frame produced. That is the same trick `denise-evdev`'s `keys`
+example plays on Linux, and it is what turned "æøå does not work" into a fixed
+AltGr bug in M4. A panel that merely *looks* right tells you nothing about which
+layer is lying.
+
+In rough order of how likely each is to be broken:
+
+| | What to do | What should happen | If it does not |
+|---|---|---|---|
+| 1 | Press **Tab** repeatedly | Focus moves between the field and the two buttons | `WM_GETDLGCODE` is not returning `DLGC_WANTALLKEYS` |
+| 2 | **AltGr+2** on a Norwegian layout | `key` says `AltRight`, `text` says `'@' U+0040` | The extended bit is being lost — `AltLeft` means the `lParam` bit 24 test is wrong |
+| 3 | Type **æ ø å** | Positions `Quote`, `Semicolon`, `BracketLeft`; characters arrive separately | `WM_CHAR` is not reaching the control, or `TranslateMessage` is missing from the loop |
+| 4 | **Press a button, drag off it, release** | The button un-presses and emits nothing | `SetCapture` is not working; the widget will stay lit |
+| 5 | **Drag off the left edge** while pressed | `mouse` shows a negative x | The `lParam` halves are being read unsigned |
+| 6 | **Scroll the wheel** over the panel | `wheel` shows a signed value | Wheel messages carry screen coordinates; if this only works with the window at the top-left, `ScreenToClient` is missing |
+| 7 | **Resize the window** | `damage` settles to a small number, not the whole client area every frame | The incremental path is not being used |
+| 8 | **Leave it alone** | The caret blinks and `damage` stays at 1 | The tree is over-damaging |
+| 9 | **Move the pointer out** | `mouse left the control`, hover clears | `TrackMouseEvent` is not being re-armed after each leave |
+| 10 | **Move to a display with different DPI** | Everything rescales | `WM_DPICHANGED` reaches top-level windows only; a child control finds out from its parent or not at all |
+
+The ones I would bet on being wrong are 1, 2 and 10 — message ordering, the
+extended bit, and DPI — because they are exactly the parts no compiler checks and
+no unit test reaches.
+
+## Reporting back
+
+`key`, `text` and `mouse` lines are the useful thing to copy out. A screenshot of
+the window with the diagnostic visible says more than a description, and UTM's
+clipboard sharing makes that a paste rather than a file transfer.
+
+## What is not testable this way
+
+The ActiveX shim, because it does not exist yet — only its registration table.
+Testing that needs a container that can load a COM control (VB6, an MFC dialog, or
+`Tstcon32.exe` from the old Platform SDK), and it should not be written until the
+control underneath it has been run at least once. Which is what this page is for.
