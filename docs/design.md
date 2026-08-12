@@ -620,15 +620,12 @@ drawn it slightly too small forever and nothing would have pointed at a constant
 
 Still outstanding, and deliberately not hidden:
 
-- **No type library.** `IDispatch` works, so any late-binding host can set `Text`,
-  `Caption` and `Enabled`, call `Refresh` and sink `Change` and `Click`. A `.tlb`
-  and a `LIBID` would add a form designer's property sheet, an object browser's
-  member list, early binding, and PowerShell without `InvokeMember`.
-  `CreateDispTypeInfo` was tried as a substitute and cannot do it — it produces a
-  `TKIND_INTERFACE`, and PowerShell wants a dispinterface.
-- **No design-time view.** `IViewObject2::Draw` is what a form editor asks for
-  before the control is ever activated, so a control dropped on a form is a blank
-  rectangle until the form runs.
+- **No form editor has hosted it.** The two things one would need are now there —
+  a type library, so a property sheet and an object browser have something to
+  read, and `IViewObject2::Draw`, so a control dropped on a form is a picture
+  rather than a blank rectangle. Both are exercised on every push, the library by
+  building one and reading it back and the view by drawing into a memory DC and
+  counting pixels. Neither has been in front of the thing they are for.
 - **`denise-win32`'s edges are unverified.** It runs, and the input path is
   confirmed on Windows 11 ARM64 — Tab, AltGr, dead keys, hover and mouse-leave.
   Not yet exercised: `SetCapture` on a drag off a pressed button, the wheel's

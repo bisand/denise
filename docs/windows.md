@@ -207,6 +207,19 @@ Each step prints, and each fails distinctly:
 6. **`GetIDsOfNames` and `Invoke`** — `Caption`, `Text` and `Enabled` are set and
    read **by name**, which is exactly what a script does.
 
+There is one more, and it happens *before* step 2, which is the whole point of
+it: **`IViewObject2::Draw`**, the design-time view. A form editor drops a control
+on a design surface and asks what it looks like — no site, no window, nothing
+activated — and a control with no answer is a blank rectangle until the form is
+run. That path never reaches the screen, so the example draws it into a memory
+device context and prints it as text, point-sampled by luminance.
+
+What to look for is a card inset from the edges of the frame, a lighter run where
+the heading is, and the field and the button below it. One flat character
+throughout is the interesting failure: the panel painted its background and
+stopped. The unit tests check the same picture by counting pixels
+(`tests/view.rs`); this is the version a person can recognise.
+
 Then it is interactive, and this is the part to actually try:
 
 - Type in the field. Each keystroke prints `event: Change` with the new text,

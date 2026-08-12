@@ -294,9 +294,11 @@ is in [docs/design.md](docs/design.md).
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch routes to widgets as a pointer would, but no physical touchscreen
   has driven it.
-- **No type library for the ActiveX control**, so PowerShell needs
-  `[System.__ComObject].InvokeMember`. Every late-binding host — VB6, MFC, Delphi,
-  VBScript — works as-is. See [docs/windows.md](docs/windows.md).
+- **The ActiveX control has never been hosted in a real form editor.** It
+  registers, sites, activates, scripts, sinks events, and draws the design-time
+  view a form editor asks for — the last of those checked pixel by pixel on the
+  Windows runner and by eye in `examples/host` — but no VB6 form or MFC dialog
+  editor has actually held it. See [docs/windows.md](docs/windows.md).
 - **`denise-win32` DPI changes are unverified**, and it has never been hosted
   inside a real dialog.
 
