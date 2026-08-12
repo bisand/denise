@@ -70,8 +70,8 @@ eighty lines, half of them comments.
 cargo run -p hello
 ```
 
-<img src="assets/hello.png" width="460"
-     alt="A small window with a heading, a prompt, a text field, a Greet button and a greeting">
+<img src="assets/screenshots/hello-mac.png" width="470"
+     alt="The hello example running in a macOS window: a heading, a prompt, a text field and a Greet button">
 
 ## A real one
 
@@ -84,8 +84,8 @@ cargo run -p table-editor
 cargo run -p table-editor -- --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 ```
 
-<img src="assets/table-editor.png" width="800"
-     alt="A record editor with a five-row grid, a selected row, an edit form and a status line">
+<img src="assets/screenshots/table-editor-win.png" width="860"
+     alt="The record editor running on Windows 11: a five-row grid with a selected row, an edit form and a status line">
 
 Three things it is showing, none of which is obvious from the outside:
 
@@ -132,9 +132,34 @@ megapixel.
 | Embedded via COM/ActiveX | `denise-activex` | ✅ registered, sited, scriptable over `IDispatch` |
 | Embedded in anything else | `denise-ffi` | ✅ stable C ABI, hand-written header |
 
-`examples/table-editor` has been run unchanged on Windows 11 and macOS, picking up
-Segoe UI and Helvetica respectively without being told to. The Raspberry Pi is
-next.
+The same `table-editor` binary, unchanged and unconfigured, on two of them. Each
+picked up the platform's own font without being told to, and neither knows which
+one it got:
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/table-editor-win.png"
+    alt="The record editor on Windows 11, drawn in Segoe UI"></td>
+<td width="50%"><img src="assets/screenshots/table-editor-mac.png"
+    alt="The record editor on macOS, drawn in Helvetica, mid-edit with a validation message"></td>
+</tr>
+<tr>
+<td align="center"><b>Windows 11</b> — Segoe UI</td>
+<td align="center"><b>macOS</b> — Helvetica</td>
+</tr>
+<tr>
+<td><img src="assets/screenshots/hello-win.png" alt="The hello example on Windows 11"></td>
+<td><img src="assets/screenshots/hello-mac.png" alt="The hello example on macOS"></td>
+</tr>
+<tr>
+<td align="center"><code>hello</code>, built-in 8×8 bitmap font</td>
+<td align="center">the same, unchanged</td>
+</tr>
+</table>
+
+The macOS shot is mid-edit: a sixth record has been added and the form filled in
+but not applied, so the status line is reporting the record as it currently stands
+rather than as it is being typed. A Raspberry Pi photograph goes here next.
 
 On a Raspberry Pi, read [docs/raspberry-pi.md](docs/raspberry-pi.md) **first** — a
 stock Pi has no `/dev/dri` at all until the vc4 KMS overlay is enabled, and that
