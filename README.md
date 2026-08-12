@@ -137,7 +137,7 @@ megapixel.
 
 | | Backend | Status |
 |---|---|---|
-| Bare Linux, DRM/KMS | `denise-drm` | ✅ Pi 3 A+ at 1920×1080, async page flips, hardware cursor plane |
+| Bare Linux, DRM/KMS | `denise-drm` | ✅ Pi 3 A+ at 1920×1080, async page flips, hardware cursor plane, console restored on exit |
 | Bare Linux, fbdev | `denise-fbdev` | ✅ fallback when there is no `/dev/dri` |
 | Desktop: macOS, Windows, Linux | `denise-winit` | ✅ development and preview |
 | Embedded in a macOS app | `denise-macos` | ✅ `NSView` over a CoreGraphics bitmap context |
@@ -172,7 +172,14 @@ one it got:
 
 The macOS shot is mid-edit: a sixth record has been added and the form filled in
 but not applied, so the status line is reporting the record as it currently stands
-rather than as it is being typed. A Raspberry Pi photograph goes here next.
+rather than as it is being typed.
+
+The third machine has no window system to photograph. The same editor, rebuilt
+with `--features kiosk`, runs on a Raspberry Pi 3 A+ driving 1920×1080 over
+DRM/KMS with no X, no compositor and no desktop — the console muted while it runs
+and restored when it exits. Alpine ships no TrueType face, so it says so and falls
+back to the built-in 8×8 bitmap font, which is the tier story working rather than
+a fault. A photograph of that screen goes here.
 
 On a Raspberry Pi, read [docs/raspberry-pi.md](docs/raspberry-pi.md) **first** — a
 stock Pi has no `/dev/dri` at all until the vc4 KMS overlay is enabled, and that
