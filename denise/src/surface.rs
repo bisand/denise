@@ -232,6 +232,22 @@ pub enum SurfaceError {
         actual: usize,
     },
 
+    /// A cursor sprite larger than the plane can hold.
+    ///
+    /// Cursor planes are fixed-size, so this is a limit rather than a shortage.
+    /// Refused rather than cropped: a pointer missing its lower half reads as a
+    /// rendering bug, not as a hardware constraint.
+    #[error(
+        "cursor sprite is {}x{} but the plane holds at most {}x{}",
+        requested.width, requested.height, limit.width, limit.height
+    )]
+    CursorTooLarge {
+        /// The largest sprite the hardware accepts.
+        limit: crate::geom::Size,
+        /// The sprite that was offered.
+        requested: crate::geom::Size,
+    },
+
     /// A platform-specific failure.
     #[error("backend error: {0}")]
     Backend(Box<dyn core::error::Error + Send + Sync + 'static>),

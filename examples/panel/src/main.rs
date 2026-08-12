@@ -37,7 +37,8 @@ mod app {
     use std::time::{Duration, Instant};
 
     use denise::{
-        ElementState, InputEvent, InputSource, KeyCode, Radius, Rect, Role, Size, Surface, Theme,
+        CursorPlane, ElementState, InputEvent, InputSource, KeyCode, Radius, Rect, Role, Size,
+        Surface, Theme,
     };
     use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
     use denise_evdev::{Console, InputBackend, layout};
@@ -45,6 +46,81 @@ mod app {
     use denise_ui::widgets::{Align, Button, Label, Panel, TextInput};
     use denise_ui::{NodeId, Ui};
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
+
+    /// The display, kept concrete so the hardware cursor plane stays reachable.
+    ///
+    /// `Box<dyn Surface>` would have been shorter and would have thrown the plane
+    /// away with the type: a cursor plane is not part of the `Surface` contract,
+    /// because most backends have nothing to implement it with.
+    // One of these exists per process and it lives for the whole run, so the
+    // variants differing in size costs a few hundred bytes once. Boxing to even
+    // them out would trade that for a pointer chase on every `acquire`.
+    #[allow(clippy::large_enum_variant)]
+    enum Display {
+        Drm(DrmSurface),
+        Fbdev(FbdevSurface),
+    }
+
+    impl Display {
+        /// The hardware cursor plane, if this display has one.
+        fn cursor_plane(&mut self) -> Option<&mut dyn CursorPlane> {
+            match self {
+                Display::Drm(drm) => Some(drm),
+                Display::Fbdev(_) => None,
+            }
+        }
+    }
+
+    impl Surface for Display {
+        fn size(&self) -> Size {
+            match self {
+                Display::Drm(d) => d.size(),
+                Display::Fbdev(f) => f.size(),
+            }
+        }
+        fn scale_factor(&self) -> f32 {
+            match self {
+                Display::Drm(d) => d.scale_factor(),
+                Display::Fbdev(f) => f.scale_factor(),
+            }
+        }
+        fn format(&self) -> denise::PixelFormat {
+            match self {
+                Display::Drm(d) => d.format(),
+                Display::Fbdev(f) => f.format(),
+            }
+        }
+        fn acquire(&mut self) -> Result<denise::Frame<'_>, denise::SurfaceError> {
+            match self {
+                Display::Drm(d) => d.acquire(),
+                Display::Fbdev(f) => f.acquire(),
+            }
+        }
+        fn present(&mut self, damage: &[Rect]) -> Result<(), denise::SurfaceError> {
+            match self {
+                Display::Drm(d) => d.present(damage),
+                Display::Fbdev(f) => f.present(damage),
+            }
+        }
+    }
+
+    /// Resolves the tree's cursor sprite and hands it to the hardware plane.
+    ///
+    /// The sprite is stored as a mask plus two theme roles, so the pixels only
+    /// exist once a theme is chosen — which is why this has to run again whenever
+    /// the theme changes.
+    fn upload_cursor(surface: &mut Display, ui: &Ui<Msg>) -> bool {
+        let image = ui.cursor().image;
+        let size = Size::new(image.width.max(0) as u32, image.height.max(0) as u32);
+        let mut pixels = vec![0u32; (size.width * size.height) as usize];
+        if image.rasterise(ui.theme(), &mut pixels) == 0 {
+            return false;
+        }
+        let Some(plane) = surface.cursor_plane() else {
+            return false;
+        };
+        plane.set_cursor(&pixels, size, image.hotspot).is_ok()
+    }
 
     /// What the widgets can ask the application to do.
     ///
@@ -326,7 +402,7 @@ mod app {
             _ => PresentMode::Immediate,
         };
 
-        let mut surface: Box<dyn Surface> = match DrmSurface::open(SurfaceConfig {
+        let mut surface: Display = match DrmSurface::open(SurfaceConfig {
             present_mode: requested,
             ..SurfaceConfig::default()
         }) {
@@ -340,13 +416,13 @@ mod app {
                         PresentMode::Immediate => "immediate: async flips, no vblank wait",
                     }
                 );
-                Box::new(drm)
+                Display::Drm(drm)
             }
             Err(drm_error) => match FbdevSurface::open_first() {
                 Ok(fb) => {
                     eprintln!("display fbdev {} ({})", fb.info(), fb.path().display());
                     eprintln!("        no DRM: {drm_error}");
-                    Box::new(fb)
+                    Display::Fbdev(fb)
                 }
                 Err(fb_error) => {
                     return Err(format!("no display — DRM: {drm_error}; fbdev: {fb_error}").into());
@@ -399,6 +475,25 @@ mod app {
         // caret never blinks — which is exactly what happened the first time this
         // ran on hardware.
         app.ui.tick(0);
+
+        // The plane composites during scanout, so the tree must stop drawing a
+        // pointer of its own — `show_cursor(false)` is a decision that sticks, so
+        // no later pointer motion brings the sprite back.
+        let hardware_cursor = upload_cursor(&mut surface, &app.ui);
+        if hardware_cursor {
+            app.ui.show_cursor(false);
+            let limit = surface
+                .cursor_plane()
+                .map(|p| p.cursor_limit())
+                .unwrap_or(Size::ZERO);
+            eprintln!(
+                "cursor  hardware plane, {}x{} max — pointer motion costs no frame",
+                limit.width, limit.height
+            );
+        } else {
+            eprintln!("cursor  composited into the buffer — no plane on this display");
+        }
+        let mut cursor_theme = app.theme;
 
         // Built once: the device set does not change, and `poll` updates each
         // entry's revents in place.
@@ -455,6 +550,21 @@ mod app {
                 break;
             }
             app.dispatch();
+
+            // Before the repaint decision, deliberately. A pointer move damages
+            // nothing now, so `needs_paint` is false and the loop is about to go
+            // back to sleep — moving the plane after that check would mean the
+            // cursor only followed the hand when something else happened to
+            // redraw.
+            if hardware_cursor {
+                if cursor_theme != app.theme {
+                    upload_cursor(&mut surface, &app.ui);
+                    cursor_theme = app.theme;
+                }
+                if let Some(plane) = surface.cursor_plane() {
+                    let _ = plane.move_cursor(app.ui.cursor().position);
+                }
+            }
 
             if !app.ui.needs_paint() {
                 continue;

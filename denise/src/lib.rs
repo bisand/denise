@@ -39,6 +39,7 @@
 extern crate alloc;
 
 pub mod color;
+pub mod cursor;
 pub mod damage;
 pub mod geom;
 pub mod input;
@@ -46,6 +47,7 @@ pub mod surface;
 pub mod theme;
 
 pub use color::Color;
+pub use cursor::CursorPlane;
 pub use damage::{DamageTracker, MAX_DAMAGE_RECTS, RectList};
 pub use geom::{Point, Rect, Size};
 pub use input::{

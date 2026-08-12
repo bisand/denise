@@ -177,8 +177,10 @@ impl Scanout {
 /// This is not a flaw in async flips; it is what removing the wait means.
 #[derive(Debug)]
 pub struct DrmSurface {
-    card: Card,
-    crtc: crtc::Handle,
+    // `pub(crate)` for the cursor plane, which lives in its own module and needs
+    // the card and the CRTC to talk to.
+    pub(crate) card: Card,
+    pub(crate) crtc: crtc::Handle,
     connector: connector::Handle,
     buffers: Vec<Scanout>,
     swapchain: Swapchain,
@@ -192,6 +194,10 @@ pub struct DrmSurface {
     flip_flags: PageFlipFlags,
     saved_crtc: Option<crtc::Info>,
     mode_name: String,
+    /// The hardware cursor plane's buffer, allocated on first use. `None` until
+    /// an application asks for a sprite, because a panel driven by touch never
+    /// wants one and should not pay for the allocation.
+    pub(crate) cursor: Option<crate::cursor::CursorBuffer>,
 }
 
 impl DrmSurface {
@@ -269,6 +275,7 @@ impl DrmSurface {
             flip_flags,
             saved_crtc,
             mode_name: format!("{width}x{height}@{}", mode.vrefresh()),
+            cursor: None,
         })
     }
 
@@ -398,6 +405,16 @@ impl Drop for DrmSurface {
                 &[self.connector],
                 saved.mode(),
             );
+        }
+
+        if let Some(cursor) = self.cursor.take() {
+            // Off the CRTC before the memory goes, or the scanout engine keeps
+            // compositing a freed buffer.
+            #[allow(deprecated)]
+            let _ = self
+                .card
+                .set_cursor(self.crtc, None::<&drm::control::dumbbuffer::DumbBuffer>);
+            cursor.release(&self.card);
         }
 
         for buffer in self.buffers.drain(..) {

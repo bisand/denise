@@ -10,9 +10,12 @@
 //! damage rectangles per move — the pixels it left and the pixels it now covers —
 //! and nothing else in the tree has to know it exists.
 //!
-//! On DRM this should eventually become the hardware cursor plane, which vc4 has
-//! and which makes pointer movement cost no redraw at all. The software composite
-//! then stays as the fallback for backends without one.
+//! On DRM this is not the path taken: `denise-drm` implements
+//! [`CursorPlane`](denise::CursorPlane), and the display controller composites the
+//! sprite during scanout so a pointer move costs one ioctl instead of a repaint
+//! and a flip. Call [`Ui::show_cursor(false)`](crate::Ui::show_cursor) and drive
+//! the plane instead. What follows is the fallback for every backend without one,
+//! and [`CursorImage::rasterise`] is how the same sprite reaches the plane.
 
 use denise::{Color, Point, Rect, Role, Theme};
 use denise_render::Canvas;
@@ -45,6 +48,35 @@ impl CursorImage {
     #[inline]
     pub const fn is_well_formed(&self) -> bool {
         self.width > 0 && self.height > 0 && self.mask.len() == (self.width * self.height) as usize
+    }
+
+    /// Writes the sprite into `out` as `0xAARRGGBB` words, for a hardware cursor
+    /// plane.
+    ///
+    /// Returns the number of words written, which is `width * height`. The two
+    /// colours are the theme's, exactly as the software composite uses them, so a
+    /// panel that switches to the plane does not also change appearance —
+    /// transparent pixels come out as a fully zero word rather than as black,
+    /// because a cursor plane composites during scanout and an opaque pad would
+    /// draw a rectangle around the pointer.
+    ///
+    /// Re-run this when the theme changes: the sprite is resolved to concrete
+    /// colours here, so the plane holds pixels rather than roles.
+    pub fn rasterise(&self, theme: &Theme, out: &mut [u32]) -> usize {
+        let needed = (self.width.max(0) * self.height.max(0)) as usize;
+        if !self.is_well_formed() || out.len() < needed {
+            return 0;
+        }
+        let fill = theme.color(Role::BaseContent).to_argb8888();
+        let outline = theme.color(Role::Base100).to_argb8888();
+        for (pixel, &value) in out[..needed].iter_mut().zip(self.mask) {
+            *pixel = match value {
+                b'#' => fill,
+                b'+' => outline,
+                _ => 0,
+            };
+        }
+        needed
     }
 
     /// Bounds the sprite would occupy with its hotspot at `at`.
@@ -197,6 +229,66 @@ fn paint_mask(
 
 #[cfg(test)]
 mod tests {
+    /// The plane and the software composite must agree, or switching a panel to
+    /// the hardware cursor would also change how it looks.
+    #[test]
+    fn the_rasterised_sprite_uses_the_same_two_theme_colours() {
+        let theme = denise::theme::DARK;
+        let mut pixels = vec![0xDEAD_BEEFu32; (ARROW.width * ARROW.height) as usize];
+        let written = ARROW.rasterise(&theme, &mut pixels);
+        assert_eq!(written, pixels.len());
+
+        let fill = theme.color(Role::BaseContent).to_argb8888();
+        let outline = theme.color(Role::Base100).to_argb8888();
+        for (pixel, &value) in pixels.iter().zip(ARROW.mask) {
+            match value {
+                b'#' => assert_eq!(*pixel, fill),
+                b'+' => assert_eq!(*pixel, outline),
+                _ => assert_eq!(*pixel, 0, "transparent must be a zero word, not black"),
+            }
+        }
+    }
+
+    /// A cursor plane composites during scanout, so any pixel that is not the
+    /// pointer has to be fully transparent — an opaque background would paint a
+    /// rectangle over whatever is under it.
+    #[test]
+    fn every_transparent_pixel_has_zero_alpha() {
+        for image in [&ARROW, &CROSSHAIR] {
+            let mut pixels = vec![0u32; (image.width * image.height) as usize];
+            image.rasterise(&denise::theme::LIGHT, &mut pixels);
+            let transparent = pixels.iter().filter(|p| **p >> 24 == 0).count();
+            let expected = image.mask.iter().filter(|b| **b == b'.').count();
+            assert_eq!(transparent, expected);
+            assert!(
+                transparent > 0,
+                "a cursor with no transparency is a rectangle"
+            );
+        }
+    }
+
+    /// The theme is baked in, so a theme switch has to re-upload. If both themes
+    /// produced the same pixels this would be silently fine and the test would be
+    /// worthless — so check they actually differ.
+    #[test]
+    fn a_theme_change_changes_the_pixels() {
+        let mut dark = vec![0u32; (ARROW.width * ARROW.height) as usize];
+        let mut light = dark.clone();
+        ARROW.rasterise(&denise::theme::DARK, &mut dark);
+        ARROW.rasterise(&denise::theme::LIGHT, &mut light);
+        assert_ne!(
+            dark, light,
+            "the plane must be re-uploaded on a theme change"
+        );
+    }
+
+    #[test]
+    fn a_buffer_too_small_writes_nothing() {
+        let mut pixels = vec![0u32; 4];
+        assert_eq!(ARROW.rasterise(&denise::theme::DARK, &mut pixels), 0);
+        assert!(pixels.iter().all(|&p| p == 0), "nothing partial is written");
+    }
+
     use super::*;
     use denise::{PixelFormat, Size, theme};
 

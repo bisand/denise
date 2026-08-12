@@ -50,6 +50,8 @@ pub use mode::{
 pub use swapchain::Swapchain;
 
 #[cfg(target_os = "linux")]
+mod cursor;
+#[cfg(target_os = "linux")]
 mod device;
 #[cfg(target_os = "linux")]
 mod error;

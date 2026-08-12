@@ -197,9 +197,12 @@ Every step happens inside the damage clip, which is what makes step 3 affordable
 a full-screen alpha fill costs 63% of a 60 Hz frame on a Pi 3, so a modal that
 repaints its own blinking caret must not drag one along with it.
 
-On DRM, step 4 should use the hardware cursor plane rather than compositing into
-the buffer; vc4 has one, and it makes pointer movement cost no redraw at all. The
-software composite stays as the fallback.
+On DRM, step 4 uses the **hardware cursor plane** instead. vc4 has one, and the
+display controller composites it during scanout, so moving the pointer is a single
+ioctl — no repaint, no page flip, and the new position takes effect at the next
+scanout of those lines rather than the next frame. `CursorPlane` in the core is the
+seam; `Ui::show_cursor(false)` tells the tree to stop drawing its own, and the
+software composite stays as the fallback for every backend without a plane.
 
 ### What damage actually buys
 
