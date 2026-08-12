@@ -154,11 +154,19 @@ mod app {
         // 5. Events. `FindConnectionPoint` is how every host that sinks a
         //    control's events finds them, and `IDispatch` is the only thing the
         //    control asks of a sink.
-        let dispatch: IDispatch = object.cast()?;
+        //
+        //    The failure worth naming: this example is rebuilt by `cargo run`,
+        //    and the server it is talking to is whatever `regsvr32` registered.
+        //    A control that is an `IOleObject` and not an `IDispatch` is almost
+        //    always a DLL from before the automation surface existed, still sitting
+        //    at the registered path.
+        let dispatch: IDispatch = object.cast().map_err(|_| stale("IDispatch"))?;
         println!("automation surface:");
         print!("{}", dispatch::describe());
 
-        let container: IConnectionPointContainer = object.cast()?;
+        let container: IConnectionPointContainer = object
+            .cast()
+            .map_err(|_| stale("IConnectionPointContainer"))?;
         // SAFETY: a live interface on the control, and a GUID this example owns
         // for the call.
         let point: IConnectionPoint =
@@ -225,6 +233,25 @@ mod app {
             let _ = object.SetClientSite(None);
         }
         Ok(())
+    }
+
+    /// The error for an interface the registered server does not have.
+    ///
+    /// `E_NOINTERFACE` on its own sends a reader looking for a bug in the control.
+    /// It is nearly always a stale DLL: `cargo run` rebuilds this example, and
+    /// rebuilds nothing that COM will load.
+    fn stale(interface: &str) -> windows_core::Error {
+        windows_core::Error::new(
+            windows::Win32::Foundation::E_NOINTERFACE,
+            format!(
+                "the registered server has no {interface}. It is almost certainly \
+                 an older DLL still at the registered path — `cargo run` rebuilt \
+                 this example and not the server. Build it and try again:\n\
+                 \n    cargo build -p denise-activex --release\n\
+                 \nThe path in the registry does not change, so there is no need \
+                 to run regsvr32 again."
+            ),
+        )
     }
 
     // ---------------------------------------------------------------- the sink

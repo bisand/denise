@@ -187,8 +187,15 @@ cargo run -p denise-activex --example host
 ```
 
 The example goes through the registry, exactly as a real container does, so it
-proves the *registered* server works rather than only the code in this tree. Each
-step prints, and each fails distinctly:
+proves the *registered* server works rather than only the code in this tree.
+
+**That is also the trap.** `cargo run --example host` rebuilds the example and
+rebuilds nothing COM will load: the server is whatever DLL is at the registered
+path. After changing anything in `denise-activex`, build the release DLL again —
+the registry entry holds a path, not a copy, so `regsvr32` does not need running a
+second time.
+
+Each step prints, and each fails distinctly:
 
 1. **`CoCreateInstance`** — registration, the class factory, `IUnknown`.
 2. **`SetClientSite`** — the control accepts a container.
