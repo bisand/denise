@@ -246,10 +246,38 @@ Two things this rules *out*, both worth knowing:
   its 1400 MHz, it drew one frame per input event, and it repainted 1.9% of the
   surface per frame. It was idling, waiting for the pointer.
 
-What is left is the page flip, and the fix for that is the vc4 hardware cursor
-plane — the display controller composites the sprite during scanout, so moving it
-is one ioctl and costs no repaint and no flip. Worth doing, and worth doing after
-measuring, because on a 62.5 Hz device it addresses the smaller half of the delay.
+### The hardware cursor plane, measured
+
+vc4 has a cursor plane, and using it removes the page flip from pointer movement
+entirely. The same panel, the same pointer, moved continuously in both runs:
+
+| | Input events | Frames | Frames per pointer report |
+|---|---|---|---|
+| Sprite composited into the buffer | 355 | 361 | **1.02** |
+| Hardware cursor plane | 963 | 68 | **0.07** |
+
+A fourteenfold drop. The software path drew a frame and flipped a page for every
+pointer report; the hardware path draws almost nothing.
+
+The remaining 68 are not pointer frames. The caret blinks at 2 Hz, which accounts
+for 40 of them over 20 seconds, and the rest are hover states lighting up as the
+pointer crosses buttons — repaints that should happen.
+
+The wake-up counts show the mechanism: **1023 wake-ups for 68 frames**. The loop
+still wakes on every report, because it has to issue the move ioctl, and then goes
+straight back to sleep without touching the framebuffer.
+
+Two things this does not fix, and one trap:
+
+- **The 16 ms report interval is untouched.** The plane removes a frame of flip
+  latency, which on a 62.5 Hz device is the smaller half of the delay.
+- **Only the pointer is free.** Anything else that animates still costs a normal
+  frame, which is correct.
+- **Move the plane before the repaint decision.** A pointer move now damages
+  nothing, so `needs_paint` is false and the loop is about to sleep. Moving the
+  cursor after that check means it only follows the hand when something else
+  happens to redraw — which looks exactly like the bug the plane was meant to
+  fix.
 
 ## Performance on a Pi 3 A+
 
