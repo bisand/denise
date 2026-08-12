@@ -24,6 +24,14 @@ pub const FRIENDLY_NAME: &str = "Denise Panel Control";
 /// The control's version, as the registry spells it.
 pub const VERSION: &str = "1.0";
 
+/// The type library's id, as text.
+///
+/// The same value as `typelib::LIBID_DENISE`, which a test checks. `RegisterTypeLib`
+/// writes the library's own keys but not this one: the link from the *class* to
+/// its library is the server's to make, and without it a host that finds the class
+/// has no way to discover the description.
+pub const LIBID_TEXT: &str = "{5CA2EE57-C922-483E-8FDA-B0A8B3D3B195}";
+
 /// `OLEMISC_` flags describing how a container should treat this control.
 ///
 /// - `RECOMPOSEONRESIZE` (1): the content depends on the size, so redraw rather
@@ -102,6 +110,7 @@ pub fn entries(server_path: &str) -> Vec<Entry> {
         Entry::new(format!("{clsid}\\Control"), "", ""),
         Entry::new(format!("{clsid}\\Programmable"), "", ""),
         Entry::new(format!("{clsid}\\Version"), "", VERSION),
+        Entry::new(format!("{clsid}\\TypeLib"), "", LIBID_TEXT),
         Entry::new(format!("{clsid}\\MiscStatus"), "", "0"),
         // Aspect 1 is DVASPECT_CONTENT, the only one this control draws.
         Entry::new(
@@ -128,6 +137,7 @@ pub fn keys_to_remove() -> Vec<String> {
         format!("{clsid}\\MiscStatus\\1"),
         format!("{clsid}\\MiscStatus"),
         format!("{clsid}\\ToolboxBitmap32"),
+        format!("{clsid}\\TypeLib"),
         format!("{clsid}\\Version"),
         format!("{clsid}\\Programmable"),
         format!("{clsid}\\Control"),

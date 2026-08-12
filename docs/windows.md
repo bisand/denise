@@ -232,26 +232,33 @@ p.Caption = "Hei"
 WScript.Echo p.Caption
 ```
 
-**PowerShell is the exception**, and `$panel.Caption` will tell you the property
-"cannot be found on this object". That is not the control failing — it is
-PowerShell never asking. It builds its member table from `ITypeInfo` rather than
-binding names late, and this control has none, so it gets adapted as a bare
-`System.__ComObject` with no members at all. Go straight to `IDispatch` instead:
+PowerShell works the same way, and needed a type library to:
 
 ```powershell
 $panel = New-Object -ComObject Denise.Panel
-$f = [System.Reflection.BindingFlags]
-[System.__ComObject].InvokeMember("Caption", $f::SetProperty, $null, $panel, @("Hei"))
-[System.__ComObject].InvokeMember("Caption", $f::GetProperty, $null, $panel, @())
+$panel.Caption = "Hei"
+$panel.Caption
+$panel.Enabled = $false
 ```
 
-`Get-Member` listing nothing is the same thing and is expected.
+`Get-Member` lists the members now, which is the quickest check that the library
+registered. If instead the property "cannot be found on this object", PowerShell is
+not being told about it — either the DLL predates the library, or
+`denise_activex.tlb` is not beside the DLL where registration put it. This path
+goes straight to `IDispatch` and works regardless, which makes it a useful way to
+tell the two apart:
 
-`CreateDispTypeInfo` was tried as a way to satisfy PowerShell without a type
-library, and does not: it builds a vtable-shaped description — `TKIND_INTERFACE`,
-not `TKIND_DISPATCH` — so PowerShell looks for a dispinterface, does not find one,
-and produces an object with no members and *no error*. Nothing in the method table
-changes the kind. The real fix is a registered type library, which is outstanding.
+```powershell
+$f = [System.Reflection.BindingFlags]
+[System.__ComObject].InvokeMember("Caption", $f::SetProperty, $null, $panel, @("Hei"))
+```
+
+`CreateDispTypeInfo` was tried first, as a way to answer PowerShell without a
+library at all, and cannot: it builds a vtable-shaped description —
+`TKIND_INTERFACE`, not `TKIND_DISPATCH` — so PowerShell looks for a dispinterface,
+does not find one, and produces an object with no members and *no error*. Nothing
+in the method table changes the kind. The library is built at registration instead,
+from the same table `Invoke` reads.
 
 Common failures, and what each means:
 

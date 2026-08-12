@@ -23,6 +23,7 @@ use windows_core::{GUID, HRESULT, Interface, PCWSTR};
 use crate::control::DenisePanel;
 use crate::factory::PanelFactory;
 use crate::registry;
+use crate::typelib;
 
 /// The control's class id, as a GUID.
 ///
@@ -106,10 +107,25 @@ fn register() -> windows_core::Result<()> {
     for entry in registry::entries(&path) {
         write_value(&entry.key, &entry.name, &entry.value)?;
     }
-    Ok(())
+
+    // The type library, built from the same table `Invoke` reads and written
+    // beside the DLL. `RegisterTypeLib` records its full path, so it has to stay
+    // there — which is why it goes next to the server rather than anywhere
+    // tidier.
+    //
+    // A failure here is reported rather than swallowed. A control that registered
+    // its class and not its library is one PowerShell cannot see and every other
+    // host can, which is a far worse thing to debug than a refusal.
+    let tlb = typelib::path_beside(&path);
+    typelib::build(&tlb)?;
+    typelib::register(&tlb)
 }
 
 fn unregister() -> windows_core::Result<()> {
+    // Before the keys, because it needs none of them — and a failure to remove a
+    // library that was never registered is not a reason to leave the class behind.
+    let _ = typelib::unregister();
+
     for key in registry::keys_to_remove() {
         let wide = wide(&key);
         // SAFETY: `wide` is NUL-terminated and live for the call. A key that is
@@ -194,6 +210,14 @@ fn server_path() -> windows_core::Result<String> {
         return Err(windows_core::Error::from_thread());
     }
     Ok(String::from_utf16_lossy(&buffer[..written as usize]))
+}
+
+/// The type library beside this DLL, if the DLL's own path can be found.
+///
+/// Used as the fallback when the library is not registered — a control created
+/// from a test, or by a host that registered per-user, still has a file to read.
+pub(crate) fn library_path() -> Option<String> {
+    server_path().ok().map(|dll| typelib::path_beside(&dll))
 }
 
 /// A NUL-terminated UTF-16 buffer, which is what every `W` entry point wants.

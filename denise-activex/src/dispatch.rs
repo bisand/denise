@@ -7,20 +7,13 @@
 //! [`crate::himetric`] makes, for the same reason: this is the part that goes
 //! wrong, and a Windows runner is a slow place to find that out.
 //!
-//! # No type library
+//! # One table, two readers
 //!
-//! There is none, so a host is late-bound: it asks for a name, gets a dispid, and
-//! invokes it. VBScript, JScript, VB6 through an `Object` variable and MFC's
-//! `COleDispatchDriver` all work that way and need nothing else.
-//!
-//! PowerShell does not. It builds its member table from `ITypeInfo` and will not
-//! ask for a name it has not been told about, so it reaches this control through
-//! `[System.__ComObject].InvokeMember` instead. The crate documentation has the
-//! incantation and the reason.
-//!
-//! Either way the table is short, because without a type library each member is
-//! something a person has to read about rather than discover by pressing `.`, so
-//! each one has to earn its place.
+//! `Invoke` reads this to answer a host that binds names late, and
+//! [`crate::typelib`] reads it to *generate* the type library for a host that will
+//! not. Both from here, so the description a host is handed cannot drift from the
+//! behaviour it describes — a library compiled from separate `.idl` source could,
+//! and that is the usual way a control comes to lie about itself.
 //!
 //! # Why the dispids are pinned
 //!
@@ -49,6 +42,24 @@ pub const PUTREF: u16 = 0x8;
 /// `DISPID_UNKNOWN`, the answer for a name this control does not have.
 pub const DISPID_UNKNOWN: i32 = -1;
 
+// ------------------------------------------------------------------- the types
+
+// `VARENUM` values, spelled out here for the same reason as the flags above. The
+// `cfg(windows)` test checks each against the real constant.
+
+/// `VT_BSTR`: a string.
+pub const TEXT: u16 = 8;
+/// `VT_BOOL`: a boolean, whose `True` is -1.
+pub const FLAG: u16 = 11;
+/// `VT_VOID`: nothing is returned.
+///
+/// **Not `VT_EMPTY`**, which is zero and reads like the obvious choice. `VT_EMPTY`
+/// is a variant that happens to hold nothing — a perfectly good *value*, and not a
+/// return type at all. A description that claims it tells a host to expect a
+/// variant back from a call that hands it none, and what a host does with that is
+/// unwrap a null. This cost an afternoon once.
+pub const VOID: u16 = 24;
+
 // ----------------------------------------------------------------- the members
 
 /// The field's contents, as a string.
@@ -70,6 +81,9 @@ pub struct Member {
     pub name: &'static str,
     /// Which of [`CALL`], [`GET`] and [`PUT`] this member allows.
     pub flags: u16,
+    /// The type of its value: what a get returns and a put takes, or [`VOID`] for
+    /// a method that returns none.
+    pub vt: u16,
 }
 
 /// Everything a script can reach on the control.
@@ -78,21 +92,25 @@ pub const MEMBERS: &[Member] = &[
         dispid: DISPID_TEXT,
         name: "Text",
         flags: GET | PUT,
+        vt: TEXT,
     },
     Member {
         dispid: DISPID_CAPTION,
         name: "Caption",
         flags: GET | PUT,
+        vt: TEXT,
     },
     Member {
         dispid: DISPID_ENABLED,
         name: "Enabled",
         flags: GET | PUT,
+        vt: FLAG,
     },
     Member {
         dispid: DISPID_REFRESH,
         name: "Refresh",
         flags: CALL,
+        vt: VOID,
     },
 ];
 
@@ -118,11 +136,13 @@ pub const EVENTS: &[Member] = &[
         dispid: DISPID_CLICK,
         name: "Click",
         flags: CALL,
+        vt: VOID,
     },
     Member {
         dispid: DISPID_CHANGE,
         name: "Change",
         flags: CALL,
+        vt: VOID,
     },
 ];
 
@@ -219,6 +239,65 @@ pub fn events_raised(previous: &str, current: &str, clicked: bool) -> Vec<i32> {
         raised.push(DISPID_CLICK);
     }
     raised
+}
+
+// ------------------------------------------------------------ the method table
+
+/// One operation of the dispinterface, as a type library lists them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// The dispid, shared by the get and the put of one property.
+    pub dispid: i32,
+    /// The name, likewise shared.
+    pub name: &'static str,
+    /// Exactly one of [`CALL`], [`GET`] and [`PUT`].
+    pub flags: u16,
+    /// What a get returns, or what a put takes.
+    pub vt: u16,
+    /// How many arguments it takes: one for a put, none for anything else.
+    pub arguments: u32,
+}
+
+/// [`MEMBERS`] expanded one row per operation.
+///
+/// A type library has no notion of a read/write property: it has a get and a put
+/// that happen to share a name and a dispid. Doing that expansion here, from the
+/// same table `Invoke` reads, is what stops the description a host is handed from
+/// drifting away from what the control actually does.
+pub fn entries() -> Vec<Entry> {
+    let mut entries = Vec::new();
+    for member in MEMBERS {
+        // Get before put, which is the order a type library expects when two
+        // entries share a dispid.
+        if member.flags & GET != 0 {
+            entries.push(Entry {
+                dispid: member.dispid,
+                name: member.name,
+                flags: GET,
+                vt: member.vt,
+                arguments: 0,
+            });
+        }
+        if member.flags & PUT != 0 {
+            entries.push(Entry {
+                dispid: member.dispid,
+                name: member.name,
+                flags: PUT,
+                vt: member.vt,
+                arguments: 1,
+            });
+        }
+        if member.flags & CALL != 0 {
+            entries.push(Entry {
+                dispid: member.dispid,
+                name: member.name,
+                flags: CALL,
+                vt: member.vt,
+                arguments: 0,
+            });
+        }
+    }
+    entries
 }
 
 /// The automation surface as a script would have to be told it, since there is no
@@ -374,6 +453,41 @@ mod tests {
         assert_eq!(events_raised("hei", "hei", true), vec![DISPID_CLICK]);
     }
 
+    /// A type library has no notion of a read/write property: it has a get and a
+    /// put sharing a name and a dispid. Three properties and one method is seven
+    /// entries, and a host counting members will notice if it is not.
+    #[test]
+    fn a_read_write_property_becomes_two_entries_sharing_one_dispid() {
+        let entries = entries();
+        assert_eq!(entries.len(), 7);
+
+        for member in MEMBERS {
+            let mine: Vec<&Entry> = entries
+                .iter()
+                .filter(|entry| entry.dispid == member.dispid)
+                .collect();
+            for entry in &mine {
+                assert_eq!(entry.name, member.name);
+                assert_eq!(entry.vt, member.vt);
+                assert_eq!(entry.flags.count_ones(), 1, "one operation per entry");
+            }
+        }
+    }
+
+    /// Only a put takes an argument, and exactly one. A library that said
+    /// otherwise would have a host marshalling the wrong number of them.
+    #[test]
+    fn only_a_put_takes_an_argument() {
+        for entry in entries() {
+            assert_eq!(
+                entry.arguments,
+                u32::from(entry.flags == PUT),
+                "{}",
+                entry.name
+            );
+        }
+    }
+
     #[test]
     fn the_description_names_every_member_and_every_event() {
         let text = describe();
@@ -396,5 +510,14 @@ mod tests {
         assert_eq!(PUT, DISPATCH_PROPERTYPUT.0);
         assert_eq!(PUTREF, DISPATCH_PROPERTYPUTREF.0);
         assert_eq!(DISPID_UNKNOWN, windows::Win32::System::Ole::DISPID_UNKNOWN);
+
+        use windows::Win32::System::Variant::{VT_BOOL, VT_BSTR, VT_EMPTY, VT_VOID};
+        assert_eq!(TEXT, VT_BSTR.0);
+        assert_eq!(FLAG, VT_BOOL.0);
+        assert_eq!(VOID, VT_VOID.0);
+        assert_ne!(
+            VOID, VT_EMPTY.0,
+            "VT_EMPTY is a variant holding nothing, not a return type"
+        );
     }
 }

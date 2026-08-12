@@ -29,12 +29,14 @@ use windows_core::{GUID, IUnknown, IUnknownImpl, Interface, PCWSTR, Ref};
 
 use crate::control::DenisePanel_Impl;
 use crate::dispatch::{self, Action};
+use crate::typelib;
 use crate::variant;
 
 /// The outgoing dispinterface a container sinks events on.
 ///
 /// Generated once and never changed, for the same reason as the class id: a host
-/// that stores it stores the number. Pass it to `FindConnectionPoint`.
+/// that stores it stores the number. Pass it to `FindConnectionPoint`, or let a
+/// type-library-aware host find it as the class's default source.
 pub const DIID_DENISE_PANEL_EVENTS: GUID =
     GUID::from_u128(0x5405_253D_6E92_42BA_916C_F483_4D09_9F69);
 
@@ -42,31 +44,29 @@ pub const DIID_DENISE_PANEL_EVENTS: GUID =
 
 impl IDispatch_Impl for DenisePanel_Impl {
     fn GetTypeInfoCount(&self) -> windows_core::Result<u32> {
-        // Zero, and it is a decision rather than a stub. There is no type library,
-        // so there is no type information, and saying so is what makes a host fall
-        // back to `GetIDsOfNames` — which works. Claiming one and then failing
-        // `GetTypeInfo` is what makes a host give up instead.
-        //
-        // What it costs is PowerShell, which builds its member table from
-        // `ITypeInfo` and adapts an object that has none as a bare
-        // `System.__ComObject`: `$panel.Caption` then fails with "cannot be found
-        // on this object" before a single COM call is made.
-        //
-        // `CreateDispTypeInfo` was tried here and does not answer it. It builds a
-        // vtable-shaped description — `TKIND_INTERFACE`, not `TKIND_DISPATCH` —
-        // and PowerShell's adapter looks for a dispinterface, does not find one,
-        // and produces an object with no members and no complaint. Nothing in the
-        // method table changes the kind; that is what the API makes. The real
-        // answer is a registered type library, which is a `.tlb`, a `LIBID` and a
-        // second file to deploy, and which nothing else here needs: VB6, MFC,
-        // Delphi, VBScript and every OLE container bind names late and already
-        // work. PowerShell reaches this control through
-        // `[System.__ComObject].InvokeMember`, which goes straight to `Invoke`.
-        Ok(0)
+        // One. This answered zero for most of its life, which was honest — there
+        // was no library — and cost PowerShell entirely: it builds its member
+        // table from type information and will not ask for a name it has not been
+        // told about. See [`crate::typelib`] for what had to be built and what was
+        // tried first.
+        Ok(1)
     }
 
-    fn GetTypeInfo(&self, _index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
-        Err(TYPE_E_ELEMENTNOTFOUND.into())
+    fn GetTypeInfo(&self, index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
+        // One dispinterface, so index zero and nothing else.
+        if index != 0 {
+            return Err(TYPE_E_ELEMENTNOTFOUND.into());
+        }
+        if let Some(info) = self.state.borrow().type_info.clone() {
+            return Ok(info);
+        }
+        // Registered first, then the file beside the DLL — so a control created
+        // without `regsvr32`, from a test or by a per-user registration, still
+        // describes itself. Kept afterwards: it describes a table that cannot
+        // change while the process runs.
+        let info = typelib::panel_type_info(crate::server::library_path().as_deref())?;
+        self.state.borrow_mut().type_info = Some(info.clone());
+        Ok(info)
     }
 
     fn GetIDsOfNames(

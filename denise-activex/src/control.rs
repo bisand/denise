@@ -24,7 +24,7 @@ use denise_win32::{ControlDelegate, DeniseControl, DibSurface};
 use windows::Win32::Foundation::{E_FAIL, E_POINTER, HWND, RECT, SIZE};
 use windows::Win32::System::Com::{
     CoTaskMemAlloc, DISPATCH_METHOD, DISPPARAMS, DVASPECT, IAdviseSink, IDataObject, IEnumSTATDATA,
-    IMoniker, IPersist_Impl, IPersistStreamInit_Impl, IStream,
+    IMoniker, IPersist_Impl, IPersistStreamInit_Impl, IStream, ITypeInfo,
 };
 use windows::Win32::System::Ole::{
     IEnumOLEVERB, IOleClientSite, IOleControl_Impl, IOleInPlaceObject_Impl, IOleInPlaceSite,
@@ -78,6 +78,8 @@ pub(crate) struct PanelState {
     position: RECT,
     /// Whether persisted state has been initialised, for `IPersistStreamInit`.
     initialised: bool,
+    /// The description handed to `IDispatch::GetTypeInfo`, loaded on first use.
+    pub(crate) type_info: Option<ITypeInfo>,
 }
 
 impl Default for DenisePanel {
@@ -102,6 +104,7 @@ impl DenisePanel {
                 },
                 position: RECT::default(),
                 initialised: false,
+                type_info: None,
             }),
             model: Model::new(),
         }

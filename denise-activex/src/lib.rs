@@ -22,26 +22,21 @@
 //!
 //! # Scripting it
 //!
-//! There is no type library, so a host is late-bound: it asks for a name and
-//! invokes it. VBScript, JScript, VB6 through an `Object` variable and MFC's
-//! `COleDispatchDriver` all work that way.
-//!
-//! **PowerShell does not**, and it is the one host here that does not. It builds
-//! its member table from `ITypeInfo` and will not ask for a name it has not been
-//! told about, so `$panel.Caption` fails with "cannot be found on this object"
-//! before a single COM call is made. Reach the control this way instead — it goes
-//! straight to `Invoke`:
-//!
 //! ```text
 //! $panel = New-Object -ComObject Denise.Panel
-//! $f = [System.Reflection.BindingFlags]
-//! [System.__ComObject].InvokeMember("Caption", $f::SetProperty, $null, $panel, @("Hei"))
-//! [System.__ComObject].InvokeMember("Caption", $f::GetProperty, $null, $panel, @())
+//! $panel.Caption = "Hei"
+//! $panel.Caption
 //! ```
 //!
-//! The surface is short because of all this: without a type library each member
-//! is something a person has to be told about rather than discover, so each one
-//! has to earn its place.
+//! That works because there is a type library now. Hosts that bind names late —
+//! VBScript, JScript, VB6 through an `Object` variable, MFC's
+//! `COleDispatchDriver`, every OLE container — never needed one and are unchanged.
+//! PowerShell did: it builds its member table from type information and will not
+//! ask for a name it has not been told about. See [`typelib`] for what that took
+//! and what was tried first.
+//!
+//! The surface is still short. A type library makes each member *discoverable*,
+//! which is a reason to have fewer good ones rather than a licence to add more.
 //!
 //! | Member | Dispid | |
 //! |---|---|---|
@@ -58,23 +53,15 @@
 //! $panel.Caption
 //! ```
 //!
-//! Events arrive through a connection point. Ask for
-//! [`DIID_DENISE_PANEL_EVENTS`] with `IConnectionPointContainer::FindConnectionPoint`
-//! and advise an object implementing `IDispatch`; there is no vtable to match and
-//! nothing to compile against, only `Invoke` with one of the two dispids above.
+//! Events arrive through a connection point. The library names
+//! `DDenisePanelEvents` as the class's default source, so a host that reads it can
+//! wire them up by itself — `WithEvents` in VB6, `Register-ObjectEvent` in
+//! PowerShell. By hand it is [`DIID_DENISE_PANEL_EVENTS`] passed to
+//! `IConnectionPointContainer::FindConnectionPoint`, then advise an object
+//! implementing `IDispatch`: there is no vtable to match and nothing to compile
+//! against, only `Invoke` with one of the two dispids above.
 //!
 //! # What is not here yet
-//!
-//! **A type library.** There is no `.tlb` and no `LIBID`, which is what a form
-//! designer's property sheet reads, what an object browser lists, what early
-//! binding needs, and what PowerShell wants.
-//!
-//! `CreateDispTypeInfo` was tried as a cheaper substitute and does not work. It
-//! builds a vtable-shaped description — `TKIND_INTERFACE`, not `TKIND_DISPATCH` —
-//! and PowerShell's adapter looks for a dispinterface, does not find one, and
-//! produces an object with no members and no complaint. Nothing in the method
-//! table changes the kind; that is what the API makes. So [`IDispatch::GetTypeInfoCount`]
-//! answers zero, which is honest and which every late-binding host is happy with.
 //!
 //! **`IViewObject2::Draw`.** The design-time view a form editor asks for before
 //! the control is ever activated. Without it a control dropped on a form is a
@@ -109,9 +96,14 @@
 //! regsvr32 /u denise_activex.dll
 //! ```
 //!
-//! The class id is generated once and never changes: a host stores it in a form
-//! file, so a new one on every build would break every project that ever embedded
-//! the control.
+//! Registration also writes `denise_activex.tlb` beside the DLL and registers it.
+//! The registry records that file's full path, so **the two have to stay
+//! together** — moving the DLL and re-registering is fine; moving it and not
+//! re-registering leaves a library nobody can load.
+//!
+//! The class id, the library id and the two interface ids are generated once and
+//! never change: a host stores them in a form file or a compiled binary, so a new
+//! one on every build would break every project that ever embedded the control.
 
 pub mod connections;
 pub mod dispatch;
@@ -128,6 +120,8 @@ mod factory;
 mod model;
 #[cfg(windows)]
 mod server;
+#[cfg(windows)]
+pub mod typelib;
 #[cfg(windows)]
 mod variant;
 
