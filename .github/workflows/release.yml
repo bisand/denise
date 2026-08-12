@@ -48,8 +48,19 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
 
+      # Deliberately no build cache, for two reasons.
+      #
+      # A release should verify from cold: a cached artifact from another commit
+      # makes the rehearsal less faithful than the fresh build a consumer of
+      # these crates actually gets. And this is the one job that holds the
+      # registry token, so it runs the fewest third-party actions it can.
+      #
+      # There is a practical reason too. `cargo publish` unpacks each crate into
+      # `target/package/<crate>-<version>/`, and Swatinem/rust-cache's cleaning
+      # step walks that expecting a target directory, failing with a wall of
+      # ENOENT annotations on a run that otherwise succeeded. A release that
+      # looks broken and is not is worse than a slower one.
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
 
       # A release whose tag disagrees with the manifest publishes one version
       # under another version's name, and the release page then describes a tree
