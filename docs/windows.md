@@ -39,6 +39,44 @@ rustup show          # confirm the host triple
 cargo --version
 ```
 
+### When `link.exe` is the wrong `link.exe`
+
+A build that dies like this is **not** a missing C++ workload, whatever rustc's
+hint says:
+
+```text
+error: linking with `link.exe` failed: exit code: 1
+  = note: link: extra operand '...rcgu.o'
+          Try 'link --help' for more information.
+```
+
+MSVC's linker never produces that. Its errors are all prefixed `LNK####` —
+`LNK1181: cannot open input file` and the like. "extra operand" and "Try
+'... --help'" is **GNU coreutils**, which ships a `link.exe` of its own: the
+hardlink utility. Something is shadowing the real linker on `PATH`, and it is
+almost always `C:\Program Files\Git\usr\bin`, which Git for Windows adds when
+installed with the "use Unix tools from the Command Prompt" option.
+
+Confirm it:
+
+```powershell
+where.exe link.exe
+```
+
+If the first hit is under `Git\usr\bin` or `msys64`, that is the problem. Build
+from the **"ARM64 Native Tools Command Prompt for VS 2022"** — or the x64 one to
+match your toolchain — which puts MSVC first. To stay in your own shell instead,
+prepend the MSVC binaries for the session:
+
+```powershell
+$vs = "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC"
+$ver = (Get-ChildItem $vs | Sort-Object Name -Descending | Select-Object -First 1).Name
+$env:PATH = "$vs\$ver\bin\HostARM64\ARM64;$env:PATH"
+```
+
+The reason this is worth a section: the error names the right file and the wrong
+cause, so the obvious response is to reinstall a toolchain that was never broken.
+
 ## Getting the code in
 
 Either clone it:
