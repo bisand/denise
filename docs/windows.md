@@ -225,9 +225,30 @@ appears — but the properties are live, and this is the shortest proof that
 `GetIDsOfNames` and `Invoke` work through the real automation layer rather than
 through a container written in this repository.
 
-`Get-Member` showing almost nothing is expected. There is no type library, so
-every host is late-bound: a name works, discovering the names does not. They are
-`Text`, `Caption`, `Enabled` and `Refresh`.
+If that fails with **"The property 'Caption' cannot be found on this object"**,
+the control is not being asked anything at all. PowerShell builds its member table
+from `ITypeInfo` rather than binding names late, and an object that answers
+`GetTypeInfoCount` with zero is adapted as a bare `System.__ComObject` with no
+members. That is what `CreateDispTypeInfo` in `typeinfo.rs` fixes, so a build from
+before it will fail exactly this way. The path that works regardless, because it
+goes straight to `IDispatch`:
+
+```powershell
+$f = [System.Reflection.BindingFlags]
+[System.__ComObject].InvokeMember("Caption", $f::SetProperty, $null, $panel, @("Hei"))
+[System.__ComObject].InvokeMember("Caption", $f::GetProperty, $null, $panel, @())
+```
+
+VBScript never needed either — it binds names late, which is the whole of what
+`GetIDsOfNames` is for:
+
+```vbscript
+Set p = CreateObject("Denise.Panel")
+p.Caption = "Hei"
+WScript.Echo p.Caption
+```
+
+The members are `Text`, `Caption`, `Enabled` and `Refresh`.
 
 Common failures, and what each means:
 

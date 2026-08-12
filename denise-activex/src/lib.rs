@@ -22,12 +22,20 @@
 //!
 //! # Scripting it
 //!
-//! There is no type library, so every host is late-bound. That works everywhere —
-//! VBScript, PowerShell, VB6 through an `Object` variable, MFC's
-//! `COleDispatchDriver` — and it costs a designer's property sheet and an object
-//! browser's member list. Which is why the surface is short: without a type
-//! library each member is something a person has to be told about rather than
-//! discover, so each one has to earn its place.
+//! There is no type library, so a host is late-bound: it asks for a name and
+//! invokes it. VBScript, JScript, VB6 through an `Object` variable and MFC's
+//! `COleDispatchDriver` all work that way.
+//!
+//! PowerShell does not. It builds its member table from `ITypeInfo` and will not
+//! ask for a name it has not been told about — an object that answers
+//! `GetTypeInfoCount` with zero is adapted as a bare `System.__ComObject` with no
+//! members, and every property fails before a single COM call is made. So the
+//! control describes itself on demand with `CreateDispTypeInfo`, built from the
+//! same table `Invoke` reads. See [`dispatch`] and the `typeinfo` module.
+//!
+//! Either way the surface is short: without a type library each member is
+//! something a person has to be told about rather than discover, so each one has
+//! to earn its place.
 //!
 //! | Member | Dispid | |
 //! |---|---|---|
@@ -51,8 +59,9 @@
 //!
 //! # What is not here yet
 //!
-//! **A type library.** Without one a form designer shows no properties and an
-//! object browser no members, and a host cannot early-bind.
+//! **A registered type library.** `GetTypeInfo` answers, but there is no `.tlb`
+//! and no `LIBID` in the registry, which is what a form designer's property sheet
+//! and an object browser read, and what early binding needs.
 //!
 //! **`IViewObject2::Draw`.** The design-time view a form editor asks for before
 //! the control is ever activated. Without it a control dropped on a form is a
@@ -97,6 +106,8 @@ mod factory;
 mod model;
 #[cfg(windows)]
 mod server;
+#[cfg(windows)]
+mod typeinfo;
 #[cfg(windows)]
 mod variant;
 

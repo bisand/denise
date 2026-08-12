@@ -557,11 +557,20 @@ $panel.Caption = "Hei"
 $panel.Caption
 ```
 
-There is no type library, so every host is late-bound. That works everywhere and
-tells nobody anything, which is why the surface is short: each member is something
-a person has to be told about rather than discover, so each has to earn its place.
+There is no type library, so a host is late-bound: it asks for a name and invokes
+it. VBScript, JScript, VB6 through an `Object` variable and MFC's
+`COleDispatchDriver` all work that way and need nothing else.
 
-Two things are worth naming. The first is that **a host is not tidy about
+PowerShell does not, which the first attempt got wrong. It builds its member table
+from `ITypeInfo` and will not ask for a name it has not been told about — an object
+answering `GetTypeInfoCount` with zero is adapted as a bare `System.__ComObject`
+with no members, and `$panel.Caption` fails with "cannot be found on this object"
+before a single COM call is made. Nothing is wrong with the control at that point;
+it has never been asked anything. So it now describes itself on demand with
+`CreateDispTypeInfo`, built from the same table `Invoke` reads — a great deal
+smaller than a type library, and with nothing that can drift.
+
+Two more things are worth naming. The first is that **a host is not tidy about
 `wFlags`** — VBScript sends `METHOD | PROPERTYGET` for anything whose result it
 uses, because at the call site it does not know which the object has. So the flags
 are a set of things the host would accept, and the control picks the one the member
@@ -702,11 +711,11 @@ drawn it slightly too small forever and nothing would have pointed at a constant
 
 Still outstanding, and deliberately not hidden:
 
-- **No type library.** `IDispatch` is there, so a host can set `Text`, `Caption`
-  and `Enabled`, call `Refresh` and sink `Change` and `Click` — all by name. What
-  a type library would add is *discovering* those names: a designer's property
-  sheet, an object browser's member list, and early binding. Without one every
-  host is late-bound, which works everywhere and tells nobody anything.
+- **No registered type library.** `IDispatch` is there and `GetTypeInfo` answers,
+  so a host can set `Text`, `Caption` and `Enabled`, call `Refresh` and sink
+  `Change` and `Click`. What a `.tlb` and a `LIBID` in the registry would add is a
+  form designer's property sheet, an object browser's member list, and early
+  binding.
 - **No design-time view.** `IViewObject2::Draw` is what a form editor asks for
   before the control is ever activated, so a control dropped on a form is a blank
   rectangle until the form runs.

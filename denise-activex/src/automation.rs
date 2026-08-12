@@ -29,6 +29,7 @@ use windows_core::{GUID, IUnknown, IUnknownImpl, Interface, PCWSTR, Ref};
 
 use crate::control::DenisePanel_Impl;
 use crate::dispatch::{self, Action};
+use crate::typeinfo;
 use crate::variant;
 
 /// The outgoing dispinterface a container sinks events on.
@@ -42,15 +43,28 @@ pub const DIID_DENISE_PANEL_EVENTS: GUID =
 
 impl IDispatch_Impl for DenisePanel_Impl {
     fn GetTypeInfoCount(&self) -> windows_core::Result<u32> {
-        // Zero, and it is not a stub: there is no type library, so there is no
-        // type information to hand out. Saying so is what makes a host fall back
-        // to `GetIDsOfNames`, which does work. Claiming one and then failing
-        // `GetTypeInfo` is what makes a host give up instead.
-        Ok(0)
+        // One. This started as zero — honest, since there is no type library, and
+        // free for VBScript and every container that asks for a name and invokes
+        // it. PowerShell does not: its COM support builds a member table from
+        // `ITypeInfo`, and an object that declines is adapted as a bare
+        // `System.__ComObject` with no members, so every property fails before a
+        // single COM call is made. See [`crate::typeinfo`].
+        Ok(1)
     }
 
-    fn GetTypeInfo(&self, _index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
-        Err(TYPE_E_ELEMENTNOTFOUND.into())
+    fn GetTypeInfo(&self, index: u32, _lcid: u32) -> windows_core::Result<ITypeInfo> {
+        // One dispinterface, so index zero and nothing else.
+        if index != 0 {
+            return Err(TYPE_E_ELEMENTNOTFOUND.into());
+        }
+        if let Some(info) = self.state.borrow().type_info.clone() {
+            return Ok(info);
+        }
+        // Built once per control and kept: it describes a table that cannot change
+        // while the process runs.
+        let info = typeinfo::describe()?;
+        self.state.borrow_mut().type_info = Some(info.clone());
+        Ok(info)
     }
 
     fn GetIDsOfNames(
