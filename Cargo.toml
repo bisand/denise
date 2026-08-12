@@ -14,6 +14,7 @@ members = [
     "denise-ui",
     "denise-win32",
     "denise-winit",
+    "examples/hello",
     "examples/hello-rect",
     "examples/kiosk",
     "examples/panel",

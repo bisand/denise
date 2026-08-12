@@ -1,0 +1,16 @@
+[package]
+name = "hello"
+description = "The smallest useful Denise application: a field, a button and a label."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true }
+denise-winit = { workspace = true }
