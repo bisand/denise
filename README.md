@@ -5,12 +5,13 @@
 
 # Denise
 
-**A direct-rendering UI toolkit for embedded Linux and systems without a desktop
-environment.**
+**A direct-rendering UI toolkit in Rust, for embedded Linux and systems without a
+desktop environment.**
 
 [![CI](https://github.com/bisand/denise/actions/workflows/ci.yml/badge.svg)](https://github.com/bisand/denise/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/denise?color=CBA6F7&label=crates.io)](https://crates.io/crates/denise)
 [![Licence](https://img.shields.io/badge/licence-MIT-89B4FA)](LICENSE)
-[![MSRV](https://img.shields.io/badge/MSRV-1.95-F9E2AF)](#constraints)
+[![Rust](https://img.shields.io/badge/rust-1.95+-F9E2AF)](#constraints)
 [![Milestone](https://img.shields.io/badge/milestone-M5-F5C2E7)](#status)
 [![Core](https://img.shields.io/badge/core-forbid(unsafe__code)-A6E3A1)](#constraints)
 [![Targets](https://img.shields.io/badge/targets-aarch64_%7C_armv7_%7C_x86__64-94E2D5)](#constraints)
@@ -21,6 +22,14 @@ Kiosks, digital signage, industrial HMIs, Raspberry Pi panels, in-vehicle displa
 
 No X11. No Wayland. No browser engine. No managed runtime. One static binary that
 opens the display, draws, and reads input.
+
+```toml
+[dependencies]
+denise = "0.1"
+denise-ui = "0.1"
+denise-winit = "0.1"    # develop on a desktop
+# denise-drm = "0.1"    # ship on a display with no compositor
+```
 
 ## Show me the code
 
@@ -220,18 +229,18 @@ framebuffer.
 
 | Crate | | |
 |---|---|---|
-| `denise` | Core types, traits, damage tracking, theming | `no_std + alloc` |
-| `denise-render` | Software rasteriser and the built-in font | `no_std + alloc` |
-| `denise-text` | Glyph sources, atlas, line layout | `no_std + alloc` |
-| `denise-ui` | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
-| `denise-drm` | Linux DRM/KMS — the primary target | Linux |
-| `denise-fbdev` | Linux fbdev fallback | Linux |
-| `denise-evdev` | Input, keyboard layouts, dead keys, console muting | Linux |
-| `denise-winit` | Desktop development and preview | any |
-| `denise-macos` | Embeddable `NSView` | macOS |
-| `denise-win32` | Child-`HWND` control | Windows |
-| `denise-activex` | COM/ActiveX shim, scriptable | Windows |
-| `denise-ffi` | Stable C ABI, `cdylib` | any |
+| [`denise`](https://crates.io/crates/denise) | Core types, traits, damage tracking, theming | `no_std + alloc` |
+| [`denise-render`](https://crates.io/crates/denise-render) | Software rasteriser and the built-in font | `no_std + alloc` |
+| [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout | `no_std + alloc` |
+| [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
+| [`denise-drm`](https://crates.io/crates/denise-drm) | Linux DRM/KMS — the primary target | Linux |
+| [`denise-fbdev`](https://crates.io/crates/denise-fbdev) | Linux fbdev fallback | Linux |
+| [`denise-evdev`](https://crates.io/crates/denise-evdev) | Input, keyboard layouts, dead keys, console muting | Linux |
+| [`denise-winit`](https://crates.io/crates/denise-winit) | Desktop development and preview | any |
+| [`denise-macos`](https://crates.io/crates/denise-macos) | Embeddable `NSView` | macOS |
+| [`denise-win32`](https://crates.io/crates/denise-win32) | Child-`HWND` control | Windows |
+| [`denise-activex`](https://crates.io/crates/denise-activex) | COM/ActiveX shim, scriptable | Windows |
+| [`denise-ffi`](https://crates.io/crates/denise-ffi) | Stable C ABI, `cdylib` | any |
 
 Text rendering comes in three tiers, chosen by feature so you pay for what you
 draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
