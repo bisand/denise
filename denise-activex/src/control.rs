@@ -21,25 +21,33 @@ use denise::{InputEvent, Rect, Role, Size, Surface, Theme};
 use denise_ui::widgets::{Button, Label, Panel, TextInput};
 use denise_ui::{NodeId, Ui};
 use denise_win32::{ControlDelegate, DeniseControl, DibSurface};
-use windows::Win32::Foundation::{E_FAIL, E_POINTER, HWND, RECT, SIZE};
+use windows::Win32::Foundation::{
+    DV_E_DVASPECT, E_FAIL, E_NOTIMPL, E_POINTER, HWND, RECT, RECTL, SIZE,
+};
+use windows::Win32::Graphics::Gdi::{
+    HALFTONE, HDC, LOGPALETTE, RestoreDC, SRCCOPY, SaveDC, SetBrushOrgEx, SetStretchBltMode,
+    StretchBlt,
+};
 use windows::Win32::System::Com::{
-    CoTaskMemAlloc, DISPATCH_METHOD, DISPPARAMS, DVASPECT, IAdviseSink, IDataObject, IEnumSTATDATA,
-    IMoniker, IPersist_Impl, IPersistStreamInit_Impl, IStream, ITypeInfo,
+    ADVF_ONLYONCE, CoTaskMemAlloc, DISPATCH_METHOD, DISPPARAMS, DVASPECT, DVASPECT_CONTENT,
+    DVTARGETDEVICE, IAdviseSink, IDataObject, IEnumSTATDATA, IMoniker, IPersist_Impl,
+    IPersistStreamInit_Impl, IStream, ITypeInfo,
 };
 use windows::Win32::System::Ole::{
     IEnumOLEVERB, IOleClientSite, IOleControl_Impl, IOleInPlaceObject_Impl, IOleInPlaceSite,
-    IOleObject_Impl, IOleWindow_Impl, OLECLOSE, OLEGETMONIKER, OLEIVERB_HIDE,
-    OLEIVERB_INPLACEACTIVATE, OLEIVERB_SHOW, OLEIVERB_UIACTIVATE, OLEMISC, OLEWHICHMK,
-    USERCLASSTYPE,
+    IOleObject_Impl, IOleWindow_Impl, IViewObject_Impl, IViewObject2_Impl, OLECLOSE, OLEGETMONIKER,
+    OLEIVERB_HIDE, OLEIVERB_INPLACEACTIVATE, OLEIVERB_SHOW, OLEIVERB_UIACTIVATE, OLEMISC,
+    OLEWHICHMK, USERCLASSTYPE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, SWP_NOZORDER, SetWindowPos};
-use windows_core::{BOOL, GUID, HRESULT, Interface, Ref, implement};
+use windows_core::{BOOL, GUID, HRESULT, Interface, OutRef, Ref, implement};
 
 use crate::dispatch;
 use crate::himetric::{himetric_to_pixels, pixels_to_himetric};
 use crate::model::{Model, Shared};
 use crate::registry::MISC_STATUS;
 use crate::server::CLSID_DENISE_PANEL;
+use crate::view;
 
 /// The message the panel's button emits. One button and one message, because an
 /// automation surface without a type library is late-bound: every addition is
@@ -55,7 +63,8 @@ const MSG_ACTIVATED: u32 = 1;
     windows::Win32::System::Com::IPersistStreamInit,
     windows::Win32::System::Com::IDispatch,
     windows::Win32::System::Com::IConnectionPointContainer,
-    windows::Win32::System::Com::IConnectionPoint
+    windows::Win32::System::Com::IConnectionPoint,
+    windows::Win32::System::Ole::IViewObject2
 )]
 pub struct DenisePanel {
     pub(crate) state: RefCell<PanelState>,
@@ -78,6 +87,16 @@ pub(crate) struct PanelState {
     position: RECT,
     /// Whether persisted state has been initialised, for `IPersistStreamInit`.
     initialised: bool,
+    /// The sink from `IViewObject::SetAdvise`, told when the picture changes.
+    ///
+    /// This is how a form editor learns that a design-time property was assigned:
+    /// there is no window to invalidate, so the only way its drawing ever
+    /// refreshes is if the control says so.
+    view_sink: Option<IAdviseSink>,
+    /// The aspects that sink asked about, echoed back in the notification.
+    view_aspects: u32,
+    /// The `ADVF_` flags it registered with. Only `ONLYONCE` changes anything.
+    view_advf: u32,
     /// The description handed to `IDispatch::GetTypeInfo`, loaded on first use.
     pub(crate) type_info: Option<ITypeInfo>,
 }
@@ -104,6 +123,9 @@ impl DenisePanel {
                 },
                 position: RECT::default(),
                 initialised: false,
+                view_sink: None,
+                view_aspects: 0,
+                view_advf: 0,
                 type_info: None,
             }),
             model: Model::new(),
@@ -192,11 +214,113 @@ impl DenisePanel_Impl {
         // Copied out before the call: `update` runs the tree, which can raise an
         // event, whose handler can land straight back in this object.
         let control = self.state.borrow().control;
-        if let Some(control) = control {
+        match control {
             // A panic in the tree must not unwind into a host's script engine,
             // which is what a `catch_unwind` at this boundary buys. The window
             // procedure has the same wrapper for input; this is the other door in.
-            let _ = catch_unwind(AssertUnwindSafe(|| control.update()));
+            Some(control) => {
+                let _ = catch_unwind(AssertUnwindSafe(|| control.update()));
+            }
+            // No window, so nothing to repaint — but somebody may be drawing the
+            // control themselves through `IViewObject::Draw`, and a picture is
+            // only as current as the last time its owner was told to redraw it.
+            None => self.notify_view(),
+        }
+    }
+
+    /// Tells the view sink, if there is one, that what it drew is now stale.
+    fn notify_view(&self) {
+        let (sink, aspects, once) = {
+            let state = self.state.borrow();
+            let once = state.view_advf & ADVF_ONLYONCE.0 as u32 != 0;
+            (state.view_sink.clone(), state.view_aspects, once)
+        };
+        let Some(sink) = sink else {
+            return;
+        };
+        // Dropped before the call rather than after: `OnViewChange` is entitled
+        // to draw, and drawing lands back in this object.
+        if once {
+            self.state.borrow_mut().view_sink = None;
+        }
+        // SAFETY: `sink` is the container's object, kept alive by the clone.
+        // `-1` is every index, which for a control with one view is the only one.
+        unsafe { sink.OnViewChange(aspects, -1) };
+    }
+
+    /// Draws the control as it currently stands onto somebody else's device
+    /// context.
+    ///
+    /// The whole point is that this works with no window and no site: a form
+    /// editor asks for the picture before the control is ever activated, and a
+    /// control that cannot answer is a blank rectangle on the form. So the tree
+    /// is built from the model, painted once into a surface of its own, and
+    /// blitted — none of which touches the live control, if there even is one.
+    fn render(&self, target: HDC, bounds: *const RECTL) -> windows_core::Result<()> {
+        if bounds.is_null() {
+            return Err(E_POINTER.into());
+        }
+        // SAFETY: the container promises a readable RECTL.
+        let bounds = unsafe { *bounds };
+        let Some(plan) = view::plan(bounds.left, bounds.top, bounds.right, bounds.bottom) else {
+            // Nothing asked for, so nothing drawn. Not a failure: see `view`.
+            return Ok(());
+        };
+
+        let size = Size::new(plan.source_width, plan.source_height);
+        let mut surface =
+            DibSurface::new(size, 1.0).map_err(|_| windows_core::Error::from(E_FAIL))?;
+        let (mut ui, _nodes) = build(size, &self.model);
+        // No input, no elapsed time and nothing focused, so this is the control
+        // at rest: no hover, no pressed button and no caret. Which is what a
+        // design-time picture should be.
+        ui.tick(0);
+        ui.invalidate_all();
+        {
+            let mut frame = surface
+                .acquire()
+                .map_err(|_| windows_core::Error::from(E_FAIL))?;
+            ui.paint(&mut frame);
+        }
+
+        // SAFETY: `target` is the container's device context, live for the call;
+        // the source DC holds the DIB just painted and the source rectangle is
+        // the whole of it.
+        //
+        // The device context belongs to the container, so its state is put back
+        // afterwards. Changing a stretch mode and leaving it changed is the kind
+        // of thing that makes somebody else's later drawing wrong for no reason
+        // they can trace. `HALFTONE` is documented as requiring the brush origin
+        // to be set after it, which is the only reason that call is here — and
+        // neither is touched at all unless the blit actually scales.
+        let drawn = unsafe {
+            let saved = SaveDC(target);
+            if plan.stretches() {
+                SetStretchBltMode(target, HALFTONE);
+                let _ = SetBrushOrgEx(target, 0, 0, None);
+            }
+            let drawn = StretchBlt(
+                target,
+                plan.x,
+                plan.y,
+                plan.width,
+                plan.height,
+                Some(surface.dc()),
+                0,
+                0,
+                size.width as i32,
+                size.height as i32,
+                SRCCOPY,
+            );
+            if saved != 0 {
+                let _ = RestoreDC(target, saved);
+            }
+            drawn
+        };
+        if drawn.as_bool() {
+            Ok(())
+        } else {
+            Err(E_FAIL.into())
         }
     }
 }
@@ -228,7 +352,12 @@ impl IOleObject_Impl for DenisePanel_Impl {
 
     fn Close(&self, _save: &OLECLOSE) -> windows_core::Result<()> {
         self.deactivate();
-        self.state.borrow_mut().site = None;
+        {
+            let mut state = self.state.borrow_mut();
+            state.site = None;
+            // The same cycle as the event sinks below, one interface along.
+            state.view_sink = None;
+        }
         // A sink holds the control and the control holds the sink. A container
         // that unadvises has already broken that cycle; one that forgot has just
         // said it is finished, and this is the last chance to break it for them.
@@ -470,6 +599,132 @@ impl IOleControl_Impl for DenisePanel_Impl {
 
     fn FreezeEvents(&self, _freeze: BOOL) -> windows_core::Result<()> {
         Ok(())
+    }
+}
+
+// ------------------------------------------------- IViewObject / IViewObject2
+
+/// Drawing without a window.
+///
+/// Everything else in this file assumes a live control: the container sites it,
+/// activates it, and Windows delivers input to a real `HWND`. A form editor does
+/// none of that. It drops the control on a design surface, sets properties on it,
+/// and asks for a picture — and a control with no answer is the blank rectangle
+/// that this interface exists to avoid.
+///
+/// The container's device context is the whole interface, which also makes this
+/// the path a print preview and a copy-to-metafile take.
+impl IViewObject_Impl for DenisePanel_Impl {
+    fn Draw(
+        &self,
+        aspect: DVASPECT,
+        _index: i32,
+        _aspect_info: *mut core::ffi::c_void,
+        _target_device: *const DVTARGETDEVICE,
+        _target_dc: HDC,
+        draw_dc: HDC,
+        bounds: *const RECTL,
+        _window_bounds: *const RECTL,
+        _continue_fn: isize,
+        _continue_arg: usize,
+    ) -> windows_core::Result<()> {
+        // CONTENT is the control itself. THUMBNAIL, ICON and DOCPRINT are the
+        // other three, and answering one of them with the content is worse than
+        // declining: a container asked for a 32x32 icon and would scale a panel
+        // into it rather than fall back to the class's registered default.
+        if aspect != DVASPECT_CONTENT {
+            return Err(DV_E_DVASPECT.into());
+        }
+        // A panic must not unwind out of a COM method into a form editor, and
+        // this one runs the tree — the same boundary `sync` guards.
+        catch_unwind(AssertUnwindSafe(|| self.render(draw_dc, bounds)))
+            .unwrap_or_else(|_| Err(E_FAIL.into()))
+    }
+
+    fn GetColorSet(
+        &self,
+        _aspect: DVASPECT,
+        _index: i32,
+        _aspect_info: *mut core::ffi::c_void,
+        _target_device: *const DVTARGETDEVICE,
+        _target_dc: HDC,
+        _colours: *mut *mut LOGPALETTE,
+    ) -> windows_core::Result<()> {
+        // The surface is 32-bit RGB, so there is no palette to negotiate. A
+        // container on a palettised display would want one; there are none left.
+        Err(E_NOTIMPL.into())
+    }
+
+    fn Freeze(
+        &self,
+        _aspect: DVASPECT,
+        _index: i32,
+        _aspect_info: *mut core::ffi::c_void,
+        _token: *mut u32,
+    ) -> windows_core::Result<()> {
+        // Freezing pins a view so a container can draw it repeatedly and know it
+        // has not changed underneath. Every `Draw` here renders from the model on
+        // the spot, so there is no cached view to pin and nothing honest to
+        // promise.
+        Err(E_NOTIMPL.into())
+    }
+
+    fn Unfreeze(&self, _token: u32) -> windows_core::Result<()> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn SetAdvise(
+        &self,
+        aspects: DVASPECT,
+        advf: u32,
+        sink: Ref<'_, IAdviseSink>,
+    ) -> windows_core::Result<()> {
+        // One sink, replaced rather than added to: `SetAdvise` is documented as
+        // supporting exactly one, which is what distinguishes it from the
+        // `IOleObject::Advise` list.
+        let mut state = self.state.borrow_mut();
+        state.view_sink = sink.cloned();
+        state.view_aspects = aspects.0;
+        state.view_advf = advf;
+        Ok(())
+    }
+
+    fn GetAdvise(
+        &self,
+        aspects: *mut u32,
+        advf: *mut u32,
+        sink: OutRef<'_, IAdviseSink>,
+    ) -> windows_core::Result<()> {
+        // Each of the three is optional, and a container that only wants one
+        // passes null for the others. Writing through those is the crash.
+        let state = self.state.borrow();
+        if !aspects.is_null() {
+            // SAFETY: non-null, and the caller owns a `u32` behind it.
+            unsafe { *aspects = state.view_aspects };
+        }
+        if !advf.is_null() {
+            // SAFETY: as above.
+            unsafe { *advf = state.view_advf };
+        }
+        if !sink.is_null() {
+            sink.write(state.view_sink.clone())?;
+        }
+        Ok(())
+    }
+}
+
+impl IViewObject2_Impl for DenisePanel_Impl {
+    fn GetExtent(
+        &self,
+        _aspect: DVASPECT,
+        _index: i32,
+        _target_device: *const DVTARGETDEVICE,
+    ) -> windows_core::Result<SIZE> {
+        // Deliberately the same value `IOleObject::GetExtent` reports. The whole
+        // reason `IViewObject2` exists is to save a container a `QueryInterface`
+        // for that answer, so the two disagreeing would be a control that changes
+        // size depending on which interface was asked.
+        Ok(self.state.borrow().extent)
     }
 }
 

@@ -9,10 +9,17 @@
 //!
 //! The server is here: the four `Dll*` exports, a class factory, and a control
 //! implementing `IOleObject`, `IOleInPlaceObject`, `IOleWindow`, `IOleControl`,
-//! `IPersistStreamInit`, `IDispatch` and the connection point that carries its
-//! events. A container can instantiate it, site it, activate it in place — at
-//! which point it creates a real [`denise_win32`] child window — script it by
-//! name, sink its events, and tear it down again.
+//! `IPersistStreamInit`, `IDispatch`, `IViewObject2` and the connection point
+//! that carries its events. A container can instantiate it, site it, activate it
+//! in place — at which point it creates a real [`denise_win32`] child window —
+//! script it by name, sink its events, and tear it down again.
+//!
+//! It can also be asked to draw without any of that, which is what a form editor
+//! does: `IViewObject2::Draw` renders the tree from the current property values
+//! into whatever device context the container passes, with no site and no
+//! window. Without it a control dropped on a form is a blank rectangle until the
+//! form runs. The geometry that decides where the picture goes is in
+//! [`view`], outside `cfg(windows)` with the rest of the arithmetic.
 //!
 //! `registry`, `himetric` and `dispatch` are the halves that can be tested
 //! without Windows, and they are also the halves that most often go wrong: a
@@ -63,9 +70,10 @@
 //!
 //! # What is not here yet
 //!
-//! **`IViewObject2::Draw`.** The design-time view a form editor asks for before
-//! the control is ever activated. Without it a control dropped on a form is a
-//! blank rectangle until the form runs.
+//! **A form editor that has actually hosted it.** The two pieces one needs are
+//! both here — a type library to read and a design-time view to draw — and both
+//! are checked on every push. Neither has been in front of VB6 or an MFC dialog
+//! editor.
 //!
 //! **The scripting safety categories.** `IObjectSafety` and the "safe for
 //! scripting" registry entries are deliberately absent: they are an assertion
@@ -127,6 +135,7 @@ pub mod connections;
 pub mod dispatch;
 pub mod himetric;
 pub mod registry;
+pub mod view;
 
 #[cfg(windows)]
 mod automation;

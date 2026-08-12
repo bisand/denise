@@ -42,6 +42,13 @@ windows = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# `IAdviseSink` is already in the tree — `IOleObject::Advise` takes one — but
+# *implementing* it needs `STGMEDIUM`, which lives behind this feature. The view
+# tests implement one to check that a container is told when the design-time
+# picture goes stale. Same crate, one more feature, no new dependency.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { workspace = true, features = ["Win32_System_Com_StructuredStorage"] }
+
 [lints.rust]
 missing_docs = "warn"
 
