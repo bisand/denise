@@ -173,9 +173,44 @@ honest way to fake one.
 the window with the diagnostic visible says more than a description, and UTM's
 clipboard sharing makes that a paste rather than a file transfer.
 
-## What is not testable this way
+## The ActiveX control
 
-The ActiveX shim, because it does not exist yet — only its registration table.
-Testing that needs a container that can load a COM control (VB6, an MFC dialog, or
-`Tstcon32.exe` from the old Platform SDK), and it should not be written until the
-control underneath it has been run at least once. Which is what this page is for.
+The classic tool for this is `Tstcon32.exe`, the ActiveX Control Test Container,
+which shipped with Visual Studio 6 and the old Platform SDKs and is on no modern
+machine. So the repository carries its own minimal container instead.
+
+```powershell
+cargo build -p denise-activex --release
+# then, from an elevated prompt:
+regsvr32 target\release\denise_activex.dll
+cargo run -p denise-activex --example host
+```
+
+The example goes through the registry, exactly as a real container does, so it
+proves the *registered* server works rather than only the code in this tree. Each
+step prints, and each fails distinctly:
+
+1. **`CoCreateInstance`** — registration, the class factory, `IUnknown`.
+2. **`SetClientSite`** — the control accepts a container.
+3. **`InitNew`** — `IPersistStreamInit`, which VB6 will not proceed without.
+4. **`DoVerb(INPLACEACTIVATE)`** — the control asks the site for a parent window
+   and creates its child `HWND` inside it. A window appearing means the whole
+   path works.
+
+A quicker smoke test needing no build at all, once the DLL is registered:
+
+```powershell
+New-Object -ComObject Denise.Panel
+```
+
+That covers step 1 only — PowerShell is not a control container, so nothing is
+ever sited and no window appears. It printing `System.__ComObject` with no members
+is expected: there is no `IDispatch` yet, so there is nothing to enumerate.
+
+Common failures, and what each means:
+
+| | Cause |
+|---|---|
+| `regsvr32`: "The specified module could not be found" | The DLL is not at that path, or it is a different architecture from the `regsvr32` you ran — an ARM64 DLL needs the one in `System32`, not `SysWOW64` |
+| `0x80040154` class not registered | `regsvr32` was not run elevated, so it could not write `HKEY_CLASSES_ROOT` |
+| `CoCreateInstance` succeeds, `DoVerb` fails | The site is being asked for something it does not implement; the example prints which call it reached |
