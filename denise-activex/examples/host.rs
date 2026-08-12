@@ -37,6 +37,10 @@
 //!    registered server. The unit tests build a library into a temporary file and
 //!    check it; only this can check that the `.tlb` ended up beside the DLL, that
 //!    the registry points at it, and that the control hands it over.
+//! 9. `IViewObject2::Draw` — the design-time view, drawn into a memory device
+//!    context *before* the control is sited and printed as text. A form editor
+//!    asks for this with no window and no container anywhere, so it is the one
+//!    step here that deliberately happens before step 3.
 //!
 //! Then it is interactive: typing in the field raises `Change`, pressing the
 //! button raises `Click`, and the click handler assigns to `Caption` — from
@@ -66,23 +70,29 @@ mod app {
     use std::mem::ManuallyDrop;
 
     use denise_activex::dispatch::{self, DISPID_CHANGE, DISPID_CLICK};
+    use denise_activex::himetric::himetric_to_pixels;
     use denise_activex::{CLSID_DENISE_PANEL, DIID_DENISE_PANEL_EVENTS};
     use windows::Win32::Foundation::{
-        DISP_E_MEMBERNOTFOUND, E_NOTIMPL, HWND, LPARAM, LRESULT, RECT, S_OK, SIZE, VARIANT_FALSE,
-        VARIANT_TRUE, WPARAM,
+        DISP_E_MEMBERNOTFOUND, E_NOTIMPL, HWND, LPARAM, LRESULT, RECT, RECTL, S_OK, SIZE,
+        VARIANT_FALSE, VARIANT_TRUE, WPARAM,
+    };
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+        DeleteDC, DeleteObject, GdiFlush, SelectObject,
     };
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
         CoUninitialize, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET,
-        DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO, IConnectionPoint, IConnectionPointContainer,
-        IDispatch, IDispatch_Impl, IMoniker, IPersistStreamInit, ITypeInfo,
+        DISPATCH_PROPERTYPUT, DISPPARAMS, DVASPECT_CONTENT, EXCEPINFO, IConnectionPoint,
+        IConnectionPointContainer, IDispatch, IDispatch_Impl, IMoniker, IPersistStreamInit,
+        ITypeInfo,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Ole::{
         DISPID_PROPERTYPUT, IOleClientSite, IOleClientSite_Impl, IOleContainer,
         IOleInPlaceActiveObject, IOleInPlaceFrame, IOleInPlaceFrame_Impl, IOleInPlaceSite,
         IOleInPlaceSite_Impl, IOleInPlaceUIWindow, IOleInPlaceUIWindow_Impl, IOleObject,
-        IOleWindow_Impl, OLECLOSE_NOSAVE, OLEGETMONIKER, OLEINPLACEFRAMEINFO,
+        IOleWindow_Impl, IViewObject2, OLECLOSE_NOSAVE, OLEGETMONIKER, OLEINPLACEFRAMEINFO,
         OLEIVERB_INPLACEACTIVATE, OLEMENUGROUPWIDTHS, OLEWHICHMK,
     };
     use windows::Win32::System::Variant::{
@@ -128,6 +138,10 @@ mod app {
         print!("{}", dispatch::describe());
         describe_from_the_library(&dispatch);
         println!();
+
+        // The design-time view, before the control is sited: no container, no
+        // window, no activation. See the function.
+        draw_the_design_time_view(&object);
 
         // 2. A container for it to talk back to.
         let site: IOleClientSite = Host {
@@ -279,6 +293,171 @@ mod app {
             match found {
                 Ok(()) => println!("  {:<10} dispid {dispid}", member.name),
                 Err(e) => println!("  {:<10} NOT NAMED — {e}", member.name),
+            }
+        }
+    }
+
+    /// The design-time view: what a form editor draws before the control runs.
+    ///
+    /// Deliberately called before `SetClientSite` below. There is no container,
+    /// no window and no activation at this point, and that is the whole claim —
+    /// a form editor drops the control on a design surface and asks what it looks
+    /// like, and a control with no answer is a blank rectangle until the form is
+    /// run.
+    ///
+    /// It is printed because otherwise there is nothing to look at: this path
+    /// never reaches the screen. The unit tests check the same pixels and count
+    /// them; a person needs to see that it is a *panel*.
+    fn draw_the_design_time_view(object: &IOleObject) {
+        let Ok(view) = object.cast::<IViewObject2>() else {
+            println!(
+                "  no IViewObject2 — a form editor would show a blank rectangle.\n  \
+                 Almost certainly an older DLL still at the registered path."
+            );
+            return;
+        };
+
+        // The size the control says it is, which is what a form editor gives it
+        // when it is first dropped.
+        // SAFETY: `view` is a live interface on the control; a null target device
+        // means the screen.
+        let extent = unsafe { view.GetExtent(DVASPECT_CONTENT, -1, core::ptr::null()) };
+        let Ok(extent) = extent else {
+            println!("  GetExtent failed");
+            return;
+        };
+        let width = himetric_to_pixels(extent.cx).clamp(1, 2048);
+        let height = himetric_to_pixels(extent.cy).clamp(1, 2048);
+
+        let Some(canvas) = Canvas::new(width, height) else {
+            println!("  could not allocate a device context to draw into");
+            return;
+        };
+        let rect = RECTL {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        // SAFETY: `canvas` owns a live memory DC and `rect` is a live local. The
+        // target device, the window bounds and the continuation callback are all
+        // optional and none of them apply to a screen-compatible memory DC.
+        let drawn = unsafe {
+            view.Draw(
+                DVASPECT_CONTENT,
+                -1,
+                core::ptr::null_mut(),
+                None,
+                None,
+                canvas.dc,
+                Some(&rect),
+                None,
+                None,
+                0,
+            )
+        };
+        match drawn {
+            Ok(()) => {
+                println!("design-time view — {width}x{height}, no window, no site:");
+                println!("{}", as_text(&canvas.pixels(), width, height));
+            }
+            Err(e) => println!("  Draw failed: {e}"),
+        }
+    }
+
+    /// Turns a picture into something a terminal can show.
+    ///
+    /// Point-sampled and by luminance, which is enough to recognise the card, the
+    /// field and the button. Characters are about twice as tall as they are wide,
+    /// hence the halved row count.
+    fn as_text(pixels: &[u32], width: i32, height: i32) -> String {
+        const RAMP: &[u8] = b" .:-=+*#%@";
+        const COLUMNS: i32 = 64;
+        let rows = (COLUMNS * height / width / 2).max(1);
+
+        let mut text = String::new();
+        for row in 0..rows {
+            text.push_str("  ");
+            for column in 0..COLUMNS {
+                let x = column * width / COLUMNS;
+                let y = row * height / rows;
+                let pixel = pixels[(y * width + x) as usize];
+                // The DIB is 0x00RRGGBB. The usual weights, in integers.
+                let (r, g, b) = ((pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF);
+                let luminance = (r * 54 + g * 183 + b * 19) >> 8;
+                let step = (luminance as usize * (RAMP.len() - 1)) / 255;
+                text.push(RAMP[step] as char);
+            }
+            text.push('\n');
+        }
+        text
+    }
+
+    /// A memory device context whose pixels can be read back afterwards.
+    struct Canvas {
+        dc: windows::Win32::Graphics::Gdi::HDC,
+        bitmap: windows::Win32::Graphics::Gdi::HBITMAP,
+        previous: windows::Win32::Graphics::Gdi::HGDIOBJ,
+        bits: *mut u32,
+        count: usize,
+    }
+
+    impl Canvas {
+        fn new(width: i32, height: i32) -> Option<Self> {
+            let mut info = BITMAPINFO::default();
+            info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = width;
+            // Negative for top-down, so row 0 is the top one — which is what the
+            // sampling above assumes.
+            info.bmiHeader.biHeight = -height;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB.0;
+
+            let mut bits = core::ptr::null_mut();
+            // SAFETY: `info` describes a 32-bit BI_RGB DIB and `bits` receives the
+            // allocation. A null DC is valid for `DIB_RGB_COLORS`.
+            let bitmap =
+                unsafe { CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0) }
+                    .ok()?;
+            // SAFETY: a null argument asks for a screen-compatible memory DC.
+            let dc = unsafe { CreateCompatibleDC(None) };
+            // SAFETY: both handles are live and a bitmap is valid in a memory DC.
+            let previous = unsafe { SelectObject(dc, bitmap.into()) };
+            Some(Self {
+                dc,
+                bitmap,
+                previous,
+                bits: bits.cast(),
+                count: (width * height) as usize,
+            })
+        }
+
+        /// The pixels, after making GDI finish what it batched.
+        ///
+        /// `GdiFlush` is not optional: GDI batches drawing per thread, and a DIB
+        /// section read without it returns what was there before the blit —
+        /// intermittently.
+        fn pixels(&self) -> Vec<u32> {
+            // SAFETY: no arguments; it drains this thread's own batch.
+            unsafe {
+                let _ = GdiFlush();
+            }
+            // SAFETY: `bits` is the DIB's allocation, exactly `count` words, and
+            // nothing else holds it.
+            unsafe { core::slice::from_raw_parts(self.bits, self.count) }.to_vec()
+        }
+    }
+
+    impl Drop for Canvas {
+        fn drop(&mut self) {
+            // SAFETY: every handle was created in `new` and released once. The
+            // previous object goes back first, because a DC still holding our
+            // bitmap will not release it.
+            unsafe {
+                SelectObject(self.dc, self.previous);
+                let _ = DeleteDC(self.dc);
+                let _ = DeleteObject(self.bitmap.into());
             }
         }
     }
