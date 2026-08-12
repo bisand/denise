@@ -80,6 +80,24 @@
 //! `Enabled` set and read **by name** through `GetIDsOfNames` and `Invoke`, a sink
 //! advised on the connection point, and `Change` and `Click` arriving at it.
 //!
+//! And from PowerShell, which is the host that needed the type library:
+//!
+//! ```text
+//! TypeName: System.__ComObject#{4c5148ff-09f3-4c34-9b77-00c850e1f940}
+//!
+//! Name    MemberType Definition
+//! ----    ---------- ----------
+//! Refresh Method     void Refresh ()
+//! Caption Property   string Caption () {get} {set}
+//! Enabled Property   bool Enabled () {get} {set}
+//! Text    Property   string Text () {get} {set}
+//! ```
+//!
+//! Worth reading closely, because it confirms four separate things: the class
+//! points at the dispinterface, `Refresh` returns `VT_VOID` rather than the
+//! `VT_EMPTY` that once made a host unwrap a null, each property was reassembled
+//! from the two entries a library stores it as, and the types survived.
+//!
 //! The part worth naming is the re-entrancy. The click handler assigns to
 //! `Caption` and the change handler reads `Text`, both from inside the event the
 //! control raised — a few hundred round trips over eighteen clicks and every

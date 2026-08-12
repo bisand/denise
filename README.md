@@ -143,7 +143,7 @@ megapixel.
 | Desktop: macOS, Windows, Linux | `denise-winit` | ✅ development and preview |
 | Embedded in a macOS app | `denise-macos` | ✅ `NSView` over a CoreGraphics bitmap context |
 | Embedded in a Windows app | `denise-win32` | ✅ child `HWND` over a DIB section |
-| Embedded via COM/ActiveX | `denise-activex` | ✅ registered, sited, scriptable over `IDispatch` |
+| Embedded via COM/ActiveX | `denise-activex` | ✅ registered, sited, scriptable, with a type library PowerShell reads |
 | Embedded in anything else | `denise-ffi` | ✅ stable C ABI, hand-written header |
 
 The same `table-editor` binary, unchanged and unconfigured, on two of them. Each
