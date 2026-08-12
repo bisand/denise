@@ -205,6 +205,52 @@ rate rather than by the cap.
 Treat any cap as a runaway guard set far above every plausible input rate, not as
 a schedule. On DRM it is redundant anyway — vblank is the schedule.
 
+## A laggy pointer is usually the mouse
+
+Pointer smoothness has a hard floor at the device's report rate, and no renderer
+can go below it. Before suspecting the toolkit, measure:
+
+```bash
+cargo run -p denise-evdev --example pointer -- 30
+```
+
+It opens no display and touches no framebuffer, so whatever it reports is input
+and nothing else. Two numbers matter. **`age`** is the gap between the kernel
+timestamping an event and this process reading it — under a millisecond means the
+loop is keeping up. **`gap`** is the interval between reports, which is the
+hardware's own rate.
+
+Measured on the Pi 3 A+, over 1849 events:
+
+| Device | `gap` | Rate | `age` p50 / p95 / max |
+|---|---|---|---|
+| Logitech K400 (wireless keyboard + touchpad) | 16.00 ms | 62.5 Hz | 0.04 / 0.05 / 0.08 ms |
+
+Input arrives in **40 microseconds** — four hundred times faster than a frame —
+and the reporting interval is dead steady at 16 ms. The USB side agrees: the
+receiver's interrupt endpoint has a `bInterval` of 8 ms, so the bus asks twice as
+often as the K400 has anything to say. The 62.5 Hz is the touchpad.
+
+That floor is what a laggy pointer feels like. 16 ms of input granularity plus up
+to one frame of page-flip latency is about 33 ms before a movement reaches the
+glass — with everything working correctly. Swapping in a wired mouse makes it
+visibly snappier, which is the confirmation worth doing before writing any code.
+
+Two things this rules *out*, both worth knowing:
+
+- **CPU throttling.** Four busy cores for 25 seconds held 1400 MHz and 50 °C. The
+  undervoltage flag does assert under that load — worth a better supply, since
+  undervoltage corrupts SD cards — but the firmware never cut the clock, and no
+  undervoltage appears under real rendering at all.
+- **The render path.** While the panel ran, the CPU never rose above 900 MHz of
+  its 1400 MHz, it drew one frame per input event, and it repainted 1.9% of the
+  surface per frame. It was idling, waiting for the pointer.
+
+What is left is the page flip, and the fix for that is the vc4 hardware cursor
+plane — the display controller composites the sprite during scanout, so moving it
+is one ioctl and costs no repaint and no flip. Worth doing, and worth doing after
+measuring, because on a 62.5 Hz device it addresses the smaller half of the delay.
+
 ## Performance on a Pi 3 A+
 
 From `cargo run -p denise-benches --bin on-target`, at 1824×984:
