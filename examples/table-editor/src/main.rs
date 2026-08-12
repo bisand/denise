@@ -194,14 +194,33 @@ fn write_snapshot(app: &mut App, path: &str) -> std::io::Result<()> {
 
 // ---------------------------------------------------------------- the backends
 
-#[cfg(feature = "desktop")]
-use window_backend as backend;
-
+// Exactly one backend, and the rule for picking it is written out rather than
+// left to whichever `use` the compiler reaches first.
+//
+// `--all-features` turns both on, and CI does that on purpose — a `#[cfg]` that
+// compiles in one combination and not another is the rot this whole project keeps
+// finding. So "both" has to mean something rather than fail to build, and it means
+// kiosk: nobody enables a bare-display backend by accident, and a desktop build is
+// what you get by doing nothing.
+//
+// The kiosk arm carries `target_os = "linux"` because the feature can be switched
+// on anywhere and the backend exists nowhere else. The desktop arm negates the
+// whole condition, not just the feature, so asking for kiosk on macOS still leaves
+// you with a window rather than with nothing at all.
 #[cfg(all(feature = "kiosk", target_os = "linux"))]
 use kiosk_backend as backend;
 
+#[cfg(all(feature = "desktop", not(all(feature = "kiosk", target_os = "linux"))))]
+use window_backend as backend;
+
+#[cfg(not(any(all(feature = "kiosk", target_os = "linux"), feature = "desktop")))]
+compile_error!(
+    "table-editor has no backend to draw with. Enable `desktop` for a window, or \
+     `kiosk` for the display itself, which needs Linux."
+);
+
 /// A window, on any desktop. Fifty lines, all of them plumbing.
-#[cfg(feature = "desktop")]
+#[cfg(all(feature = "desktop", not(all(feature = "kiosk", target_os = "linux"))))]
 mod window_backend {
     use super::{App, Message, Setup, WINDOW};
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
