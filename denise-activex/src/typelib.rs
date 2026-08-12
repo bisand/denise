@@ -74,6 +74,51 @@ const fn syskind() -> SYSKIND {
     }
 }
 
+/// Labels a failure with the step that produced it.
+///
+/// Every call in here can answer `TYPE_E_ELEMENTNOTFOUND`, and on its own that
+/// says "a type is missing" about a type you can see in the source. Naming the
+/// step turns one CI round trip into an answer instead of a guess — which is the
+/// difference this file was written to stop paying for.
+fn step<T>(what: &str, result: windows_core::Result<T>) -> windows_core::Result<T> {
+    result.map_err(|e| windows_core::Error::new(e.code(), format!("{what}: {}", e.message())))
+}
+
+/// `IDispatch`'s own description, from the standard OLE library.
+///
+/// A dispinterface *inherits* `IDispatch` — that is what makes it dispatchable —
+/// and `LayOut` will not resolve one that does not say so. The description has to
+/// come from stdole2, which is registered on every Windows machine, because a
+/// type library can only refer to types it can name.
+fn idispatch_type_info() -> windows_core::Result<ITypeInfo> {
+    /// stdole2's library id, and version 2.0.
+    const LIBID_STDOLE: GUID = GUID::from_u128(0x0002_0430_0000_0000_C000_0000_0000_0046);
+    // SAFETY: constants; the out-parameter is the binding's.
+    let stdole = step("LoadRegTypeLib(stdole2)", unsafe {
+        LoadRegTypeLib(&LIBID_STDOLE, 2, 0, 0)
+    })?;
+    // SAFETY: `stdole` is live and the IID outlives the call.
+    step("stdole2::IDispatch", unsafe {
+        stdole.GetTypeInfoOfGuid(&windows::Win32::System::Com::IDispatch::IID)
+    })
+}
+
+/// Makes `info` inherit `IDispatch`, which is what a dispinterface is.
+fn inherit_idispatch(info: &ICreateTypeInfo) -> windows_core::Result<()> {
+    let idispatch = idispatch_type_info()?;
+    let mut href = 0u32;
+    // SAFETY: `idispatch` is live and `href` receives the reference. The binding
+    // declares the out-parameter `*const`, which is a quirk of the generated
+    // signature rather than of the API.
+    unsafe {
+        step("AddRefTypeInfo(IDispatch)", {
+            info.AddRefTypeInfo(&idispatch, &mut href as *mut u32 as *const u32)
+        })?;
+        step("AddImplType(IDispatch)", info.AddImplType(0, href))?;
+    }
+    Ok(())
+}
+
 /// The library file that belongs beside `dll`.
 ///
 /// `…\denise_activex.dll` becomes `…\denise_activex.tlb`.
@@ -88,26 +133,33 @@ pub fn path_beside(dll: &str) -> String {
 pub fn build(path: &str) -> windows_core::Result<()> {
     let wide = wide(path);
     // SAFETY: `wide` is NUL-terminated and live for the call.
-    let library = unsafe { CreateTypeLib2(syskind(), PCWSTR(wide.as_ptr())) }?;
+    let library = step("CreateTypeLib2", unsafe {
+        CreateTypeLib2(syskind(), PCWSTR(wide.as_ptr()))
+    })?;
 
     // SAFETY: every one of these takes values live for its own call.
     unsafe {
-        library.SetGuid(&LIBID_DENISE)?;
-        library.SetName(&BSTR::from("Denise"))?;
-        library.SetVersion(VERSION.0, VERSION.1)?;
-        library.SetDocString(&BSTR::from("Denise panel control"))?;
+        step("library.SetGuid", library.SetGuid(&LIBID_DENISE))?;
+        step("library.SetName", library.SetName(&BSTR::from("Denise")))?;
+        step(
+            "library.SetVersion",
+            library.SetVersion(VERSION.0, VERSION.1),
+        )?;
         // Locale-neutral. The names are ASCII and there is nothing to localise;
         // claiming a locale would make a host in another one look elsewhere.
-        library.SetLcid(0)?;
+        step("library.SetLcid", library.SetLcid(0))?;
     }
 
     // SAFETY: `library` is live; each call builds one type into it.
-    let panel = unsafe { library.CreateTypeInfo(&BSTR::from("DDenisePanel"), TKIND_DISPATCH) }?;
+    let panel = step("CreateTypeInfo(DDenisePanel)", unsafe {
+        library.CreateTypeInfo(&BSTR::from("DDenisePanel"), TKIND_DISPATCH)
+    })?;
     describe_panel(&panel)?;
 
-    let events =
-        // SAFETY: as above.
-        unsafe { library.CreateTypeInfo(&BSTR::from("DDenisePanelEvents"), TKIND_DISPATCH) }?;
+    // SAFETY: as above.
+    let events = step("CreateTypeInfo(DDenisePanelEvents)", unsafe {
+        library.CreateTypeInfo(&BSTR::from("DDenisePanelEvents"), TKIND_DISPATCH)
+    })?;
     describe_events(&events)?;
 
     // Laid out before anything refers to them. A type under construction has no
@@ -116,18 +168,20 @@ pub fn build(path: &str) -> windows_core::Result<()> {
     // unfinished one, and is how this failed the first time it ran.
     // SAFETY: both are live and fully described by the calls above.
     unsafe {
-        panel.LayOut()?;
-        events.LayOut()?;
+        step("panel.LayOut", panel.LayOut())?;
+        step("events.LayOut", events.LayOut())?;
     }
 
     // SAFETY: as above.
-    let coclass = unsafe { library.CreateTypeInfo(&BSTR::from("Panel"), TKIND_COCLASS) }?;
+    let coclass = step("CreateTypeInfo(Panel)", unsafe {
+        library.CreateTypeInfo(&BSTR::from("Panel"), TKIND_COCLASS)
+    })?;
     describe_coclass(&coclass, &panel, &events)?;
     // SAFETY: the class is described; laying it out resolves its two references.
-    unsafe { coclass.LayOut()? };
+    step("coclass.LayOut", unsafe { coclass.LayOut() })?;
 
     // SAFETY: writes the file. Everything above is held until this returns.
-    unsafe { library.SaveAllChanges() }
+    step("SaveAllChanges", unsafe { library.SaveAllChanges() })
 }
 
 /// The members a script can reach.
@@ -138,8 +192,12 @@ fn describe_panel(info: &ICreateTypeInfo) -> windows_core::Result<()> {
         info.SetVersion(VERSION.0, VERSION.1)?;
         // `FDISPATCHABLE` is what makes this reachable through `IDispatch` rather
         // than through a vtable a dispinterface does not have.
-        info.SetTypeFlags(TYPEFLAG_FDISPATCHABLE.0 as u32)?;
+        step(
+            "panel.SetTypeFlags",
+            info.SetTypeFlags(TYPEFLAG_FDISPATCHABLE.0 as u32),
+        )?;
     }
+    inherit_idispatch(info)?;
 
     for (index, entry) in dispatch::entries().iter().enumerate() {
         // A put takes the value being assigned; a get and a method take nothing.
@@ -203,7 +261,9 @@ fn describe_panel(info: &ICreateTypeInfo) -> windows_core::Result<()> {
         // the promise that a previous attempt at this got wrong, freeing the
         // buffers a description still pointed at and crashing the machine reading
         // it back.
-        unsafe { info.AddFuncDesc(index as u32, &description) }?;
+        step("panel.AddFuncDesc", unsafe {
+            info.AddFuncDesc(index as u32, &description)
+        })?;
 
         // The name, and one name per parameter after it. A put's argument is
         // called `Value`, which is the convention every automation host expects.
@@ -214,7 +274,9 @@ fn describe_panel(info: &ICreateTypeInfo) -> windows_core::Result<()> {
             names.push(PCWSTR(value.as_ptr()));
         }
         // SAFETY: both buffers outlive the call, and `names` describes them.
-        unsafe { info.SetFuncAndParamNames(index as u32, &names) }?;
+        step("panel.SetFuncAndParamNames", unsafe {
+            info.SetFuncAndParamNames(index as u32, &names)
+        })?;
     }
     Ok(())
 }
@@ -225,8 +287,12 @@ fn describe_events(info: &ICreateTypeInfo) -> windows_core::Result<()> {
     unsafe {
         info.SetGuid(&crate::automation::DIID_DENISE_PANEL_EVENTS)?;
         info.SetVersion(VERSION.0, VERSION.1)?;
-        info.SetTypeFlags(TYPEFLAG_FDISPATCHABLE.0 as u32)?;
+        step(
+            "events.SetTypeFlags",
+            info.SetTypeFlags(TYPEFLAG_FDISPATCHABLE.0 as u32),
+        )?;
     }
+    inherit_idispatch(info)?;
 
     for (index, event) in dispatch::EVENTS.iter().enumerate() {
         let description = FUNCDESC {
@@ -254,11 +320,15 @@ fn describe_events(info: &ICreateTypeInfo) -> windows_core::Result<()> {
             wFuncFlags: FUNCFLAGS(0),
         };
         // SAFETY: `description` is a live local and is copied by the call.
-        unsafe { info.AddFuncDesc(index as u32, &description) }?;
+        step("events.AddFuncDesc", unsafe {
+            info.AddFuncDesc(index as u32, &description)
+        })?;
 
         let name = wide(event.name);
         // SAFETY: `name` outlives the call.
-        unsafe { info.SetFuncAndParamNames(index as u32, &[PCWSTR(name.as_ptr())]) }?;
+        step("events.SetFuncAndParamNames", unsafe {
+            info.SetFuncAndParamNames(index as u32, &[PCWSTR(name.as_ptr())])
+        })?;
     }
     Ok(())
 }
@@ -294,9 +364,14 @@ fn describe_coclass(
         // declares the out-parameter `*const`, which is a quirk of the generated
         // signature rather than of the API — `AddRefTypeInfo` writes through it.
         unsafe {
-            info.AddRefTypeInfo(&part, &mut href as *mut u32 as *const u32)?;
-            info.AddImplType(index as u32, href)?;
-            info.SetImplTypeFlags(index as u32, flags)?;
+            step("coclass.AddRefTypeInfo", {
+                info.AddRefTypeInfo(&part, &mut href as *mut u32 as *const u32)
+            })?;
+            step("coclass.AddImplType", info.AddImplType(index as u32, href))?;
+            step(
+                "coclass.SetImplTypeFlags",
+                info.SetImplTypeFlags(index as u32, flags),
+            )?;
         }
     }
     Ok(())
