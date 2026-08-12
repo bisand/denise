@@ -159,7 +159,10 @@ jobs:
       - run: cargo test -p denise-win32
 
       # The COM server is the only crate here that produces a DLL Windows loads
-      # by class id, and it compiles nowhere else.
+      # by class id, and it compiles nowhere else. `tests/typeinfo.rs` is the
+      # reason this matters beyond "it builds": the description a host reads
+      # before it will ask the control anything comes out of oleaut32, so this is
+      # the only machine that can check it says what `Invoke` implements.
       - run: cargo clippy -p denise-activex --all-targets -- -D warnings
       - run: cargo test -p denise-activex
       - run: cargo build -p denise-activex --release
