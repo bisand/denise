@@ -265,14 +265,15 @@ fn describe_panel(info: &ICreateTypeInfo) -> windows_core::Result<()> {
         let added = unsafe { info.AddFuncDesc(index as u32, &description) };
         step(&format!("panel.AddFuncDesc[{index}] {}", entry.name), added)?;
 
-        // The name, and one name per parameter after it. A put's argument is
-        // called `Value`, which is the convention every automation host expects.
+        // The member's name, and only that.
+        //
+        // A property put has one parameter — the value being assigned — and it is
+        // *not* named here: the property's own name covers it, and passing a
+        // second name is `TYPE_E_ELEMENTNOTFOUND`, which reads like a missing type
+        // rather than a name too many. That is what this cost to find out: the get
+        // at index 0 took one name and the put at index 1 refused two.
         let name = wide(entry.name);
-        let value = wide("Value");
-        let mut names = vec![PCWSTR(name.as_ptr())];
-        if entry.arguments > 0 {
-            names.push(PCWSTR(value.as_ptr()));
-        }
+        let names = [PCWSTR(name.as_ptr())];
         // SAFETY: both buffers outlive the call, and `names` describes them.
         let named = unsafe { info.SetFuncAndParamNames(index as u32, &names) };
         step(

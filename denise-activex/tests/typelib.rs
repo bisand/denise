@@ -164,17 +164,15 @@ fn every_entry_matches_the_table_it_was_generated_from() {
             entry.name
         );
 
-        // The name, which is the whole point of the exercise.
+        // The name, which is the whole point of the exercise. A put's value
+        // parameter has none of its own — the property's name covers it, and
+        // trying to give it one is refused outright.
         let mut names = [BSTR::default(), BSTR::default()];
         let mut written = 0u32;
         // SAFETY: `names` and `written` are live locals.
         unsafe { info.GetNames(memid, &mut names, &mut written) }.expect("names");
         assert!(written >= 1);
         assert_eq!(names[0].to_string(), entry.name);
-        if entry.arguments > 0 {
-            assert_eq!(written, 2, "a put's argument needs a name too");
-            assert_eq!(names[1].to_string(), "Value");
-        }
     }
 
     let _ = std::fs::remove_file(path);
