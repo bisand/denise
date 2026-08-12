@@ -261,10 +261,9 @@ fn describe_panel(info: &ICreateTypeInfo) -> windows_core::Result<()> {
         // the promise that a previous attempt at this got wrong, freeing the
         // buffers a description still pointed at and crashing the machine reading
         // it back.
-        step(
-            &format!("panel.AddFuncDesc[{index}] {}", entry.name),
-            unsafe { info.AddFuncDesc(index as u32, &description) },
-        )?;
+        // SAFETY: as described above.
+        let added = unsafe { info.AddFuncDesc(index as u32, &description) };
+        step(&format!("panel.AddFuncDesc[{index}] {}", entry.name), added)?;
 
         // The name, and one name per parameter after it. A put's argument is
         // called `Value`, which is the convention every automation host expects.
@@ -275,14 +274,15 @@ fn describe_panel(info: &ICreateTypeInfo) -> windows_core::Result<()> {
             names.push(PCWSTR(value.as_ptr()));
         }
         // SAFETY: both buffers outlive the call, and `names` describes them.
+        let named = unsafe { info.SetFuncAndParamNames(index as u32, &names) };
         step(
             &format!(
-                "panel.SetFuncAndParamNames[{index}] {} with {} name(s), invkind {:?}",
+                "panel.SetFuncAndParamNames[{index}] {} with {} name(s), flags {}",
                 entry.name,
                 names.len(),
                 entry.flags
             ),
-            unsafe { info.SetFuncAndParamNames(index as u32, &names) },
+            named,
         )?;
     }
     Ok(())
