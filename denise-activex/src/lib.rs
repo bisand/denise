@@ -88,6 +88,12 @@
 //! `Enabled` set and read **by name** through `GetIDsOfNames` and `Invoke`, a sink
 //! advised on the connection point, and `Change` and `Click` arriving at it.
 //!
+//! The design-time view too, out of the registered server and before the control
+//! was sited: a card inset from the frame with the heading inside it, printed as
+//! text by `examples/host.rs` because that path never reaches a screen. What that
+//! adds to the unit tests is the registry — they construct the control directly,
+//! so only this says the *installed* DLL exposes `IViewObject2` at all.
+//!
 //! And from PowerShell, which is the host that needed the type library:
 //!
 //! ```text
