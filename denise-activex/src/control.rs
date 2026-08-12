@@ -34,28 +34,15 @@ use windows::Win32::System::Ole::{
 use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, SWP_NOZORDER, SetWindowPos};
 use windows_core::{BOOL, GUID, HRESULT, Interface, Ref, implement};
 
+use crate::himetric::{himetric_to_pixels, pixels_to_himetric};
 use crate::registry::MISC_STATUS;
 use crate::server::CLSID_DENISE_PANEL;
-
-/// HIMETRIC units per pixel at 96 DPI: 2540 hundredths of a millimetre to the
-/// inch, over 96 pixels to the inch. OLE speaks HIMETRIC and nothing else does.
-const HIMETRIC_PER_PIXEL: i32 = 2540 / 96;
 
 /// The message the panel's button emits. One button and one message, because an
 /// automation surface without a type library is late-bound: every addition is
 /// something a host has to discover by reading documentation rather than by
 /// pressing `.`.
 const MSG_ACTIVATED: u32 = 1;
-
-/// Converts pixels to the hundredths of a millimetre OLE measures extents in.
-pub(crate) fn pixels_to_himetric(pixels: i32) -> i32 {
-    pixels * HIMETRIC_PER_PIXEL
-}
-
-/// And back.
-pub(crate) fn himetric_to_pixels(himetric: i32) -> i32 {
-    himetric / HIMETRIC_PER_PIXEL
-}
 
 /// The panel a container embeds.
 #[implement(
@@ -552,19 +539,3 @@ impl ControlDelegate for Demo {
 
 /// Referenced so the flags cannot drift from the registry's copy.
 const _: u32 = MISC_STATUS;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// OLE measures in hundredths of a millimetre and everything else measures in
-    /// pixels, so this conversion sits on every extent that crosses the boundary.
-    #[test]
-    fn himetric_round_trips_at_the_sizes_a_control_uses() {
-        for pixels in [1, 96, 100, 200, 640, 1920] {
-            assert_eq!(himetric_to_pixels(pixels_to_himetric(pixels)), pixels);
-        }
-        // 96 pixels is one inch, which is 2540 hundredths of a millimetre.
-        assert_eq!(pixels_to_himetric(96), 2540);
-    }
-}

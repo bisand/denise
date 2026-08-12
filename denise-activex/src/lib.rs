@@ -45,6 +45,7 @@
 //! file, so a new one on every build would break every project that ever embedded
 //! the control.
 
+pub mod himetric;
 pub mod registry;
 
 #[cfg(windows)]
