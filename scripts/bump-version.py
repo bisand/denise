@@ -62,8 +62,9 @@ def main(argv: list[str]) -> int:
     print(f"{old} -> {new}   (workspace.package.version and {pins} sibling pins)")
     print("\nNext:")
     print("  cargo check --workspace          # refresh Cargo.lock")
-    print(f'  git commit -am "chore: release {new}"')
-    print(f"  git tag v{new} && git push origin main v{new}")
+    print(f'  git commit -am "chore: release {new}" && git push')
+    print("  # then, once CI is green on that commit:")
+    print(f"  gh release create v{new} --generate-notes   # publishing it is the trigger")
     return 0
 
 

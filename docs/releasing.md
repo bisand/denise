@@ -11,16 +11,25 @@ git commit -am "chore: release 0.1.0"
 git push
 ```
 
-Wait for CI to go green on that commit, then:
+Wait for CI to go green on that commit — the release refuses to run otherwise — then publish a GitHub release, from the web UI or:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+gh release create v0.1.0 --generate-notes
 ```
 
-The tag is the trigger. `.github/workflows/release.yml` checks its guards, rehearses the whole publish, uploads, and opens a GitHub release with generated notes.
+**Publishing that release is the trigger.** `.github/workflows/release.yml` checks its guards, rehearses the whole publish, uploads to crates.io, and lists what went out in the run summary.
 
-To rehearse without publishing, run the **Release** workflow by hand from the Actions tab. With no tag it stops after the dry run.
+Drafting first is fine and is the better habit: `gh release create --draft` creates the tag and lets you write the notes properly, and nothing happens until you publish it.
+
+To rehearse without publishing anything, run the **Release** workflow by hand from the Actions tab. With no release attached it stops after the dry run.
+
+### Why the release comes first
+
+The usual arrangement is a tag that triggers a publish that then opens a release. This is the other way round, and deliberately: the release exists and describes what is about to go out, then crates.io follows.
+
+The reason is what each failure leaves behind. If the publish fails here, the release stays visible with a red workflow beside it — a thing with a name, notes and a URL, that plainly did not finish. Tag-first leaves a tag nobody can explain and no page to hang the explanation on. Given the upload cannot be undone, the arrangement where a half-finished release is legible is the better one.
+
+It also means the notes are written by a person before the irreversible step rather than generated after it.
 
 ## Why lockstep
 
@@ -36,8 +45,8 @@ The workflow fails closed at four points, because an upload cannot be taken back
 
 | | |
 |---|---|
-| **The tag matches the manifest** | A `v0.1.0` tag on a tree that says `0.0.9` publishes one version under another's name, and the release then points at a tree that never carried that number |
-| **The tagged commit passed CI** | A tag can be pushed at any commit, including one CI never saw or one that went red. The job asks GitHub about that exact SHA rather than assuming |
+| **The release tag matches the manifest** | A `v0.1.0` release on a tree that says `0.0.9` publishes one version under another's name, and the release page then describes a tree that never carried that number |
+| **The released commit passed CI** | A release can be cut at any commit, including one CI never saw or one that went red. The job asks GitHub about that exact commit rather than assuming |
 | **`--locked`** | A version bump that did not refresh `Cargo.lock` fails in rehearsal instead of halfway through an upload |
 | **A full dry run first** | Packages and verifies all twelve before anything real goes |
 
