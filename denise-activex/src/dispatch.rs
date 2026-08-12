@@ -59,8 +59,14 @@ pub const DISPID_UNKNOWN: i32 = -1;
 pub const TEXT: u16 = 8;
 /// `VT_BOOL`: a boolean, whose `True` is -1.
 pub const FLAG: u16 = 11;
-/// `VT_EMPTY`: no value at all, which is what a method returning nothing has.
-pub const NOTHING: u16 = 0;
+/// `VT_VOID`: nothing is returned.
+///
+/// **Not `VT_EMPTY`**, which is zero and reads like the obvious choice. `VT_EMPTY`
+/// is a variant that happens to hold nothing — a perfectly good *value*, and not
+/// a return type at all. A description that claims `VT_EMPTY` tells a host to
+/// expect a variant back from a method that hands it none, and what a host does
+/// with that is unwrap a null.
+pub const VOID: u16 = 24;
 
 // ----------------------------------------------------------------- the members
 
@@ -83,8 +89,8 @@ pub struct Member {
     pub name: &'static str,
     /// Which of [`CALL`], [`GET`] and [`PUT`] this member allows.
     pub flags: u16,
-    /// The type of its value: what a get returns and a put takes, or
-    /// [`NOTHING`] for a method that returns none.
+    /// The type of its value: what a get returns and a put takes, or [`VOID`]
+    /// for a method that returns none.
     pub vt: u16,
 }
 
@@ -112,7 +118,7 @@ pub const MEMBERS: &[Member] = &[
         dispid: DISPID_REFRESH,
         name: "Refresh",
         flags: CALL,
-        vt: NOTHING,
+        vt: VOID,
     },
 ];
 
@@ -138,13 +144,13 @@ pub const EVENTS: &[Member] = &[
         dispid: DISPID_CLICK,
         name: "Click",
         flags: CALL,
-        vt: NOTHING,
+        vt: VOID,
     },
     Member {
         dispid: DISPID_CHANGE,
         name: "Change",
         flags: CALL,
-        vt: NOTHING,
+        vt: VOID,
     },
 ];
 
@@ -521,9 +527,13 @@ mod tests {
         assert_eq!(PUTREF, DISPATCH_PROPERTYPUTREF.0);
         assert_eq!(DISPID_UNKNOWN, windows::Win32::System::Ole::DISPID_UNKNOWN);
 
-        use windows::Win32::System::Variant::{VT_BOOL, VT_BSTR, VT_EMPTY};
+        use windows::Win32::System::Variant::{VT_BOOL, VT_BSTR, VT_EMPTY, VT_VOID};
         assert_eq!(TEXT, VT_BSTR.0);
         assert_eq!(FLAG, VT_BOOL.0);
-        assert_eq!(NOTHING, VT_EMPTY.0);
+        assert_eq!(VOID, VT_VOID.0);
+        assert_ne!(
+            VOID, VT_EMPTY.0,
+            "VT_EMPTY is a variant holding nothing, not a return type"
+        );
     }
 }

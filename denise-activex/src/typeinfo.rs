@@ -36,7 +36,7 @@ use windows::Win32::System::Ole::{CreateDispTypeInfo, INTERFACEDATA, METHODDATA,
 use windows::Win32::System::Variant::VARENUM;
 use windows_core::PWSTR;
 
-use crate::dispatch::{self, PUT};
+use crate::dispatch::{self, PUT, VOID};
 
 /// Builds an `ITypeInfo` describing the control's dispinterface.
 pub fn describe() -> windows_core::Result<ITypeInfo> {
@@ -114,12 +114,10 @@ impl Table {
             };
 
             // A put returns nothing; a get returns the property's type; a method
-            // returns whatever it was declared to.
-            let returns = if entry.flags == PUT {
-                dispatch::NOTHING
-            } else {
-                entry.vt
-            };
+            // returns whatever it was declared to, which for `Refresh` is also
+            // nothing. `VOID` and not `VT_EMPTY` — see its comment; that mistake
+            // is what a host unwraps into a null reference.
+            let returns = if entry.flags == PUT { VOID } else { entry.vt };
 
             methods.push(METHODDATA {
                 szName: name,

@@ -22,6 +22,7 @@ use denise_activex::dispatch::{self, Action};
 use windows::Win32::System::Com::{
     IDispatch, INVOKE_FUNC, INVOKE_PROPERTYGET, INVOKE_PROPERTYPUT, TKIND_DISPATCH,
 };
+use windows::Win32::System::Variant::VT_EMPTY;
 use windows_core::{BSTR, GUID, PCWSTR};
 
 /// The control, reached the way a host reaches it.
@@ -80,11 +81,12 @@ fn every_entry_is_described_as_the_operation_it_is() {
         let description = unsafe { info.GetFuncDesc(index as u32) }.expect("GetFuncDesc");
         // SAFETY: the pointer came from `GetFuncDesc` and is readable until
         // released below.
-        let (memid, invoke, parameters) = unsafe {
+        let (memid, invoke, parameters, returns) = unsafe {
             (
                 (*description).memid,
                 (*description).invkind,
                 (*description).cParams,
+                (*description).elemdescFunc.tdesc.vt,
             )
         };
         // SAFETY: paired with the `GetFuncDesc` above.
@@ -101,6 +103,26 @@ fn every_entry_is_described_as_the_operation_it_is() {
         assert_eq!(
             parameters as u32, entry.arguments,
             "{} takes the wrong number of arguments",
+            entry.name
+        );
+
+        // The return type, which is where this went wrong once. A put and a
+        // method that returns nothing are `VT_VOID`; `VT_EMPTY` is a variant
+        // holding nothing, which is a *value*, and a host told to expect one from
+        // a call that hands it none unwraps a null.
+        let expected = if entry.flags == dispatch::PUT {
+            dispatch::VOID
+        } else {
+            entry.vt
+        };
+        assert_eq!(
+            returns.0, expected,
+            "{} is described as returning the wrong type",
+            entry.name
+        );
+        assert_ne!(
+            returns, VT_EMPTY,
+            "{} claims to return VT_EMPTY, which is not a return type",
             entry.name
         );
 
