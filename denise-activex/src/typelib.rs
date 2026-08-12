@@ -110,9 +110,21 @@ pub fn build(path: &str) -> windows_core::Result<()> {
         unsafe { library.CreateTypeInfo(&BSTR::from("DDenisePanelEvents"), TKIND_DISPATCH) }?;
     describe_events(&events)?;
 
+    // Laid out before anything refers to them. A type under construction has no
+    // resolved layout, and `AddRefTypeInfo` on one answers
+    // `TYPE_E_ELEMENTNOTFOUND` — which reads like a missing type rather than an
+    // unfinished one, and is how this failed the first time it ran.
+    // SAFETY: both are live and fully described by the calls above.
+    unsafe {
+        panel.LayOut()?;
+        events.LayOut()?;
+    }
+
     // SAFETY: as above.
     let coclass = unsafe { library.CreateTypeInfo(&BSTR::from("Panel"), TKIND_COCLASS) }?;
     describe_coclass(&coclass, &panel, &events)?;
+    // SAFETY: the class is described; laying it out resolves its two references.
+    unsafe { coclass.LayOut()? };
 
     // SAFETY: writes the file. Everything above is held until this returns.
     unsafe { library.SaveAllChanges() }
