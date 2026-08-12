@@ -1,0 +1,122 @@
+name: Release
+
+# Publishing is the one irreversible thing this repository does: a version can be
+# yanked, never replaced. So the trigger is a tag — a deliberate act — rather than
+# a push to main, and every guard below fails closed.
+#
+# To rehearse without publishing anything, run this workflow by hand from the
+# Actions tab. It stops after the dry run.
+#
+# The release itself is `scripts/bump-version.py`, a commit, and a tag. See
+# docs/releasing.md.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+
+# `gh release create` writes to the repository.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: publish the workspace to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # `--generate-notes` needs the history to diff against the last tag.
+          fetch-depth: 0
+
+      # `cargo publish` verifies by building, and `denise-winit` pulls in winit.
+      - name: Install winit build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # A tag that disagrees with the manifest publishes one version under
+      # another version's name, and the GitHub release then points at a tree that
+      # never carried that number.
+      - name: The tag and the workspace version are the same number
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "denise"))')
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME says $tag, the workspace says $version."
+            echo "::error::Run scripts/bump-version.py $tag, commit, and move the tag."
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME matches workspace.package.version $version"
+
+      # A tag can be pushed at any commit, including one that never went through
+      # CI or one whose CI went red. Since the upload cannot be taken back, this
+      # asks GitHub what happened to this exact SHA rather than assuming.
+      - name: The tagged commit passed CI
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+                   --jq '.check_runs[] | select(.name != "publish the workspace to crates.io") | "\(.conclusion // "pending")\t\(.name)"')
+          if [ -z "$runs" ]; then
+            echo "::error::no check runs on $GITHUB_SHA. Tag a commit CI has seen."
+            exit 1
+          fi
+          echo "$runs"
+          if echo "$runs" | grep -qvE '^(success|skipped|neutral)\b'; then
+            echo "::error::not every check on this commit succeeded — see above."
+            exit 1
+          fi
+
+      # The rehearsal. Packages all twelve, then verifies each against a local
+      # registry built from the others — which is why this works from one runner
+      # and needs nothing on the real index.
+      #
+      # `--locked` is deliberate: a version bump that did not refresh Cargo.lock
+      # should fail here rather than halfway through an upload.
+      - name: Rehearse the publish
+        run: cargo publish --workspace --locked --dry-run
+
+      # From here nothing can be undone.
+      #
+      # Note what verification on Linux does and does not prove for the three
+      # platform crates. `denise-macos` is `#![cfg(target_os = "macos")]` and
+      # `denise-win32` and `denise-activex` are `cfg(windows)` throughout, so what
+      # gets compiled here is an empty crate. That checks the packaging — the
+      # manifest, the file list, the dependency versions — and not the platform
+      # code, which is why the CI gate above matters: the Windows runner built and
+      # tested that code on this same commit.
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --workspace --locked
+
+      - name: Open the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag with a hyphen is a pre-release: v1.0.0-rc.1.
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease=--prerelease ;;
+            *)   prerelease= ;;
+          esac
+          # `--verify-tag` refuses to invent a tag if this was somehow triggered
+          # without one.
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            $prerelease

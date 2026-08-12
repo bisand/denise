@@ -117,7 +117,7 @@ jobs:
           exit $status
 
   versions:
-    name: the sibling version pins agree
+    name: the workspace versions agree
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -154,6 +154,23 @@ jobs:
           }
 
           wrong = 0
+
+          # Lockstep: one number across all twelve, so that "which versions work
+          # together" has the answer "the matching ones" rather than a table
+          # somebody has to maintain. A crate that sets its own version breaks
+          # that promise quietly, and every pin below would still agree.
+          numbers = sorted(set(published.values()))
+          if len(numbers) > 1:
+              for name, version in sorted(published.items()):
+                  print(f"    {name} {version}")
+              print(
+                  f"::error::the published crates are at {len(numbers)} different "
+                  f"versions ({', '.join(numbers)}). They release together, so "
+                  "they share one number — every crate takes "
+                  "version.workspace = true."
+              )
+              wrong += 1
+
           for package in sorted(meta["packages"], key=lambda p: p["name"]):
               if package["name"] not in published:
                   continue
@@ -178,13 +195,13 @@ jobs:
 
           if wrong:
               print(
-                  f"::error::{wrong} sibling pin(s) disagree. These are in "
+                  f"::error::{wrong} problem(s). The pins live in "
                   "[workspace.dependencies] in the root Cargo.toml, and every "
                   "one of them has to move when workspace.package.version does."
               )
               sys.exit(1)
 
-          print(f"{len(published)} published crates, every sibling pin agrees")
+          print(f"{len(published)} published crates, all at {numbers[0]}, every pin agrees")
           PY
 
   c-abi:
