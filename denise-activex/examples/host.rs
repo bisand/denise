@@ -114,6 +114,18 @@ mod app {
             unsafe { CoCreateInstance(&CLSID_DENISE_PANEL, None, CLSCTX_INPROC_SERVER) }?;
         println!("  ok — the control exists and is an IOleObject");
 
+        // The description, before anything opens a window over the output. It
+        // needs only `IDispatch`, so asking here also fails early and clearly when
+        // the registered DLL predates the automation surface.
+        //
+        //    `cargo run` rebuilds this example and rebuilds nothing COM will load:
+        //    the server is whatever sits at the registered path.
+        let dispatch: IDispatch = object.cast().map_err(|_| stale("IDispatch"))?;
+        println!("\nautomation surface:");
+        print!("{}", dispatch::describe());
+        interrogate(&dispatch);
+        println!();
+
         // 2. A container for it to talk back to.
         let site: IOleClientSite = Host {
             window,
@@ -154,17 +166,6 @@ mod app {
         // 5. Events. `FindConnectionPoint` is how every host that sinks a
         //    control's events finds them, and `IDispatch` is the only thing the
         //    control asks of a sink.
-        //
-        //    The failure worth naming: this example is rebuilt by `cargo run`,
-        //    and the server it is talking to is whatever `regsvr32` registered.
-        //    A control that is an `IOleObject` and not an `IDispatch` is almost
-        //    always a DLL from before the automation surface existed, still sitting
-        //    at the registered path.
-        let dispatch: IDispatch = object.cast().map_err(|_| stale("IDispatch"))?;
-        println!("automation surface:");
-        print!("{}", dispatch::describe());
-        interrogate(&dispatch);
-
         let container: IConnectionPointContainer = object
             .cast()
             .map_err(|_| stale("IConnectionPointContainer"))?;
