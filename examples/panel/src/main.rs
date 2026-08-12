@@ -359,7 +359,9 @@ mod app {
         // Prime the clock before the first `poll`. `next_wake_ms` is only set by
         // `tick`, so a loop that polls first blocks with no timeout at all and the
         // caret never blinks — which is exactly what happened the first time this
-        // ran on hardware.
+        // ran on hardware. It is not enough on its own: it only produces a
+        // deadline because a field is focused below, and the first frame is drawn
+        // explicitly further down for the panels where nothing is.
         app.ui.tick(0);
 
         // The plane composites during scanout, so the tree must stop drawing a
@@ -394,6 +396,26 @@ mod app {
             .iter()
             .map(|fd| PollFd::new(fd, PollFlags::IN))
             .collect();
+
+        // The first frame, before anything is allowed to block.
+        //
+        // `poll` below waits on input and on whatever the tree says it wants
+        // waking for. With nothing focused there is no caret, so nothing wants
+        // waking, so the wait is the whole run — and a loop that waits before it
+        // draws puts a mode on the display and then shows black until somebody
+        // presses a key. It looks intermittent because launching from a shell
+        // often leaves the Enter key's release in the evdev queue, which wakes the
+        // poll and hides the bug.
+        //
+        // Drawing here rather than relying on something being focused is the
+        // difference between a panel that starts and a panel that usually starts.
+        {
+            let mut frame = surface.acquire()?;
+            app.ui.paint(&mut frame);
+            drop(frame);
+            surface.present(app.ui.damage())?;
+            app.ui.presented();
+        }
 
         let started = Instant::now();
         let deadline = started + Duration::from_secs(seconds);
