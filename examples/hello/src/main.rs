@@ -27,9 +27,12 @@
 
 use std::time::Instant;
 
-use denise::{DamageTracker, Frame, InputEvent, Rect, Role, Size, theme};
+#[cfg(not(all(feature = "kiosk", target_os = "linux")))]
+use denise::{DamageTracker, Frame, InputEvent};
+use denise::{Rect, Role, Size, theme};
 use denise_ui::widgets::{Button, Label, Panel, TextInput};
 use denise_ui::{NodeId, Ui};
+#[cfg(not(all(feature = "kiosk", target_os = "linux")))]
 use denise_winit::{DeniseApp, WindowConfig, run};
 
 const WINDOW: Size = Size::new(460, 260);
@@ -43,6 +46,9 @@ enum Message {
     Greet,
 }
 
+#[cfg(all(feature = "kiosk", target_os = "linux"))]
+mod kiosk;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `--snapshot out.ppm` draws one frame and exits. It needs no display, which
     // makes it the way to review a layout over SSH, to diff a theme change, and
@@ -54,15 +60,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return snapshot(&path).map_err(Into::into);
     }
 
-    run(
-        WindowConfig {
-            title: "Denise — hello".into(),
-            size: WINDOW,
-            ..WindowConfig::default()
-        },
-        Hello::new(),
-    )?;
-    Ok(())
+    // Which display this talks to is decided here, at compile time. `kiosk` drives
+    // a Linux framebuffer directly and never links winit; the default opens a
+    // window. The forty lines that differ live in `kiosk.rs`, so the file you are
+    // reading stays about the tree and not about the machine.
+    #[cfg(all(feature = "kiosk", target_os = "linux"))]
+    return kiosk::run();
+
+    #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
+    {
+        run(
+            WindowConfig {
+                title: "Denise — hello".into(),
+                size: WINDOW,
+                ..WindowConfig::default()
+            },
+            Hello::new(WINDOW),
+        )?;
+        Ok(())
+    }
 }
 
 struct Hello {
@@ -75,18 +91,29 @@ struct Hello {
 }
 
 impl Hello {
-    fn new() -> Self {
+    fn new(size: Size) -> Self {
         // A theme, not a palette. Widgets ask for roles — `Role::Primary`, and the
         // background and text colours the theme derives to stay legible against it
         // — so swapping `theme::DARK` for `theme::LIGHT` below is the whole of
         // supporting both.
-        let mut ui: Ui<Message> = Ui::new(WINDOW, theme::DARK);
+        let mut ui: Ui<Message> = Ui::new(size, theme::DARK);
         let root = ui.root();
 
-        // A card to sit everything on. Children are positioned relative to their
-        // parent, so this rectangle is the only one that knows about the window.
+        // A card to sit everything on, centred. Children are positioned relative
+        // to their parent, so this rectangle is the only one in the file that
+        // knows how big the screen is — which is what lets the same tree look
+        // right in a 460x260 window and on a 1920x1080 display.
         let card = ui
-            .add(root, Panel::default(), Rect::new(16, 16, 428, 228))
+            .add(
+                root,
+                Panel::default(),
+                Rect::new(
+                    (size.width as i32 - 428) / 2,
+                    (size.height as i32 - 228) / 2,
+                    428,
+                    228,
+                ),
+            )
             .expect("card");
 
         ui.add(
@@ -157,6 +184,7 @@ impl Hello {
     }
 }
 
+#[cfg(not(all(feature = "kiosk", target_os = "linux")))]
 impl DeniseApp for Hello {
     fn update(&mut self, events: &[InputEvent], damage: &mut DamageTracker) {
         self.ui.handle(events);
@@ -196,7 +224,7 @@ impl DeniseApp for Hello {
 fn snapshot(path: &str) -> std::io::Result<()> {
     use std::io::Write as _;
 
-    let mut hello = Hello::new();
+    let mut hello = Hello::new(WINDOW);
     hello.greet();
 
     let mut pixels = vec![0u32; (WINDOW.width * WINDOW.height) as usize];

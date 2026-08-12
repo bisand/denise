@@ -67,7 +67,8 @@ The whole runnable version is [`examples/hello`](examples/hello/src/main.rs) —
 eighty lines, half of them comments.
 
 ```bash
-cargo run -p hello
+cargo run -p hello                                          # a window
+cargo run -p hello --no-default-features --features kiosk   # the display itself
 ```
 
 <img src="assets/screenshots/hello-mac.png" width="470"
@@ -174,12 +175,41 @@ The macOS shot is mid-edit: a sixth record has been added and the form filled in
 but not applied, so the status line is reporting the record as it currently stands
 rather than as it is being typed.
 
-The third machine has no window system to photograph. The same editor, rebuilt
-with `--features kiosk`, runs on a Raspberry Pi 3 A+ driving 1920×1080 over
-DRM/KMS with no X, no compositor and no desktop — the console muted while it runs
-and restored when it exits. Alpine ships no TrueType face, so it says so and falls
-back to the built-in 8×8 bitmap font, which is the tier story working rather than
-a fault. A photograph of that screen goes here.
+The third machine has no window system, so there is nothing to screenshot. These
+are photographs of a Raspberry Pi 3 A+ driving a 1920×1080 display over DRM/KMS —
+no X, no Wayland, no compositor, no desktop. Same binaries, rebuilt with
+`--no-default-features --features kiosk`, which is the only thing that changes.
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/pi-table-editor.jpg"
+    alt="The record editor filling a monitor attached to a Raspberry Pi, drawn in DejaVu Sans"></td>
+<td width="50%"><img src="assets/screenshots/pi-hello.jpg"
+    alt="The hello example centred on the same monitor, drawn in the built-in bitmap font"></td>
+</tr>
+<tr>
+<td align="center"><code>table-editor</code> — DejaVu Sans, found by searching</td>
+<td align="center"><code>hello</code> — the built-in 8×8 bitmap font</td>
+</tr>
+<tr>
+<td><img src="assets/screenshots/pi-table-editor-theme.jpg"
+    alt="The same editor after pressing F2, in a different theme"></td>
+<td valign="top">
+
+The moiré is the camera against the panel, not the renderer.
+
+On the left is the same tree after **F2**. Every colour comes from a semantic role
+rather than a literal value, so a theme swap is one call and the contrast between
+text and its background is derived rather than hoped for.
+
+`hello` is in the bitmap font because it never asks for another — that is what
+keeps it eighty lines. `table-editor` searches the font directories and found
+`/usr/share/fonts/dejavu/DejaVuSans.ttf` by itself. Same toolkit, two tiers, one
+machine.
+
+</td>
+</tr>
+</table>
 
 On a Raspberry Pi, read [docs/raspberry-pi.md](docs/raspberry-pi.md) **first** — a
 stock Pi has no `/dev/dri` at all until the vc4 KMS overlay is enabled, and that
@@ -211,7 +241,7 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 
 | | |
 |---|---|
-| [`hello`](examples/hello) | **Start here.** Eighty lines: a message enum, a tree, an event loop. |
+| [`hello`](examples/hello) | **Start here.** Eighty lines: a message enum, a tree, an event loop. Builds for a window or a bare display. |
 | [`table-editor`](examples/table-editor) | A record editor with a grid, a form, validation, a modal and real fonts. Builds for a window *or* for a bare display. |
 | [`hello-rect`](examples/hello-rect) | The damage proof: a bouncing rectangle that repaints two rectangles, not a window. |
 | [`panel`](examples/panel) | The widget tree, a modal and a cursor sprite, on bare Linux with no X. |

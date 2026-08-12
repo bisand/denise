@@ -10,7 +10,18 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+# Which display this talks to, decided at compile time. See `table-editor` for the
+# longer version of why a library cannot decide it for you.
+[features]
+default = ["desktop"]
+desktop = ["dep:denise-winit"]
+kiosk = ["dep:bare-linux", "dep:rustix"]
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-ui = { workspace = true }
-denise-winit = { workspace = true }
+denise-winit = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bare-linux = { path = "../bare-linux", optional = true }
+rustix = { workspace = true, features = ["event", "std"], optional = true }
