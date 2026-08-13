@@ -25,6 +25,7 @@
 //! | [`List`] | Rows, at most one selected. Selecting and activating are separate |
 //! | [`RadialProgress`] | The circular counterpart, with room for a number in the middle |
 //! | [`Spinner`] | An arc that turns. **The one widget that can keep a device awake** |
+//! | [`Select`] | The closed half of a dropdown. [`open_select`] is the open half |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -55,6 +56,7 @@ mod panel;
 mod progress;
 mod radial;
 mod radio;
+mod select;
 mod slider;
 mod spinner;
 mod style;
@@ -73,6 +75,7 @@ pub use panel::Panel;
 pub use progress::Progress;
 pub use radial::RadialProgress;
 pub use radio::RadioGroup;
+pub use select::{Select, open_select};
 pub use slider::Slider;
 pub use spinner::Spinner;
 pub use style::{Align, Orientation};

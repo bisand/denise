@@ -60,7 +60,8 @@ pub use ui::Ui;
 pub use widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
 pub use widgets::{
     Alert, Align, Badge, Button, Checkbox, Divider, Label, List, ListItem, Orientation, Panel,
-    Progress, RadialProgress, RadioGroup, Slider, Spinner, Tabs, TextInput, Toggle,
+    Progress, RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
+    open_select,
 };
 
 // Re-exported so an application names one crate rather than three to style a

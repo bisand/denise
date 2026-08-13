@@ -136,9 +136,9 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Sixteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+Seventeen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
 `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`,
-`RadialProgress`, `Spinner`. The first four are CoreCanvas 0.4
+`RadialProgress`, `Spinner`, `Select`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -185,6 +185,22 @@ disabled, so a disabled ring drew its arc in its track's colour and lost its
 value — the third time that has bitten, after `RadioGroup`'s disc and `List`'s
 selection, and the third time it was found by looking at the rendered showcase
 rather than by a test.
+
+`Select` is where the caller-owns-content line got its clearest statement. A
+dropdown that opened its own list would have to create nodes from inside
+`on_event`, and `EventCtx` deliberately cannot — it emits, asks for focus, asks
+for frames, asks to be revealed, and nothing else. That is the same line `Tabs`
+drew against owning pages, `List` against owning a viewport, and `push_popup`
+against owning content; a select that owned its list would have been the first
+widget to own nodes and the exception would have been permanent. So the widget
+is the *closed* control, and `widgets::open_select` is a free function that
+composes `push_popup` with a `List` — nothing invented, and the open list stays
+ordinary nodes the application can inspect or replace.
+
+Getting that helper right needed one distinction `List` already had: it wires
+the list's **activation** message, not its selection. A dropdown whose arrow
+keys reported every row they passed over would have an application applying
+three values on the way to the fourth.
 
 `Spinner` is also the toolkit's only **unbounded** animation, and it is
 deliberately awkward about it: it does not start itself. A spinner receives no

@@ -5,7 +5,7 @@ use denise::{
 };
 use denise_ui::widgets::{
     Alert, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress,
-    RadialProgress, RadioGroup, Slider, Spinner, Tabs, TextInput, Toggle,
+    RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
 };
 use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
 
@@ -3682,4 +3682,189 @@ fn a_bubble_that_goes_damages_what_it_covered() {
         gone.iter().any(|r| r.intersects(&gap)),
         "the bubble left without repainting what it covered: {gone:?}"
     );
+}
+
+// -------------------------------------------------------------------- select
+
+/// A select and something to tab to, so focus movement is observable.
+fn selecting() -> (Ui<Msg>, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let select = ui
+        .add(
+            root,
+            Select::new(["Auto", "Manuell", "Av"], Msg::Save).with_placeholder("Velg modus"),
+            Rect::new(40, 40, 180, 34),
+        )
+        .expect("select");
+    let after = ui
+        .add(
+            root,
+            Button::new("Etter", Msg::Cancel),
+            Rect::new(40, 180, 100, 30),
+        )
+        .expect("after");
+    (ui, select, after)
+}
+
+fn chosen(ui: &Ui<Msg>, id: NodeId) -> Option<usize> {
+    ui.widget::<Select<Msg>>(id).expect("select").selected()
+}
+
+/// A click asks to be opened. The widget does not open anything itself — it
+/// cannot, and that is the design.
+#[test]
+fn clicking_a_select_asks_to_be_opened() {
+    let (mut ui, _, _) = selecting();
+    ui.handle(&click(100, 55));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+    assert!(!ui.close_popup(), "nothing opened by itself");
+}
+
+/// Enter, Space and Down open it. Left and Right must not: a closed select that
+/// edits its own value as somebody tabs past it is the classic accidental-edit
+/// bug.
+#[test]
+fn the_keys_that_open_it_and_the_ones_that_must_not() {
+    for code in [KeyCode::Enter, KeyCode::Space, KeyCode::ArrowDown] {
+        let (mut ui, select, _) = selecting();
+        ui.focus(Some(select));
+        ui.handle(&[key(code)]);
+        assert_eq!(
+            ui.drain_messages().collect::<Vec<_>>(),
+            vec![Msg::Save],
+            "{code:?} should open it"
+        );
+    }
+    for code in [KeyCode::ArrowLeft, KeyCode::ArrowRight, KeyCode::ArrowUp] {
+        let (mut ui, select, _) = selecting();
+        ui.focus(Some(select));
+        ui.handle(&[key(code)]);
+        assert!(
+            ui.messages().is_empty(),
+            "{code:?} must not open it, and must not edit it"
+        );
+        assert_eq!(chosen(&ui, select), None, "{code:?} changed the value");
+    }
+}
+
+/// The whole dropdown, end to end: open, choose with the keyboard, the popup
+/// closes, focus comes back to the select, and the value took.
+#[test]
+fn a_dropdown_opens_chooses_and_closes() {
+    let (mut ui, select, _) = selecting();
+    ui.focus(Some(select));
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+
+    let popup = denise_ui::widgets::open_select(&mut ui, select, Msg::Row).expect("opened");
+    assert!(ui.contains(popup), "the list is a popup scene");
+    assert!(ui.bounds(popup).expect("popup").y > 70, "below the control");
+
+    // The list opens focused, so the keyboard works immediately — and moving
+    // the highlight reports nothing. A dropdown that emitted every row the
+    // arrows passed over would have the application applying three values on
+    // the way to the fourth.
+    ui.handle(&[key(KeyCode::ArrowDown), key(KeyCode::ArrowDown)]);
+    assert!(
+        ui.messages().is_empty(),
+        "moving the highlight is not choosing: {:?}",
+        ui.messages()
+    );
+
+    // Enter chooses; the application closes and applies.
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Row(1)]);
+    ui.close_popup();
+    ui.widget_mut::<Select<Msg>>(select)
+        .expect("select")
+        .set_selected(Some(1));
+
+    assert!(!ui.contains(popup), "the popup closed");
+    assert_eq!(ui.focused(), Some(select), "focus came back to the control");
+    assert_eq!(chosen(&ui, select), Some(1));
+}
+
+/// The open list lines up with the control it dropped out of, and is at least
+/// as wide as its widest option.
+#[test]
+fn the_open_list_lines_up_with_the_control() {
+    let (mut ui, select, _) = selecting();
+    let anchor = ui.bounds(select).expect("anchor");
+    let popup = denise_ui::widgets::open_select(&mut ui, select, Msg::Row).expect("opened");
+    let bounds = ui.bounds(popup).expect("popup");
+    assert_eq!(
+        bounds.x, anchor.x,
+        "the list is not aligned with the control"
+    );
+    assert!(
+        bounds.width >= anchor.width,
+        "the list is narrower than the control: {bounds:?} vs {anchor:?}"
+    );
+}
+
+/// The open list is seeded with the current choice, so opening a select that
+/// already has a value starts on it rather than on the first row.
+#[test]
+fn the_open_list_starts_on_the_current_choice() {
+    let (mut ui, select, _) = selecting();
+    ui.widget_mut::<Select<Msg>>(select)
+        .expect("select")
+        .set_selected(Some(2));
+    denise_ui::widgets::open_select(&mut ui, select, Msg::Row).expect("opened");
+
+    // The list took focus; Enter activates whatever it starts on.
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Row(2)],
+        "the list did not start on the current choice"
+    );
+}
+
+/// Escape closes without choosing, and focus returns to the select — #18's
+/// popup contract, reached through the dropdown.
+#[test]
+fn escape_closes_the_dropdown_without_choosing() {
+    let (mut ui, select, _) = selecting();
+    let popup = denise_ui::widgets::open_select(&mut ui, select, Msg::Row).expect("opened");
+    ui.handle(&[key(KeyCode::Escape)]);
+    assert!(!ui.contains(popup), "Escape should close it");
+    assert_eq!(ui.focused(), Some(select));
+    assert_eq!(chosen(&ui, select), None, "and choose nothing");
+}
+
+/// A press outside closes it and is swallowed: the button underneath must not
+/// also fire. The classic dropdown bug, reached through the real widget.
+#[test]
+fn a_press_outside_the_dropdown_does_not_reach_what_is_under_it() {
+    let (mut ui, select, after) = selecting();
+    let popup = denise_ui::widgets::open_select(&mut ui, select, Msg::Row).expect("opened");
+    let target = ui.bounds(after).expect("after");
+
+    ui.handle(&click(target.x + 10, target.y + 10));
+    assert!(!ui.contains(popup), "the press should have closed it");
+    assert!(
+        ui.messages().is_empty(),
+        "and must not reach the button under it: {:?}",
+        ui.messages()
+    );
+}
+
+/// A select with no options opens nothing and is not a tab stop.
+#[test]
+fn an_empty_select_opens_nothing() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let select = ui
+        .add(
+            root,
+            Select::<Msg>::new(Vec::<String>::new(), Msg::Save),
+            Rect::new(40, 40, 180, 34),
+        )
+        .expect("select");
+    ui.handle(&click(100, 55));
+    assert!(ui.messages().is_empty());
+    assert!(denise_ui::widgets::open_select(&mut ui, select, Msg::Row).is_none());
+    assert!(!ui.close_popup(), "and pushed no scene while failing");
 }

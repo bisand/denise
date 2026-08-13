@@ -16,11 +16,11 @@ use denise::{
 };
 use denise_ui::widgets::{
     Alert, Align, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress,
-    RadialProgress, RadioGroup, Slider, Spinner, Tabs, TextInput, Toggle,
+    RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
 };
 use denise_ui::{TextStyle, Ui};
 
-const SIZE: Size = Size::new(800, 1256);
+const SIZE: Size = Size::new(800, 1340);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +30,7 @@ enum Msg {
     Mode(usize),
     Level(f32),
     Page(usize),
+    OpenSelect,
     Row(usize),
     Open(usize),
 }
@@ -159,7 +160,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 718))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 802))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -402,6 +403,32 @@ fn build(theme: Theme) -> Ui<Msg> {
     // A quarter turn in, so the still picture shows an arc rather than a ring
     // that happens to start at twelve o'clock.
     ui.tick(250);
+
+    // A select, closed and showing its placeholder, beside one with a value —
+    // the two states the control has. The open list is a popup, which a still
+    // picture of the base scene cannot show; `a_dropdown_opens_chooses_and_closes`
+    // is where that half is checked.
+    ui.add(
+        form,
+        Select::new(["Automatisk", "Manuell", "Av"], Msg::OpenSelect)
+            .with_placeholder("Velg modus"),
+        Rect::new(16, 692, 220, 36),
+    )
+    .expect("select");
+    ui.add(
+        form,
+        Select::new(["Automatisk", "Manuell", "Av"], Msg::OpenSelect).with_selected(Some(1)),
+        Rect::new(256, 692, 220, 36),
+    )
+    .expect("chosen select");
+    let locked_select = ui
+        .add(
+            form,
+            Select::new(["Automatisk", "Manuell", "Av"], Msg::OpenSelect).with_selected(Some(2)),
+            Rect::new(496, 692, 220, 36),
+        )
+        .expect("locked select");
+    ui.set_enabled(locked_select, false);
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

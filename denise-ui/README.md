@@ -50,7 +50,7 @@ so every state change lands in one `match` you wrote — no closures holding
 
 ## The widgets
 
-Sixteen of them, deliberately few:
+Seventeen of them, deliberately few:
 
 | | |
 |---|---|
@@ -65,6 +65,7 @@ Sixteen of them, deliberately few:
 | `Tabs` · `List` | One selected from many, horizontally or vertically |
 | `RadialProgress` | A ring, with room for a number in the middle |
 | `Spinner` | An arc that turns. **The one widget that can keep a device awake** |
+| `Select` | The closed half of a dropdown; `open_select` is the open half |
 
 The bar a widget has to clear is being something several panels would otherwise
 each get subtly wrong — focus handling, keyboard semantics, hit areas, disabled
