@@ -430,6 +430,15 @@ fn build(theme: Theme) -> Ui<Msg> {
         .expect("locked select");
     ui.set_enabled(locked_select, false);
 
+    // Two notifications, stacked from the bottom edge. Not nodes: the tree
+    // times them, stacks them, fades them and removes them, and a still picture
+    // catches them mid-hold.
+    ui.toast("Lagret kl. 12:01", Role::Success);
+    ui.toast("Sensor 3 svarer ikke", Role::Error);
+    // Past the fade-in, so the still picture catches them at full opacity
+    // rather than at the nothing they are born as.
+    ui.tick(600);
+
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.
     ui.focus(Some(name));

@@ -113,6 +113,13 @@ stores a string, and the tree runs the dwell timer, places the bubble, dismisses
 it on any press or key and draws it above every widget. It needs hover, so it
 does nothing on a touch-only panel.
 
+`ui.toast(text, role)` is the same arrangement for notifications: the tree
+stacks them from the bottom edge, fades them in and out, dismisses one that is
+pressed — swallowing the press, so it does not also reach what was underneath —
+and removes them without anybody asking. During the hold it costs a single wake,
+not a frame rate. `Alert` remains the *inline* banner for the message that has a
+place in the layout.
+
 ## Features
 
 | Feature | Default | What it does |

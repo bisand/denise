@@ -14,6 +14,7 @@ use slotmap::SlotMap;
 
 use crate::cursor::{Cursor, CursorImage};
 use crate::node::{Node, NodeId, Popup, Scene};
+use crate::toast::Toasts;
 use crate::tooltip::Tooltip;
 
 /// Space between a popup and its anchor, in pixels. Small on purpose: a
@@ -79,6 +80,8 @@ pub struct Ui<M: 'static> {
     /// deliberately visible — [`Ui::animating`] exists so a test can assert a
     /// tree at rest holds nobody awake.
     animating: Vec<NodeId>,
+    /// Transient notifications. Not nodes, for the reasons in [`crate::toast`].
+    toasts: Toasts,
     /// The hover-dwell bubble. Not a node and not a widget — see
     /// [`crate::tooltip`] for why.
     tooltip: Tooltip,
@@ -113,6 +116,7 @@ impl<M: 'static> Ui<M> {
             focused: None,
             cursor: Cursor::default(),
             tooltip: Tooltip::new(),
+            toasts: Toasts::new(),
             messages: Vec::new(),
             now_ms: 0,
             next_wake: None,
@@ -420,6 +424,50 @@ impl<M: 'static> Ui<M> {
         }
     }
 
+    /// Shows a transient notification, which fades in, holds and goes by itself.
+    ///
+    /// The overlay counterpart of [`Alert`](crate::widgets::Alert): an alert
+    /// sits *in* the layout where the thing it is about would be, and a toast
+    /// is the same message when there is nowhere in the layout to put it. It is
+    /// not a node, so it never takes focus, never appears in the tab order and
+    /// nothing has to remove it.
+    ///
+    /// A press inside a toast dismisses it **and is swallowed**, so somebody
+    /// clearing a notification does not also press the button it was covering.
+    ///
+    /// It costs almost nothing while it holds: the tree asks to be woken once,
+    /// at the instant the fade-out starts. Only the fades draw frames.
+    pub fn toast(&mut self, text: impl Into<alloc::string::String>, role: Role) {
+        self.toast_for(text, role, crate::toast::HOLD_MS);
+    }
+
+    /// A toast that holds for a stated time before fading.
+    ///
+    /// For the message somebody needs longer to read, or the one that should
+    /// barely register. The fades are fixed either way.
+    pub fn toast_for(&mut self, text: impl Into<alloc::string::String>, role: Role, hold_ms: u64) {
+        self.toasts.push(text.into(), role, hold_ms, self.now_ms);
+        self.damage_toasts();
+        // A toast added between ticks must not wait for an unrelated event to
+        // appear: the loop may be blocked on input right now.
+        self.next_wake = Some(self.now_ms);
+    }
+
+    /// How many notifications are on screen.
+    #[inline]
+    pub fn toasts(&self) -> usize {
+        self.toasts.len()
+    }
+
+    /// Removes every notification, read or not.
+    pub fn clear_toasts(&mut self) {
+        if self.toasts.len() == 0 {
+            return;
+        }
+        self.damage_toasts();
+        self.toasts.clear();
+    }
+
     /// Shows `text` when the pointer rests on this node.
     ///
     /// A **pointer** affordance: it needs hover, and a touchscreen has none, so
@@ -632,6 +680,20 @@ impl<M: 'static> Ui<M> {
         })
     }
 
+    /// Dismisses a toast under `p`, reporting whether the press was consumed.
+    ///
+    /// A toast is not a node, so nothing else would stop the press reaching
+    /// what is underneath — and somebody clearing a notification would press
+    /// the button it was covering.
+    fn dismiss_toast(&mut self, p: Point) -> bool {
+        if self.toasts.len() == 0 {
+            return false;
+        }
+        self.damage_toasts();
+        let now = self.now_ms;
+        self.toasts.dismiss_at(p, self.size, &mut self.text, now)
+    }
+
     /// Whether a press at `p` should close the topmost popup instead of being
     /// delivered: the top scene is a popup and the press is outside its
     /// container.
@@ -785,10 +847,38 @@ impl<M: 'static> Ui<M> {
         {
             self.damage_tooltip();
         }
-        self.next_wake = match (wake, self.tooltip.next_wake()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        // Notifications repaint only when they are actually changing — mid-fade,
+        // or expiring. A holding toast is a still picture, and damaging it every
+        // tick would repaint the bottom of the screen for four seconds to show
+        // something that never moved.
+        if self.toasts.is_changing(now_ms) {
+            self.damage_toasts();
+            self.toasts.retire(now_ms);
+        }
+
+        // The other two reasons the tree wants waking: a tooltip's dwell
+        // deadline and a toast's next frame. Folded in here rather than
+        // anywhere else, because this is the one answer the event loop asks
+        // for and a deadline left out of it is a feature that never fires.
+        for deadline in [self.tooltip.next_wake(), self.toasts.next_wake(now_ms)]
+            .into_iter()
+            .flatten()
+        {
+            wake = Some(wake.map_or(deadline, |w: u64| w.min(deadline)));
+        }
+        self.next_wake = wake;
+    }
+
+    /// Damages whatever the notifications cover.
+    ///
+    /// Measured before any change that would move them, for the reason the
+    /// tooltip's damage had to learn: a stack that has already forgotten where
+    /// it was cannot say what to repaint.
+    fn damage_toasts(&mut self) {
+        let now = self.now_ms;
+        if let Some(bounds) = self.toasts.bounds(self.size, &mut self.text, now) {
+            self.damage.add(bounds);
+        }
     }
 
     /// Damages whatever the tooltip covers.
@@ -952,6 +1042,13 @@ impl<M: 'static> Ui<M> {
                 start = end;
             }
 
+            self.toasts.paint(
+                &self.theme,
+                self.size,
+                &mut self.text,
+                self.now_ms,
+                &mut region_canvas,
+            );
             // Above every widget, below the pointer: a bubble the cursor
             // covers is a bubble nobody can read.
             self.tooltip
@@ -996,6 +1093,9 @@ impl<M: 'static> Ui<M> {
                 position,
                 ..
             } => {
+                if self.dismiss_toast(*position) {
+                    return;
+                }
                 if self.dismisses_popup(*position) {
                     // Swallowed entirely: the press closed the popup, and must
                     // not also reach whatever was underneath. The matching Up
@@ -1036,6 +1136,9 @@ impl<M: 'static> Ui<M> {
                 self.set_hovered(None);
             }
             InputEvent::TouchDown { position, .. } => {
+                if self.dismiss_toast(*position) {
+                    return;
+                }
                 if self.dismisses_popup(*position) {
                     self.close_popup();
                     return;

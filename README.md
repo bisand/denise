@@ -302,7 +302,7 @@ is in [docs/design.md](docs/design.md).
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
   their parent, which is what a fixed-resolution panel wants. A constraint solver
   can be added over this without changing anything below it.
-- **Seventeen widgets**, plus tree-owned tooltips. Label, button, panel, text
+- **Seventeen widgets**, plus tree-owned tooltips and toasts. Label, button, panel, text
   field, checkbox, toggle, radio group, progress bar, slider, divider, badge,
   alert, tabs, list, radial progress, spinner, select. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a

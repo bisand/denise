@@ -3868,3 +3868,199 @@ fn an_empty_select_opens_nothing() {
     assert!(denise_ui::widgets::open_select(&mut ui, select, Msg::Row).is_none());
     assert!(!ui.close_popup(), "and pushed no scene while failing");
 }
+
+// -------------------------------------------------------------------- toasts
+
+/// A panel with a button, so a toast has something to cover.
+fn toasting() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    // Near the bottom, where the toasts stack.
+    let button = ui
+        .add(
+            root,
+            Button::new("Under", Msg::Save),
+            Rect::new(140, 190, 120, 34),
+        )
+        .expect("button");
+    (ui, button)
+}
+
+/// The whole life without an application touching it, and the tree back at rest
+/// afterwards.
+#[test]
+fn a_toast_appears_holds_and_goes_by_itself() {
+    let (mut ui, _) = toasting();
+    ui.tick(0);
+    assert_eq!(ui.toasts(), 0);
+    assert_eq!(ui.next_wake_ms(), None, "an idle tree wakes for nothing");
+
+    ui.toast("Lagret", Role::Success);
+    assert_eq!(ui.toasts(), 1);
+    assert!(ui.needs_paint(), "it owes a frame immediately");
+
+    // It is still there through the hold, and gone after it.
+    ui.tick(1_000);
+    assert_eq!(ui.toasts(), 1, "still holding");
+    ui.tick(10_000);
+    assert_eq!(ui.toasts(), 0, "gone without anybody removing it");
+    assert_eq!(ui.next_wake_ms(), None, "and the loop may sleep again");
+}
+
+/// **The cost claim.** A holding toast asks for one wake, at the instant it
+/// starts fading — not a frame cadence for four seconds. This is the whole
+/// reason a toast is affordable on a device that is supposed to idle.
+#[test]
+fn a_holding_toast_asks_for_one_wake_not_a_frame_rate() {
+    let (mut ui, _) = toasting();
+    ui.toast("Lagret", Role::Success);
+
+    // Through the fade-in it wants frames, which are close together.
+    ui.tick(0);
+    let soon = ui.next_wake_ms().expect("fading in");
+    assert!(
+        soon <= 100,
+        "a fade should ask for a frame soon, got {soon}"
+    );
+
+    // Once it has arrived, the next wake is the whole hold away.
+    ui.tick(200);
+    let due = ui.next_wake_ms().expect("holding");
+    assert!(
+        due >= 3_000,
+        "a holding toast should wake once, at the fade — got {due}"
+    );
+
+    // And nothing is owed in between.
+    ui.render_nothing();
+    ui.tick(due - 500);
+    assert!(!ui.needs_paint(), "a holding toast repainted for nothing");
+}
+
+/// Two toasts stack rather than landing on each other, and the newest is
+/// nearest the edge.
+#[test]
+fn two_toasts_stack_without_covering_each_other() {
+    let (mut ui, _) = toasting();
+    ui.toast("Først", Role::Info);
+    ui.toast("Så dette", Role::Success);
+    ui.tick(200);
+    assert_eq!(ui.toasts(), 2);
+
+    // Both drew: the painted area differs from one toast alone.
+    let area = Rect::new(0, 120, 400, 120);
+    let two = pixels_of(&mut ui, area);
+    ui.clear_toasts();
+    ui.toast("Så dette", Role::Success);
+    ui.tick(200);
+    let one = pixels_of(&mut ui, area);
+    assert_ne!(two, one, "the second toast did not stack above the first");
+}
+
+/// **The dropdown bug in a new hat.** A press on a toast dismisses it and must
+/// not reach the button it was covering.
+#[test]
+fn a_press_on_a_toast_does_not_reach_what_is_under_it() {
+    let (mut ui, button) = toasting();
+    ui.toast("Lagret", Role::Success);
+    ui.tick(200);
+
+    // The toast stacks up from the bottom edge, over the button.
+    let target = ui.bounds(button).expect("button");
+    let _ = target;
+    let mut engine_probe = None;
+    for y in (150..235).rev() {
+        // Find a row the toast occupies by dismissing at it and seeing if the
+        // press was consumed; restore afterwards.
+        let mut probe: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = probe.root();
+        probe
+            .add(
+                root,
+                Button::new("Under", Msg::Save),
+                Rect::new(140, 190, 120, 34),
+            )
+            .expect("button");
+        probe.toast("Lagret", Role::Success);
+        probe.tick(200);
+        probe.handle(&click(200, y));
+        if probe.toasts() == 0 {
+            engine_probe = Some(y);
+            break;
+        }
+    }
+    let inside = engine_probe.expect("the toast must cover some row near the bottom");
+
+    ui.handle(&click(200, inside));
+    assert_eq!(ui.toasts(), 0, "the press should dismiss it");
+    assert!(
+        ui.messages().is_empty(),
+        "and must not reach what is underneath: {:?}",
+        ui.messages()
+    );
+}
+
+/// A press somewhere else is not the toasts' business, and still reaches the
+/// widget it was aimed at.
+#[test]
+fn a_press_away_from_a_toast_reaches_the_widget() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("Oppe", Msg::Save),
+        Rect::new(40, 40, 120, 34),
+    )
+    .expect("button");
+    ui.toast("Lagret", Role::Success);
+    ui.tick(200);
+
+    ui.handle(&click(80, 55));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+    assert_eq!(ui.toasts(), 1, "and the toast is untouched");
+}
+
+/// The stack is capped: a panel that showed a backlog would be unreadable
+/// exactly when something was going wrong.
+#[test]
+fn the_stack_is_capped() {
+    let (mut ui, _) = toasting();
+    for i in 0..8 {
+        ui.toast(format!("Melding {i}"), Role::Info);
+    }
+    assert!(ui.toasts() <= 3, "{} toasts on screen", ui.toasts());
+}
+
+/// A toast damages what it covers when it goes — the failure the tooltip's
+/// damage test exposed, checked here too because a full repaint hides it.
+#[test]
+fn a_toast_damages_what_it_covered_when_it_goes() {
+    let (mut ui, _) = toasting();
+    ui.toast("Lagret", Role::Success);
+    ui.tick(200);
+    ui.render_nothing();
+
+    // Expire it. The damage must cover the strip it occupied near the bottom.
+    ui.tick(10_000);
+    let damage = ui.paint_for_damage();
+    assert_eq!(ui.toasts(), 0);
+    let strip = Rect::new(100, 180, 200, 50);
+    assert!(
+        damage.iter().any(|r| r.intersects(&strip)),
+        "the toast left without repainting what it covered: {damage:?}"
+    );
+}
+
+/// Clearing takes them all, read or not, and damages what they covered.
+#[test]
+fn clearing_takes_every_toast() {
+    let (mut ui, _) = toasting();
+    ui.toast("Ein", Role::Info);
+    ui.toast("To", Role::Info);
+    ui.tick(200);
+    ui.render_nothing();
+
+    ui.clear_toasts();
+    assert_eq!(ui.toasts(), 0);
+    assert!(ui.needs_paint(), "clearing must repaint what they covered");
+}

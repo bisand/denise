@@ -338,6 +338,33 @@ affordance — a touchscreen has no hover, so on a touch-only panel it does
 nothing at all, which the documentation says rather than leaving somebody to
 find out on a kiosk.
 
+`Ui::toast` is the same idea a second time, and the pair is worth reading
+together because they came out of different arguments to the same place. A
+toast is not a node because **removing itself is the whole point** and only the
+tree can remove things, because two of them must not land on top of each other
+and no widget can see its siblings, and because not being a node is what makes
+it invisible to Tab and to hit testing without anybody remembering to make it
+so. `Alert` stays as the *inline* banner; a toast is the same message when
+there is nowhere in the layout to put it.
+
+Two things about it are worth keeping. It **swallows a press inside itself and
+dismisses** — a toast that let a tap through would have somebody clearing a
+notification and pressing the button it was covering, which is the dropdown bug
+in a new hat. And it is **mostly idle**: it fades in, holds, fades out, and only
+the fades need frames, so during the hold the tree asks for exactly one wake, at
+the instant the fade-out starts. A holding toast costs one wake rather than two
+hundred and forty — the opposite of `Spinner`, which looks like the same kind of
+feature and costs a wake per frame throughout.
+
+Both of them had the same bug during development, and it is the one to expect
+from anything drawn outside the tree: **damage measured after the state that
+knew where the pixels were had already changed.** The tooltip cleared its
+remembered position before the damage could read it; the toast stack could not
+say where an expired toast had been, because the layout no longer included it.
+The tooltip damages before every state change; the toast remembers what its last
+paint covered. Neither is visible in a pixel test, because those repaint
+everything.
+
 One paint rule came with it: **only the topmost veil paints.** Two dimmed
 scenes would otherwise double-darken everything under both, and a popup inside
 a modal must not darken the modal it serves.
