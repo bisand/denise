@@ -132,12 +132,6 @@ impl Image {
         self.pixels = Pixels::Owned(pixels);
         self.size = size;
     }
-
-    /// Where the picture lands inside `bounds` — possibly overflowing it, in
-    /// which case the overflow is cropped.
-    fn placed(&self, bounds: Rect) -> Rect {
-        fit_rect(bounds, self.size, self.fit)
-    }
 }
 
 /// The rectangle `image` maps onto when drawn into `bounds` with `fit`.
@@ -173,25 +167,46 @@ fn fit_rect(bounds: Rect, image: Size, fit: Fit) -> Rect {
     }
 }
 
-impl<M: 'static> Widget<M> for Image {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+impl Image {
+    /// Whether there are enough pixels to draw the size this image claims.
+    ///
+    /// `false` for a buffer shorter than `width × height`, which is what
+    /// [`Avatar`](super::Avatar) asks before deciding whether it can show a
+    /// picture or has to fall back to initials.
+    pub fn is_drawable(&self) -> bool {
+        PixelView::new(self.pixels.as_slice(), self.size, self.size.width).is_some()
+    }
+
+    /// Draws into `bounds` with `radius`, ignoring the image's own.
+    ///
+    /// The whole of painting, so [`Widget::paint`] is one call to it. Taking
+    /// the rectangle and radius as arguments is what lets `Avatar` reuse the
+    /// fit and mask rules for a shape it decides at paint time, without
+    /// cloning a pixel buffer to change one number.
+    pub(crate) fn paint_at(&self, bounds: Rect, radius: i32, canvas: &mut Canvas<'_>) {
         let Some(view) = PixelView::new(self.pixels.as_slice(), self.size, self.size.width) else {
             return;
         };
-        let dest = self.placed(ctx.bounds);
+        let dest = fit_rect(bounds, self.size, self.fit);
         if dest.is_empty() {
             return;
         }
-        if self.radius > 0 {
+        if radius > 0 {
             // The mask is what is visible: the picture where it fits inside
             // the box, the box where the picture overflows it.
-            let Some(shape) = dest.intersect(&ctx.bounds) else {
+            let Some(shape) = dest.intersect(&bounds) else {
                 return;
             };
-            canvas.blit_rounded(&view, dest, shape, self.radius);
+            canvas.blit_rounded(&view, dest, shape, radius);
         } else {
             canvas.blit_scaled(&view, dest);
         }
+    }
+}
+
+impl<M: 'static> Widget<M> for Image {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+        self.paint_at(ctx.bounds, self.radius, canvas);
     }
 }
 

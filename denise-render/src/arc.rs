@@ -108,7 +108,7 @@ fn sin_bam(angle: i32) -> i32 {
 /// The unit vector of a clock angle, in Q16 screen coordinates (y down).
 ///
 /// Twelve o'clock is (0, -1), three o'clock (1, 0).
-fn direction(angle: i32) -> (i32, i32) {
+pub(crate) fn direction(angle: i32) -> (i32, i32) {
     (sin_bam(angle), -sin_bam(angle + TURN / 4))
 }
 

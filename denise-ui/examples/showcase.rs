@@ -15,12 +15,13 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::widgets::{
-    Alert, Align, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem, Panel,
-    Progress, RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
+    Alert, Align, Avatar, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem,
+    Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner, Tabs,
+    TextInput, Toggle,
 };
 use denise_ui::{TextStyle, Ui};
 
-const SIZE: Size = Size::new(800, 1460);
+const SIZE: Size = Size::new(800, 1580);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +32,7 @@ enum Msg {
     Level(f32),
     Page(usize),
     OpenSelect,
+    Stars(f32),
     Row(usize),
     Open(usize),
 }
@@ -160,7 +162,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 864))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 984))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -476,6 +478,69 @@ fn build(theme: Theme) -> Ui<Msg> {
         Rect::new(x + 8, 832, 80, 16),
     )
     .expect("avatar caption");
+
+    // Ratings: an interactive one, an average showing a part-filled star, and
+    // a disabled one that must still show its value — the fourth outing for
+    // that trap.
+    ui.add(
+        form,
+        Rating::new(3.0, Msg::Stars),
+        Rect::new(16, 864, 180, 32),
+    )
+    .expect("rating");
+    ui.add(
+        form,
+        Rating::<Msg>::display(4.3),
+        Rect::new(212, 864, 180, 32),
+    )
+    .expect("average rating");
+    let locked_rating = ui
+        .add(
+            form,
+            Rating::<Msg>::display(2.0),
+            Rect::new(408, 864, 180, 32),
+        )
+        .expect("locked rating");
+    ui.set_enabled(locked_rating, false);
+
+    // Avatars: a photo cropped round, initials on colours derived from the
+    // names themselves, a ring, a rounded square, and the presence dots.
+    let mut x = 16;
+    ui.add(
+        form,
+        Avatar::new(picture.clone(), picture_size).with_presence(Presence::Online),
+        Rect::new(x, 908, 56, 56),
+    )
+    .expect("photo avatar");
+    x += 68;
+    for (name, presence) in [
+        ("Ola Nordmann", Some(Presence::Online)),
+        ("Kari Traa", None),
+        ("Øystein Åsen", Some(Presence::Busy)),
+        ("Per Hansen", Some(Presence::Offline)),
+        ("Ida Berg", None),
+    ] {
+        let mut avatar = Avatar::initials(name);
+        if let Some(presence) = presence {
+            avatar = avatar.with_presence(presence);
+        }
+        ui.add(form, avatar, Rect::new(x, 908, 56, 56))
+            .expect("avatar");
+        x += 68;
+    }
+    ui.add(
+        form,
+        Avatar::initials("Nils Aas").with_ring(Role::Primary),
+        Rect::new(x, 908, 56, 56),
+    )
+    .expect("ringed avatar");
+    x += 68;
+    ui.add(
+        form,
+        Avatar::initials("Eva Lund").with_corner_radius(12),
+        Rect::new(x, 908, 56, 56),
+    )
+    .expect("squared avatar");
 
     // Two notifications, stacked from the bottom edge. Not nodes: the tree
     // times them, stacks them, fades them and removes them, and a still picture

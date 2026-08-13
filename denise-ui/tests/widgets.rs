@@ -4,8 +4,9 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Alert, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem, Panel, Progress,
-    RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
+    Alert, Avatar, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem, Panel,
+    Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner, Tabs,
+    TextInput, Toggle,
 };
 use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
 
@@ -24,6 +25,7 @@ enum Msg {
     Page(usize),
     Row(usize),
     Open(usize),
+    Stars(f32),
 }
 
 fn keys(code: KeyCode, times: usize) -> Vec<InputEvent> {
@@ -4176,4 +4178,382 @@ fn a_rounded_cover_crop_rounds_the_corners_of_the_box_not_the_picture() {
     assert_eq!(centre[0], 0xFFFF_FFFF, "the centre must be solid");
     let edge = pixels_of(&mut ui, Rect::new(120, 100, 1, 1));
     assert_eq!(edge[0], 0xFFFF_FFFF, "the circle touches the box edge");
+}
+
+// — rating —
+
+fn rated() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    // Five 40px stars with 5px gaps: the row spans x=20..245 at y=20..60.
+    let stars = ui
+        .add(
+            root,
+            Rating::new(0.0, Msg::Stars),
+            Rect::new(20, 20, 225, 40),
+        )
+        .expect("rating");
+    (ui, stars)
+}
+
+/// The centre of star `n`, counting from one.
+fn star_centre(n: i32) -> (i32, i32) {
+    (20 + (n - 1) * 45 + 20, 40)
+}
+
+#[test]
+fn pressing_a_star_sets_that_many() {
+    let (mut ui, _) = rated();
+    let (x, y) = star_centre(4);
+    ui.handle(&click(x, y));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(4.0)]
+    );
+}
+
+#[test]
+fn every_star_in_the_row_is_reachable_by_pressing_it() {
+    for n in 1..=5 {
+        let (mut ui, _) = rated();
+        let (x, y) = star_centre(n);
+        ui.handle(&click(x, y));
+        assert_eq!(
+            ui.drain_messages().collect::<Vec<_>>(),
+            vec![Msg::Stars(n as f32)],
+            "star {n}"
+        );
+    }
+}
+
+#[test]
+fn arrows_walk_the_rating_and_stop_at_the_ends() {
+    let (mut ui, stars) = rated();
+    ui.focus(Some(stars));
+
+    ui.handle(&keys(KeyCode::ArrowRight, 3));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(1.0), Msg::Stars(2.0), Msg::Stars(3.0)]
+    );
+
+    // Past the top, the value stops and stops emitting — no message for a
+    // press that changed nothing.
+    ui.handle(&keys(KeyCode::ArrowRight, 4));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(4.0), Msg::Stars(5.0)]
+    );
+
+    ui.handle(&[key(KeyCode::Home)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(0.0)]
+    );
+    ui.handle(&[key(KeyCode::End)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(5.0)]
+    );
+}
+
+/// Five stars are one tab stop, not five.
+#[test]
+fn a_rating_is_a_single_tab_stop() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Før", Msg::Save),
+            Rect::new(20, 20, 80, 30),
+        )
+        .expect("before");
+    let stars = ui
+        .add(
+            root,
+            Rating::new(2.0, Msg::Stars),
+            Rect::new(20, 60, 225, 40),
+        )
+        .expect("rating");
+    let after = ui
+        .add(
+            root,
+            Button::new("Etter", Msg::Cancel),
+            Rect::new(20, 110, 80, 30),
+        )
+        .expect("after");
+
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(stars));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(after), "the stars were five tab stops");
+}
+
+/// Without `clearable` there is no way back to zero by pressing, and pressing
+/// the current value must still not fall through to whatever is underneath.
+#[test]
+fn pressing_the_current_star_does_nothing_unless_it_is_clearable() {
+    let (mut ui, stars) = rated();
+    ui.widget_mut::<Rating<Msg>>(stars)
+        .expect("rating")
+        .set_value(3.0);
+    let (x, y) = star_centre(3);
+    ui.handle(&click(x, y));
+    assert!(ui.drain_messages().next().is_none(), "it emitted something");
+    assert_eq!(
+        ui.widget::<Rating<Msg>>(stars).expect("rating").value(),
+        3.0
+    );
+}
+
+#[test]
+fn a_clearable_rating_returns_to_zero_on_the_current_star() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let stars = ui
+        .add(
+            root,
+            Rating::new(3.0, Msg::Stars).clearable(),
+            Rect::new(20, 20, 225, 40),
+        )
+        .expect("rating");
+    let (x, y) = star_centre(3);
+    ui.handle(&click(x, y));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(0.0)]
+    );
+    assert_eq!(
+        ui.widget::<Rating<Msg>>(stars).expect("rating").value(),
+        0.0
+    );
+}
+
+/// A read-only rating is not a tab stop and does not swallow presses — so it
+/// can sit inside a row that is itself a button.
+#[test]
+fn a_display_rating_lets_the_press_through_to_the_button_under_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("Rad", Msg::Save),
+        Rect::new(20, 20, 225, 40),
+    )
+    .expect("button");
+    ui.add(
+        root,
+        Rating::<Msg>::display(3.0),
+        Rect::new(20, 20, 225, 40),
+    )
+    .expect("rating");
+
+    let (x, y) = star_centre(2);
+    ui.handle(&click(x, y));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+}
+
+/// A fractional value paints part of one star: strictly between "four filled"
+/// and "five filled" in ink, which is the whole reason the value is an f32.
+#[test]
+fn a_fractional_rating_paints_part_of_a_star() {
+    let ink = |value: f32| {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        ui.add(
+            root,
+            Rating::<Msg>::display(value),
+            Rect::new(20, 20, 225, 40),
+        )
+        .expect("rating");
+        // The fifth star's box alone, so only the partial one is measured.
+        let fifth = pixels_of(&mut ui, Rect::new(20 + 4 * 45, 20, 40, 40));
+        let empty: Vec<u32> = {
+            let mut bare: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+            pixels_of(&mut bare, Rect::new(20 + 4 * 45, 20, 40, 40))
+        };
+        fifth.iter().zip(&empty).filter(|(a, b)| a != b).count()
+    };
+
+    let (four, half, five) = (ink(4.0), ink(4.5), ink(5.0));
+    assert!(four < half, "4.5 drew no more than 4.0: {four} vs {half}");
+    assert!(half < five, "4.5 drew as much as 5.0: {half} vs {five}");
+}
+
+// — avatars —
+
+#[test]
+fn an_avatar_with_a_picture_draws_the_picture_not_the_initials() {
+    let mut with_picture: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = with_picture.root();
+    with_picture
+        .add(
+            root,
+            Avatar::new(vec![0xFFFF_FFFF; 16 * 16], Size::new(16, 16)).with_initials("Ola"),
+            Rect::new(20, 20, 40, 40),
+        )
+        .expect("avatar");
+    let picture = pixels_of(&mut with_picture, Rect::new(20, 20, 40, 40));
+    assert_eq!(
+        picture[20 * 40 + 20],
+        0xFFFF_FFFF,
+        "the middle is the photo"
+    );
+
+    let mut fallback: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = fallback.root();
+    fallback
+        .add(root, Avatar::initials("Ola"), Rect::new(20, 20, 40, 40))
+        .expect("avatar");
+    let initials = pixels_of(&mut fallback, Rect::new(20, 20, 40, 40));
+    assert_ne!(picture, initials, "the two look the same");
+}
+
+/// A short buffer is a broken asset, and a kiosk should still say who it is.
+#[test]
+fn a_broken_picture_falls_back_to_the_initials() {
+    let broken = |name: &str| {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        ui.add(
+            root,
+            // Three pixels for a 16x16 picture.
+            Avatar::new(vec![0xFFFF_FFFF; 3], Size::new(16, 16)).with_initials(name),
+            Rect::new(20, 20, 40, 40),
+        )
+        .expect("avatar");
+        pixels_of(&mut ui, Rect::new(20, 20, 40, 40))
+    };
+    let mut plain: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = plain.root();
+    plain
+        .add(root, Avatar::initials("Ola"), Rect::new(20, 20, 40, 40))
+        .expect("avatar");
+
+    assert_eq!(
+        broken("Ola"),
+        pixels_of(&mut plain, Rect::new(20, 20, 40, 40)),
+        "a broken picture did not fall back to the plain initials"
+    );
+}
+
+#[test]
+fn an_avatar_is_round_so_its_corners_are_untouched() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Avatar::new(vec![0xFFFF_FFFF; 40 * 40], Size::new(40, 40)),
+        Rect::new(20, 20, 40, 40),
+    )
+    .expect("avatar");
+
+    let px = pixels_of(&mut ui, Rect::new(20, 20, 40, 40));
+    // The corners must be exactly what the empty tree paints there — the
+    // background, not the picture — while the middle is the picture.
+    let mut bare: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let background = pixels_of(&mut bare, Rect::new(20, 20, 40, 40));
+
+    for corner in [0, 39, 39 * 40, 39 * 40 + 39] {
+        assert_eq!(
+            px[corner], background[corner],
+            "the picture escaped the circle at index {corner}"
+        );
+    }
+    assert_eq!(px[20 * 40 + 20], 0xFFFF_FFFF, "the middle is not the photo");
+}
+
+/// The dot has to stay on the avatar, at every size, or it is clipped away by
+/// the very crop that makes the avatar round.
+#[test]
+fn the_presence_dot_stays_inside_the_avatar_at_every_size() {
+    for side in [16, 24, 40, 96] {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        ui.add(
+            root,
+            Avatar::initials("Ola").with_presence(Presence::Online),
+            Rect::new(20, 20, side, side),
+        )
+        .expect("avatar");
+
+        let with_dot = pixels_of(&mut ui, Rect::new(20, 20, side, side));
+        let mut without: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = without.root();
+        without
+            .add(root, Avatar::initials("Ola"), Rect::new(20, 20, side, side))
+            .expect("avatar");
+        let plain = pixels_of(&mut without, Rect::new(20, 20, side, side));
+
+        let changed = with_dot.iter().zip(&plain).filter(|(a, b)| a != b).count();
+        assert!(changed > 0, "side {side}: the dot was invisible");
+    }
+}
+
+/// Arrows step to whole stars from a fractional value — the case an average
+/// rating puts a keyboard user in. Driven through the tree, because asserting
+/// the formula against itself proves nothing.
+#[test]
+fn arrows_step_to_whole_stars_from_an_average() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let stars = ui
+        .add(
+            root,
+            Rating::new(2.3, Msg::Stars),
+            Rect::new(20, 20, 225, 40),
+        )
+        .expect("rating");
+    ui.focus(Some(stars));
+
+    // Deliberately not from 4.3: there the clamp at five would hide a raw
+    // `value + 1` behind the right answer.
+    ui.handle(&[key(KeyCode::ArrowRight)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(3.0)],
+        "right from 2.3 must reach 3, not 3.3"
+    );
+
+    ui.widget_mut::<Rating<Msg>>(stars)
+        .expect("rating")
+        .set_value(4.3);
+    ui.handle(&[key(KeyCode::ArrowLeft)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Stars(4.0)],
+        "left from 4.3 must reach 4, not 3.3"
+    );
+}
+
+/// Tapping a rating that sits on a clickable row must rate, not activate the
+/// row. The tree's hit testing is what guarantees it — a press goes to the
+/// topmost widget that accepts the pointer and is never offered to the ones
+/// underneath — so this pins the composite behaviour rather than the rating's
+/// own `Handled`.
+#[test]
+fn pressing_the_current_star_does_not_reach_the_button_under_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("Rad", Msg::Save),
+        Rect::new(20, 20, 225, 40),
+    )
+    .expect("button");
+    ui.add(
+        root,
+        Rating::new(3.0, Msg::Stars),
+        Rect::new(20, 20, 225, 40),
+    )
+    .expect("rating");
+
+    let (x, y) = star_centre(3);
+    ui.handle(&click(x, y));
+    assert!(
+        ui.drain_messages().next().is_none(),
+        "the press fell through to the button underneath"
+    );
 }

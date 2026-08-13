@@ -137,9 +137,9 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Eighteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+Twenty of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
 `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`,
-`RadialProgress`, `Spinner`, `Select`, `Image`. The first four are CoreCanvas 0.4
+`RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`, `Avatar`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -202,6 +202,55 @@ Getting that helper right needed one distinction `List` already had: it wires
 the list's **activation** message, not its selection. A dropdown whose arrow
 keys reported every row they passed over would have an application applying
 three values on the way to the fourth.
+
+`Rating` is where the rasteriser ran out. Arcs unblocked the rings and the
+spinner and do nothing at all for a five-pointed star, which is a ten-vertex
+polygon — so the choice was a public polygon API, rating with discs instead of
+stars, or one more *shape*. The shape won: `Canvas::fill_star` computes its own
+vertices from the same Q16 sine table the arcs use, over a scanline polygon
+filler kept `pub(crate)`. The no-path-builder promise survives intact, and a
+heart or an arrow can be added the day one is wanted without having committed to
+a public path API today. The filler keeps its crossings in a fixed-size stack
+array, because this crate has no allocator.
+
+Two things fell out of that. `TURN` is a power of two and does not divide by
+five, so a five-pointed star is only approximately five-fold symmetric — the
+vertex angles round to the nearest of 65536, which is under a hundredth of a
+pixel and invisible, but it means a test comparing rotations has to compare
+against a tolerance rather than against bytes. And the widget's value is an
+`f32` while its gesture is not: an average of 4.3 has to draw four stars and a
+bit, but a person tapping the fourth star means four. Partial fill is the same
+star drawn again through a narrower clip, so there is no second shape to keep in
+step with the first.
+
+`Rating` also took the fifth outing of the `interactive_pair` trap, and the
+first one that was known about in advance and happened anyway — because it
+arrived wearing a different face. The four before it were all *one part of a
+widget becoming the same colour as another part*, and the guard written for this
+one checked exactly that. What actually broke was the empty stars becoming the
+same colour as the **panel behind them**: `Panel` fills with `Base200` and a
+disabled rating recessed its track to `Base200`, so a disabled "two of five"
+rendered as a plain "two". Not a muted control — a wrong one, because the empty
+stars are the denominator. Found by rendering the showcase and looking, for the
+fifth time.
+
+The test that now covers it is worth more than the fix. A fixed contrast floor
+could not do the job: `AA_LARGE` is WCAG's bar for *text* and no pair of base
+surfaces in any built-in theme comes within half of it, while no single ratio
+separates the good cases from the bad — `Base300` on `Base200` is 1.18 in the
+light theme and reads fine, and `Base200` on `Base100` is 1.23 in the dark one
+and was the bug. So the floor asks the theme what *it* considers a visible step,
+and demands at least that. It adapts to a theme nobody has written yet.
+
+`Avatar` is the opposite lesson: almost all of it was already built. A circular
+crop is `Image` with `Fit::Cover` and a full corner radius, which #22 had
+already made exact. What earns it a widget is the fallback — initials on a disc
+when there is no picture, which on a real panel is most of the time — and the
+colour of that disc, derived from the initials into the theme's own accent
+roles so that the same person is the same colour every session and a theme swap
+still carries a contrast-checked pair. A picture whose buffer does not match the
+size it claims falls back too, because a broken asset on a kiosk should still
+say who it is.
 
 `Image` draws somebody else's pixels and refuses to be the one who loads them:
 the application does I/O and decoding and hands over premultiplied `0xAARRGGBB`,
@@ -445,8 +494,8 @@ the size the architecture was specified for.
 
 ## The rasteriser
 
-`denise-render` draws rectangles, rounded rectangles, circles, arcs, lines,
-borrowed pixel blocks (blitted 1:1 or nearest-neighbour scaled) and
+`denise-render` draws rectangles, rounded rectangles, circles, arcs, stars,
+lines, borrowed pixel blocks (blitted 1:1 or nearest-neighbour scaled) and
 source-over alpha straight into a `Frame`. It needs neither `std` nor `alloc`, contains no `unsafe`,
 and uses **no floating point at all** — anti-aliasing coverage included.
 
