@@ -8,7 +8,7 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
-use crate::widgets::style::{Align, draw_aligned, interactive_pair};
+use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
 /// A tab strip: a row of labels, one of them selected, with a rule underneath.
 ///
@@ -173,39 +173,22 @@ impl<M> Tabs<M> {
     }
 }
 
-/// How far an unselected label is moved towards the panel behind it.
-///
-/// Enough to make the selected one obviously selected, and not so far that the
-/// others stop being readable — a floor a test holds, not a judgement about
-/// taste. Swept against the built-in themes: 96 leaves the light theme at
-/// 2.93:1, under the 3:1 floor, and 64 leaves the worst of the three at 3.84:1.
-/// The margin is the point, because a future theme with a tighter pair than
-/// today's is exactly what would slip through a value chosen to just pass.
-///
-/// The same number `PRESS_MIX` arrived at, for the same reason.
-const MUTE: u8 = 64;
-
 /// The panel behind the labels, the selected label's colour, and the others'.
 ///
 /// One function so the paint path and the contrast test cannot disagree about
 /// what is actually drawn.
 ///
-/// **Disabled does not mute.** `interactive_pair` derives its disabled content
-/// by mixing until it *just* clears the contrast floor, so there is nothing left
-/// to take: muting it drops the label to 2.33:1. A disabled strip is already
-/// recessed as a whole, and the selection still reads from the underline, so
-/// both labels use the derived colour unchanged.
+/// **A disabled strip does not mute**, and it does not have to say so here:
+/// `interactive_pair` derives its disabled content by mixing until it *just*
+/// clears the contrast floor, and [`muted`] hands back anything that cannot
+/// afford the shift. A disabled strip is already recessed as a whole, and the
+/// selection still reads from the underline.
 fn label_colors(
     theme: &denise::Theme,
     state: VisualState,
 ) -> (denise::Color, denise::Color, denise::Color) {
     let (surface, content) = interactive_pair(theme, Role::Base100, state);
-    let resting = if state.contains(VisualState::DISABLED) {
-        content
-    } else {
-        content.mix(surface, MUTE)
-    };
-    (surface, content, resting)
+    (surface, content, muted(surface, content))
 }
 
 /// Space each side of a label.

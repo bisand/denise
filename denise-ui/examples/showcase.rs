@@ -16,11 +16,11 @@ use denise::{
 };
 use denise_ui::Ui;
 use denise_ui::widgets::{
-    Alert, Align, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider,
-    Tabs, TextInput, Toggle,
+    Alert, Align, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress,
+    RadioGroup, Slider, Tabs, TextInput, Toggle,
 };
 
-const SIZE: Size = Size::new(800, 1008);
+const SIZE: Size = Size::new(800, 1156);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +30,8 @@ enum Msg {
     Mode(usize),
     Level(f32),
     Page(usize),
+    Row(usize),
+    Open(usize),
 }
 
 fn main() -> std::io::Result<()> {
@@ -157,7 +159,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 470))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 618))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -333,6 +335,34 @@ fn build(theme: Theme) -> Ui<Msg> {
             .expect("alert");
         y += height + 8;
     }
+
+    // A settings list, beside a disabled copy. Four rows with one of them
+    // unselectable, because a row nobody can choose is the state that has to stay
+    // readable and still look different from one that can be.
+    let rows = || {
+        vec![
+            ListItem::new("Nettverk").with_trailing("DHCP"),
+            ListItem::new("Skjerm").with_trailing("70 %"),
+            ListItem::new("Avriming").with_trailing("av").disabled(),
+            ListItem::new("Om").with_leading(">"),
+        ]
+    };
+    ui.add(
+        form,
+        List::new(rows(), Msg::Row)
+            .on_activate(Msg::Open)
+            .with_selected(Some(1)),
+        Rect::new(16, 424, 224, 148),
+    )
+    .expect("list");
+    let locked = ui
+        .add(
+            form,
+            List::new(rows(), Msg::Row).with_selected(Some(1)),
+            Rect::new(256, 424, 224, 148),
+        )
+        .expect("locked list");
+    ui.set_enabled(locked, false);
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

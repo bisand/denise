@@ -136,8 +136,8 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Thirteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
-`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`. The first four are CoreCanvas 0.4
+Fourteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -172,21 +172,37 @@ Three rules hold across all of them:
   the tree asks every widget how big it wants to be and then places it. Here the
   *application* asks, does its own arithmetic, and passes a rectangle — exactly as
   it does for a node with no natural size at all. `Button`, `Checkbox`, `Toggle`,
-  `RadioGroup`, `Badge`, `Alert` and `Tabs` all offer the query; nothing in
+  `RadioGroup`, `Badge`, `Alert`, `Tabs` and `List` all offer the query; nothing in
   `denise-ui` consumes it.
+
+The keyboard is where the widgets deliberately *disagree*, and each difference is
+about how much of the set a person can see at once. `RadioGroup` and `Tabs` wrap
+past the ends, because a handful of options is all visible and coming round from
+the last to the first is obvious. `List` stops, because a hundred rows jumping
+from the bottom to the top under a held key is disorienting. `RadioGroup` takes
+all four arrow keys; `Tabs` leaves Up and Down for the page below it. Nothing here
+follows from a general rule, which is exactly why it belongs in the widgets rather
+than in the tree.
 
 One rule about colour is worth stating because it has been got wrong twice. **A
 role is only guaranteed to contrast with its own content**, not with the surface
 a widget sits on. `Toggle` reached for a fixed `Base100` knob, which is 1.38:1 on
 a `Base300` track in the light theme; `Tabs` reached for the role colour as the
 selected label, and `Secondary` is 2.34:1 against the light panel. Both now take
-both colours from one `interactive_pair`, so the guarantee is structural. The
-corollary: a colour `interactive_pair` *derived* — the disabled content, mixed
-until it just clears the floor — has nothing left to give, so nothing may mute it
-further.
+both colours from one `interactive_pair`, so the guarantee is structural.
 
-Two limits were found by building against them rather than by design review, and
-both are open:
+The corollary took two more goes to state generally. De-emphasising text — an
+unselected tab, a row a list will not let you choose — costs contrast, and **not
+every pair has contrast to spend**. The disabled content `interactive_pair`
+*derives* is mixed until it just clears the floor, so muting it drops a label to
+2.33:1; and a theme's saturated pairs are only guaranteed to *reach* the floor, so
+muting the dark theme's `Primary` content leaves 2.94:1. Both were found by a test,
+one per widget, before the rule was. It now lives in one function, `style::muted`,
+which mutes a pair that can afford it and returns one that cannot unchanged:
+legible and undifferentiated beats differentiated and illegible.
+
+Three limits were found by building against them rather than by design review, and
+all three are open:
 
 - **`Ui::tick` animates only the focused widget**
   ([#19](https://github.com/bisand/denise/issues/19)). Deliberate — an idle panel
@@ -198,6 +214,12 @@ both are open:
   ([#20](https://github.com/bisand/denise/issues/20)). Every geometry token is
   therefore a physical pixel, and the scale factor the backends report is not
   acted on by anything.
+- **Nothing scrolls** ([#21](https://github.com/bisand/denise/issues/21)). `List`
+  draws the rows that fit and says so in its own documentation, which is honest
+  and, on a panel with one fixed resolution, usually enough. A viewport is not a
+  widget: it is a scroll offset that paint, damage and hit testing must all agree
+  about, and half of one built inside `List` would give every later scrollable a
+  private convention to be incompatible with.
 
 ### One surface, and what that rules out
 

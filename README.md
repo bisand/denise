@@ -112,9 +112,9 @@ all.
 
 Three things it is showing, none of which is obvious from the outside:
 
-- **There is no grid widget.** There are thirteen widgets — label, button, panel,
+- **There is no grid widget.** There are fourteen widgets — label, button, panel,
   text field, checkbox, toggle, radio group, progress bar, slider, divider, badge,
-  alert, tabs. A row is a full-width `Button` with the cell `Label`s placed on top of it;
+  alert, tabs, list. A row is a full-width `Button` with the cell `Label`s placed on top of it;
   labels are not interactive, so a click falls through them to the button
   underneath and arrives as `Select(index)`. That is how most of the widgets you
   will miss get assembled.
@@ -296,10 +296,15 @@ is in [docs/design.md](docs/design.md).
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
   their parent, which is what a fixed-resolution panel wants. A constraint solver
   can be added over this without changing anything below it.
-- **Thirteen widgets.** Label, button, panel, text field, checkbox, toggle, radio
-  group, progress bar, slider, divider, badge, alert, tabs. Everything
+- **Fourteen widgets.** Label, button, panel, text field, checkbox, toggle, radio
+  group, progress bar, slider, divider, badge, alert, tabs, list. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a
   time — see [#6](https://github.com/bisand/denise/issues/6).
+- **Nothing scrolls.** `List` draws the rows that fit its rectangle and says so;
+  size it with `preferred_height` and it is a real answer on a panel with one
+  fixed resolution. A viewport is a scroll offset the tree, the damage tracker and
+  hit testing all have to agree about — see
+  [#21](https://github.com/bisand/denise/issues/21).
 - **No text selection, clipboard or word motion** in `TextInput`. The measurement
   it needs exists; the editing model does not.
 - **One surface, so no second window.** A modal is another scene over a dimmed

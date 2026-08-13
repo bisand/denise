@@ -1,6 +1,6 @@
 //! Shared visual vocabulary, so the widgets agree with each other.
 
-use denise::theme::{AA_LARGE, derive_content};
+use denise::theme::{AA_LARGE, contrast_x100, derive_content};
 use denise::{Color, Point, Rect, Role, Size, Theme};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
@@ -17,6 +17,43 @@ const HOVER_MIX: u8 = 24;
 /// `every_state_keeps_the_pair_readable` is what found that, and is what will
 /// find it again if a future theme has a tighter pair than today's do.
 const PRESS_MIX: u8 = 64;
+
+/// How far a de-emphasised label is moved towards the surface behind it.
+///
+/// For text that is *present but not the point*: an unselected tab, a row a list
+/// will not let you choose. Enough to make the emphasised one obviously
+/// emphasised, and not so far that the others stop being readable.
+///
+/// Swept against the built-in themes: 96 leaves the light theme at 2.93:1, under
+/// the 3:1 floor, and 64 leaves `Base100` at 3.84:1 in the worst of the three.
+/// The same number `PRESS_MIX` arrived at, for the same reason.
+///
+/// Not enough on its own, though — see [`muted`].
+const MUTE: u8 = 64;
+
+/// `content` moved towards `surface`, but only as far as it can afford to go.
+///
+/// De-emphasis costs contrast, and **not every pair has contrast to spend.** Two
+/// separate widgets found that out the hard way, and this is the rule that covers
+/// both:
+///
+/// - [`interactive_pair`] *derives* a disabled widget's content by mixing until it
+///   **just** clears the floor. Muting that drops a label to 2.33:1.
+/// - A theme's saturated pairs are only guaranteed to *reach* the floor. Muting
+///   the dark theme's `Primary` content leaves 2.94:1, so a selected row that was
+///   also disabled would have been unreadable in one theme out of three.
+///
+/// A pair with room to give — `Base100` against `BaseContent` is near-black on
+/// near-white — mutes as asked. One that has none is returned unchanged, because
+/// legible and undifferentiated beats differentiated and illegible.
+pub(crate) fn muted(surface: Color, content: Color) -> Color {
+    let muted = content.mix(surface, MUTE);
+    if contrast_x100(surface, muted) >= AA_LARGE {
+        muted
+    } else {
+        content
+    }
+}
 
 /// Which way a widget runs.
 ///

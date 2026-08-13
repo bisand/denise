@@ -4,8 +4,8 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Alert, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, Tabs,
-    TextInput, Toggle,
+    Alert, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress, RadioGroup,
+    Slider, Tabs, TextInput, Toggle,
 };
 use denise_ui::{NodeId, Ui};
 
@@ -22,6 +22,8 @@ enum Msg {
     Mode(usize),
     Level(f32),
     Page(usize),
+    Row(usize),
+    Open(usize),
 }
 
 fn keys(code: KeyCode, times: usize) -> Vec<InputEvent> {
@@ -2005,4 +2007,341 @@ fn the_underline_lands_under_the_selected_tab_at_each_end() {
         "the last tab's underline ({last_start}..{last_end}) should be entirely \
          past the first tab's ({first_start}..{first_end})"
     );
+}
+
+// ----------------------------------------------------------------------- list
+
+/// A four-row list at 20,20 with buttons either side, rows 40 high so the
+/// arithmetic in the tests is obvious. Row 2 is disabled.
+fn settings() -> (Ui<Msg>, NodeId, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(280, 20, 100, 30),
+        )
+        .expect("before");
+    let list = ui
+        .add(
+            root,
+            List::new(
+                vec![
+                    ListItem::new("Nettverk"),
+                    ListItem::new("Skjerm").with_trailing("70 %"),
+                    ListItem::new("Avriming").disabled(),
+                    ListItem::new("Om"),
+                ],
+                Msg::Row,
+            )
+            .on_activate(Msg::Open)
+            .with_row_height(40),
+            Rect::new(20, 20, 240, 160),
+        )
+        .expect("list");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Cancel),
+            Rect::new(280, 60, 100, 30),
+        )
+        .expect("after");
+    (ui, before, list, after)
+}
+
+fn row(ui: &Ui<Msg>, id: NodeId) -> Option<usize> {
+    ui.widget::<List<Msg>>(id).expect("list").selected()
+}
+
+/// The centre of a row, in surface coordinates.
+fn at_row(index: i32) -> (i32, i32) {
+    (60, 20 + index * 40 + 20)
+}
+
+/// **The rule this widget shares with `RadioGroup` and `Tabs`.** Tab moves past
+/// the whole list, not through four rows.
+#[test]
+fn tab_steps_over_the_whole_list_rather_than_through_it() {
+    let (mut ui, before, list, after) = settings();
+    ui.focus(Some(before));
+
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(list), "into the list");
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(after), "and out the far side");
+    assert!(ui.messages().is_empty(), "tabbing past must select nothing");
+}
+
+/// **The difference from `RadioGroup` and `Tabs`.** A long list that jumped from
+/// the bottom row to the top under a held key would be disorienting, so the ends
+/// are ends.
+#[test]
+fn the_arrows_stop_at_the_ends_rather_than_wrapping() {
+    let (mut ui, _, list, _) = settings();
+    ui.focus(Some(list));
+    assert_eq!(row(&ui, list), None, "a list opens with nothing chosen");
+
+    // The first press lands on the near end rather than doing nothing visible.
+    ui.handle(&[key(KeyCode::ArrowDown)]);
+    assert_eq!(row(&ui, list), Some(0));
+
+    ui.handle(&keys(KeyCode::ArrowDown, 6));
+    assert_eq!(
+        row(&ui, list),
+        Some(3),
+        "six presses past the end must stay on the last row"
+    );
+    ui.handle(&keys(KeyCode::ArrowUp, 6));
+    assert_eq!(
+        row(&ui, list),
+        Some(0),
+        "and six back must stay on the first"
+    );
+
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![
+            Msg::Row(0),
+            Msg::Row(1),
+            Msg::Row(3),
+            Msg::Row(1),
+            Msg::Row(0),
+        ],
+        "every move reported once, the disabled row skipped, and the presses \
+         that moved nothing reported nothing"
+    );
+}
+
+/// Home and End reach the first and last rows anybody can choose — not the first
+/// and last rows.
+#[test]
+fn home_and_end_reach_the_ends_that_can_be_selected() {
+    let (mut ui, _, list, _) = settings();
+    ui.focus(Some(list));
+
+    ui.handle(&[key(KeyCode::End)]);
+    assert_eq!(row(&ui, list), Some(3));
+    ui.handle(&[key(KeyCode::Home)]);
+    assert_eq!(row(&ui, list), Some(0));
+
+    // With the last row disabled too, End stops one short of it.
+    ui.widget_mut::<List<Msg>>(list)
+        .expect("list")
+        .set_row_enabled(3, false);
+    ui.handle(&[key(KeyCode::End)]);
+    assert_eq!(row(&ui, list), Some(1), "row 2 and row 3 are both out");
+}
+
+/// A click selects, and a click on a disabled row does nothing at all — not even
+/// move the selection off where it was.
+#[test]
+fn clicking_selects_and_a_disabled_row_is_inert() {
+    let (mut ui, _, list, _) = settings();
+
+    let (x, y) = at_row(1);
+    ui.handle(&click(x, y));
+    assert_eq!(row(&ui, list), Some(1));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Row(1)]);
+
+    let (x, y) = at_row(2);
+    ui.handle(&click(x, y));
+    assert_eq!(
+        row(&ui, list),
+        Some(1),
+        "a click on a disabled row must leave the selection where it was"
+    );
+    assert!(ui.messages().is_empty());
+
+    // And the empty space below the last row is background, not the last row.
+    ui.handle(&click(60, 20 + 4 * 40 + 5));
+    assert_eq!(row(&ui, list), Some(1));
+    assert!(ui.messages().is_empty());
+}
+
+/// Selecting a row and acting on it are two different things, so they are two
+/// different messages. Two clicks inside the window are one of each — never two
+/// selections.
+#[test]
+fn a_double_click_activates_and_a_slow_second_click_does_not() {
+    let (mut ui, _, _, _) = settings();
+    let (x, y) = at_row(0);
+
+    ui.tick(1_000);
+    ui.handle(&click(x, y));
+    ui.tick(1_100);
+    ui.handle(&click(x, y));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Row(0), Msg::Open(0)],
+        "one selection and one activation"
+    );
+
+    // Two clicks a second apart are two selections and nothing else — and the
+    // second reports nothing, because the row was already selected.
+    ui.tick(5_000);
+    ui.handle(&click(x, y));
+    ui.tick(9_000);
+    ui.handle(&click(x, y));
+    assert!(
+        ui.messages().is_empty(),
+        "a slow click on the selected row is not an activation: {:?}",
+        ui.messages()
+    );
+}
+
+/// Enter activates the selected row, so a panel with no pointer can drive this.
+#[test]
+fn enter_activates_the_selected_row_and_nothing_else_does() {
+    let (mut ui, _, list, _) = settings();
+    ui.focus(Some(list));
+
+    // Nothing selected: Enter has nothing to act on.
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert!(ui.messages().is_empty());
+
+    ui.handle(&[key(KeyCode::ArrowDown)]);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Row(0)]);
+
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Open(0)],
+        "Enter activates without reselecting"
+    );
+    assert_eq!(row(&ui, list), Some(0));
+}
+
+/// A menu on a touch panel activates on one tap: a double-tap is unreliable on a
+/// resistive screen and unexpected on any of them.
+#[test]
+fn a_single_click_list_activates_on_the_first_tap() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        List::new(["En", "To"], Msg::Row)
+            .on_activate(Msg::Open)
+            .activate_on_click()
+            .with_row_height(40),
+        Rect::new(20, 20, 240, 80),
+    )
+    .expect("menu");
+
+    ui.handle(&click(60, 40));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Row(0), Msg::Open(0)]
+    );
+}
+
+#[test]
+fn a_disabled_list_neither_selects_nor_takes_focus() {
+    let (mut ui, _, list, _) = settings();
+    ui.set_enabled(list, false);
+
+    let (x, y) = at_row(1);
+    ui.handle(&click(x, y));
+    assert_eq!(row(&ui, list), None);
+    assert!(ui.messages().is_empty());
+
+    ui.focus(Some(list));
+    assert_eq!(ui.focused(), None);
+}
+
+/// The selected row has to *look* selected. A list whose index moves while the
+/// picture does not is a control that reports nothing.
+#[test]
+fn the_selected_row_is_drawn_differently_from_the_rest() {
+    // The modal colour of a strip across the row, so the sample is the row's
+    // fill and not a glyph or the rounded corner's antialiasing.
+    let fill_of = |ui: &mut Ui<Msg>, index: i32| -> u32 {
+        let strip = Rect::new(20, 20 + index * 40 + 20, 240, 1);
+        let painted = pixels_of(ui, strip);
+        let mut counts = std::collections::HashMap::new();
+        for pixel in painted {
+            *counts.entry(pixel).or_insert(0usize) += 1;
+        }
+        *counts.iter().max_by_key(|(_, n)| **n).expect("pixels").0
+    };
+
+    let (mut ui, _, list, _) = settings();
+    let resting = fill_of(&mut ui, 0);
+    assert_eq!(resting, fill_of(&mut ui, 1), "nothing is selected yet");
+
+    ui.handle(&click(at_row(1).0, at_row(1).1));
+    assert_eq!(row(&ui, list), Some(1));
+    assert_ne!(
+        fill_of(&mut ui, 1),
+        resting,
+        "the selected row is drawn exactly like the others"
+    );
+    assert_eq!(fill_of(&mut ui, 0), resting, "and its neighbours are not");
+}
+
+/// Hover follows the pointer between rows, and goes out when the pointer leaves
+/// the list.
+///
+/// The leaving is the part worth pinning: `PointerLeft` never reaches a widget,
+/// and the tree clears `HOVERED` without telling it, so a list that trusted its
+/// own memory would leave a row lit under a pointer somewhere else entirely.
+#[test]
+fn hover_follows_the_pointer_and_goes_out_when_it_leaves() {
+    let fill_of = |ui: &mut Ui<Msg>, index: i32| -> u32 {
+        let strip = Rect::new(20, 20 + index * 40 + 20, 240, 1);
+        let painted = pixels_of(ui, strip);
+        let mut counts = std::collections::HashMap::new();
+        for pixel in painted {
+            *counts.entry(pixel).or_insert(0usize) += 1;
+        }
+        *counts.iter().max_by_key(|(_, n)| **n).expect("pixels").0
+    };
+
+    let (mut ui, _, _, _) = settings();
+    let resting = fill_of(&mut ui, 0);
+
+    let (x, y) = at_row(0);
+    ui.handle(&[InputEvent::PointerMoved {
+        position: Point::new(x, y),
+    }]);
+    let lit = fill_of(&mut ui, 0);
+    assert_ne!(lit, resting, "the row under the pointer is not lit");
+    assert_eq!(fill_of(&mut ui, 1), resting, "and only that row is");
+
+    let (x, y) = at_row(1);
+    ui.handle(&[InputEvent::PointerMoved {
+        position: Point::new(x, y),
+    }]);
+    assert_eq!(fill_of(&mut ui, 0), resting, "the old row stayed lit");
+    assert_eq!(fill_of(&mut ui, 1), lit, "the new row did not light");
+
+    // A disabled row is not a hover target either — it cannot be chosen, so
+    // lighting it up under the pointer would be a lie.
+    let (x, y) = at_row(2);
+    ui.handle(&[InputEvent::PointerMoved {
+        position: Point::new(x, y),
+    }]);
+    assert_eq!(fill_of(&mut ui, 2), resting, "a disabled row lit up");
+
+    // Back onto a row that *does* light, so there is something to put out. A
+    // disabled row leaves nothing remembered, and leaving from there would pass
+    // this test whether or not the guard exists.
+    let (x, y) = at_row(3);
+    ui.handle(&[InputEvent::PointerMoved {
+        position: Point::new(x, y),
+    }]);
+    assert_eq!(
+        fill_of(&mut ui, 3),
+        lit,
+        "row 3 should be lit before leaving"
+    );
+
+    ui.handle(&[InputEvent::PointerLeft]);
+    for index in 0..4 {
+        assert_eq!(
+            fill_of(&mut ui, index),
+            resting,
+            "row {index} stayed lit after the pointer left the surface"
+        );
+    }
 }

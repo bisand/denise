@@ -22,6 +22,7 @@
 //! | [`Badge`] | A short string in a coloured pill |
 //! | [`Alert`] | A coloured banner with a wrapped message |
 //! | [`Tabs`] | A row of labels, one selected. **One node, so one tab stop** |
+//! | [`List`] | Rows, at most one selected. Selecting and activating are separate |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -47,6 +48,7 @@ mod button;
 mod checkbox;
 mod divider;
 mod label;
+mod list;
 mod panel;
 mod progress;
 mod radio;
@@ -62,6 +64,7 @@ pub use button::Button;
 pub use checkbox::Checkbox;
 pub use divider::Divider;
 pub use label::Label;
+pub use list::{List, ListItem};
 pub use panel::Panel;
 pub use progress::Progress;
 pub use radio::RadioGroup;
