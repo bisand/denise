@@ -21,6 +21,19 @@ pub struct TextStyle {
 }
 
 impl TextStyle {
+    /// This style at `scale`, never rounding to nothing.
+    ///
+    /// The text half of the one-multiply DPI pattern: the application scales
+    /// its theme, its rectangles and its text styles in the same place. Rounds
+    /// to nearest; a text size never scales below one pixel.
+    pub fn scaled(self, scale: f32) -> Self {
+        let size = (self.size_px as f32 * scale + 0.5) as u16;
+        Self {
+            size_px: if size == 0 { 1 } else { size },
+            ..self
+        }
+    }
+
     /// The built-in font at `size_px`.
     pub const fn built_in(size_px: u16) -> Self {
         Self {

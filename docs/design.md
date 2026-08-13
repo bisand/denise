@@ -218,10 +218,24 @@ The first is now resolved; two are open:
   a node stops its animation so an invisible spinner cannot hold the CPU.
   Unbounded animation is deliberately expressible, because a spinner genuinely is
   one; the accountability for it is the count and the tests, not a prohibition.
-- **`Metrics::scaled` is called from nowhere**
-  ([#20](https://github.com/bisand/denise/issues/20)). Every geometry token is
-  therefore a physical pixel, and the scale factor the backends report is not
-  acted on by anything.
+- **`Metrics::scaled` was called from nowhere** — resolved by
+  [#20](https://github.com/bisand/denise/issues/20), by deciding *who* calls it:
+  **the application scales, once, at construction.** It already knows the scale
+  factor and already computes every rectangle, so it is the one place that can
+  multiply everything consistently — the same argument as compile-time backend
+  selection. The pattern is three calls in one place:
+  `theme.scaled(factor)` for the widgets' furniture, `Rect::scaled(factor)` for
+  every layout rectangle, and a scaled text size wherever one is named.
+  Coordinates stay physical everywhere; there is no logical coordinate space and
+  no per-widget conversion. `Rect::scaled` scales **edges**, not extents —
+  rectangles that touch in the logical layout still touch at fractional scales,
+  which is the seam a naive width-times-scale opens. `examples/hello` makes it
+  executable: `cargo run -p hello -- --snapshot out.ppm 2` renders the same
+  layout at 2×, and the C ABI's `denise_ui_new_scaled` gives embedded hosts —
+  the ones that actually receive `WM_DPICHANGED` — the same lever. The rough
+  edge left open on purpose: widgets default their text to 16 px, so a
+  scale-aware application sets text sizes explicitly; theme-driven typography
+  would be its own design conversation.
 - **Nothing scrolls** ([#21](https://github.com/bisand/denise/issues/21)). `List`
   draws the rows that fit and says so in its own documentation, which is honest
   and, on a panel with one fixed resolution, usually enough. A viewport is not a

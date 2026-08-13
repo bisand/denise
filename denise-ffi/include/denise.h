@@ -328,6 +328,13 @@ typedef struct DeniseUi DeniseUi;
  * themes. Returns NULL if the size is empty or the theme is not one of them. */
 DENISE_API DeniseUi *denise_ui_new(uint32_t width, uint32_t height, uint32_t theme);
 
+/* As denise_ui_new, with the theme's metrics — control heights, radii, borders —
+ * at a scale factor given in hundredths: 150 is 1.5x, 200 a 2x display. The
+ * rectangles the host passes stay physical pixels; the host computes them, so
+ * the host multiplies them. Rebuild with a new factor on a DPI change. */
+DENISE_API DeniseUi *denise_ui_new_scaled(uint32_t width, uint32_t height,
+                                          uint32_t theme, uint32_t scale_x100);
+
 /* Destroys it. NULL is accepted and does nothing, as free does. Every node id
  * taken from it is dead afterwards. */
 DENISE_API void denise_ui_free(DeniseUi *ui);

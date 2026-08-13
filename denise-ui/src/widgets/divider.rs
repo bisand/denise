@@ -30,12 +30,12 @@ use crate::widgets::style::{Orientation, interactive_pair};
 ///
 /// The thickness comes from [`Metrics::border`](denise::theme::Metrics::border),
 /// which is a *logical* pixel — one at scale factor 1, two under
-/// [`Metrics::TOUCH`]. It is not yet a physical pixel at a fractional scale
-/// factor: [`Metrics::scaled`](denise::theme::Metrics::scaled) exists and nothing
-/// in the toolkit calls it. See [#20].
+/// [`Metrics::TOUCH`], and whatever the application's scale factor makes of it
+/// on a dense display: a scale-aware application passes
+/// `theme.scaled(factor)` at construction and this widget's rule thickens with
+/// everything else. See `docs/design.md` for the pattern.
 ///
 /// [`Metrics::TOUCH`]: denise::theme::Metrics::TOUCH
-/// [#20]: https://github.com/bisand/denise/issues/20
 #[derive(Clone, Debug)]
 pub struct Divider {
     label: String,

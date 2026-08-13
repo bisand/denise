@@ -106,6 +106,37 @@ impl Rect {
         )
     }
 
+    /// This rectangle at `scale` — **by its edges**, which is the part that
+    /// matters.
+    ///
+    /// Scaling a rectangle's width and height directly looks equivalent and is
+    /// not: two rectangles that share an edge in a logical layout would round
+    /// their widths independently, and at a fractional scale that opens
+    /// one-pixel seams between panels that were designed to touch. Scaling each
+    /// *edge* and deriving the extent keeps shared edges shared at every scale,
+    /// which is what lets an application design in logical units and multiply
+    /// once — the DPI answer this toolkit gives; see `docs/design.md`.
+    ///
+    /// Rounds half away from zero, without `f32::round`, which lives in `std`.
+    pub fn scaled(self, scale: f32) -> Rect {
+        #[inline]
+        fn round(v: f32) -> i32 {
+            // `as i32` truncates towards zero, so the negative side needs its
+            // half added in the other direction.
+            if v >= 0.0 {
+                (v + 0.5) as i32
+            } else {
+                -((0.5 - v) as i32)
+            }
+        }
+        Rect::from_edges(
+            round(self.x as f32 * scale),
+            round(self.y as f32 * scale),
+            round(self.right() as f32 * scale),
+            round(self.bottom() as f32 * scale),
+        )
+    }
+
     /// A rectangle covering a whole surface, anchored at the origin.
     #[inline]
     pub const fn from_size(size: Size) -> Self {
@@ -240,6 +271,45 @@ impl Rect {
 
 #[cfg(test)]
 mod tests {
+
+    /// The reason `Rect::scaled` works by edges: two rectangles that touch in
+    /// the logical layout must still touch at every scale. Independent
+    /// width-rounding is what opens the one-pixel seam.
+    #[test]
+    fn scaling_keeps_shared_edges_shared() {
+        for scale in [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+            let left = Rect::new(20, 40, 155, 60);
+            let right = Rect::new(left.right(), 40, 133, 60);
+            let (a, b) = (left.scaled(scale), right.scaled(scale));
+            assert_eq!(
+                a.right(),
+                b.x,
+                "scale {scale}: a seam opened between adjacent rectangles"
+            );
+        }
+    }
+
+    /// Identity at 1.0, exact doubling at 2.0 — the cases an application can
+    /// check with its own eyes.
+    #[test]
+    fn scaling_is_exact_at_whole_factors() {
+        let r = Rect::new(20, 44, 388, 34);
+        assert_eq!(r.scaled(1.0), r);
+        assert_eq!(r.scaled(2.0), Rect::new(40, 88, 776, 68));
+    }
+
+    /// Negative coordinates round like positive ones — towards the nearest
+    /// pixel, not towards zero. A rect partially off-screen is ordinary.
+    #[test]
+    fn scaling_rounds_negative_edges_to_nearest() {
+        let r = Rect::new(-10, -10, 20, 20).scaled(1.5);
+        assert_eq!(r, Rect::new(-15, -15, 30, 30));
+        // The half-pixel case, both signs, same distance moved.
+        let r = Rect::new(-3, 3, 6, 6).scaled(1.5);
+        assert_eq!(r.x, -5, "-4.5 rounds away from zero");
+        assert_eq!(r.bottom(), 14, "13.5 rounds away from zero");
+    }
+
     use super::*;
 
     #[test]

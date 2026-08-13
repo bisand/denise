@@ -393,6 +393,19 @@ impl Theme {
         self
     }
 
+    /// This theme with its geometry at `scale` — the one theme call a
+    /// scale-aware application makes at construction.
+    ///
+    /// Only the metrics scale; colours have no size. The layout rectangles and
+    /// text sizes are the application's own numbers and scale through
+    /// [`Rect::scaled`](crate::Rect::scaled) and `TextStyle::scaled` in the
+    /// same one place. See `docs/design.md` for why the application, not the
+    /// tree, does the multiplying.
+    pub fn scaled(self, scale: f32) -> Theme {
+        let metrics = self.metrics.scaled(scale);
+        self.with_metrics(metrics)
+    }
+
     /// This theme with a different elevation emphasis.
     pub const fn with_depth(mut self, depth: u8) -> Theme {
         self.depth = depth;

@@ -327,11 +327,13 @@ is in [docs/design.md](docs/design.md).
   view a form editor asks for — the last of those checked pixel by pixel on the
   Windows runner and by eye in `examples/host` — but no VB6 form or MFC dialog
   editor has actually held it. See [docs/windows.md](docs/windows.md).
-- **Scale factors are reported but not applied.** `Metrics::scaled` exists and
-  nothing calls it, so every geometry token is a physical pixel — see
-  [#20](https://github.com/bisand/denise/issues/20). `denise-win32`'s DPI changes
-  are unverified for the same reason, and it has never been hosted inside a real
-  dialog.
+- **Scale factors are the application's to apply, and now there is one way to.**
+  The application scales its theme (`theme.scaled(factor)`), its rectangles
+  (`Rect::scaled`, which scales edges so touching panels keep touching) and its
+  text sizes, all in one place — demonstrated by
+  `cargo run -p hello -- --snapshot out.ppm 2`, and available to C hosts as
+  `denise_ui_new_scaled`. `denise-win32` has still never been hosted inside a
+  real DPI-changing dialog, which is what would prove the Windows end.
 
 ## Documentation
 

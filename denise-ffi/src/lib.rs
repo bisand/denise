@@ -231,6 +231,39 @@ pub extern "C" fn denise_ui_new(width: u32, height: u32, theme: u32) -> *mut Den
     })
 }
 
+/// Creates a user interface with its theme metrics at a scale factor, given in
+/// hundredths — `150` is 1.5x, `200` a 2x display.
+///
+/// This scales the widgets' own furniture: control heights, corner radii,
+/// borders. The rectangles the host passes stay physical pixels, exactly as
+/// before — the host computes them, so the host multiplies them, which is the
+/// same one-place-multiplies rule the Rust API documents. A host reacting to a
+/// DPI change (`WM_DPICHANGED`) rebuilds with the new factor, as it already
+/// rebuilds on a theme change.
+///
+/// Returns `NULL` if the size is empty, the theme unknown, or the scale zero.
+#[unsafe(no_mangle)]
+pub extern "C" fn denise_ui_new_scaled(
+    width: u32,
+    height: u32,
+    theme: u32,
+    scale_x100: u32,
+) -> *mut DeniseUi {
+    guard(std::ptr::null_mut(), || {
+        let Some(theme) = types::theme(theme) else {
+            return std::ptr::null_mut();
+        };
+        if width == 0 || height == 0 || scale_x100 == 0 {
+            return std::ptr::null_mut();
+        }
+        let theme = theme.scaled(scale_x100 as f32 / 100.0);
+        Box::into_raw(Box::new(DeniseUi {
+            ui: Ui::new(denise::Size::new(width, height), theme),
+            pending: VecDeque::new(),
+        }))
+    })
+}
+
 /// Destroys a user interface. `NULL` is accepted and does nothing, as `free`
 /// does.
 ///

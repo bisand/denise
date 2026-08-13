@@ -59,10 +59,13 @@
 //!
 //! # Status
 //!
-//! Written against the documentation and compile-checked for
-//! `x86_64-pc-windows-msvc`; **not yet run on Windows**. The parts most likely to
-//! be wrong are the ones no compiler checks: message ordering, focus behaviour
-//! inside a dialog, and DPI changes. See the README.
+//! Run on real hardware — Windows 11 ARM64, where Tab reaches the control and
+//! AltGr and the dead keys compose — and built and tested by CI on every push.
+//! Still unverified: focus behaviour inside a real *dialog*, and DPI changes.
+//! For the latter, the toolkit's answer exists and is documented in
+//! `docs/design.md`: the host rebuilds with `theme.scaled(factor)` (or
+//! `denise_ui_new_scaled` over the C ABI) when `WM_DPICHANGED` arrives — what
+//! is missing is a host that has actually done it.
 
 // `keymap` is deliberately outside the gate: it is a table of a hundred numbers
 // mapping `u16` to `KeyCode`, which is exactly the sort of thing that goes wrong
