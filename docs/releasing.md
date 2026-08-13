@@ -103,6 +103,7 @@ So a new crate joins at the next release and not before, which `cargo publish --
 
 | Version | |
 |---|---|
+| [v0.6.0](https://github.com/bisand/denise/releases/tag/v0.6.0) | Table, Rating, Avatar and the star primitive — twenty-one widgets, and the widget tracker's arcs and scrolling groups both closed. Clean run |
 | [v0.5.0](https://github.com/bisand/denise/releases/tag/v0.5.0) | Pictures end to end: the blit, the `Image` widget, and `denise-image` — the first release to **create** a crate rather than update the ones that existed. Clean run |
 | [v0.4.0](https://github.com/bisand/denise/releases/tag/v0.4.0) | What the foundations were for: RadialProgress, Spinner, Tooltip, Select and Toast — the widgets that were waiting on popups. Clean run, four minutes gate to upload |
 | [v0.3.0](https://github.com/bisand/denise/releases/tag/v0.3.0) | The five foundations: arcs, requested animation, popups, DPI, scrolling. First real release through the tag-driven pipeline, clean on the first run |
