@@ -4,7 +4,7 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
+    Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
 };
 use denise_ui::{NodeId, Ui};
 
@@ -1572,4 +1572,118 @@ fn a_vertical_divider_rules_down_and_ignores_its_label() {
         bare, horizontal,
         "vertical and horizontal drew the same thing"
     );
+}
+
+// ---------------------------------------------------------------------- badge
+
+/// A badge annotates; it does not take part. Tab must step over it, and a click
+/// must fall through to whatever is underneath — a badge sitting on a row button
+/// that swallowed the click would make the row unselectable.
+#[test]
+fn a_badge_is_inert_and_lets_clicks_through_to_what_is_under_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 140, 100, 30),
+        )
+        .expect("before");
+    // A row, with a badge sitting on top of it.
+    let row = ui
+        .add(
+            root,
+            Button::new("Row", Msg::Cancel),
+            Rect::new(20, 20, 300, 40),
+        )
+        .expect("row");
+    let badge = ui
+        .add(row, Badge::new("3"), Rect::new(250, 8, 40, 24))
+        .expect("badge");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Submitted),
+            Rect::new(140, 140, 100, 30),
+        )
+        .expect("after");
+
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(row), "the row is the next stop");
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(after), "and the badge is not one");
+
+    // A click squarely on the badge reaches the row underneath.
+    ui.handle(&click(290, 48));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Cancel],
+        "the badge swallowed a click meant for the row"
+    );
+
+    ui.focus(Some(badge));
+    assert_eq!(
+        ui.focused(),
+        None,
+        "a badge cannot be focused directly either"
+    );
+}
+
+/// Text longer than the badge is clipped to the pill rather than running across
+/// whatever is beside it. The tree clips the canvas to the widget's bounds, so
+/// this is really a test that the badge relies on that instead of measuring and
+/// truncating itself.
+#[test]
+fn text_too_long_for_a_badge_is_clipped_to_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Badge::new("VEDLIKEHOLDSMODUS"),
+            Rect::new(40, 40, 40, 24),
+        )
+        .expect("badge");
+
+    // A band across the badge's row, wider than the badge on both sides.
+    let band = Rect::new(0, 40, 200, 24);
+    let painted = pixels_of(&mut ui, band);
+    let bounds = ui.bounds(id).expect("bounds");
+
+    let background = painted[0];
+    for y in 0..band.height {
+        for x in 0..band.width {
+            let inside = x >= bounds.x - band.x && x < bounds.right() - band.x;
+            if !inside {
+                assert_eq!(
+                    painted[(y * band.width + x) as usize],
+                    background,
+                    "something was drawn at {x},{y}, outside the badge"
+                );
+            }
+        }
+    }
+}
+
+/// The role decides the colour, and two roles are two different pictures. A
+/// badge that ignored its role would pass every sizing test in the module.
+#[test]
+fn the_role_changes_what_is_drawn() {
+    let picture = |role: Role| -> Vec<u32> {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(
+                root,
+                Badge::new("PÅ").with_role(role),
+                Rect::new(40, 40, 60, 24),
+            )
+            .expect("badge");
+        let bounds = ui.bounds(id).expect("bounds");
+        pixels_of(&mut ui, bounds)
+    };
+    assert_ne!(picture(Role::Primary), picture(Role::Error));
+    assert_ne!(picture(Role::Success), picture(Role::Warning));
 }

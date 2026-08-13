@@ -16,7 +16,8 @@ use denise::{
 };
 use denise_ui::Ui;
 use denise_ui::widgets::{
-    Align, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
+    Align, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput,
+    Toggle,
 };
 
 const SIZE: Size = Size::new(800, 958);
@@ -288,6 +289,23 @@ fn build(theme: Theme) -> Ui<Msg> {
     .expect("labelled rule");
     ui.add(form, Divider::vertical(), Rect::new(486, 290, 14, 100))
         .expect("vertical rule");
+
+    // Badges, sized by asking rather than by guessing — which is the whole
+    // sizing convention demonstrated in three lines.
+    let mut x = 516;
+    for (text, role) in [
+        ("3", Role::Primary),
+        ("PÅ", Role::Success),
+        ("VENTER", Role::Warning),
+        ("FEIL", Role::Error),
+    ] {
+        let badge = Badge::new(text).with_role(role);
+        let width = badge.preferred_width(ui.text_mut());
+        let height = badge.preferred_height(ui.text_mut());
+        ui.add(form, badge, Rect::new(x, 296, width, height))
+            .expect("badge");
+        x += width + 10;
+    }
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

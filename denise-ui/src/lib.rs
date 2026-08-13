@@ -56,8 +56,8 @@ pub use node::NodeId;
 pub use ui::Ui;
 pub use widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
 pub use widgets::{
-    Align, Button, Checkbox, Divider, Label, Orientation, Panel, Progress, RadioGroup, Slider,
-    TextInput, Toggle,
+    Align, Badge, Button, Checkbox, Divider, Label, Orientation, Panel, Progress, RadioGroup,
+    Slider, TextInput, Toggle,
 };
 
 // Re-exported so an application names one crate rather than three to style a

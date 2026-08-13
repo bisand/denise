@@ -136,8 +136,8 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Ten of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
-`RadioGroup`, `Progress`, `Slider`, `Divider`. The first four are CoreCanvas 0.4
+Eleven of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -156,7 +156,7 @@ clearest: a drag has to keep the pointer after it leaves the widget, and the tre
 clears `VisualState::PRESSED` at exactly that boundary because that is what makes
 a *button's* drag-off cancel. Two widgets, opposite requirements, one signal.
 
-Two rules hold across all of them:
+Three rules hold across all of them:
 
 - **A setter is silent.** `set_checked`, `set_value`, `set_selected` emit nothing.
   The message reports what a person did, and an application that assigned and got
@@ -165,6 +165,15 @@ Two rules hold across all of them:
   message. An enum's tuple variant already is such a function, so
   `Checkbox::new("Mute", Message::Muted)` reads as intended, and no `M: Clone`
   bound is needed.
+- **A widget that has a natural size offers `preferred_width` and
+  `preferred_height`, and the tree never calls them.** This is the line between
+  the toolkit as it is and a layout engine, and it is worth being explicit about
+  because it looks like the same thing. An intrinsic-size *protocol* is one where
+  the tree asks every widget how big it wants to be and then places it. Here the
+  *application* asks, does its own arithmetic, and passes a rectangle — exactly as
+  it does for a node with no natural size at all. `Button`, `Checkbox`, `Toggle`,
+  `RadioGroup` and `Badge` all offer the query; nothing in `denise-ui` consumes
+  it.
 
 Two limits were found by building against them rather than by design review, and
 both are open:
