@@ -137,9 +137,10 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Twenty-one of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
-`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`,
-`RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`, `Avatar`, `Table`. The first four are CoreCanvas 0.4
+Twenty-three of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`,
+`Toggle`, `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`,
+`Tabs`, `List`, `RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`,
+`Avatar`, `Table`, `Timeline`, `Carousel`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -202,6 +203,35 @@ Getting that helper right needed one distinction `List` already had: it wires
 the list's **activation** message, not its selection. A dropdown whose arrow
 keys reported every row they passed over would have an application applying
 three values on the way to the fourth.
+
+`Carousel` is the first widget to compose two foundations that had not met:
+#19's requested animation and #22's pictures. The tracker filed it under
+"needed scrolling", wrongly — nothing in it scrolls. Its pages are pictures
+rather than nodes (`EventCtx` cannot create nodes, the `Tabs`/`Select` line;
+mixed content composes the other way round, as `Tabs` without visible tabs),
+and its cost story is the design: idle without an advance clock, nothing;
+holding on a page with one, **one wake per interval**, the toast arrangement;
+frames only during the quarter-second slide. Like `Spinner` it does not start
+itself. One representational decision carries the widget: a slide's
+displacement is stored as a **fraction of the width**, because `animate` has
+no geometry — the advance clock starts slides without ever having seen the
+rectangle, and a fraction lets paint, which has the rectangle, do the
+multiply. And one rule got its sharpest statement yet: the advance clock
+never emits the settle message, because a message reports what a *person*
+did — the clock is the machine talking to itself, the same reasoning as every
+silent setter.
+
+`Timeline` is display, and its whole value is one alignment: the disc column
+is placed by the widest time in the list, so the discs form a straight line
+whatever each row's time says — `List`'s leading-column answer again. The
+connector is drawn per gap rather than as one stripe, so it stops at the last
+disc instead of running to the rectangle's edge. Mutation testing was the
+editor again on both widgets: it deleted two dead clock-reset assignments in
+the carousel (every slide ends in `animate`'s landing, which restarts the
+hold — the resets on the way in were overwritten before anyone read them),
+and it demanded the mid-hold re-ask test, the case where a spinner elsewhere
+on screen makes the tree ask a holding carousel every frame — which is
+exactly when the landing's restart is load-bearing.
 
 `Table` is the one widget that scrolls itself, and the reason is structural
 rather than taste: the **header**. `List` deliberately owns no scrolling — it

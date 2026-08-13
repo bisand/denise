@@ -30,6 +30,8 @@
 //! | [`Rating`] | Stars, filled to a value. Continuous to read, whole stars to set |
 //! | [`Avatar`] | A picture, or initials on a colour derived from them |
 //! | [`Table`] | Cells under a pinned header. **Windows its data, so row count is free** |
+//! | [`Timeline`] | Events in order: time, disc, connector, label |
+//! | [`Carousel`] | Pictures sliding on the animation clock. **One wake per hold** |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -53,6 +55,7 @@ mod alert;
 mod avatar;
 mod badge;
 mod button;
+mod carousel;
 mod checkbox;
 mod divider;
 mod image;
@@ -70,12 +73,14 @@ mod style;
 mod table;
 mod tabs;
 mod text_input;
+mod timeline;
 mod toggle;
 
 pub use alert::Alert;
 pub use avatar::{Avatar, Presence, initials_of};
 pub use badge::Badge;
 pub use button::Button;
+pub use carousel::Carousel;
 pub use checkbox::Checkbox;
 pub use divider::Divider;
 pub use image::{Fit, Image};
@@ -93,4 +98,5 @@ pub use style::{Align, Orientation};
 pub use table::{Column, Table};
 pub use tabs::Tabs;
 pub use text_input::TextInput;
+pub use timeline::{Timeline, TimelineItem};
 pub use toggle::Toggle;

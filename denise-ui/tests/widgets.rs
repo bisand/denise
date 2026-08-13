@@ -4,9 +4,9 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Alert, Avatar, Badge, Button, Checkbox, Column, Divider, Fit, Image, Label, List, ListItem,
-    Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner, Table,
-    Tabs, TextInput, Toggle,
+    Alert, Avatar, Badge, Button, Carousel, Checkbox, Column, Divider, Fit, Image, Label, List,
+    ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
+    Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle,
 };
 use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
 
@@ -4780,4 +4780,300 @@ fn the_header_and_its_column_start_at_the_same_x() {
     let cells = band(&mut ui, 40, 30);
     assert_ne!(header[0], -1, "no header ink found");
     assert_eq!(header, cells, "the header and the cells drifted apart");
+}
+
+// — carousels —
+
+fn touch(id: u64, x: i32, y: i32, phase: u8) -> InputEvent {
+    let position = Point::new(x, y);
+    match phase {
+        0 => InputEvent::TouchDown { id, position },
+        1 => InputEvent::TouchMoved { id, position },
+        _ => InputEvent::TouchUp {
+            id,
+            position,
+            cancelled: false,
+        },
+    }
+}
+
+fn rotator() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let mut carousel = Carousel::new(Msg::Page);
+    for shade in [0xFFCC_0000u32, 0xFF00_CC00, 0xFF00_00CC] {
+        carousel = carousel.with_picture(vec![shade; 16], Size::new(4, 4));
+    }
+    let id = ui
+        .add(root, carousel, Rect::new(20, 20, 200, 120))
+        .expect("carousel");
+    (ui, id)
+}
+
+#[test]
+fn a_swipe_past_the_threshold_commits_to_the_next_page() {
+    let (mut ui, id) = rotator();
+    ui.tick(1_000);
+    // A quarter of 200px is 50; drag 80 left.
+    ui.handle(&[touch(1, 150, 80, 0)]);
+    ui.handle(&[touch(1, 70, 80, 1)]);
+    ui.handle(&[touch(1, 70, 80, 2)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Page(1)],
+        "one settle message for the arrival"
+    );
+    assert_eq!(ui.widget::<Carousel<Msg>>(id).expect("c").current(), 1);
+}
+
+#[test]
+fn a_swipe_under_the_threshold_springs_back_and_says_nothing() {
+    let (mut ui, id) = rotator();
+    ui.tick(1_000);
+    ui.handle(&[touch(1, 150, 80, 0)]);
+    ui.handle(&[touch(1, 130, 80, 1)]);
+    ui.handle(&[touch(1, 130, 80, 2)]);
+    assert!(ui.drain_messages().next().is_none(), "a spring-back spoke");
+    assert_eq!(ui.widget::<Carousel<Msg>>(id).expect("c").current(), 0);
+    // The spring-back is animated: something is asking for frames.
+    assert_eq!(ui.animating(), 1, "the spring-back should be animating");
+}
+
+#[test]
+fn arrows_wrap_in_both_directions() {
+    let (mut ui, id) = rotator();
+    ui.tick(1_000);
+    ui.focus(Some(id));
+    ui.handle(&[key(KeyCode::ArrowLeft)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Page(2)],
+        "left from the first page wraps to the last"
+    );
+    ui.handle(&[key(KeyCode::ArrowRight)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Page(0)],
+        "and right from the last wraps home"
+    );
+}
+
+/// The cost claim, through the tree: an auto-advancing carousel holding on a
+/// page asks for one wake at the deadline, not a frame rate.
+#[test]
+fn a_holding_carousel_asks_for_one_wake() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let carousel = Carousel::new(Msg::Page)
+        .with_picture(vec![0xFFCC_0000; 16], Size::new(4, 4))
+        .with_picture(vec![0xFF00_CC00; 16], Size::new(4, 4))
+        .auto_advance(8_000);
+    let id = ui
+        .add(root, carousel, Rect::new(20, 20, 200, 120))
+        .expect("carousel");
+    ui.request_animation(id);
+
+    ui.tick(1_000);
+    let due = ui.next_wake_ms().expect("the advance clock is set");
+    assert!(
+        due >= 8_000,
+        "a holding carousel should wake at its deadline, got {due}"
+    );
+
+    // At the deadline it slides — frames are close together now.
+    ui.tick(due);
+    let frame = ui.next_wake_ms().expect("sliding");
+    assert!(
+        frame <= due + 100,
+        "a slide should ask for a frame soon, got {frame} after {due}"
+    );
+    assert_eq!(
+        ui.widget::<Carousel<Msg>>(id).expect("c").current(),
+        1,
+        "the clock advanced the page"
+    );
+    assert!(
+        ui.drain_messages().next().is_none(),
+        "the clock is not a person; it must not emit"
+    );
+}
+
+/// Any interaction resets the advance clock, so the loop never fights the
+/// person standing at the panel.
+#[test]
+fn interaction_resets_the_advance_clock() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let carousel = Carousel::new(Msg::Page)
+        .with_picture(vec![0xFFCC_0000; 16], Size::new(4, 4))
+        .with_picture(vec![0xFF00_CC00; 16], Size::new(4, 4))
+        .auto_advance(8_000);
+    let id = ui
+        .add(root, carousel, Rect::new(20, 20, 200, 120))
+        .expect("carousel");
+    ui.request_animation(id);
+    ui.tick(6_000);
+
+    // A person navigates at 6s; the slide runs, then the hold must extend to
+    // 6s + slide + interval, not fire at the original 8s.
+    ui.focus(Some(id));
+    ui.handle(&[key(KeyCode::ArrowRight)]);
+    ui.drain_messages().count();
+    ui.tick(6_000 + 250); // the slide lands
+    let due = ui.next_wake_ms().expect("holding again");
+    assert!(
+        due >= 14_000,
+        "the clock should restart from the interaction, got {due}"
+    );
+}
+
+// — timelines —
+
+#[test]
+fn the_discs_form_a_straight_line_whatever_the_times_say() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    // Wildly different time widths — the discs must still align.
+    let timeline = Timeline::new([
+        TimelineItem::new("Første").with_time("12:01:44"),
+        TimelineItem::new("Andre").with_time("kl 9"),
+        TimelineItem::new("Tredje"),
+    ])
+    .with_row_height(30);
+    ui.add(root, timeline, Rect::new(20, 20, 300, 90))
+        .expect("timeline");
+
+    // Find the disc in each row: the widest ink run left of the text. The
+    // disc is a filled circle, so at the row's middle line it is the darkest
+    // contiguous run after the time column.
+    let px = pixels_of(&mut ui, Rect::new(20, 20, 300, 90));
+    let mut disc_centres = Vec::new();
+    for row in 0..3 {
+        let mid = row * 30 + 15;
+        // The disc row: primary-coloured pixels.
+        let xs: Vec<i32> = (0..300)
+            .filter(|&x| {
+                let word = px[(mid * 300 + x) as usize];
+                // Primary in the dark theme is a saturated colour, far from
+                // the background and from white text.
+                let (r, g, b) = ((word >> 16) & 0xFF, (word >> 8) & 0xFF, word & 0xFF);
+                let max = r.max(g).max(b) as i32;
+                let min = r.min(g).min(b) as i32;
+                max - min > 40 // saturated: the disc, not text or background
+            })
+            .collect();
+        assert!(!xs.is_empty(), "row {row}: no disc found");
+        disc_centres.push((xs[0] + xs[xs.len() - 1]) / 2);
+    }
+    assert_eq!(
+        disc_centres[0], disc_centres[1],
+        "rows with different time widths drifted"
+    );
+    assert_eq!(disc_centres[1], disc_centres[2], "a bare row drifted");
+}
+
+#[test]
+fn the_connector_stops_at_the_last_disc() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let timeline = Timeline::new(["En", "To"]).with_row_height(30);
+    // The rectangle is far taller than the two rows.
+    ui.add(root, timeline, Rect::new(20, 20, 300, 200))
+        .expect("timeline");
+
+    let px = pixels_of(&mut ui, Rect::new(20, 20, 300, 200));
+    let mut bare: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let empty = pixels_of(&mut bare, Rect::new(20, 20, 300, 200));
+
+    // Below the second row nothing may be drawn — starting at its very
+    // bottom edge, so a connector segment hung under the last disc is caught
+    // even though it is short.
+    for y in 60..200 {
+        for x in 0..300 {
+            assert_eq!(
+                px[(y * 300 + x) as usize],
+                empty[(y * 300 + x) as usize],
+                "ink below the last row at {x},{y}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_timeline_inside_a_button_does_not_swallow_the_click() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("Rad", Msg::Save),
+        Rect::new(20, 20, 300, 90),
+    )
+    .expect("button");
+    ui.add(
+        root,
+        Timeline::new(["En", "To"]),
+        Rect::new(20, 20, 300, 90),
+    )
+    .expect("timeline");
+    ui.handle(&click(100, 50));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+}
+
+/// The discs sit to the right of the time column, not on top of it — and a
+/// pending disc is hollow where a reached one is filled.
+#[test]
+fn discs_clear_the_times_and_pending_discs_are_hollow() {
+    let with_times = |times: bool| {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let mut first = TimelineItem::new("En");
+        let mut second = TimelineItem::new("To").pending();
+        if times {
+            first = first.with_time("12:01:44");
+            second = second.with_time("12:02");
+        }
+        ui.add(
+            root,
+            Timeline::new([first, second]).with_row_height(30),
+            Rect::new(20, 20, 300, 60),
+        )
+        .expect("timeline");
+        pixels_of(&mut ui, Rect::new(20, 20, 300, 60))
+    };
+
+    let disc_x = |px: &[u32], row: i32| -> i32 {
+        let mid = row * 30 + 15;
+        (0..300)
+            .find(|&x| {
+                let w = px[(mid * 300 + x) as usize];
+                let (r, g, b) = ((w >> 16) & 0xFF, (w >> 8) & 0xFF, w & 0xFF);
+                (r.max(g).max(b) as i32 - r.min(g).min(b) as i32) > 40
+            })
+            .expect("a disc")
+    };
+
+    let timed = with_times(true);
+    let bare = with_times(false);
+    assert!(
+        disc_x(&timed, 0) > disc_x(&bare, 0),
+        "the disc did not move right to clear the time column"
+    );
+
+    // The reached disc is solid at its centre; the pending one is hollow —
+    // its centre is the background, not the role colour.
+    let saturated = |w: u32| {
+        let (r, g, b) = ((w >> 16) & 0xFF, (w >> 8) & 0xFF, w & 0xFF);
+        (r.max(g).max(b) as i32 - r.min(g).min(b) as i32) > 40
+    };
+    let x = disc_x(&timed, 0);
+    let reached_centre = timed[(15 * 300 + x + 5) as usize];
+    let pending_centre = timed[((30 + 15) * 300 + x + 5) as usize];
+    assert!(
+        saturated(reached_centre),
+        "the reached disc should be solid at its centre"
+    );
+    assert!(
+        !saturated(pending_centre),
+        "the pending disc should be hollow at its centre"
+    );
 }

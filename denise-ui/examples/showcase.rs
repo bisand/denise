@@ -15,13 +15,13 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::widgets::{
-    Alert, Align, Avatar, Badge, Button, Checkbox, Column, Divider, Fit, Image, Label, List,
-    ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
-    Spinner, Table, Tabs, TextInput, Toggle,
+    Alert, Align, Avatar, Badge, Button, Carousel, Checkbox, Column, Divider, Fit, Image, Label,
+    List, ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
+    Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle,
 };
 use denise_ui::{TextStyle, Ui};
 
-const SIZE: Size = Size::new(800, 1800);
+const SIZE: Size = Size::new(800, 2010);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,7 +162,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 1204))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 1414))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -565,6 +565,49 @@ fn build(theme: Theme) -> Ui<Msg> {
     grid.set_selected(Some(22));
     ui.add(form, grid, Rect::new(16, 980, 500, 196))
         .expect("table");
+
+    // A timeline beside a carousel. The timeline shows mixed states — done,
+    // done in Success, pending — with different time widths, so the straight
+    // disc line is the thing on display.
+    ui.add(
+        form,
+        Timeline::new([
+            TimelineItem::new("Pumpe startet")
+                .with_time("12:01")
+                .with_role(Role::Success),
+            TimelineItem::new("Trykk nådd").with_time("12:04:30"),
+            TimelineItem::new("Ventil åpnes").pending(),
+            TimelineItem::new("Ferdig").pending(),
+        ])
+        .with_row_height(34),
+        Rect::new(16, 1196, 320, 140),
+    )
+    .expect("timeline");
+
+    // The carousel, caught mid-slide: ticked to a frame where the first page
+    // is still leaving, so the still picture shows the mechanism rather than
+    // just a photo in a box.
+    let mut rotator = Carousel::new(Msg::Page);
+    for tint in [0xFF6688_u32, 0x88CC66, 0x6688EE] {
+        let (mut px, size) = crate::picture();
+        for word in &mut px {
+            // Tint each page so the pages are tellable apart in the picture.
+            *word =
+                (*word & 0xFF00_0000) | (((*word & 0x00FE_FEFE) >> 1) + (tint & 0x00FF_FFFF) / 2);
+        }
+        rotator = rotator.with_picture(px, size);
+    }
+    let rotator = ui
+        .add(form, rotator, Rect::new(360, 1196, 240, 140))
+        .expect("carousel");
+    ui.focus(Some(rotator));
+    ui.handle(&[InputEvent::Key {
+        code: denise::KeyCode::ArrowRight,
+        state: ElementState::Down,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    ui.tick(725); // mid-slide: the previous showcase tick was 600
 
     // Two notifications, stacked from the bottom edge. Not nodes: the tree
     // times them, stacks them, fades them and removes them, and a still picture
