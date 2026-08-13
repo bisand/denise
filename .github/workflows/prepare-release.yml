@@ -1,0 +1,104 @@
+name: Prepare release
+
+# The one manual input a release needs is its version. This workflow takes it
+# once and puts it everywhere it has to go — the workspace version, the twelve
+# sibling pins, the README snippet, Cargo.lock — then commits, gets CI running
+# on that commit, and opens a **draft** release pointing at it.
+#
+# Publishing the draft is what actually releases: .github/workflows/release.yml
+# fires on that, checks its guards (tag == manifest, CI green on the commit,
+# --locked, full dry run) and uploads. Nothing this workflow does is
+# irreversible — a draft can be deleted and the bump commit is just a commit.
+#
+# Why the explicit CI dispatch below: pushes made with the workflow token do
+# not trigger `on: push` workflows, GitHub's guard against recursive
+# workflows. Without the dispatch the bump commit would have no check runs,
+# and the release guard — which refuses to publish a commit CI has not seen —
+# would fail closed on every release prepared this way.
+#
+# See docs/releasing.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.2.0 (no leading v)"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # push the bump commit, create the draft release
+  actions: write    # dispatch CI onto the bump commit
+
+jobs:
+  prepare:
+    name: bump, push, draft
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: The version is sane and not already released
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a version. Give the bare number: 0.2.0."
+            exit 1
+          fi
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::v$VERSION already exists as a release."
+            exit 1
+          fi
+
+      # Everything version-shaped moves in one script, so this workflow and a
+      # human doing it by hand produce the identical commit.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Set the version everywhere
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          scripts/bump-version.py "$VERSION"
+          cargo update --workspace   # refresh the lock to the new versions only
+
+      - name: Commit and push the bump
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Already at $VERSION; releasing the tree as it stands."
+          else
+            git commit -m "chore: release $VERSION"
+            git push origin main
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      # The recursion guard means our push started nothing. Start CI ourselves,
+      # on exactly the commit the release will point at.
+      - name: Get CI running on the bump commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref main
+
+      - name: Open the draft release
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" \
+            --draft \
+            --target "$sha" \
+            --title "v$VERSION" \
+            --generate-notes
+          {
+            echo "### Draft v$VERSION is ready"
+            echo
+            echo "- Bump commit: \`$sha\`"
+            echo "- CI is running on it now; the publish guard will refuse until it is green."
+            echo "- Review the notes, then **publish the draft** — that is the trigger."
+          } >> "$GITHUB_STEP_SUMMARY"

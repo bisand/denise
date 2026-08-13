@@ -22,7 +22,9 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent / "Cargo.toml"
+REPO = pathlib.Path(__file__).resolve().parent.parent
+ROOT = REPO / "Cargo.toml"
+README = REPO / "README.md"
 
 # `0.1.0`, `1.0.0-rc.1`. Not a full semver grammar — enough to refuse a typo.
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
@@ -59,7 +61,25 @@ def main(argv: list[str]) -> int:
     )
 
     ROOT.write_text(text)
-    print(f"{old} -> {new}   (workspace.package.version and {pins} sibling pins)")
+
+    # The README's install snippet pins major.minor. Anchored to lines of the
+    # form `denise-x = "0.1"` (commented or not) so nothing else in the file can
+    # match. `\d+\.\d+` rather than the old value, because the snippet is
+    # major.minor while the manifest is major.minor.patch — a patch release
+    # leaves it alone by producing the same text.
+    minor = ".".join(new.split(".")[:2])
+    readme = README.read_text()
+    readme, snippets = re.subn(
+        r'(?m)^(#?\s*denise[a-z0-9-]* = ")\d+\.\d+(")',
+        r"\g<1>" + minor + r"\g<2>",
+        readme,
+    )
+    README.write_text(readme)
+
+    print(
+        f"{old} -> {new}   (workspace.package.version, {pins} sibling pins, "
+        f"{snippets} README lines)"
+    )
     print("\nNext:")
     print("  cargo check --workspace          # refresh Cargo.lock")
     print(f'  git commit -am "chore: release {new}" && git push')

@@ -4,22 +4,42 @@ All twelve crates share one version and go to crates.io together.
 
 ## Doing it
 
+Run the **Prepare release** workflow (Actions tab, or below), giving it the one
+input a release needs — the version:
+
 ```bash
-scripts/bump-version.py 0.1.0     # the workspace version and all twelve pins
-cargo check --workspace           # refresh Cargo.lock
-git commit -am "chore: release 0.1.0"
+gh workflow run prepare-release.yml -f version=0.2.0
+```
+
+It puts that number everywhere it has to go — the workspace version, the twelve
+sibling pins, the README's install snippet, `Cargo.lock` — commits, starts CI on
+that commit, and opens a **draft** release pointing at it. Review the notes, then
+**publish the draft. Publishing the release is the trigger**:
+`.github/workflows/release.yml` checks its guards, rehearses the whole publish,
+uploads to crates.io, and lists what went out in the run summary.
+
+Nothing before the publish is irreversible: the draft can be deleted and the bump
+commit is just a commit. Publish the draft before CI finishes and the guard
+refuses; publish again once it is green.
+
+By hand, the same thing is:
+
+```bash
+scripts/bump-version.py 0.2.0     # manifest, twelve pins, README snippet
+cargo update --workspace          # refresh Cargo.lock
+git commit -am "chore: release 0.2.0"
 git push
+# once CI is green on that commit:
+gh release create v0.2.0 --generate-notes
 ```
 
-Wait for CI to go green on that commit — the release refuses to run otherwise — then publish a GitHub release, from the web UI or:
+The script is shared, so the workflow and a human produce the identical commit —
+there is one place that knows where version numbers live.
 
-```bash
-gh release create v0.1.0 --generate-notes
-```
-
-**Publishing that release is the trigger.** `.github/workflows/release.yml` checks its guards, rehearses the whole publish, uploads to crates.io, and lists what went out in the run summary.
-
-Drafting first is fine and is the better habit: `gh release create --draft` creates the tag and lets you write the notes properly, and nothing happens until you publish it.
+One deliberate wrinkle inside the workflow: a push made with the workflow token
+starts no `on: push` run — GitHub's guard against recursive workflows — so it
+dispatches CI onto the bump commit explicitly. Without that, every release
+prepared this way would fail the released-commit-passed-CI guard, permanently.
 
 To rehearse without publishing anything, run the **Release** workflow by hand from the Actions tab. With no release attached it stops after the dry run.
 

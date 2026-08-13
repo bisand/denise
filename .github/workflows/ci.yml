@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # For "Prepare release": a bump commit pushed with the workflow token starts
+  # no `on: push` run (GitHub's recursion guard), so that workflow dispatches
+  # this one explicitly. The release guard then finds these check runs on the
+  # commit like any other.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
