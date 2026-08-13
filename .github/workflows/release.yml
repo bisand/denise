@@ -89,8 +89,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           sha=$(git rev-parse HEAD)
-          runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs" \
-                   --jq '.check_runs[] | select(.name != "publish the workspace to crates.io") | "\(.conclusion // "pending")\t\(.name)"')
+          # One commit can carry several runs of the same check — a rerun, or a
+          # redundant dispatch — so the verdict is per check *name*, from its
+          # most recently started run. Judging every run individually wedges a
+          # release on a duplicate sitting `pending` next to the success.
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs" --paginate \
+                   --jq '.check_runs
+                         | map(select(.name != "publish the workspace to crates.io"))
+                         | group_by(.name)
+                         | map(max_by(.started_at))
+                         | .[] | "\(.conclusion // "pending")\t\(.name)"')
           if [ -z "$runs" ]; then
             echo "::error::no check runs on $sha. Release a commit CI has seen."
             exit 1

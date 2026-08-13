@@ -72,15 +72,22 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "Already at $VERSION; releasing the tree as it stands."
+            echo "pushed=no" >> "$GITHUB_ENV"
           else
             git commit -m "chore: release $VERSION"
             git push origin main
+            echo "pushed=yes" >> "$GITHUB_ENV"
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       # The recursion guard means our push started nothing. Start CI ourselves,
-      # on exactly the commit the release will point at.
+      # on exactly the commit the release will point at — but only when there
+      # *was* a push. A no-op bump releases a commit that already has its CI,
+      # and a second, redundant run would sit `pending` next to the finished one
+      # exactly when somebody is trying to publish. Found the hard way, on the
+      # first release this workflow prepared.
       - name: Get CI running on the bump commit
+        if: env.pushed == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run ci.yml --ref main
