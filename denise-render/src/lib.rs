@@ -51,3 +51,9 @@ pub use blend::Paint;
 pub use canvas::{Canvas, PixelView};
 pub use coverage::Mask;
 pub use font::BitmapFont;
+
+/// Compiles the examples in this crate's README, so they cannot drift from the API
+/// they claim to demonstrate. Never built except under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;

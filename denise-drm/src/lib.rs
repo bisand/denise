@@ -64,3 +64,9 @@ pub use device::Card;
 pub use error::DrmError;
 #[cfg(target_os = "linux")]
 pub use surface::{DrmSurface, PresentMode, SurfaceConfig};
+
+/// Compiles the examples in this crate's README, so they cannot drift from the API
+/// they claim to demonstrate. Never built except under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;

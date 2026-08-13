@@ -63,3 +63,9 @@ pub use widgets::{
 // Re-exported so an application names one crate rather than three to style a
 // label, and so `FontId(0)` means the same thing everywhere.
 pub use denise_text::{FontId, GlyphSource, TextEngine, TextStyle};
+
+/// Compiles the examples in this crate's README, so they cannot drift from the API
+/// they claim to demonstrate. Never built except under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;

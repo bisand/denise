@@ -10,6 +10,7 @@ desktop environment.**
 
 [![CI](https://github.com/bisand/denise/actions/workflows/ci.yml/badge.svg)](https://github.com/bisand/denise/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/denise?color=CBA6F7&label=crates.io)](https://crates.io/crates/denise)
+[![docs.rs](https://img.shields.io/docsrs/denise?color=94E2D5&label=docs.rs)](https://docs.rs/denise)
 [![Licence](https://img.shields.io/badge/licence-MIT-89B4FA)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.95+-F9E2AF)](#constraints)
 [![Milestone](https://img.shields.io/badge/milestone-M5-F5C2E7)](#status)
@@ -242,6 +243,11 @@ framebuffer.
 | [`denise-win32`](https://crates.io/crates/denise-win32) | Child-`HWND` control | Windows |
 | [`denise-activex`](https://crates.io/crates/denise-activex) | COM/ActiveX shim, scriptable | Windows |
 | [`denise-ffi`](https://crates.io/crates/denise-ffi) | Stable C ABI, `cdylib` | any |
+
+Each crate has **its own README** — its API, its platform notes, and what it
+deliberately does not do — which is what crates.io and [docs.rs](https://docs.rs/denise)
+show. The Rust examples in every one of them are compiled by `cargo test --doc`, so
+they cannot drift from the API they claim to demonstrate.
 
 Text rendering comes in three tiers, chosen by feature so you pay for what you
 draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`

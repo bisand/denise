@@ -46,3 +46,9 @@ pub use console::{Console, ConsoleError};
 pub use device::{Capabilities, InputBackend, InputDevice};
 #[cfg(target_os = "linux")]
 pub use error::EvdevError;
+
+/// Compiles the examples in this crate's README, so they cannot drift from the API
+/// they claim to demonstrate. Never built except under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;

@@ -29,10 +29,20 @@
 //! Getting that sequence wrong is the classic double-buffering bug: repaint only the
 //! current frame's damage and every second frame shows stale content.
 //!
+//! # Theming
+//!
+//! Colours are named by **role** — [`Role::Primary`], [`Role::Base100`],
+//! [`Role::Error`] — each with a `*Content` partner. [`Theme::pair`] returns a
+//! surface and a foreground that are *guaranteed* to contrast, and
+//! [`Theme::validate`] proves it for a custom theme rather than leaving it to be
+//! discovered on a panel in daylight. The arithmetic is WCAG relative luminance in
+//! integers, so it is identical on x86 and ARM.
+//!
 //! # Status
 //!
-//! M0. The abstraction exists and is proven against a desktop backend; the scene
-//! graph, component model and hardware backends are not here yet. See the README.
+//! M5 complete, M6 in progress. Everything through M5 has run on real hardware —
+//! a Raspberry Pi on DRM/KMS, Windows 11 on ARM64, macOS — not only in CI. See the
+//! README for the roadmap.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -55,3 +65,9 @@ pub use input::{
 };
 pub use surface::{BufferAge, Frame, PixelFormat, Surface, SurfaceError};
 pub use theme::{ColorScheme, Metrics, Radius, Role, Theme};
+
+/// Compiles the examples in this crate's README, so they cannot drift from the API
+/// they claim to demonstrate. Never built except under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;

@@ -41,3 +41,9 @@ mod surface;
 pub use error::FbdevError;
 #[cfg(target_os = "linux")]
 pub use surface::FbdevSurface;
+
+/// Compiles the examples in this crate's README, so they cannot drift from the API
+/// they claim to demonstrate. Never built except under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;
