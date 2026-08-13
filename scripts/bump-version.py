@@ -3,8 +3,8 @@
 
     scripts/bump-version.py 0.1.0
 
-Thirteen lines in the root `Cargo.toml` have to move together: the one under
-`[workspace.package]`, and the twelve `denise* = { version = "..." }` pins under
+A line per crate in the root `Cargo.toml` has to move with the one under
+`[workspace.package]`: every `denise* = { version = "..." }` pin under
 `[workspace.dependencies]`. Editing them by hand works right up until it does
 not, and the failure is the quiet kind — a pin left behind publishes a crate
 requiring a sibling nobody built it against, and no local build can notice

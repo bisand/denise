@@ -55,7 +55,8 @@ impl Pixels {
 /// are identical in both conventions, so an image with no transparency needs
 /// no conversion. Where the pixels come from is deliberately not this
 /// widget's business: the application does I/O and decoding and hands the
-/// result over.
+/// result over — the `denise-image` crate decodes PNG, JPEG, GIF and BMP
+/// into exactly this shape.
 ///
 /// # Sizing is honest about what it costs
 ///

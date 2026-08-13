@@ -235,6 +235,7 @@ framebuffer.
 | [`denise-render`](https://crates.io/crates/denise-render) | Software rasteriser and the built-in font | `no_std + alloc` |
 | [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout, word wrapping | `no_std + alloc` |
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
+| [`denise-image`](https://crates.io/crates/denise-image) | PNG/JPEG/GIF/BMP decoding into premultiplied pixels | `std` |
 | [`denise-drm`](https://crates.io/crates/denise-drm) | Linux DRM/KMS — the primary target | Linux |
 | [`denise-fbdev`](https://crates.io/crates/denise-fbdev) | Linux fbdev fallback | Linux |
 | [`denise-evdev`](https://crates.io/crates/denise-evdev) | Input, keyboard layouts, dead keys, console muting | Linux |
@@ -344,7 +345,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/design.md](docs/design.md) | How it is built and why — architecture, rasteriser, text, keyboards, theming, and the milestone history |
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
-| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all twelve share one number, and what each guard is for |
+| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all thirteen share one number, and what each guard is for |
 
 ## Constraints
 

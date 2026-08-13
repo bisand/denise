@@ -6,7 +6,7 @@ name: Release
 # tag:
 #
 #   1. The version is read from the tag (v0.3.0 -> 0.3.0) and written everywhere
-#      it lives — workspace version, the twelve sibling pins, the README snippet,
+#      it lives — workspace version, the sibling pins, the README snippet,
 #      Cargo.lock — as a commit on top of the released tree.
 #   2. The tag is moved onto that commit, so the invariant that crates.io carries
 #      exactly the tagged source holds by construction rather than by discipline.
@@ -159,7 +159,7 @@ jobs:
           echo "::error::CI did not finish on $sha within 30 minutes."
           exit 1
 
-      # The rehearsal. Packages all twelve, then verifies each against a local
+      # The rehearsal. Packages every crate, then verifies each against a local
       # registry built from the others — one runner, nothing on the real index.
       # `--locked` is deliberate: a bump that did not refresh Cargo.lock fails
       # here rather than halfway through an upload.

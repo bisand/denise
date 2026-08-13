@@ -133,7 +133,7 @@ jobs:
       # This exists because the failure is invisible. `[workspace.dependencies]`
       # pins each sibling by version *and* path: the path is what resolves in
       # this tree, the version is what gets uploaded. Bump
-      # `workspace.package.version` and forget those twelve lines, and
+      # `workspace.package.version` and forget those pin lines, and
       # `denise-ui 0.1.0` goes to crates.io requiring `denise-render 0.0.1` — it
       # publishes, it resolves, and every consumer gets a combination that was
       # never built once. Nothing in a local build can notice, because locally
@@ -159,7 +159,7 @@ jobs:
 
           wrong = 0
 
-          # Lockstep: one number across all twelve, so that "which versions work
+          # Lockstep: one number across every published crate, so that "which versions work
           # together" has the answer "the matching ones" rather than a table
           # somebody has to maintain. A crate that sets its own version breaks
           # that promise quietly, and every pin below would still agree.

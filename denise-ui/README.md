@@ -66,7 +66,7 @@ Eighteen of them, deliberately few:
 | `RadialProgress` | A ring, with room for a number in the middle |
 | `Spinner` | An arc that turns. **The one widget that can keep a device awake** |
 | `Select` | The closed half of a dropdown; `open_select` is the open half |
-| `Image` | A picture with a fit mode. Bring your own pixels, premultiplied |
+| `Image` | A picture with a fit mode. Bring your own pixels — `denise-image` decodes them |
 
 The bar a widget has to clear is being something several panels would otherwise
 each get subtly wrong — focus handling, keyboard semantics, hit areas, disabled

@@ -1,0 +1,31 @@
+[package]
+name = "denise-image"
+description = "Image decoding for Denise: PNG, JPEG, GIF and BMP into premultiplied pixels."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+# Each decoder is its own feature so a panel pays only for the formats it
+# ships. BMP is hand-rolled in this crate and always present — it is smaller
+# than a feature gate. The binary costs are measured in the README.
+default = ["png", "jpeg", "gif"]
+png = ["dep:png"]
+jpeg = ["dep:zune-jpeg"]
+gif = ["dep:gif"]
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-render = { workspace = true, features = ["std"] }
+png = { workspace = true, optional = true }
+zune-jpeg = { workspace = true, optional = true }
+gif = { workspace = true, optional = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

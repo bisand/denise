@@ -20,6 +20,7 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-render` | Software rasteriser, coverage blitting, the built-in bitmap font | ✅ M1, M3, M4 |
 | `denise-text` | Glyph sources, a bounded glyph atlas, line layout, word wrapping | ✅ M4, M6 |
 | `denise-ui` | Scene graph, scene stack, widgets, cursor sprite | ✅ M3 |
+| `denise-image` | PNG, JPEG, GIF and BMP decoding into premultiplied pixels | ✅ M6 |
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |
 | `denise-drm` | Linux DRM/KMS backend — the primary target | ✅ M2 |
 | `denise-fbdev` | Linux fbdev fallback | ✅ M2 |
