@@ -52,6 +52,16 @@ pub(crate) struct Node<M> {
     /// Which scene this node belongs to, as an index into the stack.
     pub(crate) scene: usize,
     pub(crate) state: VisualState,
+    /// Whether the tree may scroll this node's content on wheel, page keys and
+    /// reveal requests. Explicit rather than inferred from overflowing content,
+    /// so a panel with a decoratively clipped child does not start moving under
+    /// the wheel.
+    pub(crate) scrollable: bool,
+    /// How far this node's content is scrolled: children are shifted up and
+    /// left by this much. Applied in `reflow`, which is the single place that
+    /// turns layouts into absolute bounds — so paint, clip and hit testing
+    /// cannot disagree about where a scrolled child is.
+    pub(crate) scroll: denise::Point,
 }
 
 impl<M> Node<M> {
@@ -68,6 +78,8 @@ impl<M> Node<M> {
             children: Vec::new(),
             scene,
             state: VisualState::NONE,
+            scrollable: false,
+            scroll: denise::Point::ZERO,
         }
     }
 

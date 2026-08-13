@@ -160,6 +160,7 @@ pub struct EventCtx<'a, M> {
     dirty: bool,
     wants_focus: bool,
     wants_animation: bool,
+    reveal: Option<Rect>,
 }
 
 impl<'a, M> EventCtx<'a, M> {
@@ -181,6 +182,7 @@ impl<'a, M> EventCtx<'a, M> {
             dirty: false,
             wants_focus: false,
             wants_animation: false,
+            reveal: None,
         }
     }
 
@@ -221,8 +223,25 @@ impl<'a, M> EventCtx<'a, M> {
         self.wants_animation = true;
     }
 
-    pub(crate) fn finish(self) -> (bool, bool, bool) {
-        (self.dirty, self.wants_focus, self.wants_animation)
+    /// Asks the tree to scroll `rect` — in absolute surface coordinates, like
+    /// [`EventCtx::bounds`] — into view in every scrollable ancestor.
+    ///
+    /// For a widget whose *interior* moves: a list whose selection walked below
+    /// the fold reveals the selected row's rectangle, and the viewport follows
+    /// the selection the way it follows focus. Widgets that are themselves the
+    /// focus target need nothing — focus already reveals.
+    #[inline]
+    pub fn reveal(&mut self, rect: Rect) {
+        self.reveal = Some(rect);
+    }
+
+    pub(crate) fn finish(self) -> (bool, bool, bool, Option<Rect>) {
+        (
+            self.dirty,
+            self.wants_focus,
+            self.wants_animation,
+            self.reveal,
+        )
     }
 }
 

@@ -2795,3 +2795,317 @@ fn pops_in_the_wrong_order_cannot_strand_a_popup() {
     assert!(ui.pop_scene(), "the modal pops normally afterwards");
     assert!(!ui.pop_scene(), "and the base scene never pops");
 }
+
+// ----------------------------------------------------------------- scrolling
+
+/// A 120-tall viewport over 360 of content: three buttons at 0, 120 and 240,
+/// each 40 tall, inside a scrollable panel.
+fn viewport() -> (Ui<Msg>, NodeId, NodeId, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let view = ui
+        .add(root, Panel::default(), Rect::new(40, 40, 200, 120))
+        .expect("viewport");
+    ui.set_scrollable(view, true);
+    let top = ui
+        .add(
+            view,
+            Button::new("Top", Msg::Save),
+            Rect::new(10, 0, 180, 40),
+        )
+        .expect("top");
+    let middle = ui
+        .add(
+            view,
+            Button::new("Middle", Msg::Cancel),
+            Rect::new(10, 120, 180, 40),
+        )
+        .expect("middle");
+    let bottom = ui
+        .add(
+            view,
+            Button::new("Bottom", Msg::Submitted),
+            Rect::new(10, 240, 180, 40),
+        )
+        .expect("bottom");
+    (ui, view, top, middle, bottom)
+}
+
+/// Paint, clip and hit testing agree about a scrolled child, because one reflow
+/// computes all three. Scrolled down by one page, the bottom button is where
+/// the top one was — visually and to the pointer.
+#[test]
+fn paint_and_hit_testing_agree_about_a_scrolled_child() {
+    let (mut ui, view, top, _, bottom) = viewport();
+
+    // Before scrolling: the top button is visible and clickable at y=50.
+    ui.handle(&click(100, 60));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+    assert!(
+        ui.bounds(bottom).expect("bottom").y > 160,
+        "bottom starts below the fold"
+    );
+
+    // Asking for more than the content has clamps to the end: 280 of content
+    // in a 120 viewport scrolls at most 160.
+    ui.set_scroll(view, Point::new(0, 240));
+    assert_eq!(
+        ui.bounds(bottom).expect("bottom").y,
+        120,
+        "bounds moved with the (clamped) scroll"
+    );
+    ui.handle(&click(100, 140));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Submitted],
+        "the click lands on what is visually there"
+    );
+    // And the top button is scrolled out: clipped, unhittable, a click through
+    // its old spot reaches nothing.
+    ui.handle(&click(100, 60));
+    assert!(
+        ui.messages().is_empty(),
+        "the scrolled-out button must not be clickable"
+    );
+    let _ = top;
+}
+
+/// Content outside the viewport is clipped out of painting entirely.
+#[test]
+fn content_outside_the_viewport_is_clipped() {
+    let (mut ui, view, _, _, bottom) = viewport();
+    let outside = Rect::new(40, 170, 200, 60);
+    let before = pixels_of(&mut ui, outside);
+
+    // Everything below the viewport's bottom edge (y=160) is background: the
+    // 240-tall content must not leak past the 120-tall viewport.
+    let mut reference: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let r = reference.root();
+    reference
+        .add(r, Panel::default(), Rect::new(40, 40, 200, 120))
+        .expect("bare panel");
+    let bare = pixels_of(&mut reference, outside);
+    assert_eq!(before, bare, "content leaked out of the viewport");
+
+    ui.set_scroll(view, Point::new(0, 999));
+    let _ = bottom;
+    let after = pixels_of(&mut ui, outside);
+    assert_eq!(after, bare, "scrolling must not change what leaks: nothing");
+}
+
+/// The offset clamps to the content: no negative scroll, no scrolling past the
+/// last child, and the getter reports what was actually applied.
+#[test]
+fn the_scroll_offset_clamps_to_the_content() {
+    let (mut ui, view, _, _, _) = viewport();
+    assert_eq!(ui.max_scroll(view), Point::new(0, 160), "280 tall in 120");
+
+    ui.set_scroll(view, Point::new(-50, -50));
+    assert_eq!(ui.scroll(view), Point::ZERO);
+    ui.set_scroll(view, Point::new(500, 9_999));
+    assert_eq!(ui.scroll(view), Point::new(0, 160));
+}
+
+/// The wheel scrolls the viewport under the pointer, without anything focused
+/// and without the pointer resting on any widget.
+#[test]
+fn the_wheel_scrolls_the_viewport_under_the_pointer() {
+    let (mut ui, view, _, _, _) = viewport();
+    ui.handle(&[InputEvent::PointerScroll {
+        delta_x: 0.0,
+        delta_y: 48.0,
+        position: Point::new(100, 100),
+    }]);
+    assert_eq!(ui.scroll(view), Point::new(0, 48), "content scrolled down");
+
+    // And a wheel outside the viewport does nothing to it.
+    ui.handle(&[InputEvent::PointerScroll {
+        delta_x: 0.0,
+        delta_y: 48.0,
+        position: Point::new(350, 220),
+    }]);
+    assert_eq!(ui.scroll(view), Point::new(0, 48));
+}
+
+/// Tab to a widget below the fold scrolls it into view — a keyboard-only panel
+/// must never focus something nobody can see.
+#[test]
+fn focusing_below_the_fold_scrolls_the_target_into_view() {
+    let (mut ui, view, _, _, bottom) = viewport();
+    ui.focus(Some(bottom));
+    let bounds = ui.bounds(bottom).expect("bottom");
+    let viewport = ui.bounds(view).expect("view");
+    assert!(
+        bounds.y >= viewport.y && bounds.bottom() <= viewport.bottom(),
+        "the focused button must be inside the viewport: {bounds:?} in {viewport:?}"
+    );
+    assert!(ui.scroll(view).y > 0, "which required scrolling");
+}
+
+/// PageDown pages the scrollable that contains the focus, by its own height,
+/// and PageUp pages back.
+#[test]
+fn the_page_keys_page_the_scrollable_holding_focus() {
+    let (mut ui, view, top, _, _) = viewport();
+    ui.focus(Some(top));
+    ui.handle(&[key(KeyCode::PageDown)]);
+    assert_eq!(ui.scroll(view), Point::new(0, 120), "one viewport height");
+    ui.handle(&[key(KeyCode::PageDown)]);
+    assert_eq!(ui.scroll(view), Point::new(0, 160), "clamped at the end");
+    ui.handle(&[key(KeyCode::PageUp)]);
+    assert_eq!(ui.scroll(view), Point::new(0, 40));
+}
+
+/// A touch on the viewport's background drags the content; a touch on a widget
+/// belongs to the widget.
+#[test]
+fn a_touch_on_the_background_drags_the_scroll() {
+    let (mut ui, view, _, _, _) = viewport();
+    // y=90 is between the top button (ends 80) and the middle (starts 160):
+    // background.
+    ui.handle(&[
+        InputEvent::TouchDown {
+            id: 1,
+            position: Point::new(100, 90),
+        },
+        InputEvent::TouchMoved {
+            id: 1,
+            position: Point::new(100, 50),
+        },
+        InputEvent::TouchUp {
+            id: 1,
+            position: Point::new(100, 50),
+            cancelled: false,
+        },
+    ]);
+    assert_eq!(
+        ui.scroll(view),
+        Point::new(0, 40),
+        "dragging the finger up scrolls the content down"
+    );
+    assert!(ui.messages().is_empty(), "and no widget fired");
+
+    // A touch that lands on a button is the button's press, not a drag.
+    ui.set_scroll(view, Point::new(0, 0));
+    ui.handle(&[
+        InputEvent::TouchDown {
+            id: 2,
+            position: Point::new(100, 60),
+        },
+        InputEvent::TouchMoved {
+            id: 2,
+            position: Point::new(100, 55),
+        },
+        InputEvent::TouchUp {
+            id: 2,
+            position: Point::new(100, 55),
+            cancelled: false,
+        },
+    ]);
+    assert_eq!(ui.scroll(view), Point::ZERO, "the button kept its touch");
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+}
+
+/// Scrolling damages the viewport: the next paint repaints it, and an idle
+/// tree afterwards owes nothing.
+#[test]
+fn scrolling_damages_the_viewport() {
+    let (mut ui, view, _, _, _) = viewport();
+    ui.render_nothing();
+    assert!(!ui.needs_paint());
+    ui.set_scroll(view, Point::new(0, 30));
+    assert!(ui.needs_paint(), "a scroll owes a frame");
+    ui.render_nothing();
+    ui.set_scroll(view, Point::new(0, 30));
+    assert!(!ui.needs_paint(), "the same offset again owes nothing");
+}
+
+/// The reason the foundation exists: a list taller than its viewport, whose
+/// keyboard selection walks below the fold and pulls the viewport along.
+#[test]
+fn a_list_selection_below_the_fold_pulls_the_viewport_along() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let view = ui
+        .add(root, Panel::default(), Rect::new(20, 20, 240, 120))
+        .expect("viewport");
+    ui.set_scrollable(view, true);
+    let list = ui
+        .add(
+            view,
+            List::new(
+                (1..=8).map(|i| format!("Rad {i}")).collect::<Vec<_>>(),
+                Msg::Row,
+            )
+            .with_row_height(40),
+            Rect::new(0, 0, 240, 320),
+        )
+        .expect("list");
+    ui.focus(Some(list));
+
+    // Walk the selection to the last row: 8 rows of 40 in a 120 viewport.
+    ui.handle(&keys(KeyCode::ArrowDown, 8));
+    let selected = ui
+        .widget::<List<Msg>>(list)
+        .expect("list")
+        .selected()
+        .expect("a selection");
+    assert_eq!(selected, 7);
+
+    let viewport = ui.bounds(view).expect("view");
+    let list_bounds = ui.bounds(list).expect("list");
+    let row = Rect::new(list_bounds.x, list_bounds.y + 7 * 40, list_bounds.width, 40);
+    assert!(
+        row.y >= viewport.y && row.bottom() <= viewport.bottom(),
+        "the selected row must be inside the viewport: {row:?} in {viewport:?}"
+    );
+    assert_eq!(ui.scroll(view).y, 200, "scrolled to hold the last row");
+
+    // And walking back up pulls it back.
+    ui.handle(&keys(KeyCode::ArrowUp, 7));
+    assert_eq!(ui.scroll(view).y, 0, "the first row is visible again");
+}
+
+/// The hovered widget sees the wheel before the tree does: one that consumes
+/// it — a future value-spinner, a chart — stops the viewport underneath from
+/// moving.
+#[test]
+fn a_widget_that_consumes_the_wheel_stops_the_viewport_scrolling() {
+    struct WheelEater;
+    impl Widget<Msg> for WheelEater {
+        fn paint(&self, _: &mut PaintCtx<'_>, _: &mut denise_render::Canvas<'_>) {}
+        fn on_event(
+            &mut self,
+            event: &denise_ui::Event<'_>,
+            _: &mut denise_ui::EventCtx<'_, Msg>,
+        ) -> denise_ui::Handled {
+            match event {
+                denise_ui::Event::Input(InputEvent::PointerScroll { .. }) => {
+                    denise_ui::Handled::Yes
+                }
+                _ => denise_ui::Handled::No,
+            }
+        }
+        fn accepts_pointer(&self) -> bool {
+            true
+        }
+    }
+
+    let (mut ui, view, _, _, _) = viewport();
+    ui.add(view, WheelEater, Rect::new(0, 40, 200, 40))
+        .expect("eater");
+    let wheel = |x: i32, y: i32| InputEvent::PointerScroll {
+        delta_x: 0.0,
+        delta_y: 48.0,
+        position: Point::new(x, y),
+    };
+
+    // Over the eater (absolute y 80..120): consumed, no scroll.
+    ui.handle(&[wheel(100, 100)]);
+    assert_eq!(ui.scroll(view), Point::ZERO, "the widget ate the wheel");
+
+    // Over plain viewport (y 40..80 is the Top button, which does not consume;
+    // y 130 is background): the tree scrolls.
+    ui.handle(&[wheel(100, 130)]);
+    assert_eq!(ui.scroll(view), Point::new(0, 48));
+}

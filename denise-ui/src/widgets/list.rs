@@ -132,22 +132,29 @@ impl From<String> for ListItem {
 /// List::new(["Nettverk", "Skjerm", "Om"], Message::Row).on_activate(Message::Open)
 /// ```
 ///
-/// # It does not scroll, and that is a decision rather than an omission
+/// # Scrolling belongs to the tree, and this widget cooperates with it
 ///
-/// A list longer than its rectangle draws the rows that fit and stops. Rows past
-/// the bottom edge are not drawn and cannot be clicked; the keyboard *will* still
-/// move the selection into them, where it becomes invisible.
+/// A list longer than its rectangle draws the rows that fit and stops — the
+/// widget itself never scrolls. The scrolling version is a *viewport*: put the
+/// list, sized with [`preferred_height`](List::preferred_height), inside a node
+/// marked [`Ui::set_scrollable`](crate::Ui::set_scrollable), and the tree does
+/// the rest — wheel, page keys, touch-drag on the background, clipping and hit
+/// testing all agree because one reflow computes them.
 ///
-/// There is no scrolling anywhere in Denise, and a viewport is a bigger thing than
-/// one widget: it needs a scroll offset the tree understands, damage that accounts
-/// for it, and hit testing that agrees with both. Building half of one inside this
-/// widget would give every later scrollable a private convention to be
-/// incompatible with.
+/// ```ignore
+/// let viewport = ui.add(root, Panel::default(), Rect::new(20, 20, 240, 160))?;
+/// ui.set_scrollable(viewport, true);
+/// let height = list.preferred_height(ui.theme());
+/// let list = ui.add(viewport, list, Rect::new(0, 0, 240, height))?;
+/// ```
 ///
-/// So: size the list with [`preferred_height`](List::preferred_height), or ask
-/// [`visible_rows`](List::visible_rows) how many fit and hand it that many. On a
-/// panel with one fixed resolution, "it fits" is a more reasonable assumption than
-/// it sounds. Scrolling is [#21].
+/// The one thing the widget contributes: **a keyboard selection below the fold
+/// pulls the viewport along.** Moving the selection reveals the selected row's
+/// rectangle ([`EventCtx::reveal`](crate::EventCtx::reveal)), the same way
+/// focus reveals a focused widget.
+///
+/// On a panel with one fixed resolution, "it fits" is still a fine answer —
+/// [`visible_rows`](List::visible_rows) says how many rows a rectangle holds.
 ///
 /// # Selection, and why it is optional here
 ///
@@ -438,6 +445,10 @@ impl<M> List<M> {
             return Handled::Yes;
         }
         self.selected = Some(target);
+        // A selection that walked below the fold pulls its viewport along: the
+        // list reveals the selected row's rectangle and every scrollable
+        // ancestor scrolls it into view — the same mechanism focus uses.
+        ctx.reveal(row_rect(ctx.bounds, self.row_height(ctx.theme), target));
         if let Some(message) = self.selection {
             ctx.emit(message(target));
         }

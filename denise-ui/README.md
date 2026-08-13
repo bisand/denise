@@ -88,7 +88,14 @@ this without changing anything below it. Widgets with a natural size offer
 `preferred_width`/`preferred_height` as *queries the application makes* — the tree
 never calls them, and that is the line.
 
-**Nothing scrolls** ([#21](https://github.com/bisand/denise/issues/21)).
+## Scrolling
+
+Mark a node `ui.set_scrollable(view, true)` and it is a viewport: content is
+clipped to it, the wheel scrolls it (innermost under the pointer, after the
+hovered widget declines), PageUp/Down page the scrollable holding focus, a
+touch on its background drags it, and focusing — or moving a `List` selection —
+below the fold scrolls the target into view. No smooth scrolling, deliberately:
+a kiosk animating a fling at 60 Hz is the idle-cost story in reverse.
 
 ## Layers
 

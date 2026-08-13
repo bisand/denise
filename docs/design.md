@@ -201,8 +201,8 @@ one per widget, before the rule was. It now lives in one function, `style::muted
 which mutes a pair that can afford it and returns one that cannot unchanged:
 legible and undifferentiated beats differentiated and illegible.
 
-Three limits were found by building against them rather than by design review.
-The first is now resolved; two are open:
+Three limits were found by building against them rather than by design review,
+and all three are now resolved:
 
 - **`Ui::tick` animated only the focused widget** — resolved by
   [#19](https://github.com/bisand/denise/issues/19). Animation is now *requested*:
@@ -236,12 +236,27 @@ The first is now resolved; two are open:
   edge left open on purpose: widgets default their text to 16 px, so a
   scale-aware application sets text sizes explicitly; theme-driven typography
   would be its own design conversation.
-- **Nothing scrolls** ([#21](https://github.com/bisand/denise/issues/21)). `List`
-  draws the rows that fit and says so in its own documentation, which is honest
-  and, on a panel with one fixed resolution, usually enough. A viewport is not a
-  widget: it is a scroll offset that paint, damage and hit testing must all agree
-  about, and half of one built inside `List` would give every later scrollable a
-  private convention to be incompatible with.
+- **Nothing scrolled** — resolved by
+  [#21](https://github.com/bisand/denise/issues/21), in the place the issue
+  demanded: the tree, not a widget. A node marked `Ui::set_scrollable` becomes a
+  viewport; its scroll offset is applied in **`reflow`, the one loop that turns
+  layouts into absolute bounds** — so paint, clip and hit testing cannot
+  disagree about where a scrolled child is, because they all read the fields
+  that loop wrote. Scrolling damages the whole viewport (the honest first
+  version), the wheel scrolls the innermost viewport under the pointer after
+  the hovered widget declines it, PageUp/Down page the scrollable holding
+  focus, and a touch that lands on a viewport's *background* drags it — a touch
+  that lands on a widget belongs to the widget, because stealing an in-progress
+  press is gesture disambiguation, deliberately not attempted yet. Focus
+  reveals: tabbing below the fold scrolls the target into view, which required
+  teaching `is_focusable` that an empty clip is reachable when a scrollable
+  ancestor can fix it — demanding visibility first was a catch-22 that made
+  everything below the fold keyboard-unreachable, and the tests caught it on
+  their first run. Widgets whose *interior* moves get `EventCtx::reveal`: `List`
+  reveals its selected row, so a keyboard selection below the fold pulls the
+  viewport along. Still deliberately out: smooth and inertial scrolling — a
+  kiosk redrawing a viewport at 60 Hz to animate a fling is the opposite of
+  what the animation contract protects.
 
 ### One surface, and what that rules out
 

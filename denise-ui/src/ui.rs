@@ -63,6 +63,11 @@ pub struct Ui<M: 'static> {
     pointer: Point,
     hovered: Option<NodeId>,
     pressed: Option<NodeId>,
+    /// A touch that landed on a scrollable's background rather than on any
+    /// interactive widget: subsequent moves drag the scroll. A touch that lands
+    /// on a widget belongs to the widget — stealing an in-progress press for
+    /// scrolling is gesture disambiguation, deliberately not attempted yet.
+    touch_scroll: Option<(NodeId, Point)>,
     focused: Option<NodeId>,
     cursor: Cursor,
     messages: Vec<M>,
@@ -100,6 +105,7 @@ impl<M: 'static> Ui<M> {
             pointer: Point::ZERO,
             hovered: None,
             pressed: None,
+            touch_scroll: None,
             focused: None,
             cursor: Cursor::default(),
             messages: Vec::new(),
@@ -396,6 +402,79 @@ impl<M: 'static> Ui<M> {
 
     /// Moves or resizes a node, damaging the rectangles it left and the ones it
     /// now occupies.
+    /// Marks a node as a viewport the tree may scroll: wheel over it, page
+    /// keys inside it, and reveal requests from its content all move its
+    /// [`Ui::scroll`] offset. Content is clipped to the node either way — this
+    /// flag is about who may *move* it.
+    ///
+    /// Explicit rather than inferred from overflowing content, so a panel with
+    /// a decoratively clipped child does not start moving under the wheel.
+    pub fn set_scrollable(&mut self, id: NodeId, scrollable: bool) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.scrollable = scrollable;
+        }
+    }
+
+    /// How far a node's content is scrolled. `Point::ZERO` until somebody
+    /// scrolls.
+    pub fn scroll(&self, id: NodeId) -> Point {
+        self.nodes.get(id).map_or(Point::ZERO, |n| n.scroll)
+    }
+
+    /// The furthest a node can scroll: how far its content extends past its
+    /// own rectangle, axis by axis. Zero when everything fits.
+    pub fn max_scroll(&self, id: NodeId) -> Point {
+        let Some(node) = self.nodes.get(id) else {
+            return Point::ZERO;
+        };
+        let mut right = 0;
+        let mut bottom = 0;
+        for &child in &node.children {
+            if let Some(child) = self.nodes.get(child) {
+                right = right.max(child.layout.right());
+                bottom = bottom.max(child.layout.bottom());
+            }
+        }
+        Point::new(
+            (right - node.layout.width).max(0),
+            (bottom - node.layout.height).max(0),
+        )
+    }
+
+    /// Scrolls a node's content to `offset`, clamped to what its content
+    /// actually extends to — a viewport cannot be scrolled past its last child
+    /// or into negative space.
+    ///
+    /// Damages the whole viewport, deliberately: scrolling moves every visible
+    /// pixel in it, and the honest damage for that is the viewport itself.
+    pub fn set_scroll(&mut self, id: NodeId, offset: Point) {
+        let limit = self.max_scroll(id);
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        let clamped = Point::new(offset.x.clamp(0, limit.x), offset.y.clamp(0, limit.y));
+        if node.scroll == clamped {
+            return;
+        }
+        node.scroll = clamped;
+        let clip = node.clip;
+        self.damage.add(clip);
+        self.reflow(id);
+        // The pointer has not moved, but what is under it has.
+        self.update_hover();
+    }
+
+    /// Scrolls a node's content by a delta, clamped like [`Ui::set_scroll`].
+    pub fn scroll_by(&mut self, id: NodeId, dx: i32, dy: i32) {
+        let current = self.scroll(id);
+        self.set_scroll(
+            id,
+            Point::new(current.x.saturating_add(dx), current.y.saturating_add(dy)),
+        );
+    }
+
+    /// Moves or resizes a node, damaging the rectangles it left and the ones it
+    /// now occupies.
     pub fn set_layout(&mut self, id: NodeId, layout: Rect) {
         let Some(node) = self.nodes.get(id) else {
             return;
@@ -529,6 +608,81 @@ impl<M: 'static> Ui<M> {
             .nodes
             .get(popup.container)
             .is_some_and(|node| node.clip.contains(p))
+    }
+
+    /// The innermost scrollable whose viewport contains `p`, in the scene input
+    /// currently reaches. Innermost, so a scrollable inside a scrollable
+    /// scrolls the one the pointer is actually over.
+    fn scroll_target(&mut self, p: Point) -> Option<NodeId> {
+        self.ensure_order();
+        let (start, end) = self.input_span();
+        self.order[start..end].iter().rev().copied().find(|&id| {
+            self.nodes
+                .get(id)
+                .is_some_and(|n| n.scrollable && n.visible && n.clip.contains(p))
+        })
+    }
+
+    /// The nearest scrollable ancestor of `id`, itself included.
+    fn scrollable_ancestor(&self, id: Option<NodeId>) -> Option<NodeId> {
+        let mut current = id;
+        while let Some(id) = current {
+            let node = self.nodes.get(id)?;
+            if node.scrollable {
+                return Some(id);
+            }
+            current = node.parent;
+        }
+        None
+    }
+
+    /// Scrolls ancestors of `id` so that `rect` (absolute) becomes visible in
+    /// each of their viewports — the mechanism behind focus following and a
+    /// widget's [`EventCtx::reveal`].
+    ///
+    /// Walks inside-out, so a scrollable inside a scrollable brings the target
+    /// into its own viewport first and the outer one then brings *that* into
+    /// view.
+    fn reveal_rect(&mut self, id: NodeId, rect: Rect) {
+        let mut rect = rect;
+        let mut current = self.nodes.get(id).and_then(|n| n.parent);
+        while let Some(ancestor) = current {
+            let Some(node) = self.nodes.get(ancestor) else {
+                return;
+            };
+            current = node.parent;
+            if !node.scrollable {
+                continue;
+            }
+            let view = node.bounds;
+            let scroll = node.scroll;
+            // How far the viewport must move so the rect's near edge is inside.
+            // A rect taller than the viewport reveals its top, which is where
+            // reading starts.
+            let dy = if rect.bottom() > view.bottom() {
+                (rect.bottom() - view.bottom()).min(rect.y - view.y)
+            } else if rect.y < view.y {
+                rect.y - view.y
+            } else {
+                0
+            };
+            let dx = if rect.right() > view.right() {
+                (rect.right() - view.right()).min(rect.x - view.x)
+            } else if rect.x < view.x {
+                rect.x - view.x
+            } else {
+                0
+            };
+            if dx != 0 || dy != 0 {
+                let before = self.scroll(ancestor);
+                self.set_scroll(ancestor, Point::new(before.x + dx, before.y + dy));
+                let after = self.scroll(ancestor);
+                // The rect moved with the content; the outer loop must judge it
+                // where it now is.
+                rect = rect.translate(before.x - after.x, before.y - after.y);
+            }
+            let _ = scroll;
+        }
     }
 
     // ---------------------------------------------------------------- input
@@ -783,10 +937,21 @@ impl<M: 'static> Ui<M> {
                 self.move_pointer(*position, true);
                 self.release(event);
             }
-            InputEvent::PointerScroll { position, .. } => {
+            InputEvent::PointerScroll {
+                position,
+                delta_x,
+                delta_y,
+            } => {
                 self.move_pointer(*position, true);
-                if let Some(id) = self.hovered {
-                    self.dispatch(id, &Event::Input(event));
+                // The hovered widget sees the wheel first — a widget may make
+                // it mean something else. Unconsumed, it scrolls the innermost
+                // scrollable under the pointer.
+                let handled = match self.hovered {
+                    Some(id) => self.dispatch(id, &Event::Input(event)).is_handled(),
+                    None => false,
+                };
+                if !handled && let Some(target) = self.scroll_target(*position) {
+                    self.scroll_by(target, *delta_x as i32, *delta_y as i32);
                 }
             }
             InputEvent::PointerLeft => {
@@ -800,14 +965,25 @@ impl<M: 'static> Ui<M> {
                 }
                 self.move_pointer(*position, false);
                 self.press(event);
+                if self.pressed.is_none() {
+                    // Nothing interactive claimed the finger; if it landed in a
+                    // viewport, moving it drags the scroll.
+                    self.touch_scroll = self.scroll_target(*position).map(|id| (id, *position));
+                }
             }
             InputEvent::TouchMoved { position, .. } => {
                 self.move_pointer(*position, false);
-                if let Some(id) = self.pressed {
+                if let Some((target, last)) = self.touch_scroll {
+                    // Content follows the finger: dragging up moves the scroll
+                    // down.
+                    self.scroll_by(target, last.x - position.x, last.y - position.y);
+                    self.touch_scroll = Some((target, *position));
+                } else if let Some(id) = self.pressed {
                     self.dispatch(id, &Event::Input(event));
                 }
             }
             InputEvent::TouchUp { position, .. } => {
+                self.touch_scroll = None;
                 self.move_pointer(*position, false);
                 self.release(event);
                 self.set_hovered(None);
@@ -831,6 +1007,28 @@ impl<M: 'static> Ui<M> {
                 // widget: a dropdown open over a text field closes on Escape
                 // rather than handing the key to the field behind it.
                 self.close_popup();
+            }
+            InputEvent::Key {
+                code: code @ (KeyCode::PageUp | KeyCode::PageDown),
+                state: ElementState::Down,
+                ..
+            } => {
+                // The focused widget sees the page keys first; unconsumed, they
+                // page the scrollable that contains the focus, by its own
+                // height.
+                let handled = match self.focused {
+                    Some(id) => self.dispatch(id, &Event::Input(event)).is_handled(),
+                    None => false,
+                };
+                if !handled && let Some(target) = self.scrollable_ancestor(self.focused) {
+                    let page = self.nodes[target].layout.height;
+                    let dy = if matches!(code, KeyCode::PageDown) {
+                        page
+                    } else {
+                        -page
+                    };
+                    self.scroll_by(target, 0, dy);
+                }
             }
             InputEvent::Key { .. } | InputEvent::Text { .. } => {
                 if let Some(id) = self.focused {
@@ -927,13 +1125,16 @@ impl<M: 'static> Ui<M> {
             &mut self.messages,
         );
         let handled = node.widget.on_event(event, &mut ctx);
-        let (dirty, wants_focus, wants_animation) = ctx.finish();
+        let (dirty, wants_focus, wants_animation, reveal) = ctx.finish();
         let clip = node.clip;
         if dirty || handled.is_handled() {
             self.damage.add(clip);
         }
         if wants_animation {
             self.request_animation(id);
+        }
+        if let Some(rect) = reveal {
+            self.reveal_rect(id, rect);
         }
         (handled, wants_focus)
     }
@@ -964,6 +1165,13 @@ impl<M: 'static> Ui<M> {
         if let Some(new) = id {
             self.set_state(new, VisualState::FOCUSED, true);
             self.deliver(new, &Event::FocusGained);
+            // Focus must be visible: tabbing to a widget below the fold scrolls
+            // it into view, or a keyboard-only panel focuses something nobody
+            // can see.
+            if let Some(node) = self.nodes.get(new) {
+                let bounds = node.bounds;
+                self.reveal_rect(new, bounds);
+            }
         }
     }
 
@@ -1047,7 +1255,14 @@ impl<M: 'static> Ui<M> {
 
     fn is_focusable(&self, id: NodeId) -> bool {
         self.nodes.get(id).is_some_and(|node| {
-            node.paintable()
+            // A clipped-out node is still reachable when a scrollable ancestor
+            // can bring it back: taking focus is what scrolls it into view, so
+            // demanding visibility first would make everything below the fold
+            // permanently unreachable by keyboard — the catch-22 the scrolling
+            // tests caught on their first run.
+            let reachable = node.visible
+                && (!node.clip.is_empty() || self.scrollable_ancestor(node.parent).is_some());
+            reachable
                 && !node.state.contains(VisualState::DISABLED)
                 && node.widget.focusable()
                 // Only the topmost scene is reachable. Scanning the paint order
@@ -1151,7 +1366,12 @@ impl<M: 'static> Ui<M> {
             node.clip = node.bounds.intersect(&clip).unwrap_or(Rect::ZERO);
             let disabled = disabled || !node.enabled;
             node.state = node.state.set(VisualState::DISABLED, disabled);
-            let child_origin = Point::new(node.bounds.x, node.bounds.y);
+            // The scroll offset happens here and only here. Children lay out
+            // against a shifted origin, and everything downstream — bounds,
+            // clip, paint, hit testing — reads the fields this loop wrote, so
+            // nothing can disagree about where a scrolled child is.
+            let child_origin =
+                Point::new(node.bounds.x - node.scroll.x, node.bounds.y - node.scroll.y);
             let child_clip = node.clip;
             stack.extend(
                 node.children

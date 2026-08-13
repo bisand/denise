@@ -306,11 +306,12 @@ is in [docs/design.md](docs/design.md).
   group, progress bar, slider, divider, badge, alert, tabs, list. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a
   time — see [#6](https://github.com/bisand/denise/issues/6).
-- **Nothing scrolls.** `List` draws the rows that fit its rectangle and says so;
-  size it with `preferred_height` and it is a real answer on a panel with one
-  fixed resolution. A viewport is a scroll offset the tree, the damage tracker and
-  hit testing all have to agree about — see
-  [#21](https://github.com/bisand/denise/issues/21).
+- **Scrolling is a tree concern, and the tree does it.** Mark a node
+  `set_scrollable` and it becomes a viewport: wheel, page keys, touch-drag on
+  its background, clipping and hit testing all agree because one reflow
+  computes them, and focus or a `List` selection below the fold scrolls itself
+  into view. Deliberately absent: smooth and inertial scrolling — a kiosk
+  animating a fling at 60 Hz is the idle-cost story in reverse.
 - **No text selection, clipboard or word motion** in `TextInput`. The measurement
   it needs exists; the editing model does not.
 - **One surface, so no second window.** A modal is another scene over a dimmed
