@@ -89,7 +89,15 @@ Unpacking denise-ui v0.0.1 (registry `target/package/tmp-registry`)
 
 ## Setup, once
 
-`CARGO_REGISTRY_TOKEN` has to exist as a repository secret, from <https://crates.io/settings/tokens>. Scope it to publishing updates for the existing crates; it does not need permission to create new ones.
+`CARGO_REGISTRY_TOKEN` has to exist as a repository secret, from <https://crates.io/settings/tokens>. It needs **both `publish-new` and `publish-update`**, scoped to `denise-*`.
+
+`publish-new` is the one that looks unnecessary and is not. This document used to say the token only ever updates crates that already exist — true right up until the workspace grew a thirteenth member, and a release that has to *create* `denise-image` fails on the last step of an otherwise green run. The workspace gains crates about once a year, which is exactly the interval at which nobody remembers this.
+
+## A new crate cannot be published before its siblings are
+
+A crate added between releases depends on sibling versions that are not on crates.io yet — `denise-image 0.4.0` wants `denise-render 0.4.0` to already contain a function added after v0.4.0 shipped. Publishing it on its own fails to verify, and there is no way to reserve a name without publishing.
+
+So a new crate joins at the next release and not before, which `cargo publish --workspace` handles by building the whole set against a temporary local registry. Nothing needs doing; it is only worth knowing so that a failed solo `cargo publish -p` reads as expected rather than as a problem.
 
 ## What is already published
 
