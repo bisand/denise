@@ -50,7 +50,7 @@ so every state change lands in one `match` you wrote — no closures holding
 
 ## The widgets
 
-Twenty-three of them, deliberately few:
+Twenty-four of them, deliberately few:
 
 | | |
 |---|---|
@@ -72,6 +72,7 @@ Twenty-three of them, deliberately few:
 | `Table` | Cells under a pinned header. **Windows its data, so row count is free** |
 | `Timeline` | Events in order: time, disc, connector, label |
 | `Carousel` | Pictures sliding on the animation clock. **One wake per hold** |
+| `Collapse` | A section that folds to its header; `Accordion` adds exclusivity |
 
 The bar a widget has to clear is being something several panels would otherwise
 each get subtly wrong — focus handling, keyboard semantics, hit areas, disabled

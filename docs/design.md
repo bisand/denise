@@ -137,10 +137,10 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Twenty-three of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`,
+Twenty-four of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`,
 `Toggle`, `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`,
 `Tabs`, `List`, `RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`,
-`Avatar`, `Table`, `Timeline`, `Carousel`. The first four are CoreCanvas 0.4
+`Avatar`, `Table`, `Timeline`, `Carousel`, `Collapse`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -243,6 +243,21 @@ moved anyone else. The two pieces compose into the whole feature: put
 sections in a stack, tween one section's height, and the stack re-places the
 rest on every frame. That is the accordion mechanism, and the widgets over it
 can now be thin.
+
+`Collapse` held #34's promise that these widgets would be thin. The widget is
+the header alone — title, chevron, the toggle — and the node it sits on hosts
+the body as ordinary children, the way `Panel` does. `widgets::set_open` is
+the application's whole answer to the message: it drives `animate_layout` on
+the node's height, and the expanded height is **remembered at the moment of
+folding** rather than configured, so a section that grew a row while open
+comes back at its grown height. The body needs no hiding — the node's own
+clip crops it, mid-animation included, for free. `Accordion` is a controller
+struct, not a `Widget`: exclusivity over N sections the application owns is
+application policy, and it lives once, like `ClickPair`. A drawer is
+`push_scene` plus `animate_layout` composed by the tree (`Ui::push_drawer`),
+and its one new mechanism is closing: the scene pops **when the exit slide
+lands** — the first thing to happen *because* a tween arrived, kept internal
+rather than growing a public completion hook nobody has asked for yet.
 
 `Carousel` is the first widget to compose two foundations that had not met:
 #19's requested animation and #22's pictures. The tracker filed it under

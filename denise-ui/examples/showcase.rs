@@ -15,13 +15,13 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::widgets::{
-    Alert, Align, Avatar, Badge, Button, Carousel, Checkbox, Column, Divider, Fit, Image, Label,
-    List, ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
-    Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle,
+    Alert, Align, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Column, Divider, Fit, Image,
+    Label, List, ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select,
+    Slider, Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, set_open,
 };
 use denise_ui::{TextStyle, Ui};
 
-const SIZE: Size = Size::new(800, 2010);
+const SIZE: Size = Size::new(800, 2160);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,7 +162,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 1414))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 1564))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -617,6 +617,38 @@ fn build(theme: Theme) -> Ui<Msg> {
     // Past the fade-in, so the still picture catches them at full opacity
     // rather than at the nothing they are born as.
     ui.tick(600);
+
+    // An accordion: three collapse sections in a stack, the middle one open,
+    // the first one caught mid-fold — ticked to a frame where its body is
+    // half-cropped, so the still picture shows the mechanism.
+    let accordion_stack = ui
+        .add(form, Panel::default(), Rect::new(16, 1352, 400, 210))
+        .expect("accordion");
+    ui.set_stack(accordion_stack, 6);
+    let mut sections = Vec::new();
+    for title in ["Nettverk", "Skjerm", "Om"] {
+        let section = ui
+            .add(
+                accordion_stack,
+                Collapse::new(title, Msg::Remember),
+                Rect::new(4, 0, 392, 34 + 56),
+            )
+            .expect("section");
+        ui.add(
+            section,
+            Label::new("Innhold i seksjonen").with_role(Role::Base300),
+            Rect::new(20, 40, 300, 20),
+        )
+        .expect("body");
+        sections.push(section);
+    }
+    // Fold the first and third; catch the first mid-fold. The clock here
+    // continues from the toasts' tick(600) — ticks must never go backwards,
+    // or every tween in flight reads elapsed zero and freezes at its start.
+    set_open(&mut ui, sections[2], false, 100);
+    ui.tick(650);
+    set_open(&mut ui, sections[0], false, 100);
+    ui.tick(725); // three-quarters through the first fold, body half-cropped
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

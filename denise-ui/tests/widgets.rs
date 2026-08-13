@@ -5305,3 +5305,285 @@ fn a_mid_tween_frame_damages_what_moved() {
         "the third section moved and must be repainted: {damage:?}"
     );
 }
+
+// — collapse, accordion, drawer —
+
+use denise_ui::widgets::{Accordion, Collapse, set_open};
+
+/// Three collapse sections in a stack, each 40px of header + 120px of body.
+fn folded() -> (Ui<Msg>, [NodeId; 3], i32) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let column = ui
+        .add(root, Panel::default(), Rect::new(20, 20, 300, 560))
+        .expect("column");
+    ui.set_stack(column, 8);
+    let header = Collapse::<Msg>::new("x", Msg::Logging).header_height(ui.theme());
+    let mut sections = [column; 3];
+    for (i, slot) in sections.iter_mut().enumerate() {
+        let message = match i {
+            0 => Msg::Logging,
+            _ => Msg::Muted,
+        };
+        *slot = ui
+            .add(
+                column,
+                Collapse::new("Seksjon", message),
+                Rect::new(0, 0, 300, header + 120),
+            )
+            .expect("section");
+    }
+    (ui, sections, header)
+}
+
+#[test]
+fn clicking_the_header_reports_the_flip_and_the_app_folds_it() {
+    let (mut ui, sections, header) = folded();
+    ui.tick(1_000);
+    let bounds = ui.bounds(sections[0]).expect("b");
+    ui.handle(&click(bounds.x + 100, bounds.y + header / 2));
+    let messages: Vec<Msg> = ui.drain_messages().collect();
+    assert_eq!(messages, vec![Msg::Logging(false)], "open flips to closed");
+
+    set_open(&mut ui, sections[0], false, 200);
+    ui.tick(1_200);
+    assert_eq!(
+        ui.bounds(sections[0]).expect("b").height,
+        header,
+        "folded to exactly the header"
+    );
+    // And the stacked siblings closed the gap.
+    assert_eq!(
+        ui.bounds(sections[1]).expect("b").y,
+        20 + header + 8,
+        "the second section moved up"
+    );
+}
+
+#[test]
+fn a_click_on_the_body_does_not_toggle() {
+    let (mut ui, sections, header) = folded();
+    let bounds = ui.bounds(sections[0]).expect("b");
+    ui.handle(&click(bounds.x + 100, bounds.y + header + 40));
+    assert!(
+        ui.drain_messages().next().is_none(),
+        "the body is the application's, not the header's"
+    );
+}
+
+#[test]
+fn opening_returns_to_the_height_it_really_had() {
+    let (mut ui, sections, header) = folded();
+    ui.tick(1_000);
+    // The section grows while open — a row was added.
+    ui.set_layout(sections[0], Rect::new(0, 0, 300, header + 200));
+    set_open(&mut ui, sections[0], false, 100);
+    ui.tick(1_100);
+    assert_eq!(ui.bounds(sections[0]).expect("b").height, header);
+
+    set_open(&mut ui, sections[0], true, 100);
+    ui.tick(1_200);
+    assert_eq!(
+        ui.bounds(sections[0]).expect("b").height,
+        header + 200,
+        "opening returns to the grown height, not the built one"
+    );
+}
+
+#[test]
+fn space_toggles_but_a_held_space_toggles_once() {
+    let (mut ui, sections, _) = folded();
+    ui.focus(Some(sections[0]));
+    ui.handle(&[key(KeyCode::Space)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Logging(false)]
+    );
+    ui.handle(&[InputEvent::Key {
+        code: KeyCode::Space,
+        state: ElementState::Down,
+        repeat: true,
+        modifiers: Modifiers::NONE,
+    }]);
+    assert!(ui.drain_messages().next().is_none(), "a repeat toggled");
+}
+
+#[test]
+fn an_accordion_keeps_at_most_one_section_open() {
+    let (mut ui, sections, header) = folded();
+    ui.tick(1_000);
+    let mut accordion = Accordion::new(sections).with_duration(100);
+    accordion.collapse_all(&mut ui);
+    ui.tick(1_100);
+    for (i, &section) in sections.iter().enumerate() {
+        assert_eq!(
+            ui.bounds(section).expect("b").height,
+            header,
+            "section {i} should start folded"
+        );
+    }
+
+    accordion.toggle(&mut ui, 1);
+    ui.tick(1_200);
+    assert_eq!(accordion.open(), Some(1));
+    assert_eq!(ui.bounds(sections[1]).expect("b").height, header + 120);
+
+    // Opening another folds the first: never two open.
+    accordion.toggle(&mut ui, 2);
+    ui.tick(1_300);
+    assert_eq!(accordion.open(), Some(2));
+    assert_eq!(ui.bounds(sections[1]).expect("b").height, header);
+    assert_eq!(ui.bounds(sections[2]).expect("b").height, header + 120);
+
+    // Toggling the open one closes it, leaving nothing open.
+    accordion.toggle(&mut ui, 2);
+    ui.tick(1_400);
+    assert_eq!(accordion.open(), None);
+    assert_eq!(ui.bounds(sections[2]).expect("b").height, header);
+}
+
+#[test]
+fn a_drawer_slides_in_and_takes_the_input() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("Under", Msg::Save),
+        Rect::new(20, 20, 100, 40),
+    )
+    .expect("button");
+    ui.tick(1_000);
+
+    let drawer = ui
+        .push_drawer(denise_ui::overlay::Side::Before, 160)
+        .expect("drawer");
+    assert!(ui.drawer_open());
+    // Sliding: off-screen at first, resting after the slide.
+    ui.tick(1_250);
+    assert_eq!(
+        ui.bounds(drawer).expect("b").x,
+        0,
+        "the slide landed at rest"
+    );
+
+    // The button underneath is on a lower scene: unreachable.
+    ui.handle(&click(70, 40));
+    assert!(
+        ui.drain_messages().next().is_none(),
+        "input reached under the drawer"
+    );
+}
+
+#[test]
+fn escape_slides_the_drawer_out_and_the_scene_pops_when_it_lands() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let button = ui
+        .add(
+            root,
+            Button::new("Under", Msg::Save),
+            Rect::new(20, 20, 100, 40),
+        )
+        .expect("button");
+    ui.focus(Some(button));
+    ui.tick(1_000);
+    ui.push_drawer(denise_ui::overlay::Side::After, 160)
+        .expect("drawer");
+    ui.tick(1_250); // landed
+
+    ui.handle(&[key(KeyCode::Escape)]);
+    assert!(ui.drawer_open(), "closing, not yet gone");
+    // Mid-slide the scene is still up, still swallowing input.
+    ui.tick(1_300);
+    ui.handle(&click(70, 40));
+    assert!(
+        ui.drain_messages().next().is_none(),
+        "input leaked mid-close"
+    );
+
+    ui.tick(1_500);
+    assert!(!ui.drawer_open(), "the slide landed and the scene popped");
+    ui.handle(&click(70, 40));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Save],
+        "the page is back"
+    );
+}
+
+#[test]
+fn a_press_on_the_dim_closes_the_drawer_and_reaches_nothing() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("Under", Msg::Save),
+        Rect::new(300, 20, 80, 40),
+    )
+    .expect("button");
+    ui.tick(1_000);
+    ui.push_drawer(denise_ui::overlay::Side::Before, 160)
+        .expect("drawer");
+    ui.tick(1_250);
+
+    // A press on the dim, over where the button is: closes, reaches nothing.
+    ui.handle(&click(340, 40));
+    assert!(ui.drain_messages().next().is_none(), "the press leaked");
+    assert!(ui.drawer_open(), "closing");
+    ui.tick(1_500);
+    assert!(!ui.drawer_open());
+}
+
+#[test]
+fn one_drawer_at_a_time() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    ui.tick(1_000);
+    assert!(
+        ui.push_drawer(denise_ui::overlay::Side::Before, 160)
+            .is_some()
+    );
+    assert!(
+        ui.push_drawer(denise_ui::overlay::Side::After, 160)
+            .is_none(),
+        "a second drawer over the first is refused"
+    );
+    assert!(
+        !ui.close_drawer() || ui.drawer_open(),
+        "closing is underway"
+    );
+    ui.tick(1_500);
+    assert!(!ui.drawer_open());
+    assert!(
+        ui.push_drawer(denise_ui::overlay::Side::After, 160)
+            .is_some(),
+        "gone means a new one may open"
+    );
+}
+
+#[test]
+fn a_press_on_the_drawer_itself_does_not_close_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    ui.tick(1_000);
+    let drawer = ui
+        .push_drawer(denise_ui::overlay::Side::Before, 160)
+        .expect("drawer");
+    let inside = ui
+        .add(
+            drawer,
+            Button::new("I skuffen", Msg::Cancel),
+            Rect::new(10, 10, 120, 36),
+        )
+        .expect("button");
+    let _ = inside;
+    ui.tick(1_250);
+
+    ui.handle(&click(70, 28));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Cancel],
+        "the drawer's own content must be clickable"
+    );
+    assert!(ui.drawer_open(), "and the drawer stays");
+    ui.tick(2_000);
+    assert!(ui.drawer_open(), "still up: nothing was closing");
+}

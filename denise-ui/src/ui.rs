@@ -29,6 +29,20 @@ use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widge
 /// [`Spinner`]: crate::widgets::Spinner
 const TWEEN_FRAME_MS: u64 = 50;
 
+/// A drawer's life, tracked by the tree.
+#[derive(Clone, Copy, Debug)]
+struct DrawerState {
+    container: NodeId,
+    closing: bool,
+}
+
+/// How long a drawer takes to slide in or out.
+const DRAWER_MS: u64 = 200;
+
+/// The dim behind a drawer: enough to say "modal", light enough to keep the
+/// page readable behind it.
+const DRAWER_DIM: u8 = 120;
+
 /// One layout being carried from `from` to `to` by the tree.
 #[derive(Clone, Copy, Debug)]
 struct LayoutTween {
@@ -122,6 +136,11 @@ pub struct Ui<M: 'static> {
     /// alongside the widgets' animations, so the idle-cost evidence covers
     /// both kinds of motion.
     tweens: Vec<LayoutTween>,
+    /// The drawer, while one is up: its container, and whether it is on the
+    /// way out. The scene pops when the closing slide lands — the tree
+    /// watching its own tween, rather than a public completion hook nobody
+    /// has asked for yet.
+    drawer: Option<DrawerState>,
     /// Transient notifications. Not nodes, for the reasons in [`crate::toast`].
     toasts: Toasts,
     /// The hover-dwell bubble. Not a node and not a widget — see
@@ -164,6 +183,7 @@ impl<M: 'static> Ui<M> {
             next_wake: None,
             animating: Vec::new(),
             tweens: Vec::new(),
+            drawer: None,
             cursor_auto: true,
         }
     }
@@ -353,6 +373,96 @@ impl<M: 'static> Ui<M> {
             Some(scene) if scene.popup.is_some() => self.pop_scene(),
             _ => false,
         }
+    }
+
+    /// Slides a panel in from an edge of the screen, over a dimmed backdrop,
+    /// and returns its container for the application to fill.
+    ///
+    /// A drawer is modality plus motion, and both halves already exist: this
+    /// composes [`Ui::push_scene`] with [`Ui::animate_layout`]. `size` is the
+    /// drawer's width for [`Side::Before`]/[`Side::After`] and its height for
+    /// [`Side::Above`]/[`Side::Below`]; the other dimension spans the screen.
+    ///
+    /// Escape closes it, a press on the dim closes it, and
+    /// [`Ui::close_drawer`] closes it from the application — all by sliding
+    /// out first: the scene pops when the slide lands, and focus returns to
+    /// where it was, [`Ui::push_popup`]'s conventions. One drawer at a time;
+    /// pushing over an open one returns `None`.
+    pub fn push_drawer(&mut self, side: crate::overlay::Side, size: i32) -> Option<NodeId> {
+        use crate::overlay::Side;
+        if self.drawer.is_some() {
+            return None;
+        }
+        let screen = Rect::from_size(self.size);
+        let size = size.clamp(1, screen.width.max(screen.height));
+        let (resting, offstage) = match side {
+            Side::Before => (
+                Rect::new(0, 0, size, screen.height),
+                Rect::new(-size, 0, size, screen.height),
+            ),
+            Side::After => (
+                Rect::new(screen.width - size, 0, size, screen.height),
+                Rect::new(screen.width, 0, size, screen.height),
+            ),
+            Side::Above => (
+                Rect::new(0, 0, screen.width, size),
+                Rect::new(0, -size, screen.width, size),
+            ),
+            Side::Below => (
+                Rect::new(0, screen.height - size, screen.width, size),
+                Rect::new(0, screen.height, screen.width, size),
+            ),
+        };
+        let root = self.push_scene(DRAWER_DIM);
+        let container = self
+            .add(root, Void, offstage)
+            .expect("a scene root can always take a child");
+        self.animate_layout(container, resting, DRAWER_MS);
+        self.drawer = Some(DrawerState {
+            container,
+            closing: false,
+        });
+        Some(container)
+    }
+
+    /// Slides the drawer out; the scene pops when the slide lands.
+    ///
+    /// Returns `false` when no drawer is up. Calling again while one is
+    /// already closing does nothing — the slide finishes on its own.
+    pub fn close_drawer(&mut self) -> bool {
+        let Some(state) = self.drawer else {
+            return false;
+        };
+        if state.closing {
+            return true;
+        }
+        let Some(layout) = self.layout(state.container) else {
+            self.drawer = None;
+            return false;
+        };
+        let screen = Rect::from_size(self.size);
+        // Back out the way it came in: whichever screen edge is nearest.
+        let offstage = if layout.x <= 0 && layout.width < screen.width {
+            Rect::new(-layout.width, layout.y, layout.width, layout.height)
+        } else if layout.right() >= screen.width && layout.width < screen.width {
+            Rect::new(screen.width, layout.y, layout.width, layout.height)
+        } else if layout.y <= 0 {
+            Rect::new(layout.x, -layout.height, layout.width, layout.height)
+        } else {
+            Rect::new(layout.x, screen.height, layout.width, layout.height)
+        };
+        self.animate_layout(state.container, offstage, DRAWER_MS);
+        self.drawer = Some(DrawerState {
+            closing: true,
+            ..state
+        });
+        true
+    }
+
+    /// Whether a drawer is up, closing included.
+    #[inline]
+    pub fn drawer_open(&self) -> bool {
+        self.drawer.is_some()
     }
 
     /// Pops the topmost scene and everything in it. The base scene cannot be
@@ -882,6 +992,28 @@ impl<M: 'static> Ui<M> {
     /// Whether a press at `p` should close the topmost popup instead of being
     /// delivered: the top scene is a popup and the press is outside its
     /// container.
+    /// Whether the topmost scene is an open drawer's — the state in which
+    /// Escape and a press on the dim belong to the drawer.
+    fn drawer_on_top(&self) -> bool {
+        self.drawer.is_some_and(|state| {
+            !state.closing
+                && self
+                    .nodes
+                    .get(state.container)
+                    .is_some_and(|n| n.scene + 1 == self.scenes.len())
+        })
+    }
+
+    /// Whether a press at `p` is on the drawer's dim rather than the drawer,
+    /// and should close it — swallowed entirely, like a popup's.
+    fn dismisses_drawer(&self, p: Point) -> bool {
+        self.drawer_on_top()
+            && self
+                .drawer
+                .and_then(|state| self.nodes.get(state.container))
+                .is_some_and(|n| !n.bounds.contains(p))
+    }
+
     fn dismisses_popup(&mut self, p: Point) -> bool {
         let Some(popup) = self.scenes.last().and_then(|s| s.popup) else {
             return false;
@@ -1038,6 +1170,18 @@ impl<M: 'static> Ui<M> {
             let next = now_ms + TWEEN_FRAME_MS;
             wake = Some(wake.map_or(next, |w: u64| w.min(next)));
             i += 1;
+        }
+
+        // A closing drawer pops its scene the moment its slide has landed —
+        // the first thing in the tree to happen *because* a tween arrived.
+        // Also the cleanup for a drawer whose scene somebody popped directly.
+        if let Some(state) = self.drawer {
+            if !self.nodes.contains_key(state.container) {
+                self.drawer = None;
+            } else if state.closing && !self.tweens.iter().any(|t| t.id == state.container) {
+                self.drawer = None;
+                self.pop_scene();
+            }
         }
 
         // The tooltip's dwell deadline is a wake reason too, and the one most
@@ -1311,6 +1455,10 @@ impl<M: 'static> Ui<M> {
                     self.close_popup();
                     return;
                 }
+                if self.dismisses_drawer(*position) {
+                    self.close_drawer();
+                    return;
+                }
                 self.move_pointer(*position, true);
                 self.press(event);
             }
@@ -1349,6 +1497,10 @@ impl<M: 'static> Ui<M> {
                 }
                 if self.dismisses_popup(*position) {
                     self.close_popup();
+                    return;
+                }
+                if self.dismisses_drawer(*position) {
+                    self.close_drawer();
                     return;
                 }
                 self.move_pointer(*position, false);
@@ -1395,6 +1547,14 @@ impl<M: 'static> Ui<M> {
                 // widget: a dropdown open over a text field closes on Escape
                 // rather than handing the key to the field behind it.
                 self.close_popup();
+            }
+            InputEvent::Key {
+                code: KeyCode::Escape,
+                state: ElementState::Down,
+                ..
+            } if self.drawer_on_top() => {
+                // And to the drawer, for the same reason.
+                self.close_drawer();
             }
             InputEvent::Key {
                 code: code @ (KeyCode::PageUp | KeyCode::PageDown),

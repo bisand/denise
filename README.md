@@ -115,10 +115,10 @@ all.
 Three things it is showing, none of which is obvious from the outside:
 
 - **There was no grid widget when this example was written** — and it remains a
-  lesson in how the widgets compose. There are twenty-three now, `Table` among
+  lesson in how the widgets compose. There are twenty-four now, `Table` among
   them: label, button, panel, text field, checkbox, toggle, radio group, progress
   bar, slider, divider, badge, alert, tabs, list, radial progress, spinner,
-  select, image, rating, avatar, table, timeline, carousel. A row is a full-width `Button` with the cell `Label`s placed on top of it;
+  select, image, rating, avatar, table, timeline, carousel, collapse. A row is a full-width `Button` with the cell `Label`s placed on top of it;
   labels are not interactive, so a click falls through them to the button
   underneath and arrives as `Select(index)`. That is how most of the widgets you
   will miss get assembled.
@@ -309,10 +309,10 @@ is in [docs/design.md](docs/design.md).
   node's children top-to-bottom — the piece that makes an animated collapse move
   its siblings. A constraint solver can still be added over all of this without
   changing anything below it.
-- **Twenty-three widgets**, plus tree-owned tooltips and toasts. Label, button,
-  panel, text field, checkbox, toggle, radio group, progress bar, slider,
-  divider, badge, alert, tabs, list, radial progress, spinner, select, image,
-  rating, avatar, table, timeline, carousel. Everything
+- **Twenty-four widgets**, plus tree-owned tooltips, toasts and drawers. Label,
+  button, panel, text field, checkbox, toggle, radio group, progress bar,
+  slider, divider, badge, alert, tabs, list, radial progress, spinner, select,
+  image, rating, avatar, table, timeline, carousel, collapse. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a
   time — see [#6](https://github.com/bisand/denise/issues/6).
 - **Scrolling is a tree concern, and the tree does it.** Mark a node
