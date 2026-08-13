@@ -92,6 +92,26 @@ impl From<Color> for Paint {
     }
 }
 
+/// Premultiplies straight-alpha `0xAARRGGBB` words in place.
+///
+/// This is [`Paint::new`]'s arithmetic applied to a buffer: exact at both
+/// endpoints, done once at load time so a blit never divides by 255 per frame.
+/// Decoders hand out straight alpha; [`Canvas::blit`](crate::Canvas::blit)
+/// consumes premultiplied — this is the bridge between them.
+pub fn premultiply(pixels: &mut [u32]) {
+    for px in pixels {
+        match *px >> 24 {
+            255 => {}
+            0 => *px = 0,
+            a => {
+                let rb = mul_lanes(*px & LANES, a);
+                let g = mul_lanes((*px >> 8) & 0xFF, a);
+                *px = (a << 24) | rb | (g << 8);
+            }
+        }
+    }
+}
+
 /// Composites a premultiplied source over a destination pixel.
 ///
 /// Both words are `0xAARRGGBB`. The alpha lane is composited too, so this is

@@ -7,8 +7,8 @@
 The software rasteriser for **[Denise]**, a direct-rendering UI toolkit in Rust for
 embedded Linux and systems without a desktop environment.
 
-Rectangles, rounded rectangles, circles, arcs, lines, rectangular clipping and
-source-over alpha blending, straight into a [`denise::Frame`]. No GPU, no path builder, no allocator:
+Rectangles, rounded rectangles, circles, arcs, lines, image blitting, rectangular
+clipping and source-over alpha blending, straight into a [`denise::Frame`]. No GPU, no path builder, no allocator:
 this crate needs neither `std` nor `alloc`, and every operation writes through a
 borrowed slice the caller already owns.
 
@@ -51,6 +51,16 @@ whole numbers. It is what makes a panel with no font files still able to show a
 number. Anything more — real TrueType, proportional metrics, wrapping — is
 [`denise-text`](https://crates.io/crates/denise-text), which is a separate crate
 precisely so this one stays a rasteriser.
+
+## Pictures
+
+`Canvas::blit` draws a borrowed block of pixels at a position, and
+`Canvas::blit_scaled` resamples it nearest-neighbour into a rectangle — clipped
+and alpha-composited like everything else. The one contract: source pixels are
+**premultiplied** `0xAARRGGBB`, so the multiply happens once when an image is
+loaded, never per frame. `blend::premultiply` converts a straight-alpha buffer
+in place, and fully opaque pixels are the same either way. Decoding files into
+pixels is deliberately somebody else's job.
 
 ## Features
 

@@ -174,6 +174,72 @@ fn arc(c: &mut Criterion) {
     group.finish();
 }
 
+fn blit(c: &mut Criterion) {
+    use denise_render::PixelView;
+
+    // A full-screen background image on the small panel: the workload the
+    // damage tracker exists to avoid paying every frame, measured so the docs
+    // can say what it costs when it is paid.
+    let size = SMALL_PANEL;
+    let mut target = Target::new(size);
+
+    // An opaque image, and the same image at half alpha, premultiplied the way
+    // a decoder would hand it over.
+    let opaque: Vec<u32> = (0..size.area())
+        .map(|i| 0xFF00_0000 | (i as u32 & 0x00FF_FFFF))
+        .collect();
+    let mut translucent: Vec<u32> = opaque
+        .iter()
+        .map(|&px| (px & 0x00FF_FFFF) | 0x8000_0000)
+        .collect();
+    denise_render::blend::premultiply(&mut translucent);
+
+    let opaque_view = PixelView::new(&opaque, size, size.width).expect("bench geometry");
+    let translucent_view = PixelView::new(&translucent, size, size.width).expect("bench geometry");
+
+    let mut group = c.benchmark_group("blit");
+    group.throughput(Throughput::Elements(size.area()));
+    group.bench_function("opaque", |b| {
+        b.iter(|| {
+            target
+                .canvas()
+                .blit(&opaque_view, black_box(Point::new(0, 0)))
+        });
+    });
+    group.bench_function("alpha", |b| {
+        b.iter(|| {
+            target
+                .canvas()
+                .blit(&translucent_view, black_box(Point::new(0, 0)))
+        });
+    });
+
+    // Scaling a quarter-size asset up to the panel, and the panel-size asset
+    // down to a thumbnail — the Contain/Cover cases.
+    let quarter = Size::new(size.width / 2, size.height / 2);
+    let small: Vec<u32> = (0..quarter.area())
+        .map(|i| 0xFF00_0000 | (i as u32 & 0x00FF_FFFF))
+        .collect();
+    let small_view = PixelView::new(&small, quarter, quarter.width).expect("bench geometry");
+    group.throughput(Throughput::Elements(size.area()));
+    group.bench_function("scaled_up_2x", |b| {
+        b.iter(|| {
+            target
+                .canvas()
+                .blit_scaled(&small_view, black_box(Rect::new(0, 0, 800, 480)))
+        });
+    });
+    group.throughput(Throughput::Elements(200 * 120));
+    group.bench_function("scaled_down_to_thumbnail", |b| {
+        b.iter(|| {
+            target
+                .canvas()
+                .blit_scaled(&opaque_view, black_box(Rect::new(0, 0, 200, 120)))
+        });
+    });
+    group.finish();
+}
+
 fn label(size: Size) -> String {
     format!("{}x{}", size.width, size.height)
 }
@@ -185,6 +251,7 @@ criterion_group!(
     fill_rect,
     rounded_rect,
     arc,
-    line
+    line,
+    blit
 );
 criterion_main!(benches);

@@ -1,7 +1,8 @@
 //! Denise's software rasteriser.
 //!
-//! Rectangles, rounded rectangles, circles, arcs, lines, rectangular clipping
-//! and source-over alpha blending, straight into a [`denise::Frame`]. No GPU, no
+//! Rectangles, rounded rectangles, circles, arcs, lines, image blitting,
+//! rectangular clipping and source-over alpha blending, straight into a
+//! [`denise::Frame`]. No GPU, no
 //! path builder, no allocator: this crate needs neither `std` nor `alloc`, and
 //! every operation writes through a borrowed slice the caller already owns.
 //!
@@ -44,6 +45,7 @@ pub mod coverage;
 pub mod font;
 
 mod arc;
+mod blit;
 mod line;
 mod rect;
 mod rounded;

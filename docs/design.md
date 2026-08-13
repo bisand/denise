@@ -433,7 +433,8 @@ the size the architecture was specified for.
 
 ## The rasteriser
 
-`denise-render` draws rectangles, rounded rectangles, circles, arcs, lines and
+`denise-render` draws rectangles, rounded rectangles, circles, arcs, lines,
+borrowed pixel blocks (blitted 1:1 or nearest-neighbour scaled) and
 source-over alpha straight into a `Frame`. It needs neither `std` nor `alloc`, contains no `unsafe`,
 and uses **no floating point at all** — anti-aliasing coverage included.
 
@@ -461,6 +462,8 @@ is an order of magnitude slower on memory-bound work.
 | 1080p blit, same damage | **0.88 µs** |
 | 800×480 scene, full repaint | 54 µs |
 | Rounded rect fill 1600×900, r=8 / r=32 | 77 µs / 78 µs |
+| 800×480 image blit, opaque / per-pixel alpha | 136 µs / 398 µs |
+| 800×480 image blit, nearest-neighbour 2× upscale | 190 µs |
 
 A damaged frame costs **37× less** than a full one, and the rounded-rect cost is
 flat in the radius — anti-aliasing is paid per perimeter pixel, not per area. Both

@@ -40,7 +40,7 @@ impl<'a> PixelView<'a> {
     }
 
     #[inline]
-    fn row(&self, y: i32, x0: i32, x1: i32) -> Option<&[u32]> {
+    pub(crate) fn row(&self, y: i32, x0: i32, x1: i32) -> Option<&[u32]> {
         if y < 0 || y >= self.size.height as i32 || x0 >= x1 || x0 < 0 {
             return None;
         }
