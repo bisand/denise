@@ -14,6 +14,7 @@ use slotmap::SlotMap;
 
 use crate::cursor::{Cursor, CursorImage};
 use crate::node::{Node, NodeId, Popup, Scene};
+use crate::tooltip::Tooltip;
 
 /// Space between a popup and its anchor, in pixels. Small on purpose: a
 /// dropdown visually belongs to its button, and a gap wide enough to see the
@@ -78,6 +79,9 @@ pub struct Ui<M: 'static> {
     /// deliberately visible — [`Ui::animating`] exists so a test can assert a
     /// tree at rest holds nobody awake.
     animating: Vec<NodeId>,
+    /// The hover-dwell bubble. Not a node and not a widget — see
+    /// [`crate::tooltip`] for why.
+    tooltip: Tooltip,
     /// Whether the tree still gets to decide the cursor's visibility. Cleared by
     /// the first `show_cursor`, which is a host taking the decision over.
     cursor_auto: bool,
@@ -108,6 +112,7 @@ impl<M: 'static> Ui<M> {
             touch_scroll: None,
             focused: None,
             cursor: Cursor::default(),
+            tooltip: Tooltip::new(),
             messages: Vec::new(),
             now_ms: 0,
             next_wake: None,
@@ -412,6 +417,37 @@ impl<M: 'static> Ui<M> {
     pub fn set_scrollable(&mut self, id: NodeId, scrollable: bool) {
         if let Some(node) = self.nodes.get_mut(id) {
             node.scrollable = scrollable;
+        }
+    }
+
+    /// Shows `text` when the pointer rests on this node.
+    ///
+    /// A **pointer** affordance: it needs hover, and a touchscreen has none, so
+    /// on a touch-only panel this does nothing at all. That is the honest
+    /// outcome rather than a gap — the panels that want tooltips are the
+    /// mouse-driven HMIs and the controls embedded in desktop applications
+    /// where every other control has one.
+    ///
+    /// The tree owns everything else about it: the dwell delay, the placement
+    /// (below the node, flipping above near an edge), the dismissal on any
+    /// press or key, and the drawing — above every widget, below the cursor.
+    /// It is not a node, so it is never hit-tested and never takes focus.
+    pub fn set_tooltip(&mut self, id: NodeId, text: impl Into<alloc::string::String>) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.tooltip = Some(text.into());
+        }
+    }
+
+    /// Removes a node's tooltip.
+    pub fn clear_tooltip(&mut self, id: NodeId) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.tooltip = None;
+        }
+        if self.hovered == Some(id) {
+            if self.tooltip.is_shown() {
+                self.damage_tooltip();
+            }
+            self.tooltip.dismiss();
         }
     }
 
@@ -733,7 +769,37 @@ impl<M: 'static> Ui<M> {
                 }
             }
         }
-        self.next_wake = wake;
+
+        // The tooltip's dwell deadline is a wake reason too, and the one most
+        // easily forgotten: a kiosk blocks on input until the tree says it
+        // wants waking, so a deadline left out here is a bubble that appears
+        // the next time something unrelated happens.
+        let hovered = self.hovered;
+        let anchor = hovered.and_then(|id| self.nodes.get(id)).map(|n| n.bounds);
+        let text = hovered
+            .and_then(|id| self.nodes.get(id))
+            .and_then(|n| n.tooltip.clone());
+        if self
+            .tooltip
+            .tick(now_ms, text.as_deref(), anchor.unwrap_or(Rect::ZERO))
+        {
+            self.damage_tooltip();
+        }
+        self.next_wake = match (wake, self.tooltip.next_wake()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+    }
+
+    /// Damages whatever the tooltip covers.
+    ///
+    /// It is not a node, so nothing else will do it: the bubble sits over
+    /// arbitrary widgets and its footprint has to be repainted when it appears
+    /// and again when it goes.
+    fn damage_tooltip(&mut self) {
+        if let Some(bounds) = self.tooltip.bounds(self.size, &mut self.text) {
+            self.damage.add(bounds);
+        }
     }
 
     /// Asks the tree to start animating `id`.
@@ -886,6 +952,10 @@ impl<M: 'static> Ui<M> {
                 start = end;
             }
 
+            // Above every widget, below the pointer: a bubble the cursor
+            // covers is a bubble nobody can read.
+            self.tooltip
+                .paint(&self.theme, self.size, &mut self.text, &mut region_canvas);
             self.cursor.paint(&self.theme, &mut region_canvas);
         }
     }
@@ -907,6 +977,13 @@ impl<M: 'static> Ui<M> {
     // -------------------------------------------------------------- internals
 
     fn handle_one(&mut self, event: &InputEvent) {
+        // Anything but a bare pointer move means the person moved on.
+        if !matches!(event, InputEvent::PointerMoved { .. }) && self.tooltip.dismiss_wanted(event) {
+            if self.tooltip.is_shown() {
+                self.damage_tooltip();
+            }
+            self.tooltip.dismiss();
+        }
         match event {
             InputEvent::PointerMoved { position } => {
                 self.move_pointer(*position, true);
@@ -1143,6 +1220,17 @@ impl<M: 'static> Ui<M> {
         if self.hovered == id {
             return;
         }
+        // Moving on restarts the dwell, or ends it. The footprint is damaged
+        // *first*: every state change here forgets where the bubble was, so
+        // measuring afterwards measures nothing and the pixels stay on a
+        // display that repaints only what it was told to.
+        let has_tooltip = id
+            .and_then(|id| self.nodes.get(id))
+            .is_some_and(|node| node.tooltip.is_some());
+        if self.tooltip.is_shown() {
+            self.damage_tooltip();
+        }
+        self.tooltip.hover_changed(has_tooltip, self.now_ms);
         if let Some(old) = self.hovered {
             self.set_state(old, VisualState::HOVERED, false);
         }

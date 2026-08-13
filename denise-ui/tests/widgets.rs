@@ -3458,3 +3458,228 @@ fn a_spinner_is_inert_and_not_a_tab_stop() {
     ui.handle(&click(92, 92));
     assert!(ui.messages().is_empty(), "and must not swallow a click");
 }
+
+// ------------------------------------------------------------------ tooltips
+
+/// A button with a tooltip, and one without.
+fn tipped() -> (Ui<Msg>, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let save = ui
+        .add(
+            root,
+            Button::new("Lagre", Msg::Save),
+            Rect::new(40, 40, 100, 32),
+        )
+        .expect("save");
+    let plain = ui
+        .add(
+            root,
+            Button::new("Avbryt", Msg::Cancel),
+            Rect::new(40, 100, 100, 32),
+        )
+        .expect("plain");
+    ui.set_tooltip(save, "Lagrer endringene");
+    (ui, save, plain)
+}
+
+fn hover(x: i32, y: i32) -> [InputEvent; 1] {
+    [InputEvent::PointerMoved {
+        position: Point::new(x, y),
+    }]
+}
+
+/// **The coupling the feature stands on.** A kiosk blocks on input until the
+/// tree says it wants waking, so resting the pointer must produce a deadline —
+/// otherwise the bubble appears the next time something unrelated happens.
+#[test]
+fn resting_on_a_tooltip_asks_the_loop_to_wake_for_it() {
+    let (mut ui, _, _) = tipped();
+    ui.tick(0);
+    assert_eq!(ui.next_wake_ms(), None, "an idle tree wakes for nothing");
+
+    ui.handle(&hover(80, 55));
+    ui.tick(0);
+    let due = ui
+        .next_wake_ms()
+        .expect("resting on a tooltip must ask for a wake");
+    assert!(due > 0, "and at a time in the future");
+
+    // Nothing before the deadline; the bubble at it.
+    ui.render_nothing();
+    ui.tick(due - 1);
+    assert!(!ui.needs_paint(), "the bubble appeared early");
+    ui.tick(due);
+    assert!(ui.needs_paint(), "the bubble did not appear");
+    assert_eq!(
+        ui.next_wake_ms(),
+        None,
+        "a shown bubble wants no further wakes"
+    );
+}
+
+/// A widget without a tooltip asks for nothing — or every widget on the panel
+/// would keep the loop awake.
+#[test]
+fn hovering_something_without_a_tooltip_wakes_nothing() {
+    let (mut ui, _, _) = tipped();
+    ui.handle(&hover(80, 115));
+    ui.tick(0);
+    assert_eq!(ui.next_wake_ms(), None);
+    ui.render_nothing();
+    ui.tick(10_000);
+    assert!(!ui.needs_paint(), "something appeared that should not have");
+}
+
+/// The bubble is drawn, above the widgets, and goes away again when the pointer
+/// moves on — leaving the screen exactly as it was.
+#[test]
+fn the_bubble_is_drawn_and_then_cleanly_removed() {
+    let (mut ui, _, _) = tipped();
+    let area = Rect::new(20, 20, 260, 140);
+
+    ui.tick(0);
+    let before = pixels_of(&mut ui, area);
+
+    ui.handle(&hover(80, 55));
+    ui.tick(0);
+    let due = ui.next_wake_ms().expect("a deadline");
+    ui.tick(due);
+    let shown = pixels_of(&mut ui, area);
+    assert_ne!(before, shown, "the bubble drew nothing");
+
+    // Moving to the other button takes it away. The hovered button looks
+    // different, so compare a strip the buttons do not occupy.
+    let strip = Rect::new(20, 74, 260, 24);
+    let bare_strip = {
+        let mut fresh: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = fresh.root();
+        fresh
+            .add(
+                root,
+                Button::new("Lagre", Msg::Save),
+                Rect::new(40, 40, 100, 32),
+            )
+            .expect("save");
+        fresh
+            .add(
+                root,
+                Button::new("Avbryt", Msg::Cancel),
+                Rect::new(40, 100, 100, 32),
+            )
+            .expect("plain");
+        pixels_of(&mut fresh, strip)
+    };
+    let with_bubble = pixels_of(&mut ui, strip);
+    assert_ne!(with_bubble, bare_strip, "the bubble is not in the gap");
+
+    ui.handle(&hover(80, 115));
+    ui.tick(due);
+    assert_eq!(
+        pixels_of(&mut ui, strip),
+        bare_strip,
+        "the bubble left something behind when it went"
+    );
+}
+
+/// A press or a key means the person moved on, and takes the bubble with it.
+#[test]
+fn a_press_or_a_key_dismisses_the_bubble() {
+    let strip = Rect::new(20, 74, 260, 24);
+    let shown_then = |after: &[InputEvent]| -> bool {
+        let (mut ui, _, _) = tipped();
+        ui.handle(&hover(80, 55));
+        ui.tick(0);
+        let due = ui.next_wake_ms().expect("a deadline");
+        ui.tick(due);
+        let shown = pixels_of(&mut ui, strip);
+        ui.handle(after);
+        ui.tick(due);
+        pixels_of(&mut ui, strip) == shown
+    };
+    assert!(!shown_then(&click(80, 55)), "a press must dismiss it");
+    assert!(!shown_then(&[key(KeyCode::Tab)]), "a key must dismiss it");
+    assert!(
+        !shown_then(&[InputEvent::PointerLeft]),
+        "the pointer leaving must dismiss it"
+    );
+    // And a bare move within the same widget does not — moving is how somebody
+    // arrives at the thing they are resting on.
+    assert!(
+        shown_then(&hover(82, 56)),
+        "a small move must not dismiss it"
+    );
+}
+
+/// The bubble is not a node: it cannot be hit, focused or tabbed to, and the
+/// widget underneath keeps working while it is up.
+#[test]
+fn the_bubble_is_not_a_node() {
+    let (mut ui, save, _) = tipped();
+    ui.handle(&hover(80, 55));
+    ui.tick(0);
+    let due = ui.next_wake_ms().expect("a deadline");
+    ui.tick(due);
+
+    // The bubble sits just below the button; a press there hits whatever the
+    // tree has, never the bubble.
+    assert_eq!(ui.hit_test(Point::new(80, 80)), None, "the bubble was hit");
+    // And the anchor still works.
+    ui.handle(&click(80, 55));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+    let _ = save;
+}
+
+/// Clearing a tooltip while the pointer rests on it shows nothing.
+#[test]
+fn a_tooltip_cleared_mid_wait_never_appears() {
+    let (mut ui, save, _) = tipped();
+    let strip = Rect::new(20, 74, 260, 24);
+    ui.handle(&hover(80, 55));
+    ui.tick(0);
+    let due = ui.next_wake_ms().expect("a deadline");
+    let before = pixels_of(&mut ui, strip);
+
+    ui.clear_tooltip(save);
+    ui.tick(due);
+    assert_eq!(pixels_of(&mut ui, strip), before, "it appeared anyway");
+    assert_eq!(ui.next_wake_ms(), None);
+}
+
+/// **The part only hardware would have caught.** A bubble that goes must
+/// *damage* what it covered, or the pixels stay on a display that repaints only
+/// what it was told to.
+///
+/// The pixel tests above cannot see this: they paint into a fresh buffer with
+/// an undefined age, which is a full repaint, so a missing damage rectangle
+/// looks perfect. A mutation removing the damage passed every one of them.
+#[test]
+fn a_bubble_that_goes_damages_what_it_covered() {
+    let (mut ui, _, _) = tipped();
+    // Settle first: a freshly built tree has the whole surface damaged, which
+    // would swallow the rectangle this test is about.
+    ui.render_nothing();
+
+    ui.handle(&hover(80, 55));
+    ui.tick(0);
+    let due = ui.next_wake_ms().expect("a deadline");
+    ui.render_nothing();
+    ui.tick(due);
+
+    let bubble = ui.paint_for_damage();
+    assert!(
+        bubble.iter().any(|r| r.y > 72 && r.y < 100),
+        "the bubble appearing did not damage the gap below the button: {bubble:?}"
+    );
+
+    // Move to the other button. The buttons' own hover damage is up at y 40 and
+    // down at y 100; only the bubble can account for the gap between them.
+    ui.handle(&hover(80, 115));
+    ui.tick(due);
+    let gone = ui.paint_for_damage();
+    let gap = Rect::new(40, 76, 100, 20);
+    assert!(
+        gone.iter().any(|r| r.intersects(&gap)),
+        "the bubble left without repainting what it covered: {gone:?}"
+    );
+}

@@ -48,6 +48,7 @@ extern crate alloc;
 pub mod cursor;
 mod node;
 pub mod overlay;
+mod tooltip;
 mod ui;
 pub mod widget;
 pub mod widgets;

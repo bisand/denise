@@ -57,6 +57,10 @@ pub(crate) struct Node<M> {
     /// so a panel with a decoratively clipped child does not start moving under
     /// the wheel.
     pub(crate) scrollable: bool,
+    /// Text shown after the pointer rests on this node. See
+    /// [`Ui::set_tooltip`](crate::Ui::set_tooltip) — the tree owns everything
+    /// about a tooltip except the string.
+    pub(crate) tooltip: Option<alloc::string::String>,
     /// How far this node's content is scrolled: children are shifted up and
     /// left by this much. Applied in `reflow`, which is the single place that
     /// turns layouts into absolute bounds — so paint, clip and hit testing
@@ -79,6 +83,7 @@ impl<M> Node<M> {
             scene,
             state: VisualState::NONE,
             scrollable: false,
+            tooltip: None,
             scroll: denise::Point::ZERO,
         }
     }

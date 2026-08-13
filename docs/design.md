@@ -305,6 +305,23 @@ tool: a modal is `push_scene` with a dim, a popup is `push_popup` without one,
 and a tooltip is no scene at all — a non-interactive node placed with
 `anchored` at a high z, invisible to hit testing like any `Label`.
 
+A tooltip turned out to want none of that machinery, and the reasoning is the
+same one applied one step further. Everything hard about a tooltip happens
+*before* it would exist: the dwell timer has nothing to belong to yet, the
+placement needs another node's bounds, and it goes when the pointer leaves the
+**anchor** rather than the bubble — which the pointer must never be able to
+enter. All three are things the tree already tracks, so `Ui::set_tooltip(id,
+text)` stores a string on the node and the tree owns the rest, drawing it beside
+the cursor sprite: over everything, because it is not part of the tree at all.
+
+The coupling that makes it work is the one worth remembering: **`next_wake_ms`
+has to report the dwell deadline.** A kiosk blocks on input until the tree says
+it wants waking, so a deadline left out of that answer is a bubble that appears
+the next time something unrelated happens. And a tooltip is a *pointer*
+affordance — a touchscreen has no hover, so on a touch-only panel it does
+nothing at all, which the documentation says rather than leaving somebody to
+find out on a kiosk.
+
 One paint rule came with it: **only the topmost veil paints.** Two dimmed
 scenes would otherwise double-darken everything under both, and a popup inside
 a modal must not darken the modal it serves.

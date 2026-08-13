@@ -105,8 +105,12 @@ A modal is `push_scene(dim)`: another root over a dimmed backdrop, with input
 and Tab structurally confined to it. A popup is `push_popup(anchor, size, side)`:
 anchored to a node, flipped to the other side when the surface runs out, closed
 by Escape or a press outside it — which is swallowed, never delivered to what
-is underneath — with focus returning to the anchor. A tooltip is neither: a
-non-interactive node placed with `overlay::anchored` at a high z.
+is underneath — with focus returning to the anchor.
+
+A tooltip is neither, and is not a node either: `ui.set_tooltip(id, "text")`
+stores a string, and the tree runs the dwell timer, places the bubble, dismisses
+it on any press or key and draws it above every widget. It needs hover, so it
+does nothing on a touch-only panel.
 
 ## Features
 
