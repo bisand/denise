@@ -4,9 +4,9 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Alert, Avatar, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem, Panel,
-    Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner, Tabs,
-    TextInput, Toggle,
+    Alert, Avatar, Badge, Button, Checkbox, Column, Divider, Fit, Image, Label, List, ListItem,
+    Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner, Table,
+    Tabs, TextInput, Toggle,
 };
 use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
 
@@ -4556,4 +4556,228 @@ fn pressing_the_current_star_does_not_reach_the_button_under_it() {
         ui.drain_messages().next().is_none(),
         "the press fell through to the button underneath"
     );
+}
+
+// — tables —
+
+fn scroll(x: i32, y: i32, delta_y: f32) -> [InputEvent; 2] {
+    [
+        InputEvent::PointerMoved {
+            position: Point::new(x, y),
+        },
+        InputEvent::PointerScroll {
+            delta_x: 0.0,
+            delta_y,
+            position: Point::new(x, y),
+        },
+    ]
+}
+
+/// A 5-slot window over 50 rows: header + 5 rows of 30px in a 180px box.
+fn grid() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let table = Table::new(
+        [
+            Column::new("Navn", 150),
+            Column::flex("Rolle"),
+            Column::new("Nr", 50).align_end(),
+        ],
+        Msg::Row,
+    )
+    .with_rows((0..50).map(|i| [format!("Navn {i}"), format!("Rolle {i}"), format!("{i}")]))
+    .on_activate(Msg::Open)
+    .with_row_height(30);
+    let table = ui
+        .add(root, table, Rect::new(10, 10, 380, 180))
+        .expect("table");
+    (ui, table)
+}
+
+#[test]
+fn clicking_a_row_selects_the_data_row_under_the_window() {
+    let (mut ui, table) = grid();
+    ui.widget_mut::<Table<Msg>>(table)
+        .expect("table")
+        .set_scroll(20);
+    // The second visible slot: header (30px) + one row down.
+    ui.handle(&click(100, 10 + 30 + 30 + 15));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Row(21)],
+        "the slot must map through the window"
+    );
+}
+
+#[test]
+fn a_click_on_the_header_selects_nothing() {
+    let (mut ui, _) = grid();
+    ui.handle(&click(100, 10 + 15));
+    assert!(ui.drain_messages().next().is_none());
+}
+
+#[test]
+fn the_wheel_scrolls_the_window_and_stops_at_the_ends() {
+    let (mut ui, table) = grid();
+    // One notch of 90px at 30px rows: three rows down.
+    ui.handle(&scroll(100, 100, 90.0));
+    assert_eq!(ui.widget::<Table<Msg>>(table).expect("t").scroll(), 3);
+    // A gentle wheel still moves one row.
+    ui.handle(&scroll(100, 100, 5.0));
+    assert_eq!(ui.widget::<Table<Msg>>(table).expect("t").scroll(), 4);
+    // Up past the top clamps.
+    ui.handle(&scroll(100, 100, -9_000.0));
+    assert_eq!(ui.widget::<Table<Msg>>(table).expect("t").scroll(), 0);
+    // Down past the end clamps to the last full window.
+    ui.handle(&scroll(100, 100, 90_000.0));
+    assert_eq!(ui.widget::<Table<Msg>>(table).expect("t").scroll(), 45);
+}
+
+#[test]
+fn arrows_drag_the_window_along_with_the_selection() {
+    let (mut ui, table) = grid();
+    ui.focus(Some(table));
+    ui.handle(&keys(KeyCode::ArrowDown, 7));
+    let t = ui.widget::<Table<Msg>>(table).expect("t");
+    assert_eq!(t.selected(), Some(6));
+    assert_eq!(t.scroll(), 2, "the window followed the selection down");
+    let selections: Vec<Msg> = ui.drain_messages().collect();
+    assert_eq!(selections.len(), 7);
+
+    ui.handle(&[key(KeyCode::Home)]);
+    let t = ui.widget::<Table<Msg>>(table).expect("t");
+    assert_eq!(t.selected(), Some(0));
+    assert_eq!(t.scroll(), 0, "Home brought the window back up");
+}
+
+#[test]
+fn page_keys_move_the_selection_a_window_at_a_time() {
+    let (mut ui, table) = grid();
+    ui.focus(Some(table));
+    ui.handle(&[key(KeyCode::ArrowDown)]); // select row 0
+    ui.handle(&[key(KeyCode::PageDown)]);
+    let t = ui.widget::<Table<Msg>>(table).expect("t");
+    assert_eq!(t.selected(), Some(5), "a page is the visible row count");
+    ui.handle(&[key(KeyCode::PageUp)]);
+    assert_eq!(
+        ui.widget::<Table<Msg>>(table).expect("t").selected(),
+        Some(0)
+    );
+}
+
+#[test]
+fn a_double_click_activates_and_enter_activates() {
+    let (mut ui, table) = grid();
+    let y = 10 + 30 + 15;
+    ui.handle(&click(100, y));
+    ui.handle(&click(100, y));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Row(0), Msg::Open(0)],
+        "a pair is one selection and one activation"
+    );
+
+    ui.focus(Some(table));
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Open(0)]);
+}
+
+#[test]
+fn the_header_stays_pinned_while_the_rows_move() {
+    let (mut ui, table) = grid();
+    let header = pixels_of(&mut ui, Rect::new(10, 10, 380, 30));
+    let rows_before = pixels_of(&mut ui, Rect::new(10, 40, 380, 150));
+    ui.widget_mut::<Table<Msg>>(table)
+        .expect("table")
+        .set_scroll(20);
+    let header_after = pixels_of(&mut ui, Rect::new(10, 10, 380, 30));
+    let rows_after = pixels_of(&mut ui, Rect::new(10, 40, 380, 150));
+    assert_eq!(header, header_after, "the header moved");
+    assert_ne!(rows_before, rows_after, "the rows did not");
+}
+
+#[test]
+fn an_inert_table_selects_silently() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let table = Table::inert(["Navn", "Rolle"])
+        .with_rows((0..50).map(|i| [format!("N{i}"), format!("R{i}")]))
+        .with_row_height(30);
+    let table = ui
+        .add(root, table, Rect::new(10, 10, 380, 180))
+        .expect("table");
+
+    ui.handle(&scroll(100, 100, 90.0));
+    assert_eq!(ui.widget::<Table<Msg>>(table).expect("t").scroll(), 3);
+    // A click moves the selection the application can read — and says nothing,
+    // which is `List::inert`'s contract exactly.
+    ui.handle(&click(100, 10 + 45));
+    assert!(ui.drain_messages().next().is_none(), "an inert table spoke");
+    assert_eq!(
+        ui.widget::<Table<Msg>>(table).expect("t").selected(),
+        Some(3),
+        "the selection still moves"
+    );
+}
+
+/// The tree offers the wheel to the hovered widget first. A table that cannot
+/// scroll must decline it, so a page the table sits on can scroll instead.
+#[test]
+fn a_table_with_nothing_to_scroll_lets_the_viewport_have_the_wheel() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let viewport = ui
+        .add(root, Panel::default(), Rect::new(10, 10, 380, 200))
+        .expect("viewport");
+    ui.set_scrollable(viewport, true);
+    let table = Table::new(["Navn"], Msg::Row)
+        .with_rows((0..3).map(|i| [format!("N{i}")]))
+        .with_row_height(30);
+    ui.add(viewport, table, Rect::new(0, 0, 380, 400))
+        .expect("table");
+
+    ui.handle(&scroll(100, 100, 60.0));
+    assert!(
+        ui.scroll(viewport).y > 0,
+        "the viewport should have received the wheel"
+    );
+}
+
+/// The claim the widget makes: one column definition places both the header
+/// and the cells, so their ink starts at the same x. Measured in pixels,
+/// because that is where drift would appear.
+#[test]
+fn the_header_and_its_column_start_at_the_same_x() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let table = Table::inert([Column::new("X", 100), Column::new("X", 100)])
+        .with_rows([["X", "X"]])
+        .with_row_height(30);
+    ui.add(root, table, Rect::new(10, 10, 380, 90))
+        .expect("table");
+
+    let band = |ui: &mut Ui<Msg>, y: i32, h: i32| -> Vec<i32> {
+        // The x of the first ink column in each half of the band: one per
+        // 100px column span.
+        let px = pixels_of(ui, Rect::new(10, y, 380, h));
+        let mut starts = Vec::new();
+        for range in [0..190, 190..380] {
+            let start = range
+                .clone()
+                .find(|&x| {
+                    (0..h).any(|r| {
+                        let base = px[(r * 380 + x) as usize];
+                        // Ink differs from the row's own leftmost pixel.
+                        base != px[(r * 380) as usize]
+                    })
+                })
+                .unwrap_or(-1);
+            starts.push(start);
+        }
+        starts
+    };
+    let header = band(&mut ui, 10, 30);
+    let cells = band(&mut ui, 40, 30);
+    assert_ne!(header[0], -1, "no header ink found");
+    assert_eq!(header, cells, "the header and the cells drifted apart");
 }

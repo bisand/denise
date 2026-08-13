@@ -137,9 +137,9 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Twenty of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+Twenty-one of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
 `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`,
-`RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`, `Avatar`. The first four are CoreCanvas 0.4
+`RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`, `Avatar`, `Table`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -202,6 +202,25 @@ Getting that helper right needed one distinction `List` already had: it wires
 the list's **activation** message, not its selection. A dropdown whose arrow
 keys reported every row they passed over would have an application applying
 three values on the way to the fourth.
+
+`Table` is the one widget that scrolls itself, and the reason is structural
+rather than taste: the **header**. `List` deliberately owns no scrolling — it
+cooperates with a `set_scrollable` viewport — but a header inside a viewport
+scrolls away with the rows, and a header outside it is a second widget whose
+column layout has to be kept in agreement with the first, which is exactly the
+drift a table widget exists to prevent. So the table windows its *data*, the
+way `examples/table-editor` already did by hand: it owns the index of the
+first visible row, draws the header pinned, and scrolling changes which
+records are drawn. That is also the answer to the virtualisation question the
+widget tracker left open — rows outside the window are never even iterated, so
+ten thousand rows paint at the price of nine. It consumes the wheel (the first
+widget to; it declines when it has nothing to scroll, so a page it sits on can
+have it), and one `Column` definition places both the header title and every
+cell — pinned by a pixel test that measures where the ink starts, because that
+is where drift would appear. The selection contract, the double-click pairing
+and the row colours are `List`'s, as shared code rather than as convention:
+`ClickPair` and `row_colors` moved into the widgets' common module so the
+disabled-selection answer and the pairing rules live once.
 
 `Rating` is where the rasteriser ran out. Arcs unblocked the rings and the
 spinner and do nothing at all for a five-pointed star, which is a ten-vertex

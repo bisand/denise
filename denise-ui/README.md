@@ -50,7 +50,7 @@ so every state change lands in one `match` you wrote — no closures holding
 
 ## The widgets
 
-Twenty of them, deliberately few:
+Twenty-one of them, deliberately few:
 
 | | |
 |---|---|
@@ -69,6 +69,7 @@ Twenty of them, deliberately few:
 | `Image` | A picture with a fit mode. Bring your own pixels — `denise-image` decodes them |
 | `Rating` | Stars. Continuous to read, whole stars to set |
 | `Avatar` | A picture, or initials on a colour derived from them |
+| `Table` | Cells under a pinned header. **Windows its data, so row count is free** |
 
 The bar a widget has to clear is being something several panels would otherwise
 each get subtly wrong — focus handling, keyboard semantics, hit areas, disabled

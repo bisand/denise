@@ -29,6 +29,7 @@
 //! | [`Image`] | A picture with a [`Fit`]. Bring your own pixels, premultiplied |
 //! | [`Rating`] | Stars, filled to a value. Continuous to read, whole stars to set |
 //! | [`Avatar`] | A picture, or initials on a colour derived from them |
+//! | [`Table`] | Cells under a pinned header. **Windows its data, so row count is free** |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -66,6 +67,7 @@ mod select;
 mod slider;
 mod spinner;
 mod style;
+mod table;
 mod tabs;
 mod text_input;
 mod toggle;
@@ -88,6 +90,7 @@ pub use select::{Select, open_select};
 pub use slider::Slider;
 pub use spinner::Spinner;
 pub use style::{Align, Orientation};
+pub use table::{Column, Table};
 pub use tabs::Tabs;
 pub use text_input::TextInput;
 pub use toggle::Toggle;

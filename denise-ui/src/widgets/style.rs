@@ -189,3 +189,124 @@ mod tests {
         }
     }
 }
+
+/// How a row is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowKind {
+    /// Neither selected nor under the pointer.
+    Resting,
+    /// Under the pointer.
+    Hovered,
+    /// The selected row.
+    Selected,
+}
+
+/// Fill and text colour for one row.
+///
+/// One function so the paint path and the contrast test cannot disagree about
+/// what is actually drawn — and shared between [`List`](super::List) and
+/// [`Table`](super::Table), so the disabled-selection answer lives once.
+pub(crate) fn row_colors(
+    theme: &Theme,
+    state: VisualState,
+    role: Role,
+    kind: RowKind,
+    enabled: bool,
+) -> (Color, Color) {
+    // The tree's HOVERED and PRESSED bits describe the *list*, not a row. Passing
+    // them through would tint all twenty rows the moment the pointer entered the
+    // widget, which is the opposite of what a hover highlight is for; the row
+    // says it is hovered by being drawn in `Base200`.
+    let state = state
+        .set(VisualState::HOVERED, false)
+        .set(VisualState::PRESSED, false);
+    // Every pairing comes out of `interactive_pair`, so both colours of a row are
+    // guaranteed against each other. A role is only ever guaranteed against its
+    // own content — never against whatever surface it happens to sit on.
+    let (surface, content) = match kind {
+        // A disabled list still has to show which row is selected.
+        // `interactive_pair` recesses *every* role to `Base200` when disabled, so
+        // the selected row and a resting one would be the same drawing — the
+        // mistake `RadioGroup` avoided by keeping a mark inside its disabled disc.
+        // `Base300` is the theme's own next step up from that surface, and it
+        // comes with its own content colour.
+        RowKind::Selected if state.contains(VisualState::DISABLED) => theme.pair(Role::Base300),
+        RowKind::Selected => interactive_pair(theme, role, state),
+        RowKind::Hovered => interactive_pair(theme, Role::Base200, state),
+        RowKind::Resting => interactive_pair(theme, Role::Base100, state),
+    };
+    if enabled {
+        (surface, content)
+    } else {
+        // A row nobody can choose is de-emphasised — as far as this particular
+        // pair can afford, which for a disabled list, or for a selected row in a
+        // saturated role, is not at all. `muted` is what decides that.
+        (surface, muted(surface, content))
+    }
+}
+
+/// The row to highlight under the pointer.
+///
+/// `None` unless the tree still says the pointer is over this widget. The tree
+/// clears `HOVERED` when the pointer moves to another widget and **does not send
+/// this widget an event when it does** — [`InputEvent::PointerLeft`] never
+/// reaches a widget at all. Trusting the remembered row on its own leaves a row
+/// lit up under a pointer that is somewhere else entirely.
+pub(crate) fn hovered_row(state: VisualState, remembered: Option<usize>) -> Option<usize> {
+    if state.contains(VisualState::HOVERED) {
+        remembered
+    } else {
+        None
+    }
+}
+
+/// How long after a click a second one on the same row still counts as a pair.
+///
+/// The platform default nearly everywhere. Measured against
+/// [`Ui::tick`](crate::Ui::tick)'s clock — an application that never calls
+/// `tick` has a clock frozen at zero, and every second click reads as a pair.
+pub(crate) const DOUBLE_CLICK_MS: u64 = 400;
+
+/// What a click on a row turned out to mean.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Intent {
+    Select,
+    Activate,
+}
+
+/// Double-click detection, shared by [`List`](super::List) and
+/// [`Table`](super::Table) so the pairing rules cannot drift apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ClickPair {
+    last: Option<(usize, u64)>,
+}
+
+impl ClickPair {
+    /// What a click on `row` at `at_ms` means, remembering it for the next one.
+    ///
+    /// With `single_click`, every click activates — the touch-panel answer,
+    /// where a double-tap is unreliable and unexpected.
+    pub(crate) fn classify(&mut self, row: usize, at_ms: u64, single_click: bool) -> Intent {
+        if single_click {
+            return Intent::Activate;
+        }
+        let pair = self
+            .last
+            .is_some_and(|(r, at)| r == row && at_ms >= at && at_ms - at <= DOUBLE_CLICK_MS);
+        if pair {
+            // Forgotten rather than updated, so a third click starts a new pair
+            // instead of firing again — a triple-click is one activation.
+            self.last = None;
+            Intent::Activate
+        } else {
+            self.last = Some((row, at_ms));
+            Intent::Select
+        }
+    }
+
+    /// Drops a half-finished pair — called when the rows change, because a
+    /// remembered click points at a row that may now be something else.
+    pub(crate) fn forget(&mut self) {
+        self.last = None;
+    }
+}

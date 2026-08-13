@@ -3,18 +3,14 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use denise::{Color, ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
+use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
-use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair, muted};
-
-/// How long after a click a second one on the same row still counts as a pair.
-///
-/// The platform default nearly everywhere. It is measured against
-/// [`Ui::tick`](crate::Ui::tick)'s clock — see the note on the type.
-const DOUBLE_CLICK_MS: u64 = 400;
+use crate::widgets::style::{
+    Align, ClickPair, Intent, RowKind, draw_aligned, focus_ring, hovered_row, row_colors,
+};
 
 /// One row: a label, and optionally something before and after it.
 ///
@@ -197,23 +193,9 @@ pub struct List<M> {
     selection: Option<fn(usize) -> M>,
     activation: Option<fn(usize) -> M>,
     single_click: bool,
-    last_click: Option<Click>,
+    clicks: ClickPair,
     role: Role,
     style: TextStyle,
-}
-
-/// The last click, for deciding whether the next one makes a pair.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Click {
-    row: usize,
-    at_ms: u64,
-}
-
-/// What a click on a row turned out to mean.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Intent {
-    Select,
-    Activate,
 }
 
 impl<M> List<M> {
@@ -230,7 +212,7 @@ impl<M> List<M> {
             selection: Some(message),
             activation: None,
             single_click: false,
-            last_click: None,
+            clicks: ClickPair::default(),
             role: Role::Primary,
             style: TextStyle::built_in(16),
         }
@@ -247,7 +229,7 @@ impl<M> List<M> {
             selection: None,
             activation: None,
             single_click: false,
-            last_click: None,
+            clicks: ClickPair::default(),
             role: Role::Primary,
             style: TextStyle::built_in(16),
         }
@@ -330,7 +312,7 @@ impl<M> List<M> {
         self.set_selected(self.selected);
         // The remembered click points at a row that may now be something else
         // entirely, and a stale half-pair would activate the wrong thing.
-        self.last_click = None;
+        self.clicks.forget();
     }
 
     /// Enables or disables one row. Out of range does nothing.
@@ -414,23 +396,10 @@ impl<M> List<M> {
         Some(index)
     }
 
-    /// What a click on `row` at `at_ms` means, remembering it for the next one.
+    /// What a click on `row` at `at_ms` means. The pairing rules live in
+    /// [`ClickPair`], shared with [`Table`](super::Table).
     fn classify_click(&mut self, row: usize, at_ms: u64) -> Intent {
-        if self.single_click {
-            return Intent::Activate;
-        }
-        let pair = self.last_click.is_some_and(|last| {
-            last.row == row && at_ms >= last.at_ms && at_ms - last.at_ms <= DOUBLE_CLICK_MS
-        });
-        if pair {
-            // Forgotten rather than updated, so a third click starts a new pair
-            // instead of firing again — a triple-click is one activation.
-            self.last_click = None;
-            Intent::Activate
-        } else {
-            self.last_click = Some(Click { row, at_ms });
-            Intent::Select
-        }
+        self.clicks.classify(row, at_ms, self.single_click)
     }
 
     /// Moves the selection, reporting it. `None` means the end of the list.
@@ -579,75 +548,6 @@ fn columns(row: Rect, pad: i32, leading: i32, trailing: i32) -> (Rect, Rect, Rec
         right
     };
     (leading_box, box_of(start, end), trailing_box)
-}
-
-/// How a row is drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RowKind {
-    /// Neither selected nor under the pointer.
-    Resting,
-    /// Under the pointer.
-    Hovered,
-    /// The selected row.
-    Selected,
-}
-
-/// Fill and text colour for one row.
-///
-/// One function so the paint path and the contrast test cannot disagree about
-/// what is actually drawn.
-fn row_colors(
-    theme: &Theme,
-    state: VisualState,
-    role: Role,
-    kind: RowKind,
-    enabled: bool,
-) -> (Color, Color) {
-    // The tree's HOVERED and PRESSED bits describe the *list*, not a row. Passing
-    // them through would tint all twenty rows the moment the pointer entered the
-    // widget, which is the opposite of what a hover highlight is for; the row
-    // says it is hovered by being drawn in `Base200`.
-    let state = state
-        .set(VisualState::HOVERED, false)
-        .set(VisualState::PRESSED, false);
-    // Every pairing comes out of `interactive_pair`, so both colours of a row are
-    // guaranteed against each other. A role is only ever guaranteed against its
-    // own content — never against whatever surface it happens to sit on.
-    let (surface, content) = match kind {
-        // A disabled list still has to show which row is selected.
-        // `interactive_pair` recesses *every* role to `Base200` when disabled, so
-        // the selected row and a resting one would be the same drawing — the
-        // mistake `RadioGroup` avoided by keeping a mark inside its disabled disc.
-        // `Base300` is the theme's own next step up from that surface, and it
-        // comes with its own content colour.
-        RowKind::Selected if state.contains(VisualState::DISABLED) => theme.pair(Role::Base300),
-        RowKind::Selected => interactive_pair(theme, role, state),
-        RowKind::Hovered => interactive_pair(theme, Role::Base200, state),
-        RowKind::Resting => interactive_pair(theme, Role::Base100, state),
-    };
-    if enabled {
-        (surface, content)
-    } else {
-        // A row nobody can choose is de-emphasised — as far as this particular
-        // pair can afford, which for a disabled list, or for a selected row in a
-        // saturated role, is not at all. `muted` is what decides that.
-        (surface, muted(surface, content))
-    }
-}
-
-/// The row to highlight under the pointer.
-///
-/// `None` unless the tree still says the pointer is over this widget. The tree
-/// clears `HOVERED` when the pointer moves to another widget and **does not send
-/// this widget an event when it does** — [`InputEvent::PointerLeft`] never
-/// reaches a widget at all. Trusting the remembered row on its own leaves a row
-/// lit up under a pointer that is somewhere else entirely.
-fn hovered_row(state: VisualState, remembered: Option<usize>) -> Option<usize> {
-    if state.contains(VisualState::HOVERED) {
-        remembered
-    } else {
-        None
-    }
 }
 
 impl<M: 'static> Widget<M> for List<M> {
@@ -814,6 +714,7 @@ impl<M: 'static> Widget<M> for List<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::style::DOUBLE_CLICK_MS;
     use denise::theme;
 
     fn items() -> Vec<ListItem> {

@@ -15,13 +15,13 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::widgets::{
-    Alert, Align, Avatar, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem,
-    Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner, Tabs,
-    TextInput, Toggle,
+    Alert, Align, Avatar, Badge, Button, Checkbox, Column, Divider, Fit, Image, Label, List,
+    ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
+    Spinner, Table, Tabs, TextInput, Toggle,
 };
 use denise_ui::{TextStyle, Ui};
 
-const SIZE: Size = Size::new(800, 1580);
+const SIZE: Size = Size::new(800, 1800);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,7 +162,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 984))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 1204))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -542,6 +542,30 @@ fn build(theme: Theme) -> Ui<Msg> {
     )
     .expect("squared avatar");
 
+    // A table over fifty rows: five fit, the header is pinned, and the thumb
+    // shows where the window sits. Scrolled and selected mid-data, so the
+    // still picture proves the window arithmetic rather than the easy case.
+    let mut grid = Table::new(
+        [
+            Column::new("Navn", 200),
+            Column::flex("Rolle"),
+            Column::new("Nr", 60).align_end(),
+        ],
+        Msg::Row,
+    )
+    .with_rows((0..50).map(|i| {
+        [
+            alloc_free_format(i),
+            if i % 3 == 0 { "Operatør" } else { "Vakt" }.to_owned(),
+            (100 + i).to_string(),
+        ]
+    }))
+    .with_row_height(32);
+    grid.set_scroll(20);
+    grid.set_selected(Some(22));
+    ui.add(form, grid, Rect::new(16, 980, 500, 196))
+        .expect("table");
+
     // Two notifications, stacked from the bottom edge. Not nodes: the tree
     // times them, stacks them, fades them and removes them, and a still picture
     // catches them mid-hold.
@@ -671,4 +695,9 @@ fn label_for(role: Role) -> &'static str {
         Role::Error => "Error",
         _ => "Role",
     }
+}
+
+/// Names for the table rows, without pulling in anything new.
+fn alloc_free_format(i: usize) -> String {
+    format!("Person {i}")
 }
