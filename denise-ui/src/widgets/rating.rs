@@ -161,6 +161,30 @@ impl<M> Rating<M> {
         Handled::Yes
     }
 
+    /// The next whole star above the current value, and the one below it.
+    ///
+    /// Integer arithmetic, and not only for tidiness: `f32::floor` and
+    /// `f32::ceil` live in `std` because they need `libm`, and `denise-ui`
+    /// builds `no_std`. A cast truncates, which for a value that is never
+    /// negative — the clamp guarantees it — *is* the floor.
+    ///
+    /// The asymmetry is real rather than an oversight. Stepping up from a whole
+    /// 3 goes to 4 and stepping down goes to 2, but from a fractional 4.3 the
+    /// step down is 4: an average is between stars, so the star below it is the
+    /// one it has passed.
+    fn step_up(&self) -> f32 {
+        (self.value as i32 + 1) as f32
+    }
+
+    fn step_down(&self) -> f32 {
+        let whole = self.value as i32;
+        if self.value > whole as f32 {
+            whole as f32
+        } else {
+            (whole - 1) as f32
+        }
+    }
+
     /// Which star `x` falls on, as a whole rating of `1..=max`, or `None`
     /// outside the row.
     fn star_at(&self, bounds: Rect, x: i32) -> Option<u32> {
@@ -318,8 +342,8 @@ impl<M: 'static> Widget<M> for Rating<M> {
                 let value = match code {
                     // Down joins Left so the arrow cluster works whichever way
                     // a person reaches for "less", as `Slider` does.
-                    KeyCode::ArrowLeft | KeyCode::ArrowDown => self.value.ceil() - 1.0,
-                    KeyCode::ArrowRight | KeyCode::ArrowUp => self.value.floor() + 1.0,
+                    KeyCode::ArrowLeft | KeyCode::ArrowDown => self.step_down(),
+                    KeyCode::ArrowRight | KeyCode::ArrowUp => self.step_up(),
                     KeyCode::Home => 0.0,
                     KeyCode::End => self.max as f32,
                     _ => return Handled::No,
@@ -496,6 +520,27 @@ mod tests {
             previous = star;
         }
         assert_eq!(previous, 5, "the last star was never reached");
+    }
+
+    /// The integer stepping that replaced `f32::floor` and `f32::ceil`, which
+    /// are `std`-only and so unavailable to a `no_std` crate. Truncation is the
+    /// floor here because the value is never negative.
+    #[test]
+    fn stepping_lands_on_whole_stars_from_anywhere() {
+        let at = |v: f32| {
+            let mut r = Rating::<Msg>::display(0.0);
+            r.set_value(v);
+            (r.step_down(), r.step_up())
+        };
+        assert_eq!(
+            at(4.3),
+            (4.0, 5.0),
+            "an average steps to the stars either side"
+        );
+        assert_eq!(at(3.0), (2.0, 4.0), "a whole value steps past itself");
+        assert_eq!(at(0.0), (-1.0, 1.0), "and the clamp catches the low end");
+        assert_eq!(at(0.4), (0.0, 1.0));
+        assert_eq!(at(5.0), (4.0, 6.0), "the clamp catches the high end too");
     }
 
     /// A press between two stars must land on one of them, never on nothing —
