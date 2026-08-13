@@ -7,7 +7,7 @@ use denise_ui::widgets::{
     Alert, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress, RadioGroup,
     Slider, Tabs, TextInput, Toggle,
 };
-use denise_ui::{NodeId, Ui};
+use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
 
 const SIZE: Size = Size::new(400, 240);
 
@@ -242,11 +242,13 @@ fn only_the_focused_field_is_asked_to_blink() {
         None,
         "nothing is focused, so nothing should keep the event loop awake"
     );
+    assert_eq!(ui.animating(), 0);
 
     ui.focus(Some(field));
     ui.tick(0);
     let first = ui.next_wake_ms().expect("a focused field blinks");
     assert!(first > 0 && first <= 1000);
+    assert_eq!(ui.animating(), 1);
 
     // Between blink edges nothing changes, so no frame is owed.
     ui.render_nothing();
@@ -256,9 +258,12 @@ fn only_the_focused_field_is_asked_to_blink() {
     ui.tick(first);
     assert!(ui.needs_paint(), "the caret going out must be repainted");
 
+    // Losing focus makes the field answer `None` at the next tick, which is
+    // the widget handing the CPU back — not the tree confiscating it.
     ui.focus(None);
     ui.tick(first + 10);
     assert_eq!(ui.next_wake_ms(), None, "losing focus stops the timer");
+    assert_eq!(ui.animating(), 0, "and leaves nothing in the animating set");
 }
 
 #[test]
@@ -817,15 +822,16 @@ fn an_animating_knob_only_damages_its_own_rectangle() {
     }
 }
 
-/// The failure this widget is written around: `Ui::tick` only animates the
-/// **focused** widget, so a toggle that loses focus mid-slide would never be
-/// asked again and would sit at whatever fraction it had reached — forever.
+/// The failure #19 existed for: a toggle that loses focus mid-slide used to be
+/// stranded, because only the focused widget was ever asked to animate. Now the
+/// crossing belongs to the widget, not to focus — it keeps animating to the far
+/// end and then stops asking.
 ///
 /// Asserted through the pixels, because there is no public way to ask where the
 /// knob is, and "the value is true" would pass with the knob stuck at 40%. The
 /// reference is the same toggle built already-on and never animated.
 #[test]
-fn a_toggle_that_loses_focus_mid_slide_lands_rather_than_freezing() {
+fn a_toggle_that_loses_focus_mid_slide_finishes_its_travel() {
     let (mut ui, id, _) = toggled();
     let bounds = ui.bounds(id).expect("bounds");
 
@@ -834,9 +840,19 @@ fn a_toggle_that_loses_focus_mid_slide_lands_rather_than_freezing() {
     assert!(ui.next_wake_ms().is_some(), "mid-slide");
 
     // Clicking the background is what drops focus, and it is the ordinary way a
-    // panel loses it. The knob is a third of the way across at this point.
+    // panel loses it. The knob is a third of the way across at this point — and
+    // it must keep crossing.
     ui.focus(None);
-    ui.tick(8);
+    ui.tick(40);
+    assert_eq!(ui.animating(), 1, "the crossing survives losing focus");
+    assert!(
+        ui.next_wake_ms().is_some(),
+        "an unfocused toggle mid-slide still gets frames"
+    );
+
+    // Past the end of the travel it settles and hands the CPU back.
+    ui.tick(500);
+    assert_eq!(ui.animating(), 0, "arrived, and stopped asking");
     assert_eq!(ui.next_wake_ms(), None, "nothing is animating any more");
     assert!(on(&ui, id), "the value was never in doubt");
 
@@ -2344,4 +2360,196 @@ fn hover_follows_the_pointer_and_goes_out_when_it_leaves() {
             "row {index} stayed lit after the pointer left the surface"
         );
     }
+}
+
+// ------------------------------------------------------------------ animation
+
+/// The widget #19 said was impossible: appears, waits, fades, and is never
+/// focused at any point. Written against `Widget` here in the tests, exactly the
+/// way an application would.
+struct Toast {
+    born_ms: Option<u64>,
+    lifetime_ms: u64,
+}
+
+impl Toast {
+    fn new(lifetime_ms: u64) -> Self {
+        Self {
+            born_ms: None,
+            lifetime_ms,
+        }
+    }
+}
+
+impl Widget<Msg> for Toast {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut denise_render::Canvas<'_>) {
+        // The fade is time-driven, which is the whole point of the test.
+        let age = self
+            .born_ms
+            .map_or(0, |born| ctx.now_ms.saturating_sub(born));
+        let alpha = 255u64.saturating_sub(age * 255 / self.lifetime_ms.max(1)) as u8;
+        canvas.fill_rect(ctx.bounds, denise::Color::rgba(200, 200, 200, alpha));
+    }
+
+    fn animate(&mut self, now_ms: u64) -> Animation {
+        let born = *self.born_ms.get_or_insert(now_ms);
+        if now_ms.saturating_sub(born) >= self.lifetime_ms {
+            // Expired. Answering `None` is the hand-back; the application
+            // notices through `animating()` falling, or just removes the node.
+            return Animation::NONE;
+        }
+        Animation {
+            repaint: true,
+            next_ms: Some(now_ms + 16),
+        }
+    }
+}
+
+/// A toast animates from birth to expiry without ever being focused, and a tree
+/// at rest afterwards asks for nothing. This test is the issue's "done when"
+/// list, verbatim.
+#[test]
+fn a_toast_fades_without_ever_being_focused() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let toast = ui
+        .add(root, Toast::new(300), Rect::new(100, 180, 200, 40))
+        .expect("toast");
+
+    // Nothing is focused, and nothing ever will be.
+    assert_eq!(ui.focused(), None);
+    ui.request_animation(toast);
+    assert!(
+        ui.next_wake_ms().is_some(),
+        "requesting animation wakes the loop even before the first tick"
+    );
+
+    ui.tick(0);
+    assert_eq!(ui.animating(), 1);
+    ui.render_nothing();
+
+    ui.tick(100);
+    assert!(ui.needs_paint(), "a fading toast owes a frame");
+    assert_eq!(ui.focused(), None, "and still nothing is focused");
+    ui.render_nothing();
+
+    // Expiry: the toast stops asking, and the tree is back at rest.
+    ui.tick(300);
+    ui.tick(316);
+    assert_eq!(ui.animating(), 0, "an expired toast must stop asking");
+    assert_eq!(ui.next_wake_ms(), None, "the loop may sleep indefinitely");
+}
+
+/// Two widgets animate at once — the caret and a toast — and the scene wakes
+/// for the more impatient of the two. One stopping leaves the other running.
+#[test]
+fn two_widgets_animate_at_once_and_the_scene_wakes_for_the_sooner() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::<Msg>::new(), Rect::new(20, 20, 200, 40))
+        .expect("field");
+    let toast = ui
+        .add(root, Toast::new(200), Rect::new(100, 180, 200, 40))
+        .expect("toast");
+
+    ui.focus(Some(field));
+    ui.request_animation(toast);
+    ui.tick(0);
+    assert_eq!(ui.animating(), 2, "the caret and the toast, concurrently");
+
+    // The toast wants a frame in 16 ms; the caret's blink edge is at 500 ms.
+    let wake = ui.next_wake_ms().expect("two animations pending");
+    assert_eq!(wake, 16, "the scene wakes for the more impatient animation");
+
+    // The toast expires; the caret keeps blinking, undisturbed.
+    ui.tick(250);
+    assert_eq!(ui.animating(), 1, "the toast is done, the caret is not");
+    let wake = ui.next_wake_ms().expect("the caret still blinks");
+    assert!(wake >= 500, "the survivor's cadence, not the departed's");
+}
+
+/// Hiding a node stops its animation: an invisible spinner spinning forever is
+/// the exact failure the animating set exists to make visible. Removal likewise.
+#[test]
+fn hiding_or_removing_an_animating_node_stops_its_animation() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    // Unbounded on purpose: this one would never stop asking on its own.
+    let spinner = ui
+        .add(root, Toast::new(u64::MAX), Rect::new(20, 20, 40, 40))
+        .expect("spinner");
+    ui.request_animation(spinner);
+    ui.tick(0);
+    assert_eq!(ui.animating(), 1);
+
+    ui.set_visible(spinner, false);
+    assert_eq!(ui.animating(), 0, "a hidden node must not hold the CPU");
+    ui.tick(16);
+    assert_eq!(ui.next_wake_ms(), None);
+
+    // And re-showing does not quietly resume: animation is requested, not
+    // remembered.
+    ui.set_visible(spinner, true);
+    ui.tick(32);
+    assert_eq!(
+        ui.animating(),
+        0,
+        "re-showing must not resurrect the request"
+    );
+
+    ui.request_animation(spinner);
+    ui.tick(48);
+    assert_eq!(ui.animating(), 1);
+    ui.remove(spinner);
+    assert_eq!(
+        ui.animating(),
+        0,
+        "removal stops the animation with the node"
+    );
+}
+
+/// The README's idle number, as an assertion: a fully populated panel at rest
+/// — widgets of every kind, nothing focused, nothing mid-transition — requests
+/// no wakes and holds nothing in the animating set.
+#[test]
+fn a_tree_at_rest_requests_no_wakes() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(root, Panel::default(), Rect::new(10, 10, 380, 220))
+        .expect("panel");
+    ui.add(root, Label::new("Temp"), Rect::new(20, 20, 100, 20))
+        .expect("label");
+    ui.add(
+        root,
+        Button::new("Lagre", Msg::Save),
+        Rect::new(20, 44, 100, 30),
+    )
+    .expect("button");
+    ui.add(root, TextInput::<Msg>::new(), Rect::new(20, 80, 200, 30))
+        .expect("field");
+    let toggle = ui
+        .add(
+            root,
+            Toggle::new("Mute", Msg::Muted),
+            Rect::new(20, 116, 160, 24),
+        )
+        .expect("toggle");
+    ui.add(root, Progress::new(0.4), Rect::new(20, 146, 200, 10))
+        .expect("bar");
+
+    ui.tick(0);
+    assert_eq!(ui.animating(), 0, "nothing has any business animating");
+    assert_eq!(ui.next_wake_ms(), None, "the loop may block indefinitely");
+
+    // A toggle click starts a bounded transition; its end returns to rest.
+    ui.handle(&click(30, 128));
+    let _ = toggle;
+    ui.tick(0);
+    assert_eq!(ui.animating(), 1, "the crossing is a bounded exception");
+    ui.tick(1_000);
+    // The caret of nothing: the click focused the toggle, not the field, and a
+    // toggle at rest does not blink. Everything must be back to zero.
+    assert_eq!(ui.animating(), 0, "the transition ended and handed back");
+    assert_eq!(ui.next_wake_ms(), None, "at rest again");
 }

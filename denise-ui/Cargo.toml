@@ -24,6 +24,7 @@ denise-text = { workspace = true }
 slotmap = { workspace = true }
 
 [dev-dependencies]
+denise-render = { workspace = true, features = ["std"] }
 denise-text = { workspace = true, features = ["std"] }
 
 [lints.rust]

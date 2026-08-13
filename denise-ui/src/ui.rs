@@ -63,6 +63,11 @@ pub struct Ui<M: 'static> {
     messages: Vec<M>,
     now_ms: u64,
     next_wake: Option<u64>,
+    /// Nodes that have asked to animate. Emptied by their own `animate` answers:
+    /// a widget returning `next_ms: None` drops out. Kept deliberately small and
+    /// deliberately visible — [`Ui::animating`] exists so a test can assert a
+    /// tree at rest holds nobody awake.
+    animating: Vec<NodeId>,
     /// Whether the tree still gets to decide the cursor's visibility. Cleared by
     /// the first `show_cursor`, which is a host taking the decision over.
     cursor_auto: bool,
@@ -91,6 +96,7 @@ impl<M: 'static> Ui<M> {
             messages: Vec::new(),
             now_ms: 0,
             next_wake: None,
+            animating: Vec::new(),
             cursor_auto: true,
         }
     }
@@ -353,6 +359,12 @@ impl<M: 'static> Ui<M> {
         self.damage_subtree(id);
         if !visible {
             self.forget(id);
+            // A hidden widget must not keep the device awake: an invisible
+            // spinner spinning forever is the exact failure the animation set
+            // exists to make visible. Disabling, by contrast, does *not* stop
+            // animation — a disabled toggle mid-slide still gets to finish
+            // rather than freeze part-way.
+            self.stop_animating_subtree(id);
         }
     }
 
@@ -436,23 +448,83 @@ impl<M: 'static> Ui<M> {
         }
     }
 
-    /// Advances time-based state. Only the focused widget is asked to animate.
+    /// Advances time-based state for every node that asked to animate.
+    ///
+    /// A node gets into that set through [`EventCtx::request_animation`] or
+    /// [`Ui::request_animation`], and out of it by its own answer: an
+    /// [`Animation`] with `next_ms: None` is the widget saying it is done. The
+    /// tree never keeps a widget animating; the widget keeps itself animating,
+    /// and the tree keeps the evidence — see [`Ui::animating`].
     pub fn tick(&mut self, now_ms: u64) {
         self.now_ms = now_ms;
-        let Some(id) = self.focused else {
-            self.next_wake = None;
-            return;
-        };
-        let Some(node) = self.nodes.get_mut(id) else {
-            self.next_wake = None;
-            return;
-        };
-        let animation = node.widget.animate(now_ms);
-        let clip = node.clip;
-        if animation.repaint {
-            self.damage.add(clip);
+        let mut wake: Option<u64> = None;
+        let mut i = 0;
+        while i < self.animating.len() {
+            let id = self.animating[i];
+            let Some(node) = self.nodes.get_mut(id) else {
+                // Removed while animating; nothing to settle.
+                self.animating.swap_remove(i);
+                continue;
+            };
+            let animation = node.widget.animate(now_ms);
+            let clip = node.clip;
+            if animation.repaint {
+                self.damage.add(clip);
+            }
+            match animation.next_ms {
+                Some(next) => {
+                    // The scene wakes for the most impatient animation, and
+                    // everybody is asked again at that point. A widget's
+                    // `animate` must therefore tolerate being called before the
+                    // time it asked for — all of them already did, because
+                    // `tick`'s clock was always the caller's.
+                    wake = Some(wake.map_or(next, |w: u64| w.min(next)));
+                    i += 1;
+                }
+                None => {
+                    self.animating.swap_remove(i);
+                }
+            }
         }
-        self.next_wake = animation.next_ms;
+        self.next_wake = wake;
+    }
+
+    /// Asks the tree to start animating `id`.
+    ///
+    /// The widget's [`Widget::animate`] is called from the next [`Ui::tick`],
+    /// and keeps being called until it answers with `next_ms: None`. Wanting
+    /// frames is almost always decided inside an event handler, where
+    /// [`EventCtx::request_animation`] does this without an id — this entry
+    /// point is for the widget that starts moving without being touched, a
+    /// spinner being the canonical case.
+    ///
+    /// # The cost of asking
+    ///
+    /// A bounded transition — a knob crossing, a toast fading — costs its
+    /// duration and then stops asking. An *unbounded* animation is expressible,
+    /// because a spinner genuinely is one, and it is exactly what would keep a
+    /// kiosk's CPU awake at frame rate for a year if one is left running on a
+    /// screen nobody looks at. Hide the node or remove it and the animation
+    /// stops with it; [`Ui::animating`] is how a test proves there is nothing
+    /// left running.
+    pub fn request_animation(&mut self, id: NodeId) {
+        if !self.nodes.contains_key(id) || self.animating.contains(&id) {
+            return;
+        }
+        self.animating.push(id);
+        // Wake immediately: the event loop may already be deciding how long to
+        // sleep, and the newly animating widget has not been asked yet.
+        self.next_wake = Some(self.next_wake.map_or(self.now_ms, |w| w.min(self.now_ms)));
+    }
+
+    /// How many nodes are currently animating.
+    ///
+    /// Zero is the number a panel at rest must report, and the README's idle
+    /// measurements depend on it. A test that asserts this stays zero is the
+    /// guard against a widget quietly holding the device awake.
+    #[inline]
+    pub fn animating(&self) -> usize {
+        self.animating.len()
     }
 
     /// When something wants to be woken, in the same clock as [`Ui::tick`].
@@ -737,10 +809,13 @@ impl<M: 'static> Ui<M> {
             &mut self.messages,
         );
         let handled = node.widget.on_event(event, &mut ctx);
-        let (dirty, wants_focus) = ctx.finish();
+        let (dirty, wants_focus, wants_animation) = ctx.finish();
         let clip = node.clip;
         if dirty || handled.is_handled() {
             self.damage.add(clip);
+        }
+        if wants_animation {
+            self.request_animation(id);
         }
         (handled, wants_focus)
     }
@@ -768,7 +843,6 @@ impl<M: 'static> Ui<M> {
             self.deliver(old, &Event::FocusLost);
         }
         self.focused = id;
-        self.next_wake = None;
         if let Some(new) = id {
             self.set_state(new, VisualState::FOCUSED, true);
             self.deliver(new, &Event::FocusGained);
@@ -785,6 +859,18 @@ impl<M: 'static> Ui<M> {
         node.state = node.state.set(flag, on);
         let clip = node.clip;
         self.damage.add(clip);
+    }
+
+    /// Drops a subtree out of the animating set — used on hide and removal.
+    fn stop_animating_subtree(&mut self, id: NodeId) {
+        let mut i = 0;
+        while i < self.animating.len() {
+            if self.subtree_contains(id, Some(self.animating[i])) {
+                self.animating.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Drops a node out of hover, press and focus — used when it is removed,
@@ -971,6 +1057,7 @@ impl<M: 'static> Ui<M> {
 
     fn drop_subtree(&mut self, id: NodeId) {
         self.forget(id);
+        self.stop_animating_subtree(id);
         let mut stack = vec![id];
         while let Some(id) = stack.pop() {
             let Some(node) = self.nodes.remove(id) else {

@@ -23,11 +23,12 @@ const BLINK_MS: u64 = 500;
 ///
 /// # Blinking
 ///
-/// The caret blinks only while the field has focus, and the tree only asks the
-/// focused widget to animate. An unfocused panel therefore has nothing running on
-/// a timer at all, which is the difference between a device that idles and one
-/// that keeps a core awake for its whole service life. Typing resets the phase so
-/// the caret stays solid while it is moving.
+/// The caret blinks only while the field has focus: taking focus requests
+/// animation, and losing it makes [`Widget::animate`] answer `None`, which is
+/// how a widget hands the CPU back. An unfocused panel therefore has nothing
+/// running on a timer at all — the difference between a device that idles and
+/// one that keeps a core awake for its whole service life. Typing resets the
+/// phase so the caret stays solid while it is moving.
 ///
 /// A blink damages the whole field rather than the caret, because
 /// [`Widget::animate`] reports *that* something changed, not *where*. On a Pi 3
@@ -50,6 +51,10 @@ pub struct TextInput<M> {
     password: bool,
     blink_epoch: u64,
     caret_on: bool,
+    /// Whether the field currently has focus, mirrored from the focus events.
+    /// `animate` has no context to ask the tree, and this is what lets it stop
+    /// asking for frames the moment focus moves away.
+    has_focus: bool,
 }
 
 impl<M> TextInput<M> {
@@ -67,6 +72,7 @@ impl<M> TextInput<M> {
             password: false,
             blink_epoch: 0,
             caret_on: true,
+            has_focus: false,
         }
     }
 
@@ -335,10 +341,17 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
 
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
         match event {
-            Event::FocusGained | Event::FocusLost => {
+            Event::FocusGained => {
+                self.has_focus = true;
                 self.wake_caret(ctx.now_ms);
+                ctx.request_animation();
                 // Not `Handled`: nothing was consumed. The tree already repaints
                 // on a focus change, so the caret appearing is covered.
+                Handled::No
+            }
+            Event::FocusLost => {
+                self.has_focus = false;
+                self.wake_caret(ctx.now_ms);
                 Handled::No
             }
             Event::Input(InputEvent::Text { ch }) if !ch.is_control() => {
@@ -410,6 +423,12 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
     }
 
     fn animate(&mut self, now_ms: u64) -> Animation {
+        if !self.has_focus {
+            // Blinking is for the field being typed into. Answering `None` is
+            // what takes this widget out of the animating set — the caret is
+            // not drawn without focus, so there is nothing left to repaint.
+            return Animation::NONE;
+        }
         let elapsed = now_ms.saturating_sub(self.blink_epoch);
         let on = (elapsed / BLINK_MS).is_multiple_of(2);
         let repaint = on != self.caret_on;

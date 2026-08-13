@@ -159,6 +159,7 @@ pub struct EventCtx<'a, M> {
     messages: &'a mut Vec<M>,
     dirty: bool,
     wants_focus: bool,
+    wants_animation: bool,
 }
 
 impl<'a, M> EventCtx<'a, M> {
@@ -179,6 +180,7 @@ impl<'a, M> EventCtx<'a, M> {
             messages,
             dirty: false,
             wants_focus: false,
+            wants_animation: false,
         }
     }
 
@@ -207,8 +209,20 @@ impl<'a, M> EventCtx<'a, M> {
         self.wants_focus = true;
     }
 
-    pub(crate) fn finish(self) -> (bool, bool) {
-        (self.dirty, self.wants_focus)
+    /// Asks the tree to start calling [`Widget::animate`] on this widget.
+    ///
+    /// Called at the moment the widget starts needing frames — a knob that just
+    /// began sliding, a caret whose field just took focus. The calls continue
+    /// until `animate` answers `next_ms: None`, which is the widget saying it
+    /// has arrived. See [`Widget::animate`] for what that hand-back means on a
+    /// device that is supposed to spend its day asleep.
+    #[inline]
+    pub fn request_animation(&mut self) {
+        self.wants_animation = true;
+    }
+
+    pub(crate) fn finish(self) -> (bool, bool, bool) {
+        (self.dirty, self.wants_focus, self.wants_animation)
     }
 }
 
@@ -265,12 +279,22 @@ pub trait Widget<M>: AsAny {
         false
     }
 
-    /// Advances time-based state. Only ever called on the focused widget.
+    /// Advances time-based state. Called only while this widget has asked to
+    /// animate — see [`EventCtx::request_animation`] — and stops being called
+    /// the moment it answers `next_ms: None`.
     ///
-    /// That restriction is deliberate: on a panel that spends its day idle, the one
-    /// thing with a legitimate reason to redraw on a timer is the caret in the field
-    /// the user is typing into. Anything that animates unconditionally would keep
-    /// the CPU awake for the life of the device.
+    /// The contract is deliberate about who holds the responsibility: **the
+    /// widget keeps itself animating, and must stop asking.** On a panel that
+    /// spends its day idle, a bounded transition — a knob crossing, a toast
+    /// fading — costs its duration and then hands the CPU back. An animation
+    /// that never answers `None` keeps the device awake for as long as its node
+    /// is visible, which is legitimate for a spinner and ruinous for anything
+    /// that merely forgot. [`Ui::animating`](crate::Ui::animating) exists so a
+    /// test can prove a tree at rest holds nobody awake.
+    ///
+    /// May be called earlier than the time it asked for: the tree wakes for the
+    /// most impatient animation and asks everybody. Answer honestly for the
+    /// clock given and it comes out right.
     fn animate(&mut self, now_ms: u64) -> Animation {
         let _ = now_ms;
         Animation::NONE

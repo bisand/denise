@@ -34,19 +34,17 @@ const SCALE: i32 = 1000;
 /// Toggle::new("Mute", Message::Muted)
 /// ```
 ///
-/// # The knob slides, but only while the toggle has focus
+/// # The knob slides
 ///
-/// [`Ui::tick`](crate::Ui::tick) asks **only the focused widget** to animate, and
-/// that restriction is deliberate — see [`Widget::animate`]. Clicking a toggle
-/// focuses it, so the ordinary case animates.
+/// Flipping the switch requests animation for the 120 ms crossing and then the
+/// widget stops asking — the bounded-transition contract described on
+/// [`Widget::animate`]. Focus is not involved: the knob finishes its crossing
+/// whether or not focus moves away mid-slide, which is what retired the
+/// `FocusLost`-snaps-the-knob workaround this widget shipped with.
 ///
-/// What that leaves is a knob stranded halfway if focus moves during the 120 ms
-/// it is crossing. So [`Event::FocusLost`] snaps it to its final position. The
-/// value was never in doubt; only the picture was, and a switch frozen at 40% is
-/// a control nobody can read.
-///
-/// The animation is therefore a courtesy, not a mechanism. Nothing about the
-/// value depends on a frame arriving.
+/// The animation is still a courtesy, not a mechanism: nothing about the value
+/// depends on a frame arriving, and a `Toggle` on a tree whose application
+/// never calls [`Ui::tick`](crate::Ui::tick) is merely a switch that jumps.
 #[derive(Clone, Debug)]
 pub struct Toggle<M> {
     label: String,
@@ -125,10 +123,11 @@ impl<M> Toggle<M> {
     /// reports what a person did, and an application that assigned here and got
     /// its own message back would either loop or have to guard against itself.
     ///
-    /// It does not animate because it cannot rely on being able to. A widget the
-    /// application assigns to is usually not the focused one, and an unfocused
-    /// widget is never asked to animate — so a sliding `set_checked` would leave
-    /// the knob wherever it started, which is worse than an honest jump.
+    /// It does not animate because a setter has no way to request frames — the
+    /// tree grants them through an event or [`crate::Ui::request_animation`],
+    /// and a widget cannot reach the tree from here. An application that wants
+    /// the slide can call `request_animation` itself; the default is the honest
+    /// jump.
     ///
     /// [`Checkbox::set_checked`]: super::Checkbox::set_checked
     pub fn set_checked(&mut self, checked: bool) {
@@ -314,15 +313,6 @@ impl<M: 'static> Widget<M> for Toggle<M> {
     }
 
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
-        // Losing focus ends the animation rather than stranding it: an unfocused
-        // widget is never asked to animate again, so whatever position it holds
-        // now is the one it would keep forever.
-        if matches!(event, Event::FocusLost) {
-            let stranded = self.moving(ctx.now_ms);
-            self.settle();
-            return if stranded { Handled::Yes } else { Handled::No };
-        }
-
         let toggled = match event {
             Event::Input(InputEvent::PointerButton {
                 state: ElementState::Up,
@@ -353,6 +343,9 @@ impl<M: 'static> Widget<M> for Toggle<M> {
         self.from = self.position(ctx.now_ms);
         self.started_ms = ctx.now_ms;
         self.checked = !self.checked;
+        // Frames for the crossing, and only the crossing: `animate` answers
+        // `None` the moment the knob arrives.
+        ctx.request_animation();
         if let Some(message) = self.message {
             ctx.emit(message(self.checked));
         }
@@ -516,8 +509,8 @@ mod tests {
         assert_eq!(toggle.position(TRAVEL_MS / 2 + TRAVEL_MS), 0);
     }
 
-    /// Assigning is silent *and* immediate: an unfocused widget is never asked to
-    /// animate, so a sliding `set_checked` would leave the knob where it started.
+    /// Assigning is silent *and* immediate: a setter cannot request frames, so
+    /// the honest picture is the one that needs none.
     #[test]
     fn setting_the_value_programmatically_is_silent_and_lands_immediately() {
         let mut toggle: Toggle<bool> = Toggle::new("Mute", |on| on);

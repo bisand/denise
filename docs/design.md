@@ -201,15 +201,23 @@ one per widget, before the rule was. It now lives in one function, `style::muted
 which mutes a pair that can afford it and returns one that cannot unchanged:
 legible and undifferentiated beats differentiated and illegible.
 
-Three limits were found by building against them rather than by design review, and
-all three are open:
+Three limits were found by building against them rather than by design review.
+The first is now resolved; two are open:
 
-- **`Ui::tick` animates only the focused widget**
-  ([#19](https://github.com/bisand/denise/issues/19)). Deliberate — an idle panel
-  should have exactly one thing redrawing on a timer, and that is the caret. But
-  it means a toast, a spinner and an indeterminate progress bar are not merely
-  unwritten, they are inexpressible, and `Toggle` needs a settle-on-focus-loss
-  guard so its knob is not stranded mid-slide.
+- **`Ui::tick` animated only the focused widget** — resolved by
+  [#19](https://github.com/bisand/denise/issues/19). Animation is now *requested*:
+  a widget asks for frames at the moment it starts needing them
+  (`EventCtx::request_animation`, or `Ui::request_animation` for a widget nobody
+  touches), and drops out by answering `next_ms: None` — the widget keeps itself
+  animating and must stop asking. A toast that appears, waits and fades without
+  ever being focused is now expressible; `Toggle` finishes its crossing when
+  focus moves away instead of settling defensively. What survived the change is
+  the thing the old rule protected: **a tree at rest holds nobody awake**, and
+  that is now asserted rather than trusted — `Ui::animating()` reports the set's
+  size, a test pins it at zero for a populated idle panel, and hiding or removing
+  a node stops its animation so an invisible spinner cannot hold the CPU.
+  Unbounded animation is deliberately expressible, because a spinner genuinely is
+  one; the accountability for it is the count and the tests, not a prohibition.
 - **`Metrics::scaled` is called from nowhere**
   ([#20](https://github.com/bisand/denise/issues/20)). Every geometry token is
   therefore a physical pixel, and the scale factor the backends report is not
