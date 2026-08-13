@@ -95,6 +95,7 @@ Unpacking denise-ui v0.0.1 (registry `target/package/tmp-registry`)
 
 | Version | |
 |---|---|
+| [v0.4.0](https://github.com/bisand/denise/releases/tag/v0.4.0) | What the foundations were for: RadialProgress, Spinner, Tooltip, Select and Toast — the widgets that were waiting on popups. Clean run, four minutes gate to upload |
 | [v0.3.0](https://github.com/bisand/denise/releases/tag/v0.3.0) | The five foundations: arcs, requested animation, popups, DPI, scrolling. First real release through the tag-driven pipeline, clean on the first run |
 | [v0.2.1-rc.1](https://github.com/bisand/denise/releases/tag/v0.2.1-rc.1) | A live test of the tag-driven pipeline, and says so in its notes. The workflow bumped from the tag, moved the tag onto the bump, waited for CI — releasing eight seconds after the last check went green — and published. Invisible to `"0.2"` requirements |
 | [v0.2.0](https://github.com/bisand/denise/releases/tag/v0.2.0) | The widget wave: fourteen widgets, word wrapping, per-crate READMEs. First release through the Prepare release workflow — which is how its two bugs were found |
