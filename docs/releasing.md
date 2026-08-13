@@ -97,4 +97,4 @@ Unpacking denise-ui v0.0.1 (registry `target/package/tmp-registry`)
 | [v0.0.1](https://github.com/bisand/denise/releases/tag/v0.0.1) | The first real release. All twelve, uploaded within ten seconds of each other |
 | [v0.0.0](https://github.com/bisand/denise/releases/tag/v0.0.0) | Not a release — name reservations for three crates, over two days |
 
-Both were tagged after the fact, from crates.io upload timestamps against the commit history. `0.0.1` is exact: the commit `38568ae` is titled *"chore: bump to 0.0.1 so the published core carries M4 and M5"*, and the first upload followed it by nineteen seconds. `0.0.0` is a reconstruction and its release notes say so.
+The two `0.0.x` rows were tagged after the fact, from crates.io upload timestamps against the commit history. `0.0.1` is exact: the commit `38568ae` is titled *"chore: bump to 0.0.1 so the published core carries M4 and M5"*, and the first upload followed it by nineteen seconds. `0.0.0` is a reconstruction and its release notes say so.
