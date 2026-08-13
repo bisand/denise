@@ -3,7 +3,7 @@
 use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
-use denise_ui::widgets::{Button, Checkbox, Label, Panel, TextInput};
+use denise_ui::widgets::{Button, Checkbox, Label, Panel, TextInput, Toggle};
 use denise_ui::{NodeId, Ui};
 
 const SIZE: Size = Size::new(400, 240);
@@ -14,6 +14,7 @@ enum Msg {
     Cancel,
     Submitted,
     Logging(bool),
+    Muted(bool),
 }
 
 fn keys(code: KeyCode, times: usize) -> Vec<InputEvent> {
@@ -276,12 +277,55 @@ fn a_label_only_repaints_when_its_text_actually_changes() {
     assert!(ui.needs_paint());
 }
 
+/// The pixels inside `area`, after a paint.
+fn pixels_of(ui: &mut Ui<Msg>, area: Rect) -> Vec<u32> {
+    use denise::{BufferAge, Frame, PixelFormat};
+    let mut buffer = vec![0u32; (SIZE.width * SIZE.height) as usize];
+    let mut frame = Frame::new(
+        &mut buffer,
+        SIZE,
+        SIZE.width,
+        PixelFormat::Xrgb8888,
+        BufferAge::Undefined,
+    )
+    .expect("frame");
+    ui.paint(&mut frame);
+    drop(frame);
+    let mut out = Vec::new();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            out.push(buffer[(y * SIZE.width as i32 + x) as usize]);
+        }
+    }
+    out
+}
+
 /// Test-only convenience: consume the pending damage without a surface.
 trait Settle {
     fn render_nothing(&mut self);
+    /// Paints, and reports what that paint resolved as damage.
+    fn paint_for_damage(&mut self) -> Vec<Rect>;
 }
 
 impl Settle for Ui<Msg> {
+    fn paint_for_damage(&mut self) -> Vec<Rect> {
+        use denise::{BufferAge, Frame, PixelFormat};
+        let mut pixels = vec![0u32; (SIZE.width * SIZE.height) as usize];
+        let mut frame = Frame::new(
+            &mut pixels,
+            SIZE,
+            SIZE.width,
+            PixelFormat::Xrgb8888,
+            BufferAge::Frames(1),
+        )
+        .expect("frame");
+        self.paint(&mut frame);
+        drop(frame);
+        let damage = self.damage().to_vec();
+        self.presented();
+        damage
+    }
+
     fn render_nothing(&mut self) {
         use denise::{BufferAge, Frame, PixelFormat};
         let mut pixels = vec![0u32; (SIZE.width * SIZE.height) as usize];
@@ -635,4 +679,230 @@ fn ticking_the_box_actually_changes_the_pixels_in_it() {
         "only {differing} pixels differ inside a {side}x{side} box — the tick is \
          not being drawn, or has collapsed to a hairline"
     );
+}
+
+// --------------------------------------------------------------------- toggle
+
+/// A toggle at 20,20 measuring 200x30, with a field after it to take focus away.
+fn toggled() -> (Ui<Msg>, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Toggle::new("Mute", Msg::Muted),
+            Rect::new(20, 20, 200, 30),
+        )
+        .expect("toggle");
+    let field = ui
+        .add(root, TextInput::<Msg>::new(), Rect::new(20, 90, 200, 40))
+        .expect("field");
+    (ui, id, field)
+}
+
+fn on(ui: &Ui<Msg>, id: NodeId) -> bool {
+    ui.widget::<Toggle<Msg>>(id).expect("toggle").checked()
+}
+
+#[test]
+fn a_toggle_emits_the_value_it_changed_to() {
+    let (mut ui, id, _) = toggled();
+
+    ui.handle(&click(30, 35));
+    assert!(on(&ui, id));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Muted(true)]
+    );
+
+    ui.handle(&click(30, 35));
+    assert!(!on(&ui, id));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Muted(false)]
+    );
+}
+
+/// Space toggles, Enter is left for the form's default action — the same rule as
+/// `Checkbox`, and worth pinning separately because it is easy to implement one
+/// and forget the other.
+#[test]
+fn space_toggles_a_focused_toggle_and_enter_is_left_alone() {
+    let (mut ui, id, _) = toggled();
+    ui.focus(Some(id));
+
+    ui.handle(&[key(KeyCode::Space)]);
+    assert!(on(&ui, id));
+
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert!(on(&ui, id), "Enter must not have toggled it");
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Muted(true)]
+    );
+}
+
+/// The animation has to *end*. A widget that keeps asking for frames holds a
+/// kiosk's CPU awake for the life of the device, which is the number the README
+/// leads with.
+#[test]
+fn the_knob_animates_and_then_stops_asking_for_frames() {
+    let (mut ui, id, _) = toggled();
+
+    ui.tick(0);
+    assert_eq!(ui.next_wake_ms(), None, "nothing is animating at rest");
+
+    ui.handle(&click(30, 35));
+    assert!(on(&ui, id));
+
+    // Clicking focused it, so it is the widget `tick` will animate.
+    assert_eq!(ui.focused(), Some(id));
+
+    ui.tick(0);
+    let waking = ui.next_wake_ms();
+    assert!(waking.is_some(), "the knob should be crossing");
+
+    // Run the clock past the travel time. The exact number of frames does not
+    // matter; that it stops does.
+    let mut frames = 0;
+    let mut now = 0;
+    while ui.next_wake_ms().is_some() && frames < 100 {
+        now = ui.next_wake_ms().expect("a wake time");
+        ui.tick(now);
+        frames += 1;
+    }
+    assert!(frames > 1, "the knob jumped rather than crossing");
+    assert!(
+        frames < 100,
+        "the knob never settled: still waking at {now}ms"
+    );
+    assert_eq!(ui.next_wake_ms(), None, "and stops asking once it arrives");
+}
+
+/// While it moves, the damage stays inside the toggle. A widget that invalidated
+/// its whole scene during an animation would repaint the panel sixty times a
+/// second for something 50 pixels wide.
+///
+/// `Ui::damage` reports what the **last paint** resolved, not what is pending, so
+/// this has to paint between the tick and the assertion. Reading it straight
+/// after `tick` returns the previous frame's answer, which is the full surface
+/// for a tree that has just been built.
+#[test]
+fn an_animating_knob_only_damages_its_own_rectangle() {
+    let (mut ui, id, _) = toggled();
+    let bounds = ui.bounds(id).expect("bounds");
+
+    // Settle the initial full-surface damage, and then the click's.
+    ui.render_nothing();
+    ui.handle(&click(30, 35));
+    ui.render_nothing();
+
+    ui.tick(8);
+    let damage = ui.paint_for_damage();
+    assert!(!damage.is_empty(), "a moving knob has to repaint something");
+    for rect in &damage {
+        assert!(
+            bounds.contains_rect(rect),
+            "{rect:?} escaped the toggle's own {bounds:?}"
+        );
+    }
+}
+
+/// The failure this widget is written around: `Ui::tick` only animates the
+/// **focused** widget, so a toggle that loses focus mid-slide would never be
+/// asked again and would sit at whatever fraction it had reached — forever.
+///
+/// Asserted through the pixels, because there is no public way to ask where the
+/// knob is, and "the value is true" would pass with the knob stuck at 40%. The
+/// reference is the same toggle built already-on and never animated.
+#[test]
+fn a_toggle_that_loses_focus_mid_slide_lands_rather_than_freezing() {
+    let (mut ui, id, _) = toggled();
+    let bounds = ui.bounds(id).expect("bounds");
+
+    ui.handle(&click(30, 35));
+    ui.tick(0);
+    assert!(ui.next_wake_ms().is_some(), "mid-slide");
+
+    // Clicking the background is what drops focus, and it is the ordinary way a
+    // panel loses it. The knob is a third of the way across at this point.
+    ui.focus(None);
+    ui.tick(8);
+    assert_eq!(ui.next_wake_ms(), None, "nothing is animating any more");
+    assert!(on(&ui, id), "the value was never in doubt");
+
+    // The pointer is still sitting on the toggle, and a hovered track is a
+    // different colour from a resting one. Move it off, or this compares hover
+    // states rather than knob positions.
+    ui.handle(&[InputEvent::PointerMoved {
+        position: Point::new(380, 220),
+    }]);
+    let stranded = pixels_of(&mut ui, bounds);
+
+    let mut reference: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = reference.root();
+    reference
+        .add(
+            root,
+            Toggle::new("Mute", Msg::Muted).with_checked(true),
+            Rect::new(20, 20, 200, 30),
+        )
+        .expect("toggle");
+    let landed = pixels_of(&mut reference, bounds);
+
+    let differing = stranded.iter().zip(&landed).filter(|(a, b)| a != b).count();
+    assert_eq!(
+        differing,
+        0,
+        "{differing} of {} pixels differ: the knob froze part-way instead of \
+         finishing its travel",
+        stranded.len()
+    );
+}
+
+/// Flipping it back mid-slide reverses from where the knob got to.
+#[test]
+fn flipping_a_toggle_back_mid_slide_does_not_jump() {
+    let (mut ui, id, _) = toggled();
+
+    ui.handle(&click(30, 35));
+    ui.tick(0);
+    ui.tick(40);
+    ui.handle(&click(30, 35));
+    assert!(!on(&ui, id));
+
+    // Still animating, and still bounded — the reversal is a new transition, not
+    // a second one layered on the first.
+    ui.tick(40);
+    assert!(ui.next_wake_ms().is_some());
+    let mut frames = 0;
+    while ui.next_wake_ms().is_some() && frames < 100 {
+        let now = ui.next_wake_ms().expect("a wake time");
+        ui.tick(now);
+        frames += 1;
+    }
+    assert!(frames < 100, "the reversed transition never ended");
+}
+
+#[test]
+fn a_disabled_toggle_neither_toggles_nor_takes_focus() {
+    let (mut ui, id, _) = toggled();
+    ui.set_enabled(id, false);
+
+    ui.handle(&click(30, 35));
+    assert!(!on(&ui, id));
+    assert!(ui.messages().is_empty());
+
+    ui.focus(Some(id));
+    assert_eq!(ui.focused(), None);
+}
+
+#[test]
+fn setting_a_toggle_from_the_application_emits_nothing() {
+    let (mut ui, id, _) = toggled();
+    ui.widget_mut::<Toggle<Msg>>(id)
+        .expect("toggle")
+        .set_checked(true);
+    assert!(on(&ui, id));
+    assert!(ui.messages().is_empty());
 }

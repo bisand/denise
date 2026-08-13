@@ -15,9 +15,9 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::Ui;
-use denise_ui::widgets::{Align, Button, Checkbox, Label, Panel, TextInput};
+use denise_ui::widgets::{Align, Button, Checkbox, Label, Panel, TextInput, Toggle};
 
-const SIZE: Size = Size::new(800, 700);
+const SIZE: Size = Size::new(800, 740);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Msg {
@@ -144,7 +144,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 166))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 202))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -193,6 +193,29 @@ fn build(theme: Theme) -> Ui<Msg> {
         )
         .expect("locked");
     ui.set_enabled(locked, false);
+
+    // The same boolean as a switch. Both states, because a knob only ever drawn
+    // at one end proves nothing about the travel.
+    ui.add(
+        form,
+        Toggle::new("Nattmodus", Msg::Remember).with_checked(true),
+        Rect::new(16, 156, 220, 28),
+    )
+    .expect("night");
+    ui.add(
+        form,
+        Toggle::new("Demping", Msg::Remember),
+        Rect::new(256, 156, 220, 28),
+    )
+    .expect("dim");
+    let fixed = ui
+        .add(
+            form,
+            Toggle::new("Fastlåst", Msg::Remember).with_checked(true),
+            Rect::new(496, 156, 220, 28),
+        )
+        .expect("fixed");
+    ui.set_enabled(fixed, false);
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.
