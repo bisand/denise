@@ -677,10 +677,37 @@ impl<M: 'static> Ui<M> {
         };
         let mut right = 0;
         let mut bottom = 0;
-        for &child in &node.children {
-            if let Some(child) = self.nodes.get(child) {
-                right = right.max(child.layout.right());
-                bottom = bottom.max(child.layout.bottom());
+        match node.stack {
+            None => {
+                for &child in &node.children {
+                    if let Some(child) = self.nodes.get(child) {
+                        right = right.max(child.layout.right());
+                        bottom = bottom.max(child.layout.bottom());
+                    }
+                }
+            }
+            // A stack places children at the running y, not at their layout's,
+            // so the content's extent is the same arithmetic `reflow` runs: the
+            // visible heights plus the gaps between them. Reading the layouts
+            // here would make a scrollable stacked column — a settings page of
+            // cards — report almost no range at all.
+            Some(spacing) => {
+                let mut running = 0i32;
+                let mut any = false;
+                for &child in &node.children {
+                    if let Some(child) = self.nodes.get(child)
+                        && child.visible
+                    {
+                        right = right.max(child.layout.right());
+                        running = running
+                            .saturating_add(child.layout.height.max(0))
+                            .saturating_add(spacing);
+                        any = true;
+                    }
+                }
+                if any {
+                    bottom = running - spacing;
+                }
             }
         }
         Point::new(

@@ -2908,6 +2908,48 @@ fn the_scroll_offset_clamps_to_the_content() {
     assert_eq!(ui.scroll(view), Point::new(0, 160));
 }
 
+/// A scrollable stack reports the stacked extent, not the layouts' extent.
+///
+/// Stacked children keep their own layout rectangles — usually all at y=0 —
+/// while reflow places them at the running y. The scroll range has to come
+/// from the same arithmetic reflow uses, or a settings page of stacked cards
+/// scrolls almost nowhere. Hidden children take no space in the stack, so
+/// they must take none in the range either.
+#[test]
+fn a_scrollable_stack_scrolls_to_its_stacked_extent() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let view = ui
+        .add(root, Panel::default(), Rect::new(0, 0, 200, 100))
+        .expect("viewport");
+    ui.set_scrollable(view, true);
+    ui.set_stack(view, 10);
+    let mut cards = Vec::new();
+    for i in 0..4 {
+        // Deliberately absurd layout y: the stack decides where children go
+        // and ignores it, so the scroll range must ignore it identically —
+        // an extent read from these layouts would scroll into empty space.
+        cards.push(
+            ui.add(view, Panel::default(), Rect::new(0, i * 500, 180, 60))
+                .expect("card"),
+        );
+    }
+
+    // Four 60-tall cards and three 10-gaps: 270 of content in a 100 window.
+    assert_eq!(ui.max_scroll(view), Point::new(0, 170));
+    ui.set_scroll(view, Point::new(0, 999));
+    assert_eq!(ui.scroll(view), Point::new(0, 170), "clamped to the extent");
+
+    // The last card's bounds at full scroll end exactly at the viewport's
+    // bottom edge — the range and the placement agree about where content is.
+    let last = ui.bounds(cards[3]).expect("last card");
+    assert_eq!(last.bottom(), 100, "flush with the viewport at full scroll");
+
+    // A hidden card leaves the stack, and the range follows it out.
+    ui.set_visible(cards[1], false);
+    assert_eq!(ui.max_scroll(view), Point::new(0, 100), "200 tall in 100");
+}
+
 /// The wheel scrolls the viewport under the pointer, without anything focused
 /// and without the pointer resting on any widget.
 #[test]
