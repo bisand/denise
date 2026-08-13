@@ -24,6 +24,11 @@
 //! a panic in a paint loop on a kiosk is a black screen with no way to report
 //! itself.
 //!
+//! [`Slider`] is the one with genuinely fiddly input, and the reason it is here
+//! rather than in every application: a drag has to keep the pointer after it
+//! leaves the widget, and the tree clears `PRESSED` at exactly that boundary
+//! because that is what makes a button's drag-off cancel.
+//!
 //! Every one of them names theme *roles* rather than colours, so a panel built
 //! from these survives a theme swap without a single widget knowing it happened.
 
@@ -33,6 +38,7 @@ mod label;
 mod panel;
 mod progress;
 mod radio;
+mod slider;
 mod style;
 mod text_input;
 mod toggle;
@@ -43,6 +49,7 @@ pub use label::Label;
 pub use panel::Panel;
 pub use progress::Progress;
 pub use radio::RadioGroup;
+pub use slider::Slider;
 pub use style::Align;
 pub use text_input::TextInput;
 pub use toggle::Toggle;

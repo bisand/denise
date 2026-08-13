@@ -3,12 +3,15 @@
 use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
-use denise_ui::widgets::{Button, Checkbox, Label, Panel, Progress, RadioGroup, TextInput, Toggle};
+use denise_ui::widgets::{
+    Button, Checkbox, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
+};
 use denise_ui::{NodeId, Ui};
 
 const SIZE: Size = Size::new(400, 240);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+// No `Eq`: `Level` carries an f32. `assert_eq!` only ever wanted `PartialEq`.
+#[derive(Clone, Debug, PartialEq)]
 enum Msg {
     Save,
     Cancel,
@@ -16,6 +19,7 @@ enum Msg {
     Logging(bool),
     Muted(bool),
     Mode(usize),
+    Level(f32),
 }
 
 fn keys(code: KeyCode, times: usize) -> Vec<InputEvent> {
@@ -1251,4 +1255,210 @@ fn a_bar_fed_a_nan_draws_the_same_as_an_empty_one() {
     let nan = pixels_of(&mut ui, bounds);
 
     assert_eq!(nan, empty, "a NaN drew something other than an empty bar");
+}
+
+// --------------------------------------------------------------------- slider
+
+fn down(x: i32, y: i32) -> InputEvent {
+    InputEvent::PointerButton {
+        button: PointerButton::Left,
+        state: ElementState::Down,
+        position: Point::new(x, y),
+        modifiers: Modifiers::NONE,
+    }
+}
+
+fn moved(x: i32, y: i32) -> InputEvent {
+    InputEvent::PointerMoved {
+        position: Point::new(x, y),
+    }
+}
+
+fn up(x: i32, y: i32) -> InputEvent {
+    InputEvent::PointerButton {
+        button: PointerButton::Left,
+        state: ElementState::Up,
+        position: Point::new(x, y),
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// A 0..100 slider at 20,20 measuring 200x40, starting at 0.
+fn slider() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Slider::new(0.0, 100.0, 0.0, Msg::Level),
+            Rect::new(20, 20, 200, 40),
+        )
+        .expect("slider");
+    (ui, id)
+}
+
+fn level(ui: &Ui<Msg>, id: NodeId) -> f32 {
+    ui.widget::<Slider<Msg>>(id).expect("slider").value()
+}
+
+/// Pressing the track goes there rather than stepping towards it.
+#[test]
+fn pressing_the_track_jumps_to_that_value() {
+    let (mut ui, id) = slider();
+    ui.handle(&[down(120, 40), up(120, 40)]);
+    assert!(
+        (level(&ui, id) - 50.0).abs() < 5.0,
+        "a press at the midpoint gave {}",
+        level(&ui, id)
+    );
+    assert!(!ui.messages().is_empty(), "and reported it");
+}
+
+/// **The case this widget exists for.** A drag that leaves the rectangle keeps
+/// control of the pointer: the tree routes moves to the pressed widget wherever
+/// it goes, but it clears `PRESSED` at the boundary, so a slider reading its
+/// drag state from the tree would stop tracking exactly here.
+#[test]
+fn a_drag_keeps_following_the_pointer_after_it_leaves_the_widget() {
+    let (mut ui, id) = slider();
+
+    ui.handle(&[down(30, 40)]);
+    let started = level(&ui, id);
+
+    // Out through the bottom of the widget, and keep going sideways well outside
+    // it — the pointer is nowhere near the slider now.
+    ui.handle(&[moved(60, 40), moved(120, 200), moved(180, 300)]);
+    let dragged = level(&ui, id);
+    assert!(
+        dragged > started + 40.0,
+        "the drag stopped tracking once the pointer left: {started} -> {dragged}"
+    );
+
+    ui.handle(&[up(180, 300)]);
+    let released = level(&ui, id);
+
+    // And once released, moving over the widget again must not move the value.
+    ui.handle(&[moved(40, 40), moved(200, 40)]);
+    assert_eq!(
+        level(&ui, id),
+        released,
+        "the release did not end the drag; the knob is still following the pointer"
+    );
+}
+
+/// Dragged past either end it clamps. Wrapping a volume from full to silent
+/// because a finger slid too far is the failure this pins.
+#[test]
+fn dragging_past_either_end_clamps_rather_than_wrapping() {
+    let (mut ui, id) = slider();
+
+    ui.handle(&[down(120, 40), moved(100_000, 40)]);
+    assert_eq!(level(&ui, id), 100.0);
+
+    ui.handle(&[moved(-100_000, 40)]);
+    assert_eq!(level(&ui, id), 0.0, "and back down the other way");
+
+    ui.handle(&[up(-100_000, 40)]);
+}
+
+/// The keyboard contract: arrows step, pages step further, Home and End go to
+/// the ends. A panel with no pointer has to be drivable by these alone.
+#[test]
+fn the_keyboard_moves_the_value_by_step_page_and_end() {
+    let (mut ui, id) = slider();
+    ui.focus(Some(id));
+
+    ui.handle(&[key(KeyCode::ArrowRight)]);
+    assert_eq!(level(&ui, id), 1.0, "one hundredth of the range");
+    ui.handle(&[key(KeyCode::ArrowLeft)]);
+    assert_eq!(level(&ui, id), 0.0);
+
+    ui.handle(&[key(KeyCode::PageUp)]);
+    assert_eq!(level(&ui, id), 10.0, "a tenth");
+
+    ui.handle(&[key(KeyCode::End)]);
+    assert_eq!(level(&ui, id), 100.0);
+    ui.handle(&[key(KeyCode::Home)]);
+    assert_eq!(level(&ui, id), 0.0);
+
+    // At an end, a further press changes nothing and so reports nothing.
+    ui.drain_messages().for_each(drop);
+    ui.handle(&[key(KeyCode::ArrowLeft)]);
+    assert_eq!(level(&ui, id), 0.0);
+    assert!(
+        ui.messages().is_empty(),
+        "a value that did not move was reported"
+    );
+}
+
+/// A step makes the value land on the grid however the pointer falls between.
+#[test]
+fn a_stepped_slider_snaps_wherever_the_pointer_lands() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Slider::new(0.0, 10.0, 0.0, Msg::Level).with_step(1.0),
+            Rect::new(20, 20, 200, 40),
+        )
+        .expect("slider");
+
+    for x in 20..220 {
+        ui.handle(&[down(x, 40), up(x, 40)]);
+        let value = level(&ui, id);
+        assert_eq!(
+            value,
+            (value as i32) as f32,
+            "x {x} gave {value}, which is not on the step grid"
+        );
+        assert!((0.0..=10.0).contains(&value), "x {x} gave {value}");
+    }
+}
+
+#[test]
+fn a_disabled_slider_neither_drags_nor_takes_focus() {
+    let (mut ui, id) = slider();
+    ui.set_enabled(id, false);
+
+    ui.handle(&[down(120, 40), moved(180, 40), up(180, 40)]);
+    assert_eq!(level(&ui, id), 0.0);
+    assert!(ui.messages().is_empty());
+
+    ui.focus(Some(id));
+    assert_eq!(ui.focused(), None);
+}
+
+#[test]
+fn setting_a_slider_from_the_application_emits_nothing() {
+    let (mut ui, id) = slider();
+    ui.widget_mut::<Slider<Msg>>(id)
+        .expect("slider")
+        .set_value(42.0);
+    assert_eq!(level(&ui, id), 42.0);
+    assert!(ui.messages().is_empty());
+}
+
+/// The drawing follows the value, and the knob is somewhere different at each
+/// end. A slider whose value moves while the picture does not reports nothing.
+#[test]
+fn the_knob_moves_with_the_value() {
+    let picture = |value: f32| -> Vec<u32> {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(
+                root,
+                Slider::new(0.0, 100.0, value, Msg::Level),
+                Rect::new(20, 20, 200, 40),
+            )
+            .expect("slider");
+        let bounds = ui.bounds(id).expect("bounds");
+        pixels_of(&mut ui, bounds)
+    };
+
+    let (empty, half, full) = (picture(0.0), picture(50.0), picture(100.0));
+    assert_ne!(empty, half);
+    assert_ne!(half, full);
+    assert_ne!(empty, full);
 }

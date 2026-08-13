@@ -16,16 +16,18 @@ use denise::{
 };
 use denise_ui::Ui;
 use denise_ui::widgets::{
-    Align, Button, Checkbox, Label, Panel, Progress, RadioGroup, TextInput, Toggle,
+    Align, Button, Checkbox, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
 };
 
-const SIZE: Size = Size::new(800, 834);
+const SIZE: Size = Size::new(800, 958);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+// No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
+#[derive(Clone, Debug, PartialEq)]
 enum Msg {
     Noop,
     Remember(bool),
     Mode(usize),
+    Level(f32),
 }
 
 fn main() -> std::io::Result<()> {
@@ -147,7 +149,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 296))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 420))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -254,6 +256,25 @@ fn build(theme: Theme) -> Ui<Msg> {
             Rect::new(496, 200 + index as i32 * 22, 220, 12),
         )
         .expect("bar");
+    }
+
+    // Sliders at both ends and in the middle, plus one that snaps. The knob has
+    // to stay inside its rectangle at the extremes, which is the thing a picture
+    // taken only at 50% would never show.
+    for (index, (value, step)) in [(0.0, None), (0.5, None), (1.0, None), (0.4, Some(0.2))]
+        .into_iter()
+        .enumerate()
+    {
+        let mut slider = Slider::new(0.0, 1.0, value, Msg::Level);
+        if let Some(step) = step {
+            slider = slider.with_step(step);
+        }
+        ui.add(
+            form,
+            slider,
+            Rect::new(16, 290 + index as i32 * 30, 220, 26),
+        )
+        .expect("slider");
     }
 
     // Drive the states through real input so the picture cannot drift from what
