@@ -165,10 +165,6 @@ mod window_backend {
             self.0.ui.paint(frame);
             self.0.ui.presented();
         }
-
-        fn exit_requested(&self) -> bool {
-            self.0.exit
-        }
     }
 }
 
@@ -235,9 +231,9 @@ mod kiosk_backend {
         let mut shoot = false;
 
         while Instant::now() < deadline {
-            let now = || started.elapsed().as_millis() as u64;
-
-            let timeout = poll_timeout(app.ui.next_wake_ms(), now(), deadline);
+            // The app's clock, not a second one here: the tree's ticks come
+            // from one place on every backend.
+            let timeout = poll_timeout(app.ui.next_wake_ms(), app.elapsed_ms(), deadline);
             poll(&mut poll_fds, timeout.as_ref())?;
 
             events.clear();
@@ -246,8 +242,9 @@ mod kiosk_backend {
                 break;
             }
             app.ui.handle(&events);
-            app.ui.tick(now());
-            app.handle(now());
+            app.ui.tick(app.elapsed_ms());
+            let now = app.elapsed_ms();
+            app.handle(now);
 
             if !app.ui.needs_paint() && !shoot {
                 continue;

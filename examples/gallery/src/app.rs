@@ -153,7 +153,6 @@ struct Nodes {
 
 pub struct App {
     pub ui: Ui<Message>,
-    pub exit: bool,
     /// The nine seeds the custom theme is derived from.
     seeds: [Color; 9],
     /// `Some(i)` while an untouched built-in is active; the first edit clears
@@ -215,7 +214,6 @@ impl App {
 
         let mut app = App {
             ui,
-            exit: false,
             seeds,
             builtin: Some(start_theme),
             dark: true,
