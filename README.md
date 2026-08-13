@@ -26,10 +26,10 @@ opens the display, draws, and reads input.
 
 ```toml
 [dependencies]
-denise = "0.1"
-denise-ui = "0.1"
-denise-winit = "0.1"    # develop on a desktop
-# denise-drm = "0.1"    # ship on a display with no compositor
+denise = "0.2"
+denise-ui = "0.2"
+denise-winit = "0.2"    # develop on a desktop
+# denise-drm = "0.2"    # ship on a display with no compositor
 ```
 
 ## Show me the code
