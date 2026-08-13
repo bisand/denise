@@ -1,0 +1,38 @@
+[package]
+name = "gallery"
+description = "Every widget live, and a theme editor beside them: the proof-of-concept panel."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# The same compile-time backend choice as table-editor, and for the same
+# reason: `aarch64-unknown-linux-gnu` is one target on a kiosk Pi and on a Pi
+# running the desktop image, so no library probe could pick right for both.
+#
+#   cargo run -p gallery                                          # a window
+#   cargo run -p gallery --no-default-features --features kiosk   # the display
+[features]
+default = ["desktop"]
+desktop = ["dep:denise-winit"]
+kiosk = ["dep:bare-linux", "dep:denise-evdev", "dep:rustix"]
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-render = { workspace = true, features = ["std"] }
+denise-text = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype"] }
+denise-winit = { workspace = true, optional = true }
+system-font = { path = "../system-font" }
+
+# The kiosk backend exists on Linux and nowhere else, so asking for it anywhere
+# else gets you a build that says so rather than one that mysteriously has no
+# display.
+[target.'cfg(target_os = "linux")'.dependencies]
+bare-linux = { path = "../bare-linux", optional = true }
+denise-evdev = { workspace = true, optional = true }
+rustix = { workspace = true, features = ["event", "std"], optional = true }

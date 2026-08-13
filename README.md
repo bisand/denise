@@ -135,6 +135,24 @@ built-in 8×8 bitmap font and says so, which is the tiered font story
 [`denise-text`](denise-text/src/lib.rs) documents, demonstrated rather than
 asserted.
 
+## The gallery
+
+[`examples/gallery`](examples/gallery) is every widget live on one screen, with
+a theme editor beside them — nine seed colours, a light/dark switch, radius and
+depth, and a Surprise button. Move a slider and the whole surface follows,
+because widgets name theme *roles*, never colours; the editor just rebuilds the
+theme and hands it to `Ui::set_theme`. The badge in the corner is the worst
+surface/content contrast in whatever you have built, and keeping it green is
+not your job: the derivation aims at WCAG AA by construction.
+
+```bash
+cargo run -p gallery                                          # a window
+cargo run -p gallery --no-default-features --features kiosk   # the display itself
+```
+
+<img src="assets/screenshots/gallery.png" width="860"
+     alt="The gallery: a theme editor sidebar beside live widgets — role buttons, form controls, sliders driving a progress ring, ratings and a spinner">
+
 ## What it costs when nothing happens
 
 The number that matters for a panel that runs for a year. On a Raspberry Pi 3 A+

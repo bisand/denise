@@ -17,6 +17,7 @@ members = [
     "denise-win32",
     "denise-winit",
     "examples/bare-linux",
+    "examples/gallery",
     "examples/hello",
     "examples/hello-rect",
     "examples/kiosk",
