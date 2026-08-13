@@ -4,8 +4,8 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Alert, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput,
-    Toggle,
+    Alert, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, Tabs,
+    TextInput, Toggle,
 };
 use denise_ui::{NodeId, Ui};
 
@@ -21,6 +21,7 @@ enum Msg {
     Muted(bool),
     Mode(usize),
     Level(f32),
+    Page(usize),
 }
 
 fn keys(code: KeyCode, times: usize) -> Vec<InputEvent> {
@@ -1829,4 +1830,179 @@ fn a_message_taller_than_its_banner_is_clipped_to_it() {
             }
         }
     }
+}
+
+// ----------------------------------------------------------------------- tabs
+
+/// A strip at 20,20, wide enough for three tabs, with buttons either side.
+fn strip() -> (Ui<Msg>, NodeId, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 160, 100, 30),
+        )
+        .expect("before");
+    let tabs = ui
+        .add(
+            root,
+            Tabs::new(["En", "To", "Tre"], Msg::Page),
+            Rect::new(20, 20, 360, 40),
+        )
+        .expect("tabs");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Cancel),
+            Rect::new(140, 160, 100, 30),
+        )
+        .expect("after");
+    (ui, before, tabs, after)
+}
+
+fn page(ui: &Ui<Msg>, id: NodeId) -> usize {
+    ui.widget::<Tabs<Msg>>(id).expect("tabs").selected()
+}
+
+/// **The rule this widget shares with `RadioGroup`.** Tab moves from the strip
+/// into the page, not through three tabs first.
+#[test]
+fn tab_steps_over_the_whole_strip_rather_than_through_it() {
+    let (mut ui, before, tabs, after) = strip();
+    ui.focus(Some(before));
+
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(tabs), "into the strip");
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(after), "and out the far side");
+    assert!(
+        ui.messages().is_empty(),
+        "tabbing past must not change the page"
+    );
+}
+
+/// Left and Right move and wrap; Home and End reach the ends.
+#[test]
+fn the_arrows_move_the_selection_and_wrap() {
+    let (mut ui, _, tabs, _) = strip();
+    ui.focus(Some(tabs));
+
+    ui.handle(&[key(KeyCode::ArrowRight)]);
+    assert_eq!(page(&ui, tabs), 1);
+    ui.handle(&[key(KeyCode::ArrowRight), key(KeyCode::ArrowRight)]);
+    assert_eq!(page(&ui, tabs), 0, "past the end wraps to the start");
+    ui.handle(&[key(KeyCode::ArrowLeft)]);
+    assert_eq!(page(&ui, tabs), 2, "and before the start wraps to the end");
+
+    ui.handle(&[key(KeyCode::Home)]);
+    assert_eq!(page(&ui, tabs), 0);
+    ui.handle(&[key(KeyCode::End)]);
+    assert_eq!(page(&ui, tabs), 2);
+
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![
+            Msg::Page(1),
+            Msg::Page(2),
+            Msg::Page(0),
+            Msg::Page(2),
+            Msg::Page(0),
+            Msg::Page(2),
+        ],
+        "every move reported once, and no move reported nothing"
+    );
+}
+
+/// Up and Down belong to the page below, not to the strip — the opposite of a
+/// vertical radio group, which takes all four.
+#[test]
+fn up_and_down_are_left_for_the_page_below() {
+    let (mut ui, _, tabs, _) = strip();
+    ui.focus(Some(tabs));
+    ui.handle(&[key(KeyCode::ArrowDown), key(KeyCode::ArrowUp)]);
+    assert_eq!(page(&ui, tabs), 0);
+    assert!(ui.messages().is_empty());
+}
+
+/// Clicking a tab selects it, and clicking the selected one again reports
+/// nothing.
+#[test]
+fn clicking_a_tab_selects_it_and_reselecting_reports_nothing() {
+    let (mut ui, _, tabs, _) = strip();
+
+    ui.handle(&click(30, 40));
+    assert_eq!(page(&ui, tabs), 0);
+    assert!(ui.messages().is_empty(), "tab 0 was already selected");
+
+    // Somewhere in the middle of the strip is not tab 0.
+    ui.handle(&click(160, 40));
+    assert_ne!(page(&ui, tabs), 0, "a click further along should move it");
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>().len(), 1);
+}
+
+#[test]
+fn a_disabled_strip_neither_selects_nor_takes_focus() {
+    let (mut ui, _, tabs, _) = strip();
+    ui.set_enabled(tabs, false);
+
+    ui.handle(&click(160, 40));
+    assert_eq!(page(&ui, tabs), 0);
+    assert!(ui.messages().is_empty());
+
+    ui.focus(Some(tabs));
+    assert_eq!(ui.focused(), None);
+}
+
+/// The underline moves with the selection, and lands under the selected tab at
+/// each end of the row. A strip whose index changes while the picture does not
+/// is a control that reports nothing.
+#[test]
+fn the_underline_lands_under_the_selected_tab_at_each_end() {
+    let underline_span = |selected: usize| -> (i32, i32) {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(
+                root,
+                Tabs::new(["En", "To", "Tre"], Msg::Page).with_selected(selected),
+                Rect::new(20, 20, 360, 40),
+            )
+            .expect("tabs");
+        let bounds = ui.bounds(id).expect("bounds");
+        let painted = pixels_of(&mut ui, bounds);
+
+        // The bottom row is the rule, with the selected tab's segment in a
+        // different colour. The rule is the row's *modal* colour — taking the
+        // pixel at x=0 instead reads the selected segment itself when tab 0 is
+        // the selected one, and then "differs from the rule" finds every tab but
+        // that one.
+        let row = bounds.height - 1;
+        let mut counts = std::collections::HashMap::new();
+        for x in 0..bounds.width {
+            *counts
+                .entry(painted[(row * bounds.width + x) as usize])
+                .or_insert(0usize) += 1;
+        }
+        let rule = *counts.iter().max_by_key(|(_, n)| **n).expect("pixels").0;
+        let marked: Vec<i32> = (0..bounds.width)
+            .filter(|x| painted[(row * bounds.width + x) as usize] != rule)
+            .collect();
+        assert!(!marked.is_empty(), "no underline at all for tab {selected}");
+        (marked[0], marked[marked.len() - 1])
+    };
+
+    let (first_start, first_end) = underline_span(0);
+    let (last_start, last_end) = underline_span(2);
+
+    assert_eq!(
+        first_start, 0,
+        "the first tab's underline starts at the edge"
+    );
+    assert!(
+        last_start > first_end,
+        "the last tab's underline ({last_start}..{last_end}) should be entirely \
+         past the first tab's ({first_start}..{first_end})"
+    );
 }

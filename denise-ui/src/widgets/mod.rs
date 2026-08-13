@@ -21,6 +21,7 @@
 //! | [`Divider`] | A rule, optionally with a label in it |
 //! | [`Badge`] | A short string in a coloured pill |
 //! | [`Alert`] | A coloured banner with a wrapped message |
+//! | [`Tabs`] | A row of labels, one selected. **One node, so one tab stop** |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -51,6 +52,7 @@ mod progress;
 mod radio;
 mod slider;
 mod style;
+mod tabs;
 mod text_input;
 mod toggle;
 
@@ -65,5 +67,6 @@ pub use progress::Progress;
 pub use radio::RadioGroup;
 pub use slider::Slider;
 pub use style::{Align, Orientation};
+pub use tabs::Tabs;
 pub use text_input::TextInput;
 pub use toggle::Toggle;

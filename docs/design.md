@@ -136,8 +136,8 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Twelve of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
-`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`. The first four are CoreCanvas 0.4
+Thirteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -172,8 +172,18 @@ Three rules hold across all of them:
   the tree asks every widget how big it wants to be and then places it. Here the
   *application* asks, does its own arithmetic, and passes a rectangle — exactly as
   it does for a node with no natural size at all. `Button`, `Checkbox`, `Toggle`,
-  `RadioGroup`, `Badge` and `Alert` all offer the query; nothing in `denise-ui`
-  consumes it.
+  `RadioGroup`, `Badge`, `Alert` and `Tabs` all offer the query; nothing in
+  `denise-ui` consumes it.
+
+One rule about colour is worth stating because it has been got wrong twice. **A
+role is only guaranteed to contrast with its own content**, not with the surface
+a widget sits on. `Toggle` reached for a fixed `Base100` knob, which is 1.38:1 on
+a `Base300` track in the light theme; `Tabs` reached for the role colour as the
+selected label, and `Secondary` is 2.34:1 against the light panel. Both now take
+both colours from one `interactive_pair`, so the guarantee is structural. The
+corollary: a colour `interactive_pair` *derived* — the disabled content, mixed
+until it just clears the floor — has nothing left to give, so nothing may mute it
+further.
 
 Two limits were found by building against them rather than by design review, and
 both are open:

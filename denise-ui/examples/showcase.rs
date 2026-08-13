@@ -17,7 +17,7 @@ use denise::{
 use denise_ui::Ui;
 use denise_ui::widgets::{
     Alert, Align, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider,
-    TextInput, Toggle,
+    Tabs, TextInput, Toggle,
 };
 
 const SIZE: Size = Size::new(800, 1008);
@@ -29,6 +29,7 @@ enum Msg {
     Remember(bool),
     Mode(usize),
     Level(f32),
+    Page(usize),
 }
 
 fn main() -> std::io::Result<()> {
@@ -104,6 +105,12 @@ fn build(theme: Theme) -> Ui<Msg> {
         )
         .expect("role button");
     }
+
+    // A tab strip, sized by asking, with the middle one selected.
+    let tabs = Tabs::new(["Oversikt", "Alarmer", "Innstillinger"], Msg::Page).with_selected(1);
+    let width = tabs.preferred_width(ui.text_mut());
+    ui.add(root, tabs, Rect::new(20, 152, width, 34))
+        .expect("tabs");
 
     // The visual states, acted out through real input rather than forced, so the
     // picture cannot drift from what the tree would actually do. Hover is missing
