@@ -284,6 +284,20 @@ impl DrmSurface {
         Self::new(Card::open_first()?, config)
     }
 
+    /// The open card, for driving DRM objects the surface does not own —
+    /// video planes above all. One process is DRM master, so anything else
+    /// touching the display **must** go through this card rather than a
+    /// second open, which would either fail or fight. `denise-video` is the
+    /// consumer this seam exists for.
+    pub fn card(&self) -> &Card {
+        &self.card
+    }
+
+    /// The CRTC being driven, for placing planes on it.
+    pub fn crtc(&self) -> drm::control::crtc::Handle {
+        self.crtc
+    }
+
     /// The mode in force, for logging.
     pub fn mode_name(&self) -> &str {
         &self.mode_name

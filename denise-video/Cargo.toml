@@ -1,0 +1,30 @@
+[package]
+name = "denise-video"
+description = "Hardware video decode onto a DRM plane for Denise: V4L2 M2M in, zero-copy scanout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+denise-render = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+denise-drm = { workspace = true }
+drm = { workspace = true }
+drm-fourcc = { workspace = true }
+rustix = { workspace = true, features = ["event", "fs", "mm", "std"] }
+
+# `unsafe` is permitted here, unlike the core crates: the V4L2 uapi is spoken
+# directly — struct layouts and ioctls by hand — and every block carries a
+# `// SAFETY:` comment. Same rules as denise-drm.
+[lints.rust]
+missing_docs = "warn"

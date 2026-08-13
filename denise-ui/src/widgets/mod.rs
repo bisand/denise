@@ -33,6 +33,7 @@
 //! | [`Timeline`] | Events in order: time, disc, connector, label |
 //! | [`Carousel`] | Pictures sliding on the animation clock. **One wake per hold** |
 //! | [`Collapse`] | A section that folds to its header. [`Accordion`] adds exclusivity |
+//! | [`Video`] | The rectangle a video plane sits in. **The frames never come through here** |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -77,6 +78,7 @@ mod tabs;
 mod text_input;
 mod timeline;
 mod toggle;
+mod video;
 
 pub use alert::Alert;
 pub use avatar::{Avatar, Presence, initials_of};
@@ -103,3 +105,4 @@ pub use tabs::Tabs;
 pub use text_input::TextInput;
 pub use timeline::{Timeline, TimelineItem};
 pub use toggle::Toggle;
+pub use video::Video;

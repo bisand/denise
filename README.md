@@ -115,10 +115,10 @@ all.
 Three things it is showing, none of which is obvious from the outside:
 
 - **There was no grid widget when this example was written** — and it remains a
-  lesson in how the widgets compose. There are twenty-four now, `Table` among
+  lesson in how the widgets compose. There are twenty-five now, `Table` among
   them: label, button, panel, text field, checkbox, toggle, radio group, progress
   bar, slider, divider, badge, alert, tabs, list, radial progress, spinner,
-  select, image, rating, avatar, table, timeline, carousel, collapse. A row is a full-width `Button` with the cell `Label`s placed on top of it;
+  select, image, rating, avatar, table, timeline, carousel, collapse, video. A row is a full-width `Button` with the cell `Label`s placed on top of it;
   labels are not interactive, so a click falls through them to the button
   underneath and arrives as `Select(index)`. That is how most of the widgets you
   will miss get assembled.
@@ -239,6 +239,7 @@ framebuffer.
 | [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout, word wrapping | `no_std + alloc` |
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
 | [`denise-image`](https://crates.io/crates/denise-image) | PNG/JPEG/GIF/BMP decoding into premultiplied pixels | `std` |
+| [`denise-video`](https://crates.io/crates/denise-video) | V4L2 hardware decode onto a DRM plane, zero-copy | Linux |
 | [`denise-drm`](https://crates.io/crates/denise-drm) | Linux DRM/KMS — the primary target | Linux |
 | [`denise-fbdev`](https://crates.io/crates/denise-fbdev) | Linux fbdev fallback | Linux |
 | [`denise-evdev`](https://crates.io/crates/denise-evdev) | Input, keyboard layouts, dead keys, console muting | Linux |
@@ -309,10 +310,10 @@ is in [docs/design.md](docs/design.md).
   node's children top-to-bottom — the piece that makes an animated collapse move
   its siblings. A constraint solver can still be added over all of this without
   changing anything below it.
-- **Twenty-four widgets**, plus tree-owned tooltips, toasts and drawers. Label,
+- **Twenty-five widgets**, plus tree-owned tooltips, toasts and drawers. Label,
   button, panel, text field, checkbox, toggle, radio group, progress bar,
   slider, divider, badge, alert, tabs, list, radial progress, spinner, select,
-  image, rating, avatar, table, timeline, carousel, collapse. Everything
+  image, rating, avatar, table, timeline, carousel, collapse, video. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a
   time — see [#6](https://github.com/bisand/denise/issues/6).
 - **Scrolling is a tree concern, and the tree does it.** Mark a node
@@ -356,7 +357,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/design.md](docs/design.md) | How it is built and why — architecture, rasteriser, text, keyboards, theming, and the milestone history |
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
-| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all thirteen share one number, and what each guard is for |
+| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all fourteen share one number, and what each guard is for |
 
 ## Constraints
 

@@ -599,6 +599,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "denise-video"
+version = "0.8.0"
+dependencies = [
+ "denise",
+ "denise-drm",
+ "denise-render",
+ "drm 0.15.0",
+ "drm-fourcc",
+ "rustix 1.1.4",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "denise-win32"
 version = "0.8.0"
 dependencies = [

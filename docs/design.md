@@ -21,6 +21,7 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-text` | Glyph sources, a bounded glyph atlas, line layout, word wrapping | ✅ M4, M6 |
 | `denise-ui` | Scene graph, scene stack, widgets, cursor sprite | ✅ M3 |
 | `denise-image` | PNG, JPEG, GIF and BMP decoding into premultiplied pixels | ✅ M6 |
+| `denise-video` | V4L2 M2M hardware decode onto a DRM plane, zero-copy | ◐ M7 |
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |
 | `denise-drm` | Linux DRM/KMS backend — the primary target | ✅ M2 |
 | `denise-fbdev` | Linux fbdev fallback | ✅ M2 |
@@ -137,10 +138,10 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Twenty-four of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`,
+Twenty-five of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`,
 `Toggle`, `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`,
 `Tabs`, `List`, `RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`,
-`Avatar`, `Table`, `Timeline`, `Carousel`, `Collapse`. The first four are CoreCanvas 0.4
+`Avatar`, `Table`, `Timeline`, `Carousel`, `Collapse`, `Video`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.

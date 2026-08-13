@@ -1,6 +1,6 @@
 # Releasing
 
-All thirteen crates share one version and go to crates.io together.
+All fourteen crates share one version and go to crates.io together.
 
 ## Doing it
 
@@ -58,7 +58,7 @@ It also means the notes are written by a person before the irreversible step rat
 
 Because the version number is worth more as a compatibility statement than as a change log. Under independent versioning you get `denise-ui 0.3.1` requiring `denise-render 0.2.4` within about three releases, and from then on "which versions work together" needs a table somebody maintains and readers have to find. Sharing one number makes the answer "the matching ones", permanently.
 
-These thirteen crates are one product split up for compilation reasons — nobody uses `denise-render` without `denise` — so that is the property worth keeping. The cost is that a crate gets a new version when nothing in it changed, which matters to somebody depending on exactly one of them. Nobody does yet.
+These fourteen crates are one product split up for compilation reasons — nobody uses `denise-render` without `denise` — so that is the property worth keeping. The cost is that a crate gets a new version when nothing in it changed, which matters to somebody depending on exactly one of them. Nobody does yet.
 
 **When to revisit.** Approaching 1.0, a breaking change in `denise-drm` forcing `denise` to a major it did not earn stops being noise and becomes a semver lie. At `0.0.x` it is noise.
 
@@ -71,7 +71,7 @@ The workflow fails closed at four points, because an upload cannot be taken back
 | **The release tag matches the manifest** | True by construction now that the workflow writes the version from the tag — and asserted anyway, because if the bump path ever grows a bug, this is what stops one version being published under another's name |
 | **CI passes on the exact commit being published** | The workflow waits for CI's verdict on the bump commit — per check *name*, from its most recent run, so a rerun or a duplicate cannot wedge it. A red check fails the release before anything is uploaded |
 | **`--locked`** | A version bump that did not refresh `Cargo.lock` fails in rehearsal instead of halfway through an upload |
-| **A full dry run first** | Packages and verifies all thirteen before anything real goes |
+| **A full dry run first** | Packages and verifies all fourteen before anything real goes |
 
 Separately, on every push, the `the workspace versions agree` job asserts that all of them are at one version and that every sibling pin equals that version. That one exists because the failure is invisible: `[workspace.dependencies]` pins each sibling by version *and* path, the path is what resolves locally, and the version is what gets uploaded. Miss a pin and `denise-ui` goes to crates.io requiring a `denise-render` nobody built it against. It publishes, it resolves, and no local build can notice.
 
