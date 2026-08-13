@@ -112,8 +112,9 @@ all.
 
 Three things it is showing, none of which is obvious from the outside:
 
-- **There is no grid widget.** There are eleven widgets — label, button, panel,
-  text field, checkbox, toggle, radio group, progress bar, slider, divider, badge. A row is a full-width `Button` with the cell `Label`s placed on top of it;
+- **There is no grid widget.** There are twelve widgets — label, button, panel,
+  text field, checkbox, toggle, radio group, progress bar, slider, divider, badge,
+  alert. A row is a full-width `Button` with the cell `Label`s placed on top of it;
   labels are not interactive, so a click falls through them to the button
   underneath and arrives as `Select(index)`. That is how most of the widgets you
   will miss get assembled.
@@ -231,7 +232,7 @@ framebuffer.
 |---|---|---|
 | [`denise`](https://crates.io/crates/denise) | Core types, traits, damage tracking, theming | `no_std + alloc` |
 | [`denise-render`](https://crates.io/crates/denise-render) | Software rasteriser and the built-in font | `no_std + alloc` |
-| [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout | `no_std + alloc` |
+| [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout, word wrapping | `no_std + alloc` |
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
 | [`denise-drm`](https://crates.io/crates/denise-drm) | Linux DRM/KMS — the primary target | Linux |
 | [`denise-fbdev`](https://crates.io/crates/denise-fbdev) | Linux fbdev fallback | Linux |
@@ -295,12 +296,16 @@ is in [docs/design.md](docs/design.md).
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
   their parent, which is what a fixed-resolution panel wants. A constraint solver
   can be added over this without changing anything below it.
-- **Eleven widgets.** Label, button, panel, text field, checkbox, toggle, radio
-  group, progress bar, slider, divider, badge. Everything
+- **Twelve widgets.** Label, button, panel, text field, checkbox, toggle, radio
+  group, progress bar, slider, divider, badge, alert. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a
   time — see [#6](https://github.com/bisand/denise/issues/6).
 - **No text selection, clipboard or word motion** in `TextInput`. The measurement
   it needs exists; the editing model does not.
+- **One surface, so no second window.** A modal is another scene over a dimmed
+  backdrop in the same buffer, which is what a kiosk wants and what an embedded
+  control must do. A desktop application that wants a *native* dialog calls the
+  platform for one — see [docs/design.md](docs/design.md).
 - **Only two keyboard layouts**, US and Norwegian, and the Norwegian AltGr
   assignments are a reconstruction that wants checking against real hardware.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and

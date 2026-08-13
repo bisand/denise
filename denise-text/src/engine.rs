@@ -62,6 +62,22 @@ pub struct TextEngine {
     run: Vec<ShapedGlyph>,
 }
 
+/// Each word in `line`, with its byte offset.
+///
+/// Runs of spaces collapse: a double space is not an empty word, because a line
+/// beginning with a space is a line indented by a typo.
+fn word_starts(line: &str) -> impl Iterator<Item = (usize, &str)> {
+    line.split(' ')
+        .scan(0usize, |offset, word| {
+            let start = *offset;
+            // The separator is one byte, and it is ASCII, so this stays on a
+            // character boundary however many of them are multi-byte.
+            *offset += word.len() + 1;
+            Some((start, word))
+        })
+        .filter(|(_, word)| !word.is_empty())
+}
+
 impl TextEngine {
     /// An engine with the built-in bitmap font registered as [`FontId(0)`], and a
     /// 64 KB glyph cache.
@@ -239,6 +255,64 @@ impl TextEngine {
         Size::new(widest.max(0) as u32, (lines * line_height).max(0) as u32)
     }
 
+    /// The lines `text` becomes when broken to fit `max_width`.
+    ///
+    /// Greedy: words are added to a line until the next one would not fit. That
+    /// is what every text editor does, it is one measuring pass, and the
+    /// alternative — balancing lines by minimising raggedness — is a
+    /// dynamic-programming problem this toolkit has no reason to solve.
+    ///
+    /// Explicit `\n` always breaks, so a caller who has already decided where
+    /// the lines go keeps that decision.
+    ///
+    /// Slices borrow from `text`; nothing is copied. Words are separated by ASCII
+    /// spaces, which is the boundary the built-in font can render and the one the
+    /// languages this toolkit ships keyboard layouts for use.
+    ///
+    /// # A word wider than the line
+    ///
+    /// Goes on a line of its own and overflows, rather than being broken between
+    /// characters. Breaking mid-word needs to know where a grapheme ends, and
+    /// getting that wrong turns `æ` into two bytes of nothing — so an honest
+    /// overflow the caller can see beats a corruption they cannot. A
+    /// `max_width` of zero or less disables wrapping entirely for the same
+    /// reason: there is no width that any word fits in.
+    pub fn wrap<'a>(
+        &mut self,
+        style: TextStyle,
+        text: &'a str,
+        max_width: i32,
+    ) -> alloc::vec::Vec<&'a str> {
+        let mut lines = alloc::vec::Vec::new();
+        for paragraph in text.split('\n') {
+            if max_width <= 0 || paragraph.is_empty() {
+                lines.push(paragraph);
+                continue;
+            }
+            // Byte offsets into `paragraph`: `start` where the current line
+            // begins, `end` where it currently ends. Both land on space
+            // boundaries, which are ASCII and so always character boundaries.
+            let mut start = 0;
+            let mut end = 0;
+            for (offset, word) in word_starts(paragraph) {
+                let candidate = &paragraph[start..offset + word.len()];
+                if end > start && self.measure_line(style, candidate) > max_width {
+                    lines.push(&paragraph[start..end]);
+                    start = offset;
+                }
+                end = offset + word.len();
+            }
+            lines.push(&paragraph[start..]);
+        }
+        lines
+    }
+
+    /// Height of `text` once wrapped to `max_width`.
+    pub fn wrapped_height(&mut self, style: TextStyle, text: &str, max_width: i32) -> i32 {
+        let lines = self.wrap(style, text, max_width).len() as i32;
+        (lines * self.line_height(style)).max(0)
+    }
+
     /// Draws one line with its baseline at `origin`.
     ///
     /// Returns the total advance.
@@ -306,5 +380,115 @@ impl core::fmt::Debug for TextEngine {
             .field("fonts", &self.sources.len())
             .field("atlas", &self.atlas)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::*;
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    /// The built-in font is 8 px per character at 16 px, which makes every width
+    /// in these tests a character count and the assertions readable.
+    fn engine() -> (TextEngine, TextStyle) {
+        (TextEngine::new(), TextStyle::built_in(16))
+    }
+
+    #[test]
+    fn words_are_found_with_their_offsets_and_runs_of_spaces_collapse() {
+        let words: Vec<_> = word_starts("ab cd  ef").collect();
+        assert_eq!(words, vec![(0, "ab"), (3, "cd"), (7, "ef")]);
+        assert_eq!(word_starts("").count(), 0);
+        assert_eq!(word_starts("   ").count(), 0);
+        let single: Vec<_> = word_starts("  x").collect();
+        assert_eq!(single, vec![(2, "x")]);
+    }
+
+    /// The ordinary case: greedy fill, breaking where the next word would not
+    /// fit.
+    #[test]
+    fn a_line_breaks_where_the_next_word_would_not_fit() {
+        let (mut engine, style) = engine();
+        let lines = engine.wrap(style, "en to tre fire fem", 80);
+        let widths: Vec<i32> = lines
+            .iter()
+            .map(|l| engine.measure_line(style, l))
+            .collect();
+        for (line, width) in lines.iter().zip(&widths) {
+            assert!(
+                *width <= 80 || !line.contains(' '),
+                "{line:?} is {width} wide and could have been broken"
+            );
+        }
+        assert!(lines.len() > 1, "nothing wrapped at all");
+        assert_eq!(lines.concat().replace(' ', ""), "entotrefirefem");
+    }
+
+    /// Explicit breaks are a decision the caller already made.
+    #[test]
+    fn an_explicit_newline_always_breaks() {
+        let (mut engine, style) = engine();
+        assert_eq!(engine.wrap(style, "a\nb\nc", 10_000), vec!["a", "b", "c"]);
+    }
+
+    /// A word wider than the line overflows on its own line rather than being
+    /// cut between bytes — `æ` is two of them, and half of it is nothing.
+    #[test]
+    fn a_word_wider_than_the_line_gets_its_own_line_and_overflows() {
+        let (mut engine, style) = engine();
+        let input = "kort kjempelangtordherinne kort";
+        let lines = engine.wrap(style, input, 40);
+        assert!(
+            lines.contains(&"kjempelangtordherinne"),
+            "the long word was broken or lost: {lines:?}"
+        );
+        // Against the input rather than a number I worked out by hand, which is
+        // how this assertion was wrong the first time.
+        assert_eq!(lines.concat().replace(' ', ""), input.replace(' ', ""));
+    }
+
+    /// No width is not a width every word fails to fit; it is no wrapping.
+    #[test]
+    fn a_width_of_zero_or_less_does_not_wrap() {
+        let (mut engine, style) = engine();
+        assert_eq!(engine.wrap(style, "en to tre", 0), vec!["en to tre"]);
+        assert_eq!(engine.wrap(style, "en to tre", -5), vec!["en to tre"]);
+    }
+
+    /// Empty input is one empty line, not no lines — a blank paragraph still
+    /// occupies a line's height.
+    #[test]
+    fn empty_text_is_one_empty_line() {
+        let (mut engine, style) = engine();
+        assert_eq!(engine.wrap(style, "", 100), vec![""]);
+        assert_eq!(engine.wrap(style, "\n", 100), vec!["", ""]);
+    }
+
+    /// Nothing is dropped and nothing is duplicated, at any width. The property
+    /// that matters: wrapping rearranges, it does not edit.
+    #[test]
+    fn wrapping_never_loses_or_duplicates_a_character() {
+        let (mut engine, style) = engine();
+        let text = "Kjærlighet på Øy er en lang setning med æøå i seg";
+        let stripped: String = text.chars().filter(|c| *c != ' ').collect();
+        for width in [1, 8, 17, 40, 101, 500, 5000] {
+            let joined = engine.wrap(style, text, width).concat();
+            let got: String = joined.chars().filter(|c| *c != ' ').collect();
+            assert_eq!(got, stripped, "width {width} changed the text");
+        }
+    }
+
+    /// The height follows the line count, which is what a widget sizes itself
+    /// from.
+    #[test]
+    fn the_wrapped_height_is_the_line_count_times_the_line_height() {
+        let (mut engine, style) = engine();
+        let one = engine.wrapped_height(style, "kort", 10_000);
+        assert_eq!(one, engine.line_height(style));
+        let many = engine.wrapped_height(style, "en to tre fire fem seks sju", 40);
+        assert!(many > one, "wrapped text should be taller");
+        assert_eq!(many % engine.line_height(style), 0);
     }
 }

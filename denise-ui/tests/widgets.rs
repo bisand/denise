@@ -4,7 +4,8 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
+    Alert, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput,
+    Toggle,
 };
 use denise_ui::{NodeId, Ui};
 
@@ -1686,4 +1687,146 @@ fn the_role_changes_what_is_drawn() {
     };
     assert_ne!(picture(Role::Primary), picture(Role::Error));
     assert_ne!(picture(Role::Success), picture(Role::Warning));
+}
+
+// ---------------------------------------------------------------------- alert
+
+/// A banner reports; it does not take part. Tab steps over it and a click falls
+/// through, the same as a badge.
+#[test]
+fn an_alert_is_inert_and_not_a_tab_stop() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 160, 100, 30),
+        )
+        .expect("before");
+    let alert = ui
+        .add(
+            root,
+            Alert::new(Role::Error, "Kunne ikke lagre"),
+            Rect::new(20, 20, 300, 40),
+        )
+        .expect("alert");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Cancel),
+            Rect::new(140, 160, 100, 30),
+        )
+        .expect("after");
+
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(
+        ui.focused(),
+        Some(after),
+        "Tab went straight past the banner"
+    );
+
+    ui.handle(&click(120, 40));
+    assert!(ui.messages().is_empty());
+    ui.focus(Some(alert));
+    assert_eq!(ui.focused(), None);
+}
+
+/// The message actually wraps onto more than one line, which is the half of this
+/// widget that needed new machinery in `denise-text`.
+///
+/// Counted as inked rows against a one-word banner in the same box, rather than
+/// as "bands of text". Bands looked right and were not: the sample strip caught
+/// the rounded corners' antialiasing, so the test passed even with wrapping
+/// removed. Two pictures of the same shape cancel that out.
+#[test]
+fn a_long_message_wraps_onto_more_than_one_line() {
+    let inked_rows = |message: &str| -> usize {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(
+                root,
+                Alert::new(Role::Warning, message),
+                Rect::new(20, 20, 200, 90),
+            )
+            .expect("alert");
+        let bounds = ui.bounds(id).expect("bounds");
+        let painted = pixels_of(&mut ui, bounds);
+
+        // Inside the corner radius on both sides, so the rounded rect's own
+        // antialiasing cannot be mistaken for ink.
+        let inset = theme::DARK.radius(denise::Radius::Box) + 2;
+        let strip = inset..(bounds.width - inset);
+        let fill = painted[((bounds.height / 2) * bounds.width + bounds.width / 2) as usize];
+        (0..bounds.height)
+            .filter(|y| {
+                strip
+                    .clone()
+                    .any(|x| painted[(y * bounds.width + x) as usize] != fill)
+            })
+            .count()
+    };
+
+    let one = inked_rows("Full");
+    let many = inked_rows("Disken er nesten full og det er ikke plass til flere opptak");
+    assert!(one > 0, "the short message drew nothing at all");
+    assert!(
+        many > one * 2,
+        "a message that should wrap to several lines inked {many} rows against \
+         {one} for a single word, so it did not wrap"
+    );
+}
+
+/// The role decides both colours together — which is the whole reason this is a
+/// widget rather than a `Panel` and a `Label` a caller pairs by hand.
+#[test]
+fn the_role_changes_the_banner_and_its_text_together() {
+    let picture = |role: Role| -> Vec<u32> {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(root, Alert::new(role, "Lagret"), Rect::new(20, 20, 220, 40))
+            .expect("alert");
+        let bounds = ui.bounds(id).expect("bounds");
+        pixels_of(&mut ui, bounds)
+    };
+    assert_ne!(picture(Role::Success), picture(Role::Error));
+    assert_ne!(picture(Role::Info), picture(Role::Warning));
+}
+
+/// More message than banner is clipped to the banner rather than drawn across
+/// whatever is below it.
+#[test]
+fn a_message_taller_than_its_banner_is_clipped_to_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Alert::new(
+                Role::Error,
+                "en to tre fire fem seks sju atte ni ti elleve tolv",
+            ),
+            Rect::new(40, 40, 120, 30),
+        )
+        .expect("alert");
+    let bounds = ui.bounds(id).expect("bounds");
+
+    let band = Rect::new(0, 40, 300, 60);
+    let painted = pixels_of(&mut ui, band);
+    let background = painted[0];
+    for y in 0..band.height {
+        for x in 0..band.width {
+            let inside = x >= bounds.x - band.x && x < bounds.right() - band.x && y < bounds.height;
+            if !inside {
+                assert_eq!(
+                    painted[(y * band.width + x) as usize],
+                    background,
+                    "the message escaped the banner at {x},{y}"
+                );
+            }
+        }
+    }
 }

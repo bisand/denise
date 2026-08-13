@@ -18,7 +18,7 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 |---|---|---|
 | `denise` | Geometry, colour, pixel buffer contract, input, damage tracking, theming | ✅ M0, M1.1 |
 | `denise-render` | Software rasteriser, coverage blitting, the built-in bitmap font | ✅ M1, M3, M4 |
-| `denise-text` | Glyph sources, a bounded glyph atlas, line layout | ✅ M4 |
+| `denise-text` | Glyph sources, a bounded glyph atlas, line layout, word wrapping | ✅ M4, M6 |
 | `denise-ui` | Scene graph, scene stack, widgets, cursor sprite | ✅ M3 |
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |
 | `denise-drm` | Linux DRM/KMS backend — the primary target | ✅ M2 |
@@ -136,8 +136,8 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Eleven of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
-`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`. The first four are CoreCanvas 0.4
+Twelve of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -172,8 +172,8 @@ Three rules hold across all of them:
   the tree asks every widget how big it wants to be and then places it. Here the
   *application* asks, does its own arithmetic, and passes a rectangle — exactly as
   it does for a node with no natural size at all. `Button`, `Checkbox`, `Toggle`,
-  `RadioGroup` and `Badge` all offer the query; nothing in `denise-ui` consumes
-  it.
+  `RadioGroup`, `Badge` and `Alert` all offer the query; nothing in `denise-ui`
+  consumes it.
 
 Two limits were found by building against them rather than by design review, and
 both are open:
@@ -188,6 +188,25 @@ both are open:
   ([#20](https://github.com/bisand/denise/issues/20)). Every geometry token is
   therefore a physical pixel, and the scale factor the backends report is not
   acted on by anything.
+
+### One surface, and what that rules out
+
+Denise is a single `Surface`. There is no second window, and there will not be
+one: `denise-drm` owns the display and there is no window system to open one in,
+and `denise-win32`, `denise-macos` and `denise-activex` are *embedded* — the host
+owns the window and Denise owns one rectangle inside it. A control that spawned a
+top-level window would escape its host's modality, land on the wrong monitor and
+outlive the dialog that owns it, which is the behaviour that makes embedded
+controls hated.
+
+So a modal is `Ui::push_scene`: another root over a dimmed backdrop, inside the
+same buffer. An `Alert` is an inline banner, not a message box.
+
+An application that wants a *native* dialog on a desktop build should call the
+platform for one — `MessageBoxW`, `NSAlert` — behind the same `cfg` seam it
+already uses to pick a backend. It knows which build it is; the toolkit would
+have to guess, and guessing wrong means a kiosk trying to open a window on a
+machine with no compositor.
 
 ### Damage is the toolkit's job
 

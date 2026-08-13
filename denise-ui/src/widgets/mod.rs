@@ -20,6 +20,7 @@
 //! | [`Slider`] | A value in a range. Keeps the pointer after a drag leaves it |
 //! | [`Divider`] | A rule, optionally with a label in it |
 //! | [`Badge`] | A short string in a coloured pill |
+//! | [`Alert`] | A coloured banner with a wrapped message |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -39,6 +40,7 @@
 //! looking it up afterwards. An enum's tuple variant already is such a function:
 //! `Checkbox::new("Mute", Message::Muted)`.
 //!
+mod alert;
 mod badge;
 mod button;
 mod checkbox;
@@ -52,6 +54,7 @@ mod style;
 mod text_input;
 mod toggle;
 
+pub use alert::Alert;
 pub use badge::Badge;
 pub use button::Button;
 pub use checkbox::Checkbox;

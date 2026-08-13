@@ -1,6 +1,6 @@
 [package]
 name = "denise-text"
-description = "Glyph sources, a bounded glyph atlas and line layout for Denise."
+description = "Glyph sources, a bounded glyph atlas, line layout and word wrapping for Denise."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

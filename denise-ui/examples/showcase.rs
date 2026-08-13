@@ -16,11 +16,11 @@ use denise::{
 };
 use denise_ui::Ui;
 use denise_ui::widgets::{
-    Align, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput,
-    Toggle,
+    Alert, Align, Badge, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider,
+    TextInput, Toggle,
 };
 
-const SIZE: Size = Size::new(800, 958);
+const SIZE: Size = Size::new(800, 1008);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -150,7 +150,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 420))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 470))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -305,6 +305,26 @@ fn build(theme: Theme) -> Ui<Msg> {
         ui.add(form, badge, Rect::new(x, 296, width, height))
             .expect("badge");
         x += width + 10;
+    }
+
+    // Banners: one short, one long enough to wrap, sized by asking.
+    let mut y = 330;
+    for (role, message, icon) in [
+        (Role::Success, "Lagret", Some('+')),
+        (
+            Role::Error,
+            "Kunne ikke lagre fordi disken er full og det er ingen plass igjen",
+            Some('!'),
+        ),
+    ] {
+        let mut alert = Alert::new(role, message);
+        if let Some(icon) = icon {
+            alert = alert.with_icon(icon);
+        }
+        let height = alert.preferred_height(ui.text_mut(), 244);
+        ui.add(form, alert, Rect::new(496, y, 244, height))
+            .expect("alert");
+        y += height + 8;
     }
 
     // Drive the states through real input so the picture cannot drift from what

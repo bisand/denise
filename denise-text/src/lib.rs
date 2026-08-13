@@ -1,4 +1,4 @@
-//! Fonts, a bounded glyph cache, and line layout.
+//! Fonts, a bounded glyph cache, line layout and word wrapping.
 //!
 //! One [`TextEngine`] holds every font an application uses and one [`GlyphAtlas`]
 //! that caches what has been rasterised. Measurement and drawing both go through
@@ -17,6 +17,14 @@
 //! # let _ = extent;
 //! # }
 //! ```
+//!
+//! # Wrapping
+//!
+//! [`TextEngine::wrap`] breaks a string into the lines it becomes at a given
+//! width, greedily, returning slices that borrow the input. Explicit `\n` always
+//! breaks. A word wider than the line overflows on a line of its own rather than
+//! being cut between characters — breaking mid-word means knowing where a
+//! grapheme ends, and half of an `æ` is nothing.
 //!
 //! # Three tiers, and what each costs
 //!
