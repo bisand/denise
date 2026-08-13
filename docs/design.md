@@ -136,8 +136,9 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Fourteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
-`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`. The first four are CoreCanvas 0.4
+Sixteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+`RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`,
+`RadialProgress`, `Spinner`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -174,6 +175,25 @@ Three rules hold across all of them:
   it does for a node with no natural size at all. `Button`, `Checkbox`, `Toggle`,
   `RadioGroup`, `Badge`, `Alert`, `Tabs` and `List` all offer the query; nothing in
   `denise-ui` consumes it.
+
+Two widgets share their geometry rather than each inventing it. `Spinner` is
+`RadialProgress`'s ring with the value replaced by a clock, so the centre,
+radius, thickness and colour rules live in one place and a spinner and a ring of
+the same size *are* the same ring. Sharing the colours also fixed the same bug
+twice at once: `interactive_pair` recesses every role to `Base200` when
+disabled, so a disabled ring drew its arc in its track's colour and lost its
+value — the third time that has bitten, after `RadioGroup`'s disc and `List`'s
+selection, and the third time it was found by looking at the rendered showcase
+rather than by a test.
+
+`Spinner` is also the toolkit's only **unbounded** animation, and it is
+deliberately awkward about it: it does not start itself. A spinner receives no
+events, so it cannot request frames from a handler, and the application calls
+`Ui::request_animation` — which puts the decision to keep a CPU awake at the
+line where somebody made it. Its frame interval is 50 ms rather than 16: a
+rotating object is the animation least forgiving of a low rate, so it cannot go
+as slow as the caret, but the expense is the wake rather than the drawing (the
+arc bench says three microseconds), and twenty a second is a third of sixty.
 
 The keyboard is where the widgets deliberately *disagree*, and each difference is
 about how much of the set a person can see at once. `RadioGroup` and `Tabs` wrap

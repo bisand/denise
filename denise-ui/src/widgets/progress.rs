@@ -26,12 +26,14 @@ use crate::widgets::style::interactive_pair;
 ///
 /// # There is no indeterminate mode
 ///
-/// Not an oversight, and not a decision about taste — it is currently
-/// impossible. An indeterminate bar animates forever, and
-/// [`Ui::tick`](crate::Ui::tick) only ever animates the **focused** widget. A
-/// progress bar is never focused, so it would never be asked for a frame and
-/// would sit motionless. See [#19] — the same limitation that makes a toast
-/// inexpressible.
+/// It used to be impossible — an indeterminate bar animates forever, and
+/// `Ui::tick` once animated only the focused widget, which a progress bar never
+/// is. [#19] removed that limitation, so this is now a choice rather than a
+/// wall: an unbounded animation costs a wake per frame for as long as the node
+/// is visible, and the widget that already spends it is
+/// [`Spinner`](super::Spinner). A second way to say *something is happening*,
+/// in a widget whose whole job is saying *how much has happened*, has not
+/// earned its place.
 ///
 /// [#19]: https://github.com/bisand/denise/issues/19
 #[derive(Clone, Copy, Debug)]

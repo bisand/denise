@@ -14,13 +14,13 @@ use denise::{
     BufferAge, ElementState, Frame, InputEvent, Modifiers, PixelFormat, Point, PointerButton, Rect,
     Role, Size, Theme, theme,
 };
-use denise_ui::Ui;
 use denise_ui::widgets::{
     Alert, Align, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress,
-    RadioGroup, Slider, Tabs, TextInput, Toggle,
+    RadialProgress, RadioGroup, Slider, Spinner, Tabs, TextInput, Toggle,
 };
+use denise_ui::{TextStyle, Ui};
 
-const SIZE: Size = Size::new(800, 1156);
+const SIZE: Size = Size::new(800, 1256);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -159,7 +159,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 618))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 718))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -363,6 +363,45 @@ fn build(theme: Theme) -> Ui<Msg> {
         )
         .expect("locked list");
     ui.set_enabled(locked, false);
+
+    // Rings: the value at several points, one disabled, and a spinner. The
+    // spinner is deliberately two calls — adding it costs nothing, and asking
+    // it to animate is what keeps a device awake.
+    let mut x = 16;
+    for (value, label, role) in [
+        (0.0, "0 %", Role::Primary),
+        (0.35, "35 %", Role::Primary),
+        (0.8, "80 %", Role::Warning),
+        (1.0, "100 %", Role::Success),
+    ] {
+        ui.add(
+            form,
+            RadialProgress::new(value)
+                .with_label(label)
+                .with_role(role)
+                .with_style(TextStyle::built_in(14)),
+            Rect::new(x, 588, 84, 84),
+        )
+        .expect("ring");
+        x += 96;
+    }
+    let stopped = ui
+        .add(
+            form,
+            RadialProgress::new(0.6).with_label("60 %"),
+            Rect::new(x, 588, 84, 84),
+        )
+        .expect("disabled ring");
+    ui.set_enabled(stopped, false);
+    x += 108;
+
+    let spinner = ui
+        .add(form, Spinner::new(), Rect::new(x, 604, 52, 52))
+        .expect("spinner");
+    ui.request_animation(spinner);
+    // A quarter turn in, so the still picture shows an arc rather than a ring
+    // that happens to start at twelve o'clock.
+    ui.tick(250);
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

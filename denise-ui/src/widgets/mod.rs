@@ -23,6 +23,8 @@
 //! | [`Alert`] | A coloured banner with a wrapped message |
 //! | [`Tabs`] | A row of labels, one selected. **One node, so one tab stop** |
 //! | [`List`] | Rows, at most one selected. Selecting and activating are separate |
+//! | [`RadialProgress`] | The circular counterpart, with room for a number in the middle |
+//! | [`Spinner`] | An arc that turns. **The one widget that can keep a device awake** |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -51,8 +53,10 @@ mod label;
 mod list;
 mod panel;
 mod progress;
+mod radial;
 mod radio;
 mod slider;
+mod spinner;
 mod style;
 mod tabs;
 mod text_input;
@@ -67,8 +71,10 @@ pub use label::Label;
 pub use list::{List, ListItem};
 pub use panel::Panel;
 pub use progress::Progress;
+pub use radial::RadialProgress;
 pub use radio::RadioGroup;
 pub use slider::Slider;
+pub use spinner::Spinner;
 pub use style::{Align, Orientation};
 pub use tabs::Tabs;
 pub use text_input::TextInput;

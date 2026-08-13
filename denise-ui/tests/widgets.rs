@@ -4,8 +4,8 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Alert, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress, RadioGroup,
-    Slider, Tabs, TextInput, Toggle,
+    Alert, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress,
+    RadialProgress, RadioGroup, Slider, Spinner, Tabs, TextInput, Toggle,
 };
 use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
 
@@ -3108,4 +3108,353 @@ fn a_widget_that_consumes_the_wheel_stops_the_viewport_scrolling() {
     // y 130 is background): the tree scrolls.
     ui.handle(&[wheel(100, 130)]);
     assert_eq!(ui.scroll(view), Point::new(0, 48));
+}
+
+// ----------------------------------------------------------- radial progress
+
+/// Renders a ring at each value and reports the painted-pixel count in the
+/// ring's band, which is what "how much of it is filled" means in pixels.
+#[cfg(test)]
+fn ring_pixels(value: f32) -> usize {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            RadialProgress::new(value).with_role(Role::Primary),
+            Rect::new(40, 40, 120, 120),
+        )
+        .expect("ring");
+    let bounds = ui.bounds(id).expect("bounds");
+    let painted = pixels_of(&mut ui, bounds);
+    // The value arc is Primary; the track is Base300. Count what is neither
+    // background nor track by taking the least common colour's population —
+    // simplest honest measure: pixels matching the Primary fill.
+    let primary = theme::DARK.color(Role::Primary).to_argb8888();
+    painted.iter().filter(|&&px| px == primary).count()
+}
+
+/// The ring fills with the value, and both ends are exact: nothing at zero, a
+/// closed ring at one.
+#[test]
+fn the_ring_fills_with_its_value() {
+    let empty = ring_pixels(0.0);
+    let quarter = ring_pixels(0.25);
+    let half = ring_pixels(0.5);
+    let full = ring_pixels(1.0);
+
+    assert_eq!(empty, 0, "an empty ring draws no arc at all");
+    assert!(quarter > 0, "a quarter draws something");
+    assert!(half > quarter, "{half} is not more than {quarter}");
+    assert!(full > half, "{full} is not more than {half}");
+
+    // A full ring is about four times a quarter — the arc length is linear in
+    // the sweep, so a wildly different ratio means the geometry is wrong.
+    let ratio = full as f32 / quarter as f32;
+    assert!(
+        (3.0..5.0).contains(&ratio),
+        "full/quarter is {ratio}, so the sweep is not linear in the value"
+    );
+}
+
+/// A full ring is closed all the way round — the property that lets a caller
+/// pass `done / total` at 100% with no special case, since a sweep of a whole
+/// turn *is* the circle.
+///
+/// Asserted by walking the ring's own band rather than by diffing against a
+/// differently-coloured reference: at the faint end of the antialiasing a
+/// `Base300` pixel rounds back to the background where a `Primary` one does
+/// not, so a shape comparison across two colours compares the palette as much
+/// as the geometry.
+#[test]
+fn a_full_ring_is_closed_all_the_way_round() {
+    let sample = |value: f32| -> Vec<bool> {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(
+                root,
+                RadialProgress::new(value),
+                Rect::new(40, 40, 120, 120),
+            )
+            .expect("ring");
+        let bounds = ui.bounds(id).expect("bounds");
+        let painted = pixels_of(&mut ui, bounds);
+        let primary = theme::DARK.color(Role::Primary).to_argb8888();
+
+        // Mid-band of the ring: radius 60, thickness 60/5 = 12, so the band is
+        // 48..60 and its middle is 54.
+        let (cx, cy) = (bounds.width / 2, bounds.height / 2);
+        (0..48)
+            .map(|step| {
+                let angle = step as f32 / 48.0 * std::f32::consts::TAU;
+                let x = cx + (54.0 * angle.sin()) as i32;
+                let y = cy - (54.0 * angle.cos()) as i32;
+                painted[(y * bounds.width + x) as usize] == primary
+            })
+            .collect()
+    };
+
+    let full = sample(1.0);
+    assert!(
+        full.iter().all(|&lit| lit),
+        "a full ring has gaps in it: {} of {} samples unpainted",
+        full.iter().filter(|&&lit| !lit).count(),
+        full.len()
+    );
+
+    // And a half ring is lit for about half of the way round, starting at the
+    // top and going clockwise.
+    let half = sample(0.5);
+    let lit = half.iter().filter(|&&lit| lit).count();
+    assert!(
+        (20..28).contains(&lit),
+        "a half ring lit {lit} of 48 samples"
+    );
+    assert!(half[0], "which starts at twelve o'clock");
+    assert!(half[12], "and runs clockwise through three");
+    assert!(!half[36], "and not through nine");
+}
+
+/// The ring stays inside its rectangle, and inscribes rather than stretching
+/// when the rectangle is not square.
+#[test]
+fn the_ring_stays_inside_a_non_square_rectangle() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(root, RadialProgress::new(1.0), Rect::new(40, 60, 200, 80))
+        .expect("ring");
+    let bounds = ui.bounds(id).expect("bounds");
+
+    // A band around the widget: nothing may be painted outside its rectangle.
+    let band = Rect::new(20, 40, 240, 120);
+    let painted = pixels_of(&mut ui, band);
+    let background = painted[0];
+    for y in 0..band.height {
+        for x in 0..band.width {
+            let inside = bounds.contains(Point::new(band.x + x, band.y + y));
+            if !inside {
+                assert_eq!(
+                    painted[(y * band.width + x) as usize],
+                    background,
+                    "the ring escaped its bounds at {x},{y}"
+                );
+            }
+        }
+    }
+
+    // And it is a circle of the short side: the corners of the wide rectangle
+    // are untouched.
+    let corners = pixels_of(&mut ui, Rect::new(bounds.x, bounds.y, 8, 8));
+    assert!(
+        corners.iter().all(|&p| p == background),
+        "a wide rectangle stretched the ring into its corner"
+    );
+}
+
+/// A label of a sensible size lands in the hole and never touches the ring
+/// band. What this pins is the *centring*, not a clip: the widget deliberately
+/// lets an oversized label overflow onto the ring rather than truncating a
+/// number, so this asserts the case a caller should be in, not a guarantee the
+/// widget makes for every string.
+#[test]
+fn a_sensible_label_is_drawn_in_the_hole_and_never_on_the_ring() {
+    let render = |label: &str| {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(
+                root,
+                RadialProgress::new(0.7).with_label(label),
+                Rect::new(40, 40, 120, 120),
+            )
+            .expect("ring");
+        let bounds = ui.bounds(id).expect("bounds");
+        (pixels_of(&mut ui, bounds), bounds)
+    };
+    let (bare, bounds) = render("");
+    let (labelled, _) = render("70 %");
+    assert_ne!(bare, labelled, "the label drew nothing");
+
+    // Radius 60, thickness 12: the ring occupies 48..60 from the centre, so
+    // every pixel the label added must be closer in than 48.
+    let hole = 60 - 12;
+    let (cx, cy) = (bounds.width / 2, bounds.height / 2);
+    let mut changed = 0;
+    for y in 0..bounds.height {
+        for x in 0..bounds.width {
+            let i = (y * bounds.width + x) as usize;
+            if bare[i] == labelled[i] {
+                continue;
+            }
+            changed += 1;
+            let (dx, dy) = ((x - cx) as f32, (y - cy) as f32);
+            let distance = (dx * dx + dy * dy).sqrt();
+            assert!(
+                distance < hole as f32,
+                "the label reached the ring band at {x},{y}: {distance} from the centre"
+            );
+        }
+    }
+    assert!(
+        changed > 20,
+        "only {changed} pixels changed; is it drawing?"
+    );
+}
+
+#[test]
+fn a_radial_progress_is_inert_and_not_a_tab_stop() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 200, 80, 30),
+        )
+        .expect("before");
+    let ring = ui
+        .add(root, RadialProgress::new(0.5), Rect::new(40, 40, 120, 120))
+        .expect("ring");
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_ne!(ui.focused(), Some(ring), "a ring must not take focus");
+    ui.handle(&click(100, 100));
+    assert!(ui.messages().is_empty(), "and must not swallow a click");
+}
+
+// ------------------------------------------------------------------- spinner
+
+/// A spinner in a tree: added, started, spinning.
+fn spinning() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(root, Spinner::new(), Rect::new(60, 60, 64, 64))
+        .expect("spinner");
+    ui.request_animation(id);
+    (ui, id)
+}
+
+/// It does not start itself. Adding a spinner to a tree keeps the device
+/// asleep; asking it to animate is what costs, and the asking is explicit.
+#[test]
+fn a_spinner_does_not_start_itself() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(root, Spinner::new(), Rect::new(60, 60, 64, 64))
+        .expect("spinner");
+    ui.tick(0);
+    assert_eq!(ui.animating(), 0, "an unasked spinner must not spin");
+    assert_eq!(ui.next_wake_ms(), None, "and must not keep the loop awake");
+
+    ui.request_animation(id);
+    ui.tick(0);
+    assert_eq!(ui.animating(), 1);
+    assert!(ui.next_wake_ms().is_some());
+}
+
+/// It never stops on its own — the unbounded case #19 made expressible, spent
+/// here on purpose. A hundred frames in and it is still asking.
+#[test]
+fn a_spinner_keeps_asking_for_frames_indefinitely() {
+    let (mut ui, _) = spinning();
+    for frame in 0..100u64 {
+        ui.tick(frame * 50);
+        assert_eq!(ui.animating(), 1, "frame {frame}: it stopped");
+    }
+    assert!(ui.next_wake_ms().is_some(), "and it is still asking");
+}
+
+/// Hiding it is how you stop paying. This is the claim the whole idle story
+/// rests on for the one widget able to break it.
+#[test]
+fn hiding_a_spinner_puts_the_tree_back_to_sleep() {
+    let (mut ui, id) = spinning();
+    ui.tick(0);
+    assert_eq!(ui.animating(), 1);
+
+    ui.set_visible(id, false);
+    ui.tick(50);
+    assert_eq!(ui.animating(), 0, "a hidden spinner must not spin");
+    assert_eq!(
+        ui.next_wake_ms(),
+        None,
+        "and the loop may block indefinitely again"
+    );
+
+    // Showing it again does not resume by itself: animation is requested, not
+    // remembered.
+    ui.set_visible(id, true);
+    ui.tick(100);
+    assert_eq!(
+        ui.animating(),
+        0,
+        "re-showing must not resurrect the request"
+    );
+    ui.request_animation(id);
+    ui.tick(150);
+    assert_eq!(ui.animating(), 1);
+
+    // And removing it stops it with the node.
+    ui.remove(id);
+    ui.tick(200);
+    assert_eq!(ui.animating(), 0);
+    assert_eq!(ui.next_wake_ms(), None);
+}
+
+/// The arc actually moves, and it is the arc that moves rather than the ring:
+/// the pixels change between frames, and a spinner and a full ring of the same
+/// size occupy the same band.
+#[test]
+fn the_arc_moves_between_frames() {
+    let (mut ui, id) = spinning();
+    let bounds = ui.bounds(id).expect("bounds");
+
+    ui.tick(0);
+    let first = pixels_of(&mut ui, bounds);
+    // A quarter of a one-second revolution.
+    ui.tick(250);
+    let later = pixels_of(&mut ui, bounds);
+    assert_ne!(first, later, "the arc did not move");
+
+    // A full revolution later it is back where it started.
+    ui.tick(1_250);
+    let round_again = pixels_of(&mut ui, bounds);
+    assert_eq!(round_again, later, "a full revolution must close the loop");
+}
+
+/// A spinning spinner owes a frame; one asked twice at the same instant does
+/// not. The tree wakes for the most impatient animation and asks everybody, so
+/// being asked early is routine and must not cost a repaint.
+#[test]
+fn a_frame_that_moved_nothing_owes_no_repaint() {
+    let (mut ui, _) = spinning();
+    ui.tick(0);
+    ui.render_nothing();
+
+    ui.tick(0);
+    assert!(!ui.needs_paint(), "no time passed, so nothing to repaint");
+
+    ui.tick(50);
+    assert!(ui.needs_paint(), "a frame later the arc has moved");
+}
+
+#[test]
+fn a_spinner_is_inert_and_not_a_tab_stop() {
+    let (mut ui, id) = spinning();
+    let before = ui
+        .add(
+            ui.root(),
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 200, 80, 30),
+        )
+        .expect("before");
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_ne!(ui.focused(), Some(id), "a spinner must not take focus");
+    ui.handle(&click(92, 92));
+    assert!(ui.messages().is_empty(), "and must not swallow a click");
 }

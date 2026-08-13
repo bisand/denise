@@ -113,9 +113,9 @@ all.
 
 Three things it is showing, none of which is obvious from the outside:
 
-- **There is no grid widget.** There are fourteen widgets — label, button, panel,
+- **There is no grid widget.** There are sixteen widgets — label, button, panel,
   text field, checkbox, toggle, radio group, progress bar, slider, divider, badge,
-  alert, tabs, list. A row is a full-width `Button` with the cell `Label`s placed on top of it;
+  alert, tabs, list, radial progress, spinner. A row is a full-width `Button` with the cell `Label`s placed on top of it;
   labels are not interactive, so a click falls through them to the button
   underneath and arrives as `Select(index)`. That is how most of the widgets you
   will miss get assembled.
@@ -302,8 +302,9 @@ is in [docs/design.md](docs/design.md).
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
   their parent, which is what a fixed-resolution panel wants. A constraint solver
   can be added over this without changing anything below it.
-- **Fourteen widgets.** Label, button, panel, text field, checkbox, toggle, radio
-  group, progress bar, slider, divider, badge, alert, tabs, list. Everything
+- **Sixteen widgets.** Label, button, panel, text field, checkbox, toggle, radio
+  group, progress bar, slider, divider, badge, alert, tabs, list, radial progress,
+  spinner. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a
   time — see [#6](https://github.com/bisand/denise/issues/6).
 - **Scrolling is a tree concern, and the tree does it.** Mark a node
