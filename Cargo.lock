@@ -2158,6 +2158,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "system-font"
+version = "0.8.0"
+dependencies = [
+ "denise-text",
+]
+
+[[package]]
 name = "table-editor"
 version = "0.9.0"
 dependencies = [
@@ -2168,6 +2175,7 @@ dependencies = [
  "denise-ui",
  "denise-winit",
  "rustix 1.1.4",
+ "system-font",
 ]
 
 [[package]]

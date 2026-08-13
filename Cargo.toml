@@ -21,6 +21,7 @@ members = [
     "examples/hello-rect",
     "examples/kiosk",
     "examples/panel",
+    "examples/system-font",
     "examples/table-editor",
 ]
 
