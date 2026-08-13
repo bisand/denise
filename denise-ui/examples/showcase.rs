@@ -15,14 +15,15 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::Ui;
-use denise_ui::widgets::{Align, Button, Checkbox, Label, Panel, TextInput, Toggle};
+use denise_ui::widgets::{Align, Button, Checkbox, Label, Panel, RadioGroup, TextInput, Toggle};
 
-const SIZE: Size = Size::new(800, 740);
+const SIZE: Size = Size::new(800, 834);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Msg {
     Noop,
     Remember(bool),
+    Mode(usize),
 }
 
 fn main() -> std::io::Result<()> {
@@ -144,7 +145,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 202))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 296))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -216,6 +217,23 @@ fn build(theme: Theme) -> Ui<Msg> {
         )
         .expect("fixed");
     ui.set_enabled(fixed, false);
+
+    // One choice from three. Drawn beside a disabled copy, because the chosen
+    // disc is what the disabled state has to keep readable.
+    ui.add(
+        form,
+        RadioGroup::new(["Automatisk", "Manuell", "Av"], Msg::Mode).with_selected(1),
+        Rect::new(16, 194, 220, 84),
+    )
+    .expect("mode");
+    let frozen = ui
+        .add(
+            form,
+            RadioGroup::new(["Automatisk", "Manuell", "Av"], Msg::Mode).with_selected(2),
+            Rect::new(256, 194, 220, 84),
+        )
+        .expect("frozen");
+    ui.set_enabled(frozen, false);
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

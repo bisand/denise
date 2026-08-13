@@ -3,7 +3,7 @@
 use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
-use denise_ui::widgets::{Button, Checkbox, Label, Panel, TextInput, Toggle};
+use denise_ui::widgets::{Button, Checkbox, Label, Panel, RadioGroup, TextInput, Toggle};
 use denise_ui::{NodeId, Ui};
 
 const SIZE: Size = Size::new(400, 240);
@@ -15,6 +15,7 @@ enum Msg {
     Submitted,
     Logging(bool),
     Muted(bool),
+    Mode(usize),
 }
 
 fn keys(code: KeyCode, times: usize) -> Vec<InputEvent> {
@@ -905,4 +906,237 @@ fn setting_a_toggle_from_the_application_emits_nothing() {
         .set_checked(true);
     assert!(on(&ui, id));
     assert!(ui.messages().is_empty());
+}
+
+// ---------------------------------------------------------------- radio group
+
+/// A three-option group at 20,20 measuring 200x90 — rows of 30 — with a button
+/// before it and after it, so Tab has somewhere to come from and go to.
+fn radios() -> (Ui<Msg>, NodeId, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 200, 100, 30),
+        )
+        .expect("before");
+    let group = ui
+        .add(
+            root,
+            RadioGroup::new(["Auto", "Manual", "Off"], Msg::Mode),
+            Rect::new(20, 20, 200, 90),
+        )
+        .expect("group");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Cancel),
+            Rect::new(140, 200, 100, 30),
+        )
+        .expect("after");
+    (ui, before, group, after)
+}
+
+fn mode(ui: &Ui<Msg>, id: NodeId) -> usize {
+    ui.widget::<RadioGroup<Msg>>(id).expect("group").selected()
+}
+
+/// Clicking a row chooses it, and the message carries the index.
+#[test]
+fn clicking_an_option_chooses_it() {
+    let (mut ui, _, group, _) = radios();
+
+    ui.handle(&click(60, 65)); // the middle row, y 50..80
+    assert_eq!(mode(&ui, group), 1);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Mode(1)]);
+
+    ui.handle(&click(60, 95)); // the last row, y 80..110
+    assert_eq!(mode(&ui, group), 2);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Mode(2)]);
+}
+
+/// Re-choosing what is already chosen is not a change, so it emits nothing —
+/// otherwise an application redoes its work for a click that meant nothing.
+#[test]
+fn clicking_the_chosen_option_again_emits_nothing() {
+    let (mut ui, _, group, _) = radios();
+    ui.handle(&click(60, 35));
+    assert_eq!(mode(&ui, group), 0);
+    assert!(
+        ui.messages().is_empty(),
+        "option 0 was already chosen; nothing changed"
+    );
+}
+
+/// Arrows move the choice and wrap, in both directions. This is what makes a
+/// panel with no pointer usable.
+#[test]
+fn arrows_move_the_choice_and_wrap() {
+    let (mut ui, _, group, _) = radios();
+    ui.focus(Some(group));
+
+    ui.handle(&[key(KeyCode::ArrowDown)]);
+    assert_eq!(mode(&ui, group), 1);
+    ui.handle(&[key(KeyCode::ArrowDown)]);
+    assert_eq!(mode(&ui, group), 2);
+    ui.handle(&[key(KeyCode::ArrowDown)]);
+    assert_eq!(mode(&ui, group), 0, "past the end comes back to the start");
+
+    ui.handle(&[key(KeyCode::ArrowUp)]);
+    assert_eq!(mode(&ui, group), 2, "and before the start goes to the end");
+
+    // Right and Left do the same, since a horizontal-looking group is still one
+    // list to the keyboard.
+    ui.handle(&[key(KeyCode::ArrowRight)]);
+    assert_eq!(mode(&ui, group), 0);
+    ui.handle(&[key(KeyCode::ArrowLeft)]);
+    assert_eq!(mode(&ui, group), 2);
+
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![
+            Msg::Mode(1),
+            Msg::Mode(2),
+            Msg::Mode(0),
+            Msg::Mode(2),
+            Msg::Mode(0),
+            Msg::Mode(2),
+        ],
+        "every arrow that moved the choice reported it, once"
+    );
+}
+
+/// **The rule this widget exists for.** Tab moves past the whole group, not
+/// between its options. An application assembling radios out of separate widgets
+/// gets three tab stops here, and that is the bug.
+#[test]
+fn tab_steps_over_the_whole_group_rather_than_through_it() {
+    let (mut ui, before, group, after) = radios();
+    ui.focus(Some(before));
+
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(group), "into the group");
+
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(
+        ui.focused(),
+        Some(after),
+        "and straight out the other side — one stop for three options"
+    );
+    assert!(
+        ui.messages().is_empty(),
+        "tabbing past a group must not change what it has chosen"
+    );
+}
+
+/// Arrows belong to the group only while it holds focus; a group that swallowed
+/// them regardless would fight whatever else on the panel wants them.
+#[test]
+fn arrows_do_nothing_to_an_unfocused_group() {
+    let (mut ui, before, group, _) = radios();
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::ArrowDown)]);
+    assert_eq!(mode(&ui, group), 0);
+    assert!(ui.messages().is_empty());
+}
+
+#[test]
+fn a_disabled_group_neither_chooses_nor_takes_focus() {
+    let (mut ui, _, group, _) = radios();
+    ui.set_enabled(group, false);
+
+    ui.handle(&click(60, 65));
+    assert_eq!(mode(&ui, group), 0);
+    assert!(ui.messages().is_empty());
+
+    ui.focus(Some(group));
+    assert_eq!(ui.focused(), None);
+}
+
+#[test]
+fn setting_the_choice_from_the_application_emits_nothing() {
+    let (mut ui, _, group, _) = radios();
+    ui.widget_mut::<RadioGroup<Msg>>(group)
+        .expect("group")
+        .set_selected(2);
+    assert_eq!(mode(&ui, group), 2);
+    assert!(ui.messages().is_empty());
+}
+
+/// An empty group is not a tab stop. Focusing something no key does anything to
+/// strands a keyboard-only panel on it.
+#[test]
+fn an_empty_group_is_skipped_by_tab() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 200, 100, 30),
+        )
+        .expect("before");
+    ui.add(
+        root,
+        RadioGroup::<Msg>::inert(Vec::<String>::new()),
+        Rect::new(20, 20, 200, 90),
+    )
+    .expect("empty");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Cancel),
+            Rect::new(140, 200, 100, 30),
+        )
+        .expect("after");
+
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(after), "the empty group is not a stop");
+}
+
+/// The drawing: exactly one option is filled, and moving the choice moves which.
+/// A group whose `selected` index changes while the picture does not is a control
+/// nobody can read, and every test above would still pass.
+///
+/// Only the **circle** is compared, not the row. Rows carry different words, so
+/// two rows can never be pixel-equal however identically their circles are drawn
+/// — which is what makes the circle the thing to look at.
+#[test]
+fn exactly_one_option_is_drawn_as_chosen() {
+    let (mut ui, _, group, _) = radios();
+    let bounds = ui.bounds(group).expect("bounds");
+    let side = theme::DARK.metrics.size_selector;
+
+    // Row `i` spans 30px; the circle is `side` square, centred in it.
+    let circle = |i: i32| Rect::new(bounds.x, bounds.y + i * 30 + (30 - side) / 2, side, side);
+    let shot =
+        |ui: &mut Ui<Msg>| -> Vec<Vec<u32>> { (0..3).map(|i| pixels_of(ui, circle(i))).collect() };
+
+    let first = shot(&mut ui);
+    assert_ne!(
+        first[0], first[1],
+        "the chosen circle should differ from the rest"
+    );
+    assert_eq!(
+        first[1], first[2],
+        "two unchosen circles are the same drawing, so the same pixels"
+    );
+
+    ui.widget_mut::<RadioGroup<Msg>>(group)
+        .expect("group")
+        .set_selected(1);
+    let second = shot(&mut ui);
+
+    assert_eq!(
+        second[1], first[0],
+        "the newly chosen circle should look exactly like the old chosen one"
+    );
+    assert_eq!(
+        second[0], first[1],
+        "and the one it replaced should look exactly like an unchosen one"
+    );
+    assert_eq!(second[0], second[2], "still only one is filled");
 }
