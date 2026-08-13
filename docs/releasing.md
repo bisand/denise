@@ -4,44 +4,47 @@ All twelve crates share one version and go to crates.io together.
 
 ## Doing it
 
-Run the **Prepare release** workflow (Actions tab, or below), giving it the one
-input a release needs — the version:
+Create a GitHub release. That is the whole of it:
 
 ```bash
-gh workflow run prepare-release.yml -f version=0.2.0
+gh release create v0.3.0 --title v0.3.0 --generate-notes
 ```
 
-It puts that number everywhere it has to go — the workspace version, the twelve
-sibling pins, the README's install snippet, `Cargo.lock` — commits, starts CI on
-that commit, and opens a **draft** release pointing at it. Review the notes, then
-**publish the draft. Publishing the release is the trigger**:
-`.github/workflows/release.yml` checks its guards, rehearses the whole publish,
-uploads to crates.io, and lists what went out in the run summary.
+or the web UI's *Draft a new release* — a draft is the better habit, since it
+lets the notes be written properly and nothing happens until it is published.
 
-Nothing before the publish is irreversible: the draft can be deleted and the bump
-commit is just a commit. Publish the draft before CI finishes and the guard
-refuses; publish again once it is green.
+**The tag is the version.** On publish, `.github/workflows/release.yml` does
+everything the number touches:
 
-By hand, the same thing is:
+1. Writes it everywhere it lives — the workspace version, the twelve sibling
+   pins, the README's install snippet, `Cargo.lock` — as a commit on top of the
+   released tree (`scripts/bump-version.py`, the one place that knows where
+   version numbers live).
+2. **Moves the tag onto that commit**, so the release page and crates.io
+   describe the same tree — the invariant holds by construction, not by
+   discipline. main is fast-forwarded to the bump when it can be.
+3. Dispatches CI onto the commit and **waits** for the verdict — the commit was
+   born seconds ago, so demanding it had already passed would fail every
+   release. Red CI still stops everything, before anything is uploaded.
+4. Rehearses with a full `--dry-run`, then publishes, and lists what went out
+   in the run summary.
 
-```bash
-scripts/bump-version.py 0.2.0     # manifest, twelve pins, README snippet
-cargo update --workspace          # refresh Cargo.lock
-git commit -am "chore: release 0.2.0"
-git push
-# once CI is green on that commit:
-gh release create v0.2.0 --generate-notes
-```
+A release cut on a tree whose manifests already carry the tag's version — a
+manual `bump-version.py` commit, or a re-run — skips 1 and 2 and just verifies
+and publishes.
 
-The script is shared, so the workflow and a human produce the identical commit —
-there is one place that knows where version numbers live.
+### When a release fails partway
 
-One deliberate wrinkle inside the workflow: a push made with the workflow token
-starts no `on: push` run — GitHub's guard against recursive workflows — so it
-dispatches CI onto the bump commit explicitly. Without that, every release
-prepared this way would fail the released-commit-passed-CI guard, permanently.
+Nothing is uploaded until every guard has passed, so a red run leaves crates.io
+untouched and the release visible with a red workflow beside it — that is the
+designed failure state. If the cause was red CI or a bad tree: fix main, then
+**delete the release and its tag** and release again from the fixed tree.
+Re-publishing the same release (draft-toggle) re-runs the workflow against its
+existing tag, which is only right when the tree it points at was fine and the
+failure was transient.
 
-To rehearse without publishing anything, run the **Release** workflow by hand from the Actions tab. With no release attached it stops after the dry run.
+To rehearse without publishing anything, run the **Release** workflow by hand
+from the Actions tab. With no release attached it stops after the dry run.
 
 ### Why the release comes first
 
@@ -65,8 +68,8 @@ The workflow fails closed at four points, because an upload cannot be taken back
 
 | | |
 |---|---|
-| **The release tag matches the manifest** | A `v0.1.0` release on a tree that says `0.0.9` publishes one version under another's name, and the release page then describes a tree that never carried that number |
-| **The released commit passed CI** | A release can be cut at any commit, including one CI never saw or one that went red. The job asks GitHub about that exact commit rather than assuming |
+| **The release tag matches the manifest** | True by construction now that the workflow writes the version from the tag — and asserted anyway, because if the bump path ever grows a bug, this is what stops one version being published under another's name |
+| **CI passes on the exact commit being published** | The workflow waits for CI's verdict on the bump commit — per check *name*, from its most recent run, so a rerun or a duplicate cannot wedge it. A red check fails the release before anything is uploaded |
 | **`--locked`** | A version bump that did not refresh `Cargo.lock` fails in rehearsal instead of halfway through an upload |
 | **A full dry run first** | Packages and verifies all twelve before anything real goes |
 

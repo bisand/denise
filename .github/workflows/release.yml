@@ -1,30 +1,37 @@
 name: Release
 
 # Publishing is the one irreversible thing this repository does: a version can be
-# yanked, never replaced. So the trigger is a **published GitHub release** — a
-# deliberate act, with notes somebody wrote — rather than a tag push or a merge to
-# main. Every guard below fails closed.
+# yanked, never replaced. The single trigger is a **published GitHub release** —
+# a deliberate act, with notes somebody wrote. Everything else follows from its
+# tag:
 #
-# The order matters and is the opposite of the usual arrangement: the release
-# exists first and describes what is about to go out, then crates.io follows. A
-# release that fails to publish stays visible, with a red workflow beside it,
-# instead of a tag nobody can explain.
+#   1. The version is read from the tag (v0.3.0 -> 0.3.0) and written everywhere
+#      it lives — workspace version, the twelve sibling pins, the README snippet,
+#      Cargo.lock — as a commit on top of the released tree.
+#   2. The tag is moved onto that commit, so the invariant that crates.io carries
+#      exactly the tagged source holds by construction rather than by discipline.
+#   3. CI is dispatched onto the commit and this workflow *waits* for it — the
+#      commit was born seconds ago, so "must already have passed" would fail
+#      closed on every release. Red CI still stops everything.
+#   4. Dry run, then upload.
+#
+# A release cut on a tree whose manifests already carry the tag's version (a
+# manual bump, or a re-run) skips step 1 and 2 and just verifies and publishes.
 #
 # To rehearse without publishing anything, run this workflow by hand from the
 # Actions tab. With no release attached it stops after the dry run.
 #
-# See docs/releasing.md.
+# See docs/releasing.md — including what to do when a release fails partway.
 
 on:
   release:
     types: [published]
   workflow_dispatch:
 
-# Nothing here writes to the repository: the release already exists. The check
-# API is read to confirm the tagged commit passed CI.
 permissions:
-  contents: read
-  checks: read
+  contents: write   # the bump commit, the moved tag, the push to main
+  checks: read      # confirming CI's verdict on the released commit
+  actions: write    # dispatching CI onto a commit whose push started nothing
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,12 +41,12 @@ jobs:
     name: publish the workspace to crates.io
     runs-on: ubuntu-latest
     steps:
-      # Explicitly the release's own tag rather than whatever ref the event
-      # happens to carry. A release can point at any commit, including one that
-      # is not the tip of main, and that commit is the one being published.
+      # The release's own tag rather than whatever ref the event happens to
+      # carry, and full history so the bump commit can be pushed to main.
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name || github.ref }}
+          fetch-depth: 0
 
       # `cargo publish` verifies by building, and `denise-winit` pulls in winit.
       - name: Install winit build dependencies
@@ -48,23 +55,60 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
 
-      # Deliberately no build cache, for two reasons.
-      #
-      # A release should verify from cold: a cached artifact from another commit
-      # makes the rehearsal less faithful than the fresh build a consumer of
-      # these crates actually gets. And this is the one job that holds the
-      # registry token, so it runs the fewest third-party actions it can.
-      #
-      # There is a practical reason too. `cargo publish` unpacks each crate into
-      # `target/package/<crate>-<version>/`, and Swatinem/rust-cache's cleaning
-      # step walks that expecting a target directory, failing with a wall of
-      # ENOENT annotations on a run that otherwise succeeded. A release that
-      # looks broken and is not is worse than a slower one.
+      # Deliberately no build cache: a release should verify from cold, this is
+      # the one job holding the registry token so it runs the fewest third-party
+      # actions it can, and rust-cache chokes on `target/package/` anyway.
       - uses: dtolnay/rust-toolchain@stable
 
-      # A release whose tag disagrees with the manifest publishes one version
-      # under another version's name, and the release page then describes a tree
-      # that never carried that number.
+      # The tag is the single source of the version. If the tree already says
+      # the same number this is a no-op; otherwise the bump lands as a commit on
+      # top of the released tree, the tag moves onto it, and main is
+      # fast-forwarded when it can be.
+      - name: Set the version everywhere from the release tag
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${TAG#v}"
+          if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag '$TAG' is not v<semver>. Delete the release and its tag, and release as vX.Y.Z."
+            exit 1
+          fi
+          current=$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "denise"))')
+
+          if [ "$version" = "$current" ]; then
+            echo "The tree already says $version; nothing to set."
+          else
+            scripts/bump-version.py "$version"
+            cargo update --workspace
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: release $version"
+
+            # The tag follows the bump, so the release page and crates.io
+            # describe the same tree. The release object tracks the tag ref.
+            git tag -f "$TAG"
+            git push -f origin "refs/tags/$TAG"
+
+            # Fast-forward only: a release cut from an older commit must not
+            # rewrite main. The tag is authoritative either way.
+            if git push origin "HEAD:refs/heads/main"; then
+              echo "main fast-forwarded to the bump commit"
+            else
+              echo "::warning::main was not fast-forwardable; the bump lives on the tag only."
+            fi
+
+            # A push made with the workflow token starts no `on: push` run —
+            # GitHub's recursion guard — so CI is dispatched explicitly, on the
+            # tag, which now names the bump commit.
+            gh workflow run ci.yml --ref "$TAG"
+          fi
+
+      # Kept even though the step above makes it true by construction: if the
+      # bump path ever grows a bug, this is what stops one version being
+      # published under another's name.
       - name: The release tag and the workspace version are the same number
         if: github.event_name == 'release'
         env:
@@ -74,59 +118,60 @@ jobs:
           version=$(cargo metadata --format-version 1 --no-deps \
             | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "denise"))')
           if [ "$tag" != "$version" ]; then
-            echo "::error::release $TAG says $tag, the workspace at that commit says $version."
-            echo "::error::Run scripts/bump-version.py $tag, commit, retag, and re-publish the release."
+            echo "::error::release $TAG says $tag, the tree being published says $version."
             exit 1
           fi
           echo "$TAG matches workspace.package.version $version"
 
-      # A release can be cut at any commit, including one CI never saw or one
-      # whose CI went red. Since the upload cannot be taken back, this asks
-      # GitHub what happened to this exact commit rather than assuming.
-      - name: The released commit passed CI
+      # The upload cannot be taken back, so it waits for CI's verdict on the
+      # exact commit going out — the one made above, or the released commit
+      # itself when nothing needed bumping. The verdict is per check *name*
+      # from its most recently started run, so a rerun or a duplicate does not
+      # wedge it; a red check fails it immediately rather than at the timeout.
+      - name: CI passes on the exact commit being published
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           sha=$(git rev-parse HEAD)
-          # One commit can carry several runs of the same check — a rerun, or a
-          # redundant dispatch — so the verdict is per check *name*, from its
-          # most recently started run. Judging every run individually wedges a
-          # release on a duplicate sitting `pending` next to the success.
-          runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs" --paginate \
-                   --jq '.check_runs
-                         | map(select(.name != "publish the workspace to crates.io"))
-                         | group_by(.name)
-                         | map(max_by(.started_at))
-                         | .[] | "\(.conclusion // "pending")\t\(.name)"')
-          if [ -z "$runs" ]; then
-            echo "::error::no check runs on $sha. Release a commit CI has seen."
-            exit 1
-          fi
-          echo "$runs"
-          if echo "$runs" | grep -qvE '^(success|skipped|neutral)\b'; then
-            echo "::error::not every check on $sha succeeded — see above."
-            exit 1
-          fi
+          echo "waiting on CI for $sha"
+          for attempt in $(seq 1 90); do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs" --paginate \
+                     --jq '.check_runs
+                           | map(select(.name != "publish the workspace to crates.io"))
+                           | group_by(.name)
+                           | map(max_by(.started_at))
+                           | .[] | "\(.conclusion // "pending")\t\(.name)"')
+            if [ -n "$runs" ]; then
+              if echo "$runs" | grep -qE '^(failure|cancelled|timed_out|action_required)\b'; then
+                echo "$runs"
+                echo "::error::CI went red on $sha — see above. Fix main, delete the release and its tag, and release again."
+                exit 1
+              fi
+              if ! echo "$runs" | grep -qvE '^(success|skipped|neutral)\b'; then
+                echo "$runs"
+                echo "all checks green on $sha"
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+          echo "::error::CI did not finish on $sha within 30 minutes."
+          exit 1
 
       # The rehearsal. Packages all twelve, then verifies each against a local
-      # registry built from the others — which is why this works from one runner
-      # and needs nothing on the real index.
-      #
-      # `--locked` is deliberate: a version bump that did not refresh Cargo.lock
-      # should fail here rather than halfway through an upload.
+      # registry built from the others — one runner, nothing on the real index.
+      # `--locked` is deliberate: a bump that did not refresh Cargo.lock fails
+      # here rather than halfway through an upload.
       - name: Rehearse the publish
         run: cargo publish --workspace --locked --dry-run
 
       # From here nothing can be undone.
       #
-      # Note what verification on Linux does and does not prove for the three
-      # platform crates. `denise-macos` is `#![cfg(target_os = "macos")]` and
-      # `denise-win32` and `denise-activex` are `cfg(windows)` throughout, so what
-      # gets compiled here is an empty crate. That checks the packaging — the
-      # manifest, the file list, the dependency versions — and not the platform
-      # code, which is why the CI gate above matters: the Windows runner built and
-      # tested that code on this same commit.
+      # Verification on Linux compiles the three platform crates to empty
+      # crates (`cfg(windows)`, `cfg(target_os = "macos")`) — that checks the
+      # packaging, not the platform code. The CI wait above is what covered the
+      # platform code, on this same commit, minutes earlier.
       - name: Publish
         if: github.event_name == 'release'
         env:
@@ -140,6 +185,8 @@ jobs:
         run: |
           {
             echo "### $TAG is on crates.io"
+            echo
+            echo "Published from $(git rev-parse HEAD)"
             echo
             cargo metadata --format-version 1 --no-deps \
               | jq -r '.packages[] | select(.publish == null)

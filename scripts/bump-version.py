@@ -80,11 +80,10 @@ def main(argv: list[str]) -> int:
         f"{old} -> {new}   (workspace.package.version, {pins} sibling pins, "
         f"{snippets} README lines)"
     )
-    print("\nNext:")
-    print("  cargo check --workspace          # refresh Cargo.lock")
-    print(f'  git commit -am "chore: release {new}" && git push')
-    print("  # then, once CI is green on that commit:")
-    print(f"  gh release create v{new} --generate-notes   # publishing it is the trigger")
+    print("\nRemember: cargo update --workspace   # refresh Cargo.lock")
+    print(f"Releasing is just: gh release create v{new} --notes '...'")
+    print("The Release workflow sets the version from the tag by itself; running")
+    print("this script first is only for landing the bump as your own commit.")
     return 0
 
 
