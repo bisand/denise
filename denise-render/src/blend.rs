@@ -75,9 +75,7 @@ impl Paint {
     /// This paint scaled by an anti-aliasing coverage of `0..=255`.
     #[inline]
     pub const fn scaled(self, coverage: u32) -> Self {
-        let rb = mul_lanes(self.premul & LANES, coverage);
-        let ag = mul_lanes((self.premul >> 8) & LANES, coverage);
-        let premul = rb | (ag << 8);
+        let premul = scale_premul(self.premul, coverage);
         Self {
             premul,
             alpha: premul >> 24,
@@ -90,6 +88,15 @@ impl From<Color> for Paint {
     fn from(color: Color) -> Self {
         Paint::new(color)
     }
+}
+
+/// Scales a premultiplied `0xAARRGGBB` word — alpha lane included — by a
+/// coverage of `0..=255`.
+#[inline(always)]
+pub(crate) const fn scale_premul(px: u32, coverage: u32) -> u32 {
+    let rb = mul_lanes(px & LANES, coverage);
+    let ag = mul_lanes((px >> 8) & LANES, coverage);
+    rb | (ag << 8)
 }
 
 /// Premultiplies straight-alpha `0xAARRGGBB` words in place.

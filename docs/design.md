@@ -136,9 +136,9 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Seventeen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+Eighteen of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
 `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`, `Tabs`, `List`,
-`RadialProgress`, `Spinner`, `Select`. The first four are CoreCanvas 0.4
+`RadialProgress`, `Spinner`, `Select`, `Image`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -201,6 +201,17 @@ Getting that helper right needed one distinction `List` already had: it wires
 the list's **activation** message, not its selection. A dropdown whose arrow
 keys reported every row they passed over would have an application applying
 three values on the way to the fourth.
+
+`Image` draws somebody else's pixels and refuses to be the one who loads them:
+the application does I/O and decoding and hands over premultiplied `0xAARRGGBB`,
+because a widget that opens files is wrong in an embedded toolkit and unusable
+over the FFI. Its four fit modes are pure integer geometry over the rasteriser's
+blit, and the one decision with a bug hiding in it is the rounded-corner mask:
+the mask follows what is *visible* — the picture's rectangle under `Contain`,
+the box's under `Cover` — and must never be derived from the clip, because the
+clip is damage, and a damage-restricted repaint of half an avatar has to round
+the avatar's corners, not the damage rectangle's. A full radius is a circle, so
+the avatar crop is not a special case anywhere.
 
 `Spinner` is also the toolkit's only **unbounded** animation, and it is
 deliberately awkward about it: it does not start itself. A spinner receives no

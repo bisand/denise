@@ -15,12 +15,12 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::widgets::{
-    Alert, Align, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress,
-    RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
+    Alert, Align, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem, Panel,
+    Progress, RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
 };
 use denise_ui::{TextStyle, Ui};
 
-const SIZE: Size = Size::new(800, 1340);
+const SIZE: Size = Size::new(800, 1460);
 
 // No `Eq`: `Level` carries an f32, and nothing here compares messages anyway.
 #[derive(Clone, Debug, PartialEq)]
@@ -160,7 +160,7 @@ fn build(theme: Theme) -> Ui<Msg> {
 
     // Fields, one focused with a caret and one showing its placeholder.
     let form = ui
-        .add(root, Panel::default(), Rect::new(20, 304, 760, 802))
+        .add(root, Panel::default(), Rect::new(20, 304, 760, 864))
         .expect("form");
     ui.add(form, Label::new("Navn"), Rect::new(16, 10, 200, 22))
         .expect("name label");
@@ -430,6 +430,53 @@ fn build(theme: Theme) -> Ui<Msg> {
         .expect("locked select");
     ui.set_enabled(locked_select, false);
 
+    // One picture, drawn once with the rasteriser itself, shown through every
+    // fit — so the letterboxing, the cropping and the stretching are all
+    // visible side by side — and once more as the circular avatar crop.
+    let (picture, picture_size) = picture();
+    let mut x = 16;
+    for (fit, caption) in [
+        (Fit::Contain, "Contain"),
+        (Fit::Cover, "Cover"),
+        (Fit::Center, "Center"),
+        (Fit::Fill, "Fill"),
+    ] {
+        let frame_node = ui
+            .add(form, Panel::default(), Rect::new(x, 744, 84, 84))
+            .expect("picture frame");
+        ui.add(
+            frame_node,
+            Image::new(picture.clone(), picture_size).with_fit(fit),
+            Rect::new(2, 2, 80, 80),
+        )
+        .expect("picture");
+        ui.add(
+            form,
+            Label::new(caption)
+                .with_size(12)
+                .with_align(Align::Center, Align::Center),
+            Rect::new(x, 832, 84, 16),
+        )
+        .expect("caption");
+        x += 96;
+    }
+    ui.add(
+        form,
+        Image::new(picture.clone(), picture_size)
+            .with_fit(Fit::Cover)
+            .with_corner_radius(40),
+        Rect::new(x + 8, 746, 80, 80),
+    )
+    .expect("avatar");
+    ui.add(
+        form,
+        Label::new("Avatar")
+            .with_size(12)
+            .with_align(Align::Center, Align::Center),
+        Rect::new(x + 8, 832, 80, 16),
+    )
+    .expect("avatar caption");
+
     // Two notifications, stacked from the bottom edge. Not nodes: the tree
     // times them, stacks them, fades them and removes them, and a still picture
     // catches them mid-hold.
@@ -525,6 +572,26 @@ fn build(theme: Theme) -> Ui<Msg> {
     }]);
 
     ui
+}
+
+/// A little landscape, drawn with the rasteriser itself: the showcase needs a
+/// picture and has no business shipping an asset file to get one.
+fn picture() -> (Vec<u32>, Size) {
+    use denise::{Color, PixelFormat};
+    use denise_render::Canvas;
+
+    let size = Size::new(64, 48);
+    let mut pixels = vec![0u32; (size.width * size.height) as usize];
+    {
+        let mut c = Canvas::from_pixels(&mut pixels, size, size.width, PixelFormat::Argb8888)
+            .expect("picture buffer");
+        c.clear(Color::from_rgb888(0x89B4FA));
+        c.fill_rect(Rect::new(0, 36, 64, 12), Color::from_rgb888(0xA6E3A1));
+        c.fill_circle(Point::new(48, 12), 8, Color::from_rgb888(0xF9E2AF));
+        c.fill_rounded_rect(Rect::new(8, 22, 20, 14), 3, Color::from_rgb888(0xF38BA8));
+    }
+    // Every pixel is opaque, so the buffer is already premultiplied.
+    (pixels, size)
 }
 
 fn label_for(role: Role) -> &'static str {

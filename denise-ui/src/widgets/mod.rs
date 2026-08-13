@@ -26,6 +26,7 @@
 //! | [`RadialProgress`] | The circular counterpart, with room for a number in the middle |
 //! | [`Spinner`] | An arc that turns. **The one widget that can keep a device awake** |
 //! | [`Select`] | The closed half of a dropdown. [`open_select`] is the open half |
+//! | [`Image`] | A picture with a [`Fit`]. Bring your own pixels, premultiplied |
 //!
 //! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
 //! at a time against <https://github.com/bisand/denise/issues/6>.
@@ -50,6 +51,7 @@ mod badge;
 mod button;
 mod checkbox;
 mod divider;
+mod image;
 mod label;
 mod list;
 mod panel;
@@ -69,6 +71,7 @@ pub use badge::Badge;
 pub use button::Button;
 pub use checkbox::Checkbox;
 pub use divider::Divider;
+pub use image::{Fit, Image};
 pub use label::Label;
 pub use list::{List, ListItem};
 pub use panel::Panel;

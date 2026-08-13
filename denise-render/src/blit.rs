@@ -107,6 +107,76 @@ impl Canvas<'_> {
             }
         }
     }
+
+    /// Draws all of `src` into `dest`, masked to `shape` with rounded corners
+    /// of `radius`, anti-aliased.
+    ///
+    /// `shape` is the rectangle whose corners are rounded and outside which
+    /// nothing is drawn; sampling is still mapped from the whole of `dest`.
+    /// They are separate arguments because they genuinely differ in the *Cover*
+    /// case — an image scaled past its box so the box is filled edge to edge —
+    /// where `dest` overflows and `shape` is the box. When the picture and the
+    /// mask are the same rectangle, pass it twice. `radius` is clamped to half
+    /// of `shape`'s shorter side, so a full radius on a square shape is a
+    /// circle — the avatar crop. Zero draws exactly [`Canvas::blit_scaled`]
+    /// restricted to `shape`.
+    ///
+    /// The mask must not come from the clip: the clip is damage, and a
+    /// damage-restricted repaint of half an image has to round the image's
+    /// corners, never the damage rectangle's.
+    pub fn blit_rounded(&mut self, src: &PixelView<'_>, dest: Rect, shape: Rect, radius: i32) {
+        use crate::blend::scale_premul;
+        use crate::rounded::{Scan, ceil_px, floor_px};
+
+        let Size { width, height } = src.size();
+        let (sw, sh) = (width as i64, height as i64);
+        let radius = radius.clamp(0, shape.width.min(shape.height) / 2);
+        let Some(painted) = dest.intersect(&shape) else {
+            return;
+        };
+        let Some(visible) = self.visible(painted) else {
+            return;
+        };
+        for y in visible.y..visible.bottom() {
+            let sy = nearest((y - dest.y) as i64, sh, dest.height as i64);
+            let Some(srow) = src.row(sy as i32, 0, width as i32) else {
+                continue;
+            };
+            // Everything between the deepest left inset and the shallowest
+            // right one is fully covered, so only the fringes pay for coverage.
+            let scan = (radius > 0).then(|| Scan::new(shape, radius, y));
+            let (solid0, solid1) = match &scan {
+                None => (visible.x, visible.right()),
+                Some(scan) => (ceil_px(scan.max_left()), floor_px(scan.min_right())),
+            };
+            let Some(drow) = self.row_span(y, visible.x, visible.right()) else {
+                continue;
+            };
+            for (i, d) in drow.iter_mut().enumerate() {
+                let x = visible.x + i as i32;
+                let coverage = if (solid0..solid1).contains(&x) {
+                    255
+                } else if let Some(scan) = &scan {
+                    scan.coverage(x)
+                } else {
+                    255
+                };
+                if coverage == 0 {
+                    continue;
+                }
+                let sx = nearest((x - dest.x) as i64, sw, dest.width as i64);
+                let s = srow[sx as usize];
+                blend_word(
+                    d,
+                    if coverage == 255 {
+                        s
+                    } else {
+                        scale_premul(s, coverage)
+                    },
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,6 +382,123 @@ mod tests {
         t.canvas()
             .blit(&empty, Point::new(i32::MAX - 1, i32::MAX - 1));
         t.canvas().blit(&empty, Point::new(i32::MIN, i32::MIN));
+    }
+
+    #[test]
+    fn a_rounded_blit_of_solid_white_is_a_rounded_fill() {
+        // The mask arithmetic must be the same arithmetic the rounded fill
+        // uses, not a lookalike: a solid white image drawn through the mask
+        // has to produce fill_rounded_rect's pixels exactly, fringes included.
+        let pixels = vec![0xFFFF_FFFFu32; 32 * 32];
+        let src = PixelView::new(&pixels, Size::new(32, 32), 32).unwrap();
+        let shape = Rect::new(2, 2, 28, 28);
+
+        let mut blitted = TestCanvas::new(32, 32);
+        blitted.canvas().blit_rounded(&src, shape, shape, 8);
+        let mut filled = TestCanvas::new(32, 32);
+        filled.canvas().fill_rounded_rect(shape, 8, Color::WHITE);
+
+        assert_eq!(blitted.pixels(), filled.pixels());
+    }
+
+    #[test]
+    fn a_zero_radius_rounded_blit_is_a_scaled_blit() {
+        let pixels = coordinate_source(5, 5);
+        let src = PixelView::new(&pixels, Size::new(5, 5), 5).unwrap();
+        let dest = Rect::new(1, 1, 10, 10);
+
+        let mut rounded = TestCanvas::new(12, 12);
+        rounded.canvas().blit_rounded(&src, dest, dest, 0);
+        let mut scaled = TestCanvas::new(12, 12);
+        scaled.canvas().blit_scaled(&src, dest);
+
+        assert_eq!(rounded.pixels(), scaled.pixels());
+    }
+
+    #[test]
+    fn a_full_radius_on_a_square_is_the_avatar_circle() {
+        let pixels = vec![0xFFFF_FFFFu32; 16 * 16];
+        let src = PixelView::new(&pixels, Size::new(16, 16), 16).unwrap();
+        let shape = Rect::new(0, 0, 16, 16);
+        let mut t = TestCanvas::new(16, 16);
+        t.canvas().blit_rounded(&src, shape, shape, 999);
+        assert_eq!(t.at(0, 0), 0, "corner outside the circle");
+        assert_eq!(t.at(15, 15), 0, "corner outside the circle");
+        assert_eq!(t.at(8, 8), 0xFFFF_FFFF, "centre inside the circle");
+        assert_eq!(t.at(8, 0) >> 24, 255, "top of the circle touches the edge");
+    }
+
+    #[test]
+    fn the_shape_crops_an_overflowing_dest_the_cover_case() {
+        // A 2x-scaled image mapped past its box: pixels must stop at the
+        // shape, and the ones inside must be the same pixels the unmasked
+        // mapping would have put there.
+        let pixels = coordinate_source(8, 8);
+        let src = PixelView::new(&pixels, Size::new(8, 8), 8).unwrap();
+        let dest = Rect::new(-4, -4, 16, 16);
+        let shape = Rect::new(2, 2, 4, 4);
+
+        let mut masked = TestCanvas::new(8, 8);
+        masked.canvas().blit_rounded(&src, dest, shape, 0);
+        let mut unmasked = TestCanvas::new(8, 8);
+        unmasked.canvas().blit_scaled(&src, dest);
+
+        for y in 0..8 {
+            for x in 0..8 {
+                let inside = (2..6).contains(&x) && (2..6).contains(&y);
+                let expected = if inside { unmasked.at(x, y) } else { 0 };
+                assert_eq!(masked.at(x, y), expected, "at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn damage_clipping_rounds_the_image_corners_not_the_damage_rect() {
+        // Repainting half the image through a clip must reproduce exactly the
+        // pixels a full repaint puts there — the mask follows the shape, and
+        // the clip must not create its own corners.
+        let pixels = vec![0xFFFF_FFFFu32; 24 * 24];
+        let src = PixelView::new(&pixels, Size::new(24, 24), 24).unwrap();
+        let shape = Rect::new(0, 0, 24, 24);
+
+        let mut whole = TestCanvas::new(24, 24);
+        whole.canvas().blit_rounded(&src, shape, shape, 8);
+
+        let mut damaged = TestCanvas::new(24, 24);
+        {
+            let mut c = damaged.canvas();
+            c.clip_to(Rect::new(0, 0, 12, 24));
+            c.blit_rounded(&src, shape, shape, 8);
+        }
+        for y in 0..24 {
+            for x in 0..12 {
+                assert_eq!(damaged.at(x, y), whole.at(x, y), "at {x},{y}");
+            }
+            for x in 12..24 {
+                assert_eq!(damaged.at(x, y), 0, "leaked past the clip at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn rounded_blits_survive_absurd_rectangles() {
+        let pixels = coordinate_source(4, 4);
+        let src = PixelView::new(&pixels, Size::new(4, 4), 4).unwrap();
+        let mut t = TestCanvas::new(8, 8);
+        for (dest, shape) in [
+            (
+                Rect::new(-1_000_000, -1_000_000, 3_000_000, 3_000_000),
+                Rect::new(0, 0, 8, 8),
+            ),
+            (Rect::new(0, 0, 8, 8), Rect::new(100, 100, 4, 4)),
+            (Rect::new(0, 0, 0, 0), Rect::new(0, 0, 8, 8)),
+            (
+                Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX, i32::MAX),
+                Rect::new(2, 2, 4, 4),
+            ),
+        ] {
+            t.canvas().blit_rounded(&src, dest, shape, 3);
+        }
     }
 
     #[test]

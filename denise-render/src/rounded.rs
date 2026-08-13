@@ -100,7 +100,7 @@ impl Scan {
     }
 
     /// Coverage of pixel column `x`, `0..=255`.
-    fn coverage(&self, x: i32) -> u32 {
+    pub(crate) fn coverage(&self, x: i32) -> u32 {
         let px0 = to_fx(x);
         let px1 = px0 + ONE;
         let mut covered: i32 = 0;
@@ -117,22 +117,22 @@ impl Scan {
     }
 
     #[inline]
-    fn min_left(&self) -> i32 {
+    pub(crate) fn min_left(&self) -> i32 {
         *self.left.iter().min().expect("SUBSAMPLES > 0")
     }
 
     #[inline]
-    fn max_left(&self) -> i32 {
+    pub(crate) fn max_left(&self) -> i32 {
         *self.left.iter().max().expect("SUBSAMPLES > 0")
     }
 
     #[inline]
-    fn min_right(&self) -> i32 {
+    pub(crate) fn min_right(&self) -> i32 {
         *self.right.iter().min().expect("SUBSAMPLES > 0")
     }
 
     #[inline]
-    fn max_right(&self) -> i32 {
+    pub(crate) fn max_right(&self) -> i32 {
         *self.right.iter().max().expect("SUBSAMPLES > 0")
     }
 }

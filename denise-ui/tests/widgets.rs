@@ -4,7 +4,7 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Alert, Badge, Button, Checkbox, Divider, Label, List, ListItem, Panel, Progress,
+    Alert, Badge, Button, Checkbox, Divider, Fit, Image, Label, List, ListItem, Panel, Progress,
     RadialProgress, RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle,
 };
 use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
@@ -4063,4 +4063,117 @@ fn clearing_takes_every_toast() {
     ui.clear_toasts();
     assert_eq!(ui.toasts(), 0);
     assert!(ui.needs_paint(), "clearing must repaint what they covered");
+}
+
+// — images —
+
+/// A 4x4 opaque image whose every pixel encodes its own coordinates.
+fn coordinate_image() -> Image {
+    let pixels = (0..4u32)
+        .flat_map(|y| (0..4u32).map(move |x| 0xFF00_0000 | (x << 8) | y))
+        .collect();
+    Image::new(pixels, Size::new(4, 4))
+}
+
+#[test]
+fn an_image_paints_its_pixels_where_the_fit_puts_them() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    // Center in a 10x10 box puts the 4x4 image at an offset of 3.
+    ui.add(
+        root,
+        coordinate_image().with_fit(Fit::Center),
+        Rect::new(20, 20, 10, 10),
+    )
+    .expect("image");
+
+    let got = pixels_of(&mut ui, Rect::new(23, 23, 4, 4));
+    let want: Vec<u32> = (0..4u32)
+        .flat_map(|y| (0..4u32).map(move |x| 0xFF00_0000 | (x << 8) | y))
+        .collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_covering_image_is_cropped_at_the_widget_bounds() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    // A 10x20 image covering a 40x40 box overflows vertically by 20 each way.
+    let pixels = vec![0xFFFF_FFFFu32; 10 * 20];
+    ui.add(
+        root,
+        Image::new(pixels, Size::new(10, 20)).with_fit(Fit::Cover),
+        Rect::new(100, 100, 40, 40),
+    )
+    .expect("image");
+
+    let inside = pixels_of(&mut ui, Rect::new(100, 100, 40, 40));
+    assert!(inside.iter().all(|&px| px == 0xFFFF_FFFF));
+    let above = pixels_of(&mut ui, Rect::new(100, 96, 40, 4));
+    assert!(
+        above.iter().all(|&px| px != 0xFFFF_FFFF),
+        "the overflow escaped the widget bounds"
+    );
+}
+
+#[test]
+fn an_undersized_pixel_buffer_draws_nothing_and_nobody_panics() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Image::new(vec![0xFFFF_FFFF; 3], Size::new(4, 4)),
+        Rect::new(20, 20, 10, 10),
+    )
+    .expect("image");
+    let before = pixels_of(&mut ui, Rect::new(0, 0, 40, 40));
+    let empty: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    drop(empty);
+    let mut bare: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let after = pixels_of(&mut bare, Rect::new(0, 0, 40, 40));
+    assert_eq!(before, after, "a broken image must draw exactly nothing");
+}
+
+#[test]
+fn a_click_on_an_image_falls_through_to_the_button_under_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let button = ui
+        .add(
+            root,
+            Button::new("Save", Msg::Save),
+            Rect::new(20, 20, 120, 40),
+        )
+        .expect("button");
+    let _ = button;
+    // The image sits on top of the button, like a logo on a big touch target.
+    ui.add(root, coordinate_image(), Rect::new(20, 20, 120, 40))
+        .expect("image");
+
+    ui.handle(&click(80, 40));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+}
+
+#[test]
+fn a_rounded_cover_crop_rounds_the_corners_of_the_box_not_the_picture() {
+    // Under Cover the picture rectangle overflows the box, so its own corners
+    // are off-screen; the radius must land on the box's corners instead.
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let pixels = vec![0xFFFF_FFFFu32; 10 * 20];
+    ui.add(
+        root,
+        Image::new(pixels, Size::new(10, 20))
+            .with_fit(Fit::Cover)
+            .with_corner_radius(20),
+        Rect::new(100, 100, 40, 40),
+    )
+    .expect("image");
+
+    let corner = pixels_of(&mut ui, Rect::new(100, 100, 1, 1));
+    assert_ne!(corner[0], 0xFFFF_FFFF, "the box corner must be cropped");
+    let centre = pixels_of(&mut ui, Rect::new(120, 120, 1, 1));
+    assert_eq!(centre[0], 0xFFFF_FFFF, "the centre must be solid");
+    let edge = pixels_of(&mut ui, Rect::new(120, 100, 1, 1));
+    assert_eq!(edge[0], 0xFFFF_FFFF, "the circle touches the box edge");
 }
