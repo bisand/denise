@@ -92,6 +92,8 @@ Unpacking denise-ui v0.0.1 (registry `target/package/tmp-registry`)
 
 | Version | |
 |---|---|
+| [v0.2.0](https://github.com/bisand/denise/releases/tag/v0.2.0) | The widget wave: fourteen widgets, word wrapping, per-crate READMEs. First release through the Prepare release workflow — which is how its two bugs were found |
+| [v0.1.0](https://github.com/bisand/denise/releases/tag/v0.1.0) | M4 and M5: the text engine and the embedding backends |
 | [v0.0.1](https://github.com/bisand/denise/releases/tag/v0.0.1) | The first real release. All twelve, uploaded within ten seconds of each other |
 | [v0.0.0](https://github.com/bisand/denise/releases/tag/v0.0.0) | Not a release — name reservations for three crates, over two days |
 
