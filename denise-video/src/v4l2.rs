@@ -346,21 +346,44 @@ impl Buffer {
     }
 }
 
-/// One read-write V4L2 ioctl over a `#[repr(C)]` struct.
+/// The transfer direction an ioctl's opcode encodes.
+///
+/// **The direction bits are part of the request number**, so getting them
+/// wrong is not a style problem — the kernel fails the call with `ENOTTY`
+/// because the number matches nothing. The first run of the probe on real
+/// hardware failed on exactly this: every request had been built `_IOWR`,
+/// and `VIDIOC_QUERYCAP` is `_IOR`.
+#[derive(Clone, Copy)]
+enum Dir {
+    /// `_IOR`: the kernel fills the struct.
+    R,
+    /// `_IOW`: the kernel reads the struct.
+    W,
+    /// `_IOWR`: both.
+    Rw,
+}
+
+/// One V4L2 ioctl over a `#[repr(C)]` struct.
 struct Vidioc<'a, T> {
     nr: u8,
+    dir: Dir,
     arg: &'a mut T,
 }
 
-// SAFETY: the opcode is built from `T`'s own size, so the kernel reads and
-// writes exactly the `T` the reference covers; the pointer is valid for the
-// duration of the call because the borrow is.
+// SAFETY: the opcode is built from `T`'s own size and the request's true
+// direction, so the kernel reads and writes exactly the `T` the reference
+// covers; the pointer is valid for the duration of the call because the
+// borrow is.
 unsafe impl<T> Ioctl for Vidioc<'_, T> {
     type Output = ();
     const IS_MUTATING: bool = true;
 
     fn opcode(&self) -> Opcode {
-        ioctl::opcode::read_write::<T>(b'V', self.nr)
+        match self.dir {
+            Dir::R => ioctl::opcode::read::<T>(b'V', self.nr),
+            Dir::W => ioctl::opcode::write::<T>(b'V', self.nr),
+            Dir::Rw => ioctl::opcode::read_write::<T>(b'V', self.nr),
+        }
     }
 
     fn as_ptr(&mut self) -> *mut core::ffi::c_void {
@@ -375,11 +398,11 @@ unsafe impl<T> Ioctl for Vidioc<'_, T> {
     }
 }
 
-/// Issues one V4L2 ioctl, by uapi request number.
-fn vidioc<T>(fd: BorrowedFd<'_>, nr: u8, arg: &mut T) -> Result<(), Errno> {
+/// Issues one V4L2 ioctl, by uapi request number and direction.
+fn vidioc<T>(fd: BorrowedFd<'_>, nr: u8, dir: Dir, arg: &mut T) -> Result<(), Errno> {
     // SAFETY: `Vidioc`'s contract above; `T` is one of this module's
     // `#[repr(C)]` uapi structs, matching what the request number expects.
-    unsafe { ioctl::ioctl(fd, Vidioc { nr, arg }) }
+    unsafe { ioctl::ioctl(fd, Vidioc { nr, dir, arg }) }
 }
 
 // The uapi request numbers, from videodev2.h.
@@ -398,14 +421,14 @@ const NR_STREAMOFF: u8 = 19;
 /// `VIDIOC_QUERYCAP`.
 pub fn querycap(fd: BorrowedFd<'_>) -> Result<Capability, Errno> {
     let mut cap = Capability::zeroed();
-    vidioc(fd, NR_QUERYCAP, &mut cap)?;
+    vidioc(fd, NR_QUERYCAP, Dir::R, &mut cap)?;
     Ok(cap)
 }
 
 /// `VIDIOC_ENUM_FMT` at `index`; `Ok(None)` when the enumeration ends.
 pub fn enum_fmt(fd: BorrowedFd<'_>, buf_type: u32, index: u32) -> Result<Option<FmtDesc>, Errno> {
     let mut desc = FmtDesc::at(index, buf_type);
-    match vidioc(fd, NR_ENUM_FMT, &mut desc) {
+    match vidioc(fd, NR_ENUM_FMT, Dir::Rw, &mut desc) {
         Ok(()) => Ok(Some(desc)),
         Err(Errno::INVAL) => Ok(None),
         Err(e) => Err(e),
@@ -415,13 +438,13 @@ pub fn enum_fmt(fd: BorrowedFd<'_>, buf_type: u32, index: u32) -> Result<Option<
 /// `VIDIOC_G_FMT`.
 pub fn g_fmt(fd: BorrowedFd<'_>, buf_type: u32) -> Result<Format, Errno> {
     let mut format = Format::zeroed(buf_type);
-    vidioc(fd, NR_G_FMT, &mut format)?;
+    vidioc(fd, NR_G_FMT, Dir::Rw, &mut format)?;
     Ok(format)
 }
 
 /// `VIDIOC_S_FMT`, in place — the driver writes back what it actually set.
 pub fn s_fmt(fd: BorrowedFd<'_>, format: &mut Format) -> Result<(), Errno> {
-    vidioc(fd, NR_S_FMT, format)
+    vidioc(fd, NR_S_FMT, Dir::Rw, format)
 }
 
 /// `VIDIOC_REQBUFS`; returns how many the driver granted.
@@ -432,7 +455,7 @@ pub fn reqbufs(fd: BorrowedFd<'_>, buf_type: u32, count: u32) -> Result<u32, Err
         memory: MEMORY_MMAP,
         ..RequestBuffers::default()
     };
-    vidioc(fd, NR_REQBUFS, &mut req)?;
+    vidioc(fd, NR_REQBUFS, Dir::Rw, &mut req)?;
     Ok(req.count)
 }
 
@@ -444,17 +467,17 @@ pub fn querybuf(
     planes: &mut [Plane],
 ) -> Result<(), Errno> {
     let mut buffer = Buffer::mplane(index, buf_type, planes);
-    vidioc(fd, NR_QUERYBUF, &mut buffer)
+    vidioc(fd, NR_QUERYBUF, Dir::Rw, &mut buffer)
 }
 
 /// `VIDIOC_QBUF`.
 pub fn qbuf(fd: BorrowedFd<'_>, buffer: &mut Buffer) -> Result<(), Errno> {
-    vidioc(fd, NR_QBUF, buffer)
+    vidioc(fd, NR_QBUF, Dir::Rw, buffer)
 }
 
 /// `VIDIOC_DQBUF`; `Ok(None)` when nothing is ready on a non-blocking fd.
 pub fn dqbuf(fd: BorrowedFd<'_>, buffer: &mut Buffer) -> Result<Option<()>, Errno> {
-    match vidioc(fd, NR_DQBUF, buffer) {
+    match vidioc(fd, NR_DQBUF, Dir::Rw, buffer) {
         Ok(()) => Ok(Some(())),
         Err(Errno::AGAIN) => Ok(None),
         Err(e) => Err(e),
@@ -464,13 +487,13 @@ pub fn dqbuf(fd: BorrowedFd<'_>, buffer: &mut Buffer) -> Result<Option<()>, Errn
 /// `VIDIOC_STREAMON`.
 pub fn streamon(fd: BorrowedFd<'_>, buf_type: u32) -> Result<(), Errno> {
     let mut arg = buf_type;
-    vidioc(fd, NR_STREAMON, &mut arg)
+    vidioc(fd, NR_STREAMON, Dir::W, &mut arg)
 }
 
 /// `VIDIOC_STREAMOFF`.
 pub fn streamoff(fd: BorrowedFd<'_>, buf_type: u32) -> Result<(), Errno> {
     let mut arg = buf_type;
-    vidioc(fd, NR_STREAMOFF, &mut arg)
+    vidioc(fd, NR_STREAMOFF, Dir::W, &mut arg)
 }
 
 /// `VIDIOC_EXPBUF`: a capture buffer's plane as a dmabuf fd.
@@ -484,7 +507,7 @@ pub fn expbuf(fd: BorrowedFd<'_>, buf_type: u32, index: u32, plane: u32) -> Resu
         flags: 0o2000000 | 0o2,
         ..ExportBuffer::default()
     };
-    vidioc(fd, NR_EXPBUF, &mut exp)?;
+    vidioc(fd, NR_EXPBUF, Dir::Rw, &mut exp)?;
     Ok(exp.fd)
 }
 
@@ -577,13 +600,13 @@ pub fn subscribe_event(fd: BorrowedFd<'_>, event_type: u32) -> Result<(), Errno>
         event_type,
         ..EventSubscription::default()
     };
-    vidioc(fd, NR_SUBSCRIBE_EVENT, &mut sub)
+    vidioc(fd, NR_SUBSCRIBE_EVENT, Dir::W, &mut sub)
 }
 
 /// `VIDIOC_DQEVENT`; `Ok(None)` when the queue is empty.
 pub fn dqevent(fd: BorrowedFd<'_>) -> Result<Option<Event>, Errno> {
     let mut event = Event::zeroed();
-    match vidioc(fd, NR_DQEVENT, &mut event) {
+    match vidioc(fd, NR_DQEVENT, Dir::R, &mut event) {
         Ok(()) => Ok(Some(event)),
         Err(Errno::NOENT) => Ok(None),
         Err(e) => Err(e),

@@ -1,6 +1,7 @@
 //! Play, loop, stop: the whole transport a promo loop needs.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use drm::control::crtc;
 
@@ -32,6 +33,12 @@ pub struct Player {
     /// one replaces it.
     on_screen: Option<u32>,
     frames_shown: u64,
+    /// How long each frame holds the plane.
+    frame_interval: Duration,
+    /// When the next frame is due — a metronome, not a stopwatch: scheduling
+    /// absolutely means the flip's own latency (set_plane waits on vblank)
+    /// does not accumulate into the interval.
+    next_due: Option<Instant>,
 }
 
 impl Player {
@@ -92,6 +99,10 @@ impl Player {
             looping: true,
             on_screen: None,
             frames_shown: 0,
+            // The menu's ceiling. An elementary stream carries no container
+            // to say otherwise, so the application does — it encoded it.
+            frame_interval: Duration::from_nanos(1_000_000_000 / 30),
+            next_due: None,
         })
     }
 
@@ -121,6 +132,15 @@ impl Player {
         self.plane.set_dst(dst);
     }
 
+    /// Sets the playback rate, frames per second. Defaults to 30 — the menu's
+    /// ceiling — because an elementary stream has no container to carry its
+    /// rate: **the application states it, having encoded it.** Without a
+    /// clock the first hardware run played 6 seconds of video in 3.3, which
+    /// is how this method earned its place.
+    pub fn set_fps(&mut self, fps: u32) {
+        self.frame_interval = Duration::from_nanos(1_000_000_000 / u64::from(fps.clamp(1, 120)));
+    }
+
     /// One pass of the transport: feed what fits, show what is ready.
     ///
     /// Returns `true` if a new frame went on screen — the caller needs no
@@ -140,11 +160,27 @@ impl Player {
             self.cursor = 0;
         }
 
+        // The presentation clock: a decoded frame is not taken off the queue
+        // until the current one is due to leave — the decoder simply stalls
+        // against its full capture queue, which is the cheapest pause there
+        // is.
+        let now = Instant::now();
+        if let Some(due) = self.next_due
+            && now < due
+        {
+            return Ok(false);
+        }
         match self.decoder.pump()? {
             None => Ok(false),
             Some(frame) => {
                 self.plane.show(card, &self.decoder, &frame)?;
                 self.frames_shown += 1;
+                // Advance the metronome; resync when the pipeline fell more
+                // than a frame behind, so a stall does not turn into a sprint.
+                self.next_due = Some(match self.next_due {
+                    Some(due) if now < due + self.frame_interval => due + self.frame_interval,
+                    _ => now + self.frame_interval,
+                });
                 // The previous frame has left the screen with this flip; the
                 // decoder may fill it again.
                 if let Some(previous) = self.on_screen.replace(frame.index) {
@@ -161,6 +197,7 @@ impl Player {
         self.decoder.restart()?;
         self.cursor = 0;
         self.on_screen = None;
+        self.next_due = None;
         Ok(())
     }
 }

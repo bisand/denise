@@ -59,7 +59,13 @@ fn main() {
     println!("playing; Ctrl-C to stop");
     loop {
         match player.pump(surface.card()) {
-            Ok(_flipped) => {}
+            Ok(flipped) => {
+                // A heartbeat every second of video, so a remote shell can see
+                // the pipeline moving without seeing the panel.
+                if flipped && player.frames_shown() % 30 == 1 {
+                    println!("frame {}", player.frames_shown());
+                }
+            }
             Err(e) => {
                 eprintln!("playback failed: {e}");
                 break;

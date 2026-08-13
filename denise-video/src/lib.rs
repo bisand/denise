@@ -49,8 +49,12 @@ mod error;
 mod plane;
 #[cfg(target_os = "linux")]
 mod player;
+/// The raw uapi layer. Hidden rather than private so the probe example can
+/// narrate each enumeration step — a board where detection fails needs the
+/// errno, not a shrug.
 #[cfg(target_os = "linux")]
-mod v4l2;
+#[doc(hidden)]
+pub mod v4l2;
 
 #[cfg(target_os = "linux")]
 pub use decode::{DecodedFrame, Decoder};
