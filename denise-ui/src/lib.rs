@@ -55,7 +55,10 @@ pub use cursor::{ARROW, CROSSHAIR, Cursor, CursorImage};
 pub use node::NodeId;
 pub use ui::Ui;
 pub use widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
-pub use widgets::{Align, Button, Label, Panel, TextInput};
+pub use widgets::{
+    Align, Button, Checkbox, Divider, Label, Orientation, Panel, Progress, RadioGroup, Slider,
+    TextInput, Toggle,
+};
 
 // Re-exported so an application names one crate rather than three to style a
 // label, and so `FontId(0)` means the same thing everywhere.

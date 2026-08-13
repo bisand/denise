@@ -112,8 +112,8 @@ all.
 
 Three things it is showing, none of which is obvious from the outside:
 
-- **There is no grid widget.** There are nine widgets — label, button, panel,
-  text field, checkbox, toggle, radio group, progress bar, slider. A row is a full-width `Button` with the cell `Label`s placed on top of it;
+- **There is no grid widget.** There are ten widgets — label, button, panel,
+  text field, checkbox, toggle, radio group, progress bar, slider, divider. A row is a full-width `Button` with the cell `Label`s placed on top of it;
   labels are not interactive, so a click falls through them to the button
   underneath and arrives as `Select(index)`. That is how most of the widgets you
   will miss get assembled.
@@ -284,6 +284,7 @@ embed all of it in somebody else's application.
 | **M3** | Scene graph, widgets, cursor sprite | ✅ |
 | **M4** | Text engine, glyph atlas, keyboard layouts | ✅ |
 | **M5** | C ABI, macOS `NSView`, Windows control, ActiveX shim | ✅ |
+| **M6** | A wider widget set, one at a time | ◐ |
 
 Everything through M5 has run on real hardware, not only in CI. The full history
 — what each milestone cost, what was measured, and what was tried and abandoned —
@@ -294,8 +295,8 @@ is in [docs/design.md](docs/design.md).
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
   their parent, which is what a fixed-resolution panel wants. A constraint solver
   can be added over this without changing anything below it.
-- **Nine widgets.** Label, button, panel, text field, checkbox, toggle, radio
-  group, progress bar, slider. Everything
+- **Ten widgets.** Label, button, panel, text field, checkbox, toggle, radio
+  group, progress bar, slider, divider. Everything
   is assembled from them, as `table-editor` shows. More are being added one at a
   time — see [#6](https://github.com/bisand/denise/issues/6).
 - **No text selection, clipboard or word motion** in `TextInput`. The measurement
@@ -310,8 +311,11 @@ is in [docs/design.md](docs/design.md).
   view a form editor asks for — the last of those checked pixel by pixel on the
   Windows runner and by eye in `examples/host` — but no VB6 form or MFC dialog
   editor has actually held it. See [docs/windows.md](docs/windows.md).
-- **`denise-win32` DPI changes are unverified**, and it has never been hosted
-  inside a real dialog.
+- **Scale factors are reported but not applied.** `Metrics::scaled` exists and
+  nothing calls it, so every geometry token is a physical pixel — see
+  [#20](https://github.com/bisand/denise/issues/20). `denise-win32`'s DPI changes
+  are unverified for the same reason, and it has never been hosted inside a real
+  dialog.
 
 ## Documentation
 

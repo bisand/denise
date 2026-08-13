@@ -203,7 +203,8 @@ impl<M> TextInput<M> {
 
     /// Horizontal offset of the caret from the field's left edge.
     ///
-    /// Measured, not counted — see [`TextInput::run_width`].
+    /// Measured through the engine rather than counted as characters times a
+    /// width, which is the only thing that works with a proportional font.
     pub fn caret_x(&self, engine: &mut TextEngine, bounds: Rect) -> i32 {
         let first = self.window_start(engine, bounds);
         self.pad() + self.run_width(engine, first, self.caret)

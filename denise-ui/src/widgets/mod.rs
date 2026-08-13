@@ -1,39 +1,46 @@
 //! The widgets that ship with Denise.
 //!
 //! Deliberately few. This is a toolkit for panels and kiosks, not a general
-//! application framework: a [`Panel`], a [`Label`], a [`Button`] and a
-//! [`TextInput`] are what CoreCanvas 0.4 shipped, and anything more specific is
-//! better written against [`Widget`](crate::Widget) in the application than
-//! guessed at here.
+//! application framework, and the bar a widget has to clear is being something
+//! several panels would otherwise each get subtly wrong — focus handling,
+//! keyboard semantics, hit areas, disabled states — rather than saving a caller
+//! three `fill_rect` calls. Anything more specific is better written against
+//! [`Widget`](crate::Widget) in the application than guessed at here.
 //!
-//! The bar a new one has to clear is being something several panels would
-//! otherwise each get subtly wrong — focus handling, keyboard semantics, hit
-//! areas, disabled states — rather than saving a caller three `fill_rect` calls.
-//! [`Checkbox`], [`Toggle`] and [`RadioGroup`] are the additions beyond that
-//! original four, and each is here for the keyboard rules as much as for the
-//! drawing:
-//! Space toggles, Enter does not, autorepeat does not, and the label is part of
-//! the hit area. [`Toggle`] adds the only animation in the set, and is written
-//! so that losing it costs nothing — see its own documentation for why that
-//! matters, and [`RadioGroup`] is the group rather than the button — one node,
-//! so one tab stop, and one index, so "two chosen" cannot be represented.
+//! | | |
+//! |---|---|
+//! | [`Panel`] | A surface with an optional border |
+//! | [`Label`] | Static text, aligned in its box |
+//! | [`Button`] | Emits a message of your type |
+//! | [`TextInput`] | Editing, a caret, and the only widget that animates by default |
+//! | [`Checkbox`] | A boolean. Space toggles, Enter does not, the label is part of the hit area |
+//! | [`Toggle`] | The same boolean as a switch, with a sliding knob |
+//! | [`RadioGroup`] | One choice from a few. **One node, so one tab stop** |
+//! | [`Progress`] | Purely an output. Clamps a value nobody checked |
+//! | [`Slider`] | A value in a range. Keeps the pointer after a drag leaves it |
+//! | [`Divider`] | A rule, optionally with a label in it |
 //!
-//! [`Progress`] is the exception to all of that: no keyboard rules, no focus, no
-//! messages. It is here because clamping a value nobody checked is a decision
-//! worth making once — `done / total` is NaN the first time `total` is zero, and
-//! a panic in a paint loop on a kiosk is a black screen with no way to report
-//! itself.
-//!
-//! [`Slider`] is the one with genuinely fiddly input, and the reason it is here
-//! rather than in every application: a drag has to keep the pointer after it
-//! leaves the widget, and the tree clears `PRESSED` at exactly that boundary
-//! because that is what makes a button's drag-off cancel.
+//! The first four are what CoreCanvas 0.4 shipped. The rest are being added one
+//! at a time against <https://github.com/bisand/denise/issues/6>.
 //!
 //! Every one of them names theme *roles* rather than colours, so a panel built
 //! from these survives a theme swap without a single widget knowing it happened.
-
+//!
+//! # Two rules they all share
+//!
+//! **A setter is silent.** `set_checked`, `set_value`, `set_selected` change the
+//! widget and emit nothing. The message reports what a *person* did, and an
+//! application that assigned and got its own message back would either loop or
+//! have to guard against itself.
+//!
+//! **A message carries the new value**, as a `fn(T) -> M` rather than a fixed
+//! message, so an application matches on what the widget became instead of
+//! looking it up afterwards. An enum's tuple variant already is such a function:
+//! `Checkbox::new("Mute", Message::Muted)`.
+//!
 mod button;
 mod checkbox;
+mod divider;
 mod label;
 mod panel;
 mod progress;
@@ -45,11 +52,12 @@ mod toggle;
 
 pub use button::Button;
 pub use checkbox::Checkbox;
+pub use divider::Divider;
 pub use label::Label;
 pub use panel::Panel;
 pub use progress::Progress;
 pub use radio::RadioGroup;
 pub use slider::Slider;
-pub use style::Align;
+pub use style::{Align, Orientation};
 pub use text_input::TextInput;
 pub use toggle::Toggle;

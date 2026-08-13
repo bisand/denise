@@ -18,6 +18,19 @@ const HOVER_MIX: u8 = 24;
 /// find it again if a future theme has a tighter pair than today's do.
 const PRESS_MIX: u8 = 64;
 
+/// Which way a widget runs.
+///
+/// Shared rather than owned by one widget: a divider, and later a slider or a
+/// group of options, all mean the same thing by it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Orientation {
+    /// Left to right, splitting a column of content.
+    #[default]
+    Horizontal,
+    /// Top to bottom, splitting a row.
+    Vertical,
+}
+
 /// Where text sits along one axis of its box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Align {

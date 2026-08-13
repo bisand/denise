@@ -4,7 +4,7 @@ use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
 use denise_ui::widgets::{
-    Button, Checkbox, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
+    Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
 };
 use denise_ui::{NodeId, Ui};
 
@@ -1461,4 +1461,115 @@ fn the_knob_moves_with_the_value() {
     assert_ne!(empty, half);
     assert_ne!(half, full);
     assert_ne!(empty, full);
+}
+
+// -------------------------------------------------------------------- divider
+
+/// A rule reports nothing and takes nothing. Tab must step straight over it, or
+/// a keyboard-only panel strands on a line.
+#[test]
+fn a_divider_is_inert_and_not_a_tab_stop() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 100, 100, 30),
+        )
+        .expect("before");
+    let rule = ui
+        .add(root, Divider::labelled("eller"), Rect::new(20, 20, 200, 24))
+        .expect("divider");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Cancel),
+            Rect::new(140, 100, 100, 30),
+        )
+        .expect("after");
+
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(after), "Tab went straight past the rule");
+
+    ui.handle(&click(120, 32));
+    assert!(ui.messages().is_empty());
+    ui.focus(Some(rule));
+    assert_eq!(
+        ui.focused(),
+        None,
+        "a rule cannot be focused directly either"
+    );
+}
+
+/// The label breaks the rule, and the two are genuinely different pictures. A
+/// divider that ignored its label would pass every geometry test in the module.
+#[test]
+fn a_label_breaks_the_rule_and_draws_between_the_halves() {
+    let picture = |divider: Divider| -> Vec<u32> {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(root, divider, Rect::new(20, 20, 200, 24))
+            .expect("divider");
+        let bounds = ui.bounds(id).expect("bounds");
+        pixels_of(&mut ui, bounds)
+    };
+
+    let plain = picture(Divider::new());
+    let labelled = picture(Divider::labelled("eller"));
+    assert_ne!(plain, labelled, "the label changed nothing on screen");
+
+    // The rule sits at `(height - thickness) / 2`, which is not `height / 2` —
+    // derived rather than guessed, because guessing it samples background and
+    // then two identical rows of nothing compare equal and prove nothing.
+    let thickness = theme::DARK.metrics.border.max(1) as usize;
+    let row = (24 - thickness) / 2;
+    let at = |x: usize| row * 200 + x;
+
+    assert_ne!(
+        plain[at(100)],
+        labelled[at(100)],
+        "the rule was not broken where the label sits"
+    );
+    assert_eq!(
+        plain[at(2)],
+        labelled[at(2)],
+        "but the ends are still ruled"
+    );
+    assert_ne!(
+        plain[at(2)],
+        plain[at(2) - 200],
+        "the sampled row is not the rule at all"
+    );
+}
+
+/// A vertical divider is a different drawing, not a horizontal one in a narrow
+/// box — and it ignores a label rather than drawing text across its own line.
+#[test]
+fn a_vertical_divider_rules_down_and_ignores_its_label() {
+    let picture = |divider: Divider| -> Vec<u32> {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(root, divider, Rect::new(40, 20, 24, 120))
+            .expect("divider");
+        let bounds = ui.bounds(id).expect("bounds");
+        pixels_of(&mut ui, bounds)
+    };
+
+    let bare = picture(Divider::vertical());
+    let mut labelled_divider = Divider::vertical();
+    labelled_divider.set_label("ignorert");
+    let labelled = picture(labelled_divider);
+    assert_eq!(bare, labelled, "a vertical rule drew its label");
+
+    // A horizontal rule in the same box would paint one row across; a vertical
+    // one paints one column down. Comparing them is the cheapest way to say so.
+    let horizontal = picture(Divider::new());
+    assert_ne!(
+        bare, horizontal,
+        "vertical and horizontal drew the same thing"
+    );
 }

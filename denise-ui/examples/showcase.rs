@@ -16,7 +16,7 @@ use denise::{
 };
 use denise_ui::Ui;
 use denise_ui::widgets::{
-    Align, Button, Checkbox, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
+    Align, Button, Checkbox, Divider, Label, Panel, Progress, RadioGroup, Slider, TextInput, Toggle,
 };
 
 const SIZE: Size = Size::new(800, 958);
@@ -276,6 +276,18 @@ fn build(theme: Theme) -> Ui<Msg> {
         )
         .expect("slider");
     }
+
+    // A plain rule, a labelled one, and the vertical case between the columns.
+    ui.add(form, Divider::new(), Rect::new(256, 296, 220, 14))
+        .expect("rule");
+    ui.add(
+        form,
+        Divider::labelled("eller"),
+        Rect::new(256, 330, 220, 24),
+    )
+    .expect("labelled rule");
+    ui.add(form, Divider::vertical(), Rect::new(486, 290, 14, 100))
+        .expect("vertical rule");
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

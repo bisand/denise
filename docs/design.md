@@ -134,6 +134,52 @@ for message in ui.drain_messages() { /* the application decides */ }
 A stale `NodeId` resolves to `None` rather than to whoever was allocated next,
 which is the entire reason for the generation in the key.
 
+### The widget set, and what a widget has to earn
+
+Ten of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`, `Toggle`,
+`RadioGroup`, `Progress`, `Slider`, `Divider`. The first four are CoreCanvas 0.4
+parity; the rest are being added one at a time against
+[issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
+component list against what a toolkit with no layout engine can honestly support.
+
+The bar is not "is it useful". It is **would several panels otherwise each get
+this subtly wrong** — focus handling, keyboard semantics, hit areas, disabled
+states. A widget that saves a caller three `fill_rect` calls has not earned a
+place; one that stops three applications each inventing their own tab-stop rule
+has.
+
+`RadioGroup` is the clearest case. It is the *group*, not the button, which makes
+it one node and therefore **one tab stop** — the thing an application assembling
+radios out of separate widgets gets wrong every time — and it holds one index, so
+"two chosen" is unrepresentable rather than merely avoided. `Slider` is the next
+clearest: a drag has to keep the pointer after it leaves the widget, and the tree
+clears `VisualState::PRESSED` at exactly that boundary because that is what makes
+a *button's* drag-off cancel. Two widgets, opposite requirements, one signal.
+
+Two rules hold across all of them:
+
+- **A setter is silent.** `set_checked`, `set_value`, `set_selected` emit nothing.
+  The message reports what a person did, and an application that assigned and got
+  its own message back would either loop or guard against itself.
+- **A message carries the new value**, as a `fn(T) -> M` rather than a fixed
+  message. An enum's tuple variant already is such a function, so
+  `Checkbox::new("Mute", Message::Muted)` reads as intended, and no `M: Clone`
+  bound is needed.
+
+Two limits were found by building against them rather than by design review, and
+both are open:
+
+- **`Ui::tick` animates only the focused widget**
+  ([#19](https://github.com/bisand/denise/issues/19)). Deliberate — an idle panel
+  should have exactly one thing redrawing on a timer, and that is the caret. But
+  it means a toast, a spinner and an indeterminate progress bar are not merely
+  unwritten, they are inexpressible, and `Toggle` needs a settle-on-focus-loss
+  guard so its knob is not stranded mid-slide.
+- **`Metrics::scaled` is called from nowhere**
+  ([#20](https://github.com/bisand/denise/issues/20)). Every geometry token is
+  therefore a physical pixel, and the scale factor the backends report is not
+  acted on by anything.
+
 ### Damage is the toolkit's job
 
 This is the part that changed as a result of M2. A bug on the Pi produced a
@@ -581,6 +627,7 @@ somebody paid for.
 | **M3** | Scene stack, z-index, modal dialogs, cursor sprite. Label, Button, TextInput. CoreCanvas 0.4 parity. | ✅ |
 | **M4** | Text: three font tiers behind feature flags, a bounded glyph atlas, keyboard layouts with dead keys. | ✅ |
 | **M5** | C ABI, macOS `NSView`, Windows child-HWND control, ActiveX shim. | ✅ |
+| **M6** | Widening the widget set, one at a time, against [#6](https://github.com/bisand/denise/issues/6). | ◐ |
 
 M2 does not start until M1 is benchmarked. M5 does not start until the Pi story is
 solid — that is the entire point of the project.
