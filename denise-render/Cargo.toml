@@ -1,6 +1,6 @@
 [package]
 name = "denise-render"
-description = "Software rasteriser for Denise: rectangles, rounded rectangles, lines and alpha blending."
+description = "Software rasteriser for Denise: rectangles, rounded rectangles, circles, arcs, lines and alpha blending."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

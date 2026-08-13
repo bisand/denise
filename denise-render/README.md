@@ -7,8 +7,8 @@
 The software rasteriser for **[Denise]**, a direct-rendering UI toolkit in Rust for
 embedded Linux and systems without a desktop environment.
 
-Rectangles, rounded rectangles, lines, rectangular clipping and source-over alpha
-blending, straight into a [`denise::Frame`]. No GPU, no path builder, no allocator:
+Rectangles, rounded rectangles, circles, arcs, lines, rectangular clipping and
+source-over alpha blending, straight into a [`denise::Frame`]. No GPU, no path builder, no allocator:
 this crate needs neither `std` nor `alloc`, and every operation writes through a
 borrowed slice the caller already owns.
 
@@ -24,6 +24,9 @@ for region in damage {
     c.clear(Color::from_rgb888(0x1E1E2E));
     c.fill_rounded_rect(Rect::new(40, 40, 200, 64), 12, Color::rgba(255, 255, 255, 32));
     c.draw_line(Point::new(40, 120), Point::new(240, 121), Color::WHITE);
+    // A 70% progress ring: angles are binary turns, 0 is twelve o'clock,
+    // clockwise positive. No radians, no floats, no libm.
+    c.stroke_arc(Point::new(300, 90), 40, 8, 0, 70 * denise_render::TURN / 100, Color::WHITE);
 }
 # }
 ```

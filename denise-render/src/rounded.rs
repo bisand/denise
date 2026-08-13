@@ -13,32 +13,32 @@ use crate::canvas::Canvas;
 
 /// Sub-rows sampled per scanline. Four is the point where the near-horizontal top
 /// of a corner stops looking stepped; eight is not visibly better.
-const SUBSAMPLES: usize = 4;
+pub(crate) const SUBSAMPLES: usize = 4;
 
 /// Fractional bits in the fixed-point coordinates used here.
-const FRAC_BITS: u32 = 8;
+pub(crate) const FRAC_BITS: u32 = 8;
 /// One whole pixel in fixed point.
-const ONE: i32 = 1 << FRAC_BITS;
+pub(crate) const ONE: i32 = 1 << FRAC_BITS;
 /// Vertical distance between sub-rows.
-const SUB_STEP: i32 = ONE / SUBSAMPLES as i32;
+pub(crate) const SUB_STEP: i32 = ONE / SUBSAMPLES as i32;
 
 /// Coordinates are clamped to this before entering fixed point, so a rectangle
 /// placed absurdly far off-screen cannot overflow the shift. Any real surface is
 /// orders of magnitude inside it.
-const COORD_LIMIT: i32 = 1 << 22;
+pub(crate) const COORD_LIMIT: i32 = 1 << 22;
 
 #[inline]
-fn to_fx(v: i32) -> i32 {
+pub(crate) fn to_fx(v: i32) -> i32 {
     v.clamp(-COORD_LIMIT, COORD_LIMIT) << FRAC_BITS
 }
 
 #[inline]
-fn floor_px(v: i32) -> i32 {
+pub(crate) fn floor_px(v: i32) -> i32 {
     v.div_euclid(ONE)
 }
 
 #[inline]
-fn ceil_px(v: i32) -> i32 {
+pub(crate) fn ceil_px(v: i32) -> i32 {
     (v + ONE - 1).div_euclid(ONE)
 }
 
@@ -53,14 +53,14 @@ fn arc_half_width(radius: i32, dy: i32) -> i32 {
 /// Where a rounded rectangle starts and ends on one scanline, sampled at several
 /// sub-rows and kept sub-pixel.
 #[derive(Clone, Copy, Debug)]
-struct Scan {
-    left: [i32; SUBSAMPLES],
-    right: [i32; SUBSAMPLES],
+pub(crate) struct Scan {
+    pub(crate) left: [i32; SUBSAMPLES],
+    pub(crate) right: [i32; SUBSAMPLES],
 }
 
 impl Scan {
     /// Computes the extent of `rect` with corner `radius` on row `y`.
-    fn new(rect: Rect, radius: i32, y: i32) -> Self {
+    pub(crate) fn new(rect: Rect, radius: i32, y: i32) -> Self {
         let rad = to_fx(radius);
         let top = to_fx(rect.y);
         let bottom = to_fx(rect.bottom());

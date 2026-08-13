@@ -1,9 +1,9 @@
 //! Denise's software rasteriser.
 //!
-//! Rectangles, rounded rectangles, lines, rectangular clipping and source-over
-//! alpha blending, straight into a [`denise::Frame`]. No GPU, no path builder, no
-//! allocator: this crate needs neither `std` nor `alloc`, and every operation
-//! writes through a borrowed slice the caller already owns.
+//! Rectangles, rounded rectangles, circles, arcs, lines, rectangular clipping
+//! and source-over alpha blending, straight into a [`denise::Frame`]. No GPU, no
+//! path builder, no allocator: this crate needs neither `std` nor `alloc`, and
+//! every operation writes through a borrowed slice the caller already owns.
 //!
 //! ```no_run
 //! # use denise::{Color, Frame, Rect, Point};
@@ -16,6 +16,9 @@
 //!     c.clear(Color::from_rgb888(0x1E1E2E));
 //!     c.fill_rounded_rect(Rect::new(40, 40, 200, 64), 12, Color::rgba(255, 255, 255, 32));
 //!     c.draw_line(Point::new(40, 120), Point::new(240, 121), Color::WHITE);
+//!     // A 70% progress ring. Angles are binary turns: 0 is twelve o'clock,
+//!     // clockwise positive, no radians and no floats anywhere.
+//!     c.stroke_arc(Point::new(300, 90), 40, 8, 0, 70 * denise_render::TURN / 100, Color::WHITE);
 //! }
 //! # }
 //! ```
@@ -40,6 +43,7 @@ pub mod canvas;
 pub mod coverage;
 pub mod font;
 
+mod arc;
 mod line;
 mod rect;
 mod rounded;
@@ -47,6 +51,7 @@ mod rounded;
 #[cfg(test)]
 mod testing;
 
+pub use arc::TURN;
 pub use blend::Paint;
 pub use canvas::{Canvas, PixelView};
 pub use coverage::Mask;

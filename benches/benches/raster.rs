@@ -118,6 +118,62 @@ fn line(c: &mut Criterion) {
     group.finish();
 }
 
+fn arc(c: &mut Criterion) {
+    use denise_render::TURN;
+    let mut target = Target::new(PANEL);
+    let centre = Point::new(960, 540);
+
+    // Throughput in ring pixels, not bounding-box pixels: the claim in the arc
+    // documentation is that cost follows what is painted, and this is where
+    // that claim gets measured.
+    let ring = |radius: i64, thickness: i64| {
+        let outer = radius * radius;
+        let inner = (radius - thickness) * (radius - thickness);
+        (core::f64::consts::PI * (outer - inner) as f64) as u64
+    };
+
+    let mut group = c.benchmark_group("arc");
+    group.throughput(Throughput::Elements(ring(200, 12)));
+    group.bench_function("full_ring", |b| {
+        b.iter(|| {
+            target.canvas().stroke_circle(
+                black_box(centre),
+                black_box(200),
+                black_box(12),
+                Color::WHITE,
+            )
+        });
+    });
+    group.throughput(Throughput::Elements(ring(200, 12) * 3 / 4));
+    group.bench_function("three_quarter_sweep", |b| {
+        b.iter(|| {
+            target.canvas().stroke_arc(
+                black_box(centre),
+                black_box(200),
+                black_box(12),
+                black_box(TURN / 8),
+                black_box(3 * TURN / 4),
+                Color::WHITE,
+            )
+        });
+    });
+    // The spinner case: small, thin, animated at frame rate on a Pi.
+    group.throughput(Throughput::Elements(ring(24, 4) / 4));
+    group.bench_function("spinner_quarter", |b| {
+        b.iter(|| {
+            target.canvas().stroke_arc(
+                black_box(centre),
+                black_box(24),
+                black_box(4),
+                black_box(TURN / 3),
+                black_box(TURN / 4),
+                Color::WHITE,
+            )
+        });
+    });
+    group.finish();
+}
+
 fn label(size: Size) -> String {
     format!("{}x{}", size.width, size.height)
 }
@@ -128,6 +184,7 @@ criterion_group!(
     clear_with_pitch_padding,
     fill_rect,
     rounded_rect,
+    arc,
     line
 );
 criterion_main!(benches);

@@ -296,8 +296,8 @@ the size the architecture was specified for.
 
 ## The rasteriser
 
-`denise-render` draws rectangles, rounded rectangles, lines and source-over alpha
-straight into a `Frame`. It needs neither `std` nor `alloc`, contains no `unsafe`,
+`denise-render` draws rectangles, rounded rectangles, circles, arcs, lines and
+source-over alpha straight into a `Frame`. It needs neither `std` nor `alloc`, contains no `unsafe`,
 and uses **no floating point at all** — anti-aliasing coverage included.
 
 That last one is a deliberate trade. Integer coverage means no `libm` on `no_std`
