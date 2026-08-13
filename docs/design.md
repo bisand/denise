@@ -204,6 +204,46 @@ the list's **activation** message, not its selection. A dropdown whose arrow
 keys reported every row they passed over would have an application applying
 three values on the way to the fourth.
 
+### Animated relayout: the tween, and the stack that moves the siblings
+
+The last foundation the widget tracker waited on, and it split into two pieces
+the moment it was designed honestly. `Ui::animate_layout(id, to, duration)` is
+the obvious half: the tree carries a node's layout to a target through the
+same `set_layout` path the application uses, so damage — the rectangles left
+behind and the ones now occupied — and reflow come along on every frame, at
+`Spinner`'s 20 fps, landing *exactly* on the target and going silent.
+
+The rules around the tween are where its design lives. A second call
+mid-flight retargets **from the current mid-flight rectangle**, so a section
+told to close while opening turns around instead of teleporting. A plain
+`set_layout` cancels the journey — the application wrote state, and state
+written is state shown, the silent-setter rule applied to the tree itself.
+Hiding the node **completes the journey instantly**: a hidden node must not
+keep the device awake, and half-moved is the one dishonest place to stop.
+Tweens are counted by `Ui::animating()`, so the idle-cost evidence covers the
+tree's own motion as well as the widgets'.
+
+The second piece is the one hiding in the feature's name: animating a
+collapse's height does nothing useful while the ten sections below it sit
+still, and per-frame sibling bookkeeping in the application is exactly the
+scattered-invalidation disease this toolkit exists to prevent. So the tree
+owns one placement rule — `Ui::set_stack(id, spacing)` makes a node a
+vertical stack whose visible children are placed top-to-bottom at the running
+y, keeping their own x, width and height. It is applied in `reflow`, beside
+the scroll offset and for the same reason: one place turns layouts into
+bounds, so paint, damage, clipping and hit testing cannot disagree about
+where a moved sibling is. It is not a layout engine and not the
+intrinsic-size protocol — the tree still asks widgets nothing.
+
+The consequence that generated most of the tests: anything that changes what
+a stack should place — a child's size, its visibility, its z, adding,
+removing — has to reflow and damage the *stack*, not just the child.
+`set_visible` had never reflowed anything, because until now visibility never
+moved anyone else. The two pieces compose into the whole feature: put
+sections in a stack, tween one section's height, and the stack re-places the
+rest on every frame. That is the accordion mechanism, and the widgets over it
+can now be thin.
+
 `Carousel` is the first widget to compose two foundations that had not met:
 #19's requested animation and #22's pictures. The tracker filed it under
 "needed scrolling", wrongly — nothing in it scrolls. Its pages are pictures
@@ -1001,5 +1041,7 @@ Still outstanding, and deliberately not hidden:
 - **Only two layouts.** US and Norwegian. Adding one is about thirty lines,
   because a layout table lists only what differs from the Latin alphabet.
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
-  their parent, which is what a fixed-resolution panel wants; a constraint solver
-  can be added over this without changing anything below it.
+  their parent, which is what a fixed-resolution panel wants; the opt-in vertical
+  stack (`Ui::set_stack`) is the one placement rule the tree owns, and a
+  constraint solver can still be added over all of this without changing anything
+  below it.

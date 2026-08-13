@@ -304,8 +304,11 @@ is in [docs/design.md](docs/design.md).
 ### Known gaps, deliberately not hidden
 
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
-  their parent, which is what a fixed-resolution panel wants. A constraint solver
-  can be added over this without changing anything below it.
+  their parent, which is what a fixed-resolution panel wants. The one placement
+  rule the tree owns is the opt-in vertical stack (`set_stack`), which places a
+  node's children top-to-bottom — the piece that makes an animated collapse move
+  its siblings. A constraint solver can still be added over all of this without
+  changing anything below it.
 - **Twenty-three widgets**, plus tree-owned tooltips and toasts. Label, button,
   panel, text field, checkbox, toggle, radio group, progress bar, slider,
   divider, badge, alert, tabs, list, radial progress, spinner, select, image,
@@ -318,6 +321,10 @@ is in [docs/design.md](docs/design.md).
   computes them, and focus or a `List` selection below the fold scrolls itself
   into view. Deliberately absent: smooth and inertial scrolling — a kiosk
   animating a fling at 60 Hz is the idle-cost story in reverse.
+- **Relayout animates, when asked.** `animate_layout` carries a node's rectangle
+  to a target over a duration, through the same path `set_layout` uses — damage,
+  reflow and stacked siblings come along on every frame, and the tween lands
+  exactly and goes silent. With `set_stack`, this is the accordion mechanism.
 - **No text selection, clipboard or word motion** in `TextInput`. The measurement
   it needs exists; the editing model does not.
 - **One surface, so no second window.** A modal is another scene over a dimmed

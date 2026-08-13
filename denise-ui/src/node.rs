@@ -66,6 +66,12 @@ pub(crate) struct Node<M> {
     /// turns layouts into absolute bounds — so paint, clip and hit testing
     /// cannot disagree about where a scrolled child is.
     pub(crate) scroll: denise::Point,
+    /// `Some(spacing)` makes this node a vertical stack: its visible children
+    /// are placed top-to-bottom in order, each at the running y. Applied in
+    /// `reflow`, like scrolling and for the same reason — one place turns
+    /// layouts into bounds, so nothing can disagree about where a moved
+    /// sibling is. See [`Ui::set_stack`](crate::Ui::set_stack).
+    pub(crate) stack: Option<i32>,
 }
 
 impl<M> Node<M> {
@@ -85,6 +91,7 @@ impl<M> Node<M> {
             scrollable: false,
             tooltip: None,
             scroll: denise::Point::ZERO,
+            stack: None,
         }
     }
 

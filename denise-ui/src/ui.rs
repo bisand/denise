@@ -23,6 +23,42 @@ use crate::tooltip::Tooltip;
 const POPUP_GAP: i32 = 4;
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
 
+/// Frames while a layout tween is flying: 20 fps, [`Spinner`]'s number and
+/// reasoning — on a Pi-class device the cost is the wakes, not the draws.
+///
+/// [`Spinner`]: crate::widgets::Spinner
+const TWEEN_FRAME_MS: u64 = 50;
+
+/// One layout being carried from `from` to `to` by the tree.
+#[derive(Clone, Copy, Debug)]
+struct LayoutTween {
+    id: NodeId,
+    from: Rect,
+    to: Rect,
+    start_ms: u64,
+    duration_ms: u64,
+}
+
+impl LayoutTween {
+    /// Where the journey has got to at `now_ms`: integer, monotonic, and
+    /// exactly `to` from the duration onward.
+    fn at(&self, now_ms: u64) -> Rect {
+        let elapsed = now_ms.saturating_sub(self.start_ms);
+        if elapsed >= self.duration_ms || self.duration_ms == 0 {
+            return self.to;
+        }
+        let lerp = |a: i32, b: i32| -> i32 {
+            a + (i64::from(b - a) * elapsed as i64 / self.duration_ms as i64) as i32
+        };
+        Rect::new(
+            lerp(self.from.x, self.to.x),
+            lerp(self.from.y, self.to.y),
+            lerp(self.from.width, self.to.width),
+            lerp(self.from.height, self.to.height),
+        )
+    }
+}
+
 /// A retained tree of widgets, a stack of scenes, and the damage they generate.
 ///
 /// `M` is the application's message type. Widgets emit `M`; the application drains
@@ -80,6 +116,12 @@ pub struct Ui<M: 'static> {
     /// deliberately visible — [`Ui::animating`] exists so a test can assert a
     /// tree at rest holds nobody awake.
     animating: Vec<NodeId>,
+    /// Layout tweens in flight: nodes the *tree* is carrying from one
+    /// rectangle to another. Bounded by construction — every tween has a
+    /// duration and is removed at arrival — and counted by [`Ui::animating`]
+    /// alongside the widgets' animations, so the idle-cost evidence covers
+    /// both kinds of motion.
+    tweens: Vec<LayoutTween>,
     /// Transient notifications. Not nodes, for the reasons in [`crate::toast`].
     toasts: Toasts,
     /// The hover-dwell bubble. Not a node and not a widget — see
@@ -121,6 +163,7 @@ impl<M: 'static> Ui<M> {
             now_ms: 0,
             next_wake: None,
             animating: Vec::new(),
+            tweens: Vec::new(),
             cursor_auto: true,
         }
     }
@@ -368,8 +411,11 @@ impl<M: 'static> Ui<M> {
         self.nodes[id].parent = Some(parent);
         self.nodes[parent].children.push(id);
         self.sort_children(parent);
-        self.reflow(id);
-        self.damage_subtree(id);
+        // Into a stack, a new child pushes its siblings down; the reflow and
+        // the damage have to cover them, not just the newcomer.
+        let root = self.reflow_root(id);
+        self.reflow(root);
+        self.damage_subtree(root);
         self.order_dirty = true;
         Some(id)
     }
@@ -381,12 +427,20 @@ impl<M: 'static> Ui<M> {
             return false;
         }
         self.damage_subtree(id);
-        if let Some(parent) = self.nodes[id].parent
+        let parent = self.nodes[id].parent;
+        if let Some(parent) = parent
             && let Some(node) = self.nodes.get_mut(parent)
         {
             node.children.retain(|&c| c != id);
         }
         self.drop_subtree(id);
+        // Out of a stack, the siblings below close the gap.
+        if let Some(parent) = parent
+            && self.nodes.get(parent).is_some_and(|n| n.stack.is_some())
+        {
+            self.reflow(parent);
+            self.damage_subtree(parent);
+        }
         self.order_dirty = true;
         true
     }
@@ -558,18 +612,122 @@ impl<M: 'static> Ui<M> {
     }
 
     /// Moves or resizes a node, damaging the rectangles it left and the ones it
-    /// now occupies.
+    /// now occupies. Siblings in a [stack](Ui::set_stack) move with it.
+    ///
+    /// Cancels any [`Ui::animate_layout`] in flight on this node: the
+    /// application wrote state, and state written is state shown — the
+    /// silent-setter rule applied to the tree itself.
     pub fn set_layout(&mut self, id: NodeId, layout: Rect) {
+        self.tweens.retain(|t| t.id != id);
+        self.apply_layout(id, layout);
+    }
+
+    /// [`Ui::set_layout`] without the tween cancellation — the path the tween
+    /// itself drives, so advancing a tween does not cancel it.
+    fn apply_layout(&mut self, id: NodeId, layout: Rect) {
         let Some(node) = self.nodes.get(id) else {
             return;
         };
         if node.layout == layout {
             return;
         }
-        self.damage_subtree(id);
+        // The stack parent, when there is one: a resized child moves every
+        // sibling below it, so the damage and the reflow both start there.
+        let root = self.reflow_root(id);
+        self.damage_subtree(root);
         self.nodes[id].layout = layout;
-        self.reflow(id);
-        self.damage_subtree(id);
+        self.reflow(root);
+        self.damage_subtree(root);
+    }
+
+    /// Carries a node's layout to `to` over `duration_ms`, through the same
+    /// path [`Ui::set_layout`] uses — so damage and reflow, stacks included,
+    /// come along on every frame.
+    ///
+    /// Runs on [`Ui::tick`], at about 20 fps while flying, and lands *exactly*
+    /// on `to`. A second call mid-flight retargets from the current mid-flight
+    /// rectangle, so a section told to close while opening turns around
+    /// smoothly. A plain [`Ui::set_layout`] cancels the journey; hiding the
+    /// node completes it instantly, because a hidden node must not keep the
+    /// device awake and half-moved is the one dishonest place to stop.
+    ///
+    /// Counted by [`Ui::animating`], so the idle-cost evidence covers it.
+    pub fn animate_layout(&mut self, id: NodeId, to: Rect, duration_ms: u64) {
+        let Some(node) = self.nodes.get(id) else {
+            return;
+        };
+        let from = node.layout;
+        self.tweens.retain(|t| t.id != id);
+        if duration_ms == 0 || from == to {
+            self.apply_layout(id, to);
+            return;
+        }
+        self.tweens.push(LayoutTween {
+            id,
+            from,
+            to,
+            start_ms: self.now_ms,
+            duration_ms,
+        });
+        // Wake immediately, as a widget's request_animation does: the first
+        // frame belongs to the next tick, however far away the event loop
+        // thought its next deadline was.
+        self.next_wake = Some(self.next_wake.map_or(self.now_ms, |w| w.min(self.now_ms)));
+    }
+
+    /// Makes a node a vertical stack: its visible children are placed
+    /// top-to-bottom in order, `spacing` pixels apart, each keeping its own
+    /// x, width and height.
+    ///
+    /// Not a layout engine, and not the intrinsic-size protocol — the tree
+    /// still asks widgets nothing, and every height is the same explicit
+    /// rectangle as ever. It is scrolling's argument again: paint, damage,
+    /// clipping and hit testing must agree about where a moved sibling is,
+    /// and one reflow rule is how they agree. Combined with
+    /// [`Ui::animate_layout`] on one child's height, the stack re-places the
+    /// rest on every frame — which is the whole accordion mechanism.
+    ///
+    /// A hidden child takes no space; children are placed in paint order, so
+    /// [`Ui::set_z`] reorders the stack too.
+    pub fn set_stack(&mut self, id: NodeId, spacing: i32) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.stack = Some(spacing);
+            self.reflow(id);
+            self.damage_subtree(id);
+        }
+    }
+
+    /// Stops stacking: children return to their own layout positions.
+    pub fn clear_stack(&mut self, id: NodeId) {
+        if let Some(node) = self.nodes.get_mut(id)
+            && node.stack.take().is_some()
+        {
+            self.reflow(id);
+            self.damage_subtree(id);
+        }
+    }
+
+    /// Whether `id` is `ancestor` or sits anywhere under it.
+    fn is_descendant_or_self(&self, id: NodeId, ancestor: NodeId) -> bool {
+        let mut current = Some(id);
+        while let Some(node) = current {
+            if node == ancestor {
+                return true;
+            }
+            current = self.nodes.get(node).and_then(|n| n.parent);
+        }
+        false
+    }
+
+    /// Where a reflow triggered by `id` has to start: the parent when it
+    /// stacks, because the change moves siblings, and the node itself
+    /// otherwise.
+    fn reflow_root(&self, id: NodeId) -> NodeId {
+        self.nodes
+            .get(id)
+            .and_then(|n| n.parent)
+            .filter(|&p| self.nodes.get(p).is_some_and(|n| n.stack.is_some()))
+            .unwrap_or(id)
     }
 
     /// Sets the sibling sort key. Higher paints later, so higher is on top.
@@ -586,6 +744,12 @@ impl<M: 'static> Ui<M> {
             self.sort_children(parent);
         }
         self.damage_subtree(id);
+        // A stack places children in paint order, so reordering moves them.
+        let root = self.reflow_root(id);
+        if root != id {
+            self.reflow(root);
+            self.damage_subtree(root);
+        }
         self.order_dirty = true;
     }
 
@@ -599,7 +763,28 @@ impl<M: 'static> Ui<M> {
         }
         node.visible = visible;
         self.damage_subtree(id);
+        // In a stack, appearing and disappearing move the siblings below.
+        let root = self.reflow_root(id);
+        if root != id {
+            self.reflow(root);
+            self.damage_subtree(root);
+        }
         if !visible {
+            // A hidden node's layout tween completes instantly: it must not
+            // keep the device awake, and half-moved is the one dishonest
+            // place to stop. Descendants' tweens too — hiding a panel hides
+            // everything it contains.
+            let snapping: alloc::vec::Vec<LayoutTween> = self
+                .tweens
+                .iter()
+                .copied()
+                .filter(|t| self.is_descendant_or_self(t.id, id))
+                .collect();
+            self.tweens
+                .retain(|t| !snapping.iter().any(|snap| snap.id == t.id));
+            for tween in snapping {
+                self.apply_layout(tween.id, tween.to);
+            }
             self.forget(id);
             // A hidden widget must not keep the device awake: an invisible
             // spinner spinning forever is the exact failure the animation set
@@ -832,6 +1017,29 @@ impl<M: 'static> Ui<M> {
             }
         }
 
+        // Layout tweens: the tree's own animation. Advanced through the same
+        // apply path the application's set_layout uses, so damage — the
+        // rectangles left behind and the ones now occupied, stacked siblings
+        // included — comes along on every frame. A tween that has arrived
+        // lands exactly on its target and is gone.
+        let mut i = 0;
+        while i < self.tweens.len() {
+            let tween = self.tweens[i];
+            if !self.nodes.contains_key(tween.id) {
+                self.tweens.swap_remove(i);
+                continue;
+            }
+            let rect = tween.at(now_ms);
+            self.apply_layout(tween.id, rect);
+            if rect == tween.to {
+                self.tweens.swap_remove(i);
+                continue;
+            }
+            let next = now_ms + TWEEN_FRAME_MS;
+            wake = Some(wake.map_or(next, |w: u64| w.min(next)));
+            i += 1;
+        }
+
         // The tooltip's dwell deadline is a wake reason too, and the one most
         // easily forgotten: a kiosk blocks on input until the tree says it
         // wants waking, so a deadline left out here is a bubble that appears
@@ -927,7 +1135,7 @@ impl<M: 'static> Ui<M> {
     /// guard against a widget quietly holding the device awake.
     #[inline]
     pub fn animating(&self) -> usize {
-        self.animating.len()
+        self.animating.len() + self.tweens.len()
     }
 
     /// When something wants to be woken, in the same clock as [`Ui::tick`].
@@ -1548,8 +1756,8 @@ impl<M: 'static> Ui<M> {
             None => (Point::ZERO, Rect::from_size(self.size), false),
         };
 
-        let mut stack = vec![(id, origin, clip, disabled)];
-        while let Some((id, origin, clip, disabled)) = stack.pop() {
+        let mut work = vec![(id, origin, clip, disabled)];
+        while let Some((id, origin, clip, disabled)) = work.pop() {
             let Some(node) = self.nodes.get_mut(id) else {
                 continue;
             };
@@ -1564,11 +1772,41 @@ impl<M: 'static> Ui<M> {
             let child_origin =
                 Point::new(node.bounds.x - node.scroll.x, node.bounds.y - node.scroll.y);
             let child_clip = node.clip;
-            stack.extend(
-                node.children
-                    .iter()
-                    .map(|&c| (c, child_origin, child_clip, disabled)),
-            );
+            match node.stack {
+                None => work.extend(
+                    node.children
+                        .iter()
+                        .map(|&c| (c, child_origin, child_clip, disabled)),
+                ),
+                // A stack places its visible children top-to-bottom at the
+                // running y, keeping their own x, width and height. Like the
+                // scroll offset above, it happens here and only here — which
+                // is what lets a layout tween on one child move every sibling
+                // below it without anybody keeping books. Each child gets its
+                // own origin, shifted so its layout lands at the running
+                // position; the layout itself is never rewritten, so the
+                // application's rectangles stay the application's.
+                Some(spacing) => {
+                    let children = node.children.clone();
+                    let mut running = 0i32;
+                    for c in children {
+                        let Some(child) = self.nodes.get(c) else {
+                            continue;
+                        };
+                        if !child.visible {
+                            // A hidden child takes no space and moves nobody.
+                            work.push((c, child_origin, child_clip, disabled));
+                            continue;
+                        }
+                        let shifted =
+                            Point::new(child_origin.x, child_origin.y + running - child.layout.y);
+                        running = running
+                            .saturating_add(child.layout.height.max(0))
+                            .saturating_add(spacing);
+                        work.push((c, shifted, child_clip, disabled));
+                    }
+                }
+            }
         }
     }
 

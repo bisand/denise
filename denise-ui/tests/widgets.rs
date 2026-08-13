@@ -5077,3 +5077,231 @@ fn discs_clear_the_times_and_pending_discs_are_hollow() {
         "the pending disc should be hollow at its centre"
     );
 }
+
+// — animated relayout —
+
+/// Three stacked panels, 40px tall, 10px apart, inside a 400px column.
+fn stacked() -> (Ui<Msg>, NodeId, [NodeId; 3]) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let column = ui
+        .add(root, Panel::default(), Rect::new(20, 20, 200, 400))
+        .expect("column");
+    ui.set_stack(column, 10);
+    let mut sections = [column; 3];
+    for (i, slot) in sections.iter_mut().enumerate() {
+        // Deliberately absurd layout.y values: the stack owns y.
+        *slot = ui
+            .add(
+                column,
+                Panel::default(),
+                Rect::new(0, 999 - i as i32, 200, 40),
+            )
+            .expect("section");
+    }
+    (ui, column, sections)
+}
+
+#[test]
+fn a_stack_places_children_top_to_bottom_whatever_their_y_says() {
+    let (ui, _, sections) = stacked();
+    for (i, &section) in sections.iter().enumerate() {
+        let bounds = ui.bounds(section).expect("bounds");
+        assert_eq!(
+            bounds.y,
+            20 + i as i32 * 50,
+            "section {i} is not at the running y"
+        );
+        assert_eq!(bounds.x, 20, "x is the child's own");
+        assert_eq!(bounds.height, 40, "height is the child's own");
+    }
+}
+
+#[test]
+fn resizing_a_stacked_child_moves_the_siblings_below_it() {
+    let (mut ui, _, sections) = stacked();
+    ui.set_layout(sections[0], Rect::new(0, 0, 200, 100));
+    assert_eq!(ui.bounds(sections[1]).expect("b").y, 20 + 110);
+    assert_eq!(ui.bounds(sections[2]).expect("b").y, 20 + 160);
+}
+
+#[test]
+fn hiding_a_stacked_child_closes_the_gap_and_showing_reopens_it() {
+    let (mut ui, _, sections) = stacked();
+    ui.set_visible(sections[1], false);
+    assert_eq!(
+        ui.bounds(sections[2]).expect("b").y,
+        20 + 50,
+        "the third section should move up into the gap"
+    );
+    ui.set_visible(sections[1], true);
+    assert_eq!(ui.bounds(sections[2]).expect("b").y, 20 + 100);
+}
+
+#[test]
+fn adding_and_removing_stacked_children_re_places_the_rest() {
+    let (mut ui, column, sections) = stacked();
+    let inserted = ui
+        .add(column, Panel::default(), Rect::new(0, 0, 200, 20))
+        .expect("inserted");
+    assert_eq!(
+        ui.bounds(inserted).expect("b").y,
+        20 + 150,
+        "a new child lands at the end of the stack"
+    );
+    ui.remove(sections[0]);
+    assert_eq!(
+        ui.bounds(sections[1]).expect("b").y,
+        20,
+        "removing the first moves everyone up"
+    );
+}
+
+/// The whole point of the pairing: animate one child's height and the stack
+/// re-places the rest on every frame. This is the accordion mechanism.
+#[test]
+fn a_tween_on_one_child_carries_the_siblings_with_it() {
+    let (mut ui, _, sections) = stacked();
+    ui.tick(1_000);
+    ui.animate_layout(sections[0], Rect::new(0, 0, 200, 140), 200);
+
+    ui.tick(1_100); // halfway
+    let mid = ui.bounds(sections[1]).expect("b").y;
+    assert_eq!(
+        mid,
+        20 + 90 + 10,
+        "halfway through, the sibling is halfway moved"
+    );
+
+    ui.tick(1_200); // arrived
+    assert_eq!(
+        ui.bounds(sections[0]).expect("b").height,
+        140,
+        "exact landing"
+    );
+    assert_eq!(ui.bounds(sections[1]).expect("b").y, 20 + 150);
+    assert_eq!(ui.animating(), 0, "an arrived tween is gone");
+}
+
+#[test]
+fn a_tween_wakes_at_frame_rate_and_goes_silent_on_arrival() {
+    let (mut ui, _, sections) = stacked();
+    ui.tick(1_000);
+    assert_eq!(ui.next_wake_ms(), None, "a tree at rest owes nothing");
+
+    ui.animate_layout(sections[0], Rect::new(0, 0, 200, 140), 200);
+    assert!(ui.next_wake_ms().is_some(), "a tween wants its first frame");
+    assert_eq!(
+        ui.animating(),
+        1,
+        "a flying tween is motion, and the idle-cost evidence must see it"
+    );
+    ui.tick(1_050);
+    let frame = ui.next_wake_ms().expect("flying");
+    assert!(
+        frame <= 1_150,
+        "a flying tween asks for a frame, got {frame}"
+    );
+
+    ui.tick(1_300);
+    assert_eq!(ui.next_wake_ms(), None, "an arrived tween owes nothing");
+    assert_eq!(ui.animating(), 0);
+}
+
+#[test]
+fn retargeting_starts_from_the_mid_flight_rectangle() {
+    let (mut ui, _, sections) = stacked();
+    ui.tick(1_000);
+    ui.animate_layout(sections[0], Rect::new(0, 0, 200, 240), 200);
+    ui.tick(1_100); // halfway: height 140
+    assert_eq!(ui.bounds(sections[0]).expect("b").height, 140);
+
+    // Told to go back where it came from: the journey starts from 140, so a
+    // moment later it is below 140, not teleported.
+    ui.animate_layout(sections[0], Rect::new(0, 999, 200, 40), 200);
+    ui.tick(1_150);
+    let height = ui.bounds(sections[0]).expect("b").height;
+    assert!(
+        height < 140 && height > 40,
+        "the turnaround should pass through, got {height}"
+    );
+    ui.tick(1_300);
+    assert_eq!(ui.bounds(sections[0]).expect("b").height, 40, "and land");
+}
+
+#[test]
+fn a_plain_set_layout_cancels_the_journey() {
+    let (mut ui, _, sections) = stacked();
+    ui.tick(1_000);
+    ui.animate_layout(sections[0], Rect::new(0, 0, 200, 240), 200);
+    ui.tick(1_100);
+    ui.set_layout(sections[0], Rect::new(0, 0, 200, 60));
+    assert_eq!(
+        ui.animating(),
+        0,
+        "the application wrote state; the tween is gone"
+    );
+    ui.tick(1_200);
+    assert_eq!(
+        ui.bounds(sections[0]).expect("b").height,
+        60,
+        "and nothing carried it anywhere else"
+    );
+}
+
+#[test]
+fn hiding_a_tweening_node_completes_the_journey_instantly() {
+    let (mut ui, _, sections) = stacked();
+    ui.tick(1_000);
+    ui.animate_layout(sections[0], Rect::new(0, 0, 200, 140), 200);
+    ui.tick(1_100);
+    ui.set_visible(sections[0], false);
+    assert_eq!(ui.animating(), 0, "a hidden node keeps nobody awake");
+    ui.set_visible(sections[0], true);
+    assert_eq!(
+        ui.bounds(sections[0]).expect("b").height,
+        140,
+        "shown again, it is where it was going — not half-moved"
+    );
+}
+
+/// Mid-tween, a click lands where the pixels are: hit testing reads the same
+/// bounds reflow wrote, stacked shift included.
+#[test]
+fn hit_testing_agrees_with_the_pixels_mid_tween() {
+    let (mut ui, column, sections) = stacked();
+    // Replace the third section with a button so the hit is observable.
+    ui.remove(sections[2]);
+    let button = ui
+        .add(
+            column,
+            Button::new("Treff", Msg::Save),
+            Rect::new(0, 0, 200, 40),
+        )
+        .expect("button");
+    ui.tick(1_000);
+    ui.animate_layout(sections[0], Rect::new(0, 0, 200, 140), 200);
+    ui.tick(1_100); // halfway: button top at 20 + 90 + 50 + 10 = wherever reflow says
+    let bounds = ui.bounds(button).expect("b");
+    ui.handle(&click(bounds.x + 10, bounds.y + 10));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Save],
+        "the click at the reported bounds must hit the button"
+    );
+}
+
+#[test]
+fn a_mid_tween_frame_damages_what_moved() {
+    let (mut ui, _, sections) = stacked();
+    ui.tick(1_000);
+    ui.render_nothing();
+    ui.animate_layout(sections[0], Rect::new(0, 0, 200, 140), 200);
+    ui.tick(1_100);
+    let damage = ui.paint_for_damage();
+    let sibling = ui.bounds(sections[2]).expect("b");
+    assert!(
+        damage.iter().any(|r| r.intersects(&sibling)),
+        "the third section moved and must be repainted: {damage:?}"
+    );
+}
