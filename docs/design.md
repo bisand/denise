@@ -242,6 +242,26 @@ controls hated.
 So a modal is `Ui::push_scene`: another root over a dimmed backdrop, inside the
 same buffer. An `Alert` is an inline banner, not a message box.
 
+The same stack carries popups, since [#18]. What was already there did most of
+the work: input only ever reaches the topmost scene, so a scene *is* input
+capture, and Tab was always confined to it — the modal focus trap was
+structural before it had a name. `Ui::push_popup(anchor, size, side)` adds the
+dismissal rules on top: the container is placed beside its anchor by
+`overlay::anchored` — flipping to the other side when the surface runs out — a
+press outside it closes the popup *and is swallowed* (the dropdown that closes
+and also activates the button behind it is the classic bug, and it is pinned by
+a test), Escape closes before the focused widget sees the key, and focus
+returns to the anchor however the popup closes. Each layer keeps its honest
+tool: a modal is `push_scene` with a dim, a popup is `push_popup` without one,
+and a tooltip is no scene at all — a non-interactive node placed with
+`anchored` at a high z, invisible to hit testing like any `Label`.
+
+One paint rule came with it: **only the topmost veil paints.** Two dimmed
+scenes would otherwise double-darken everything under both, and a popup inside
+a modal must not darken the modal it serves.
+
+[#18]: https://github.com/bisand/denise/issues/18
+
 An application that wants a *native* dialog on a desktop build should call the
 platform for one — `MessageBoxW`, `NSAlert` — behind the same `cfg` seam it
 already uses to pick a backend. It knows which build it is; the toolkit would

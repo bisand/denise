@@ -47,12 +47,14 @@ extern crate alloc;
 
 pub mod cursor;
 mod node;
+pub mod overlay;
 mod ui;
 pub mod widget;
 pub mod widgets;
 
 pub use cursor::{ARROW, CROSSHAIR, Cursor, CursorImage};
 pub use node::NodeId;
+pub use overlay::{Side, anchored};
 pub use ui::Ui;
 pub use widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
 pub use widgets::{

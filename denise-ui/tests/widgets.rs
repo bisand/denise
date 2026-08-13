@@ -2553,3 +2553,245 @@ fn a_tree_at_rest_requests_no_wakes() {
     assert_eq!(ui.animating(), 0, "the transition ended and handed back");
     assert_eq!(ui.next_wake_ms(), None, "at rest again");
 }
+
+// ------------------------------------------------------------------- popups
+
+use denise_ui::Side;
+
+/// A base scene with a button, and a popup anchored to it holding another
+/// button — the dropdown shape, without pretending to be a dropdown widget.
+fn popped() -> (Ui<Msg>, NodeId, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let opener = ui
+        .add(
+            root,
+            Button::new("Velg", Msg::Save),
+            Rect::new(40, 40, 120, 36),
+        )
+        .expect("opener");
+    let container = ui
+        .push_popup(opener, Size::new(160, 90), Side::Below)
+        .expect("popup");
+    ui.add(container, Panel::default(), Rect::new(0, 0, 160, 90))
+        .expect("panel");
+    let choice = ui
+        .add(
+            container,
+            Button::new("Alternativ", Msg::Cancel),
+            Rect::new(8, 8, 144, 30),
+        )
+        .expect("choice");
+    (ui, opener, container, choice)
+}
+
+/// The container sits below its anchor with the documented gap, and the caller
+/// owns its content — the Tabs decision, again.
+#[test]
+fn a_popup_is_anchored_below_its_opener() {
+    let (ui, opener, container, _) = popped();
+    let anchor = ui.bounds(opener).expect("anchor");
+    let popup = ui.bounds(container).expect("container");
+    assert_eq!(popup.y, anchor.bottom() + 4);
+    assert_eq!(popup.x, anchor.x);
+}
+
+/// Content inside the popup receives input normally: a press on the choice is
+/// a press on the choice.
+#[test]
+fn content_inside_a_popup_works_normally() {
+    let (mut ui, _, container, _) = popped();
+    let bounds = ui.bounds(container).expect("container");
+    ui.handle(&click(bounds.x + 20, bounds.y + 20));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Cancel],
+        "the choice button should have fired"
+    );
+}
+
+/// **The classic bug, pinned.** A press outside the popup closes it and is
+/// swallowed — it must not also reach whatever is underneath. The opener sits
+/// exactly under the press to make the failure loud.
+#[test]
+fn the_dismissing_press_is_swallowed_not_delivered() {
+    let (mut ui, opener, container, _) = popped();
+    let target = ui.bounds(opener).expect("opener");
+
+    // Press dead on the opener, which is underneath the (closed-over) base
+    // scene while the popup is up.
+    ui.handle(&click(target.x + 10, target.y + 10));
+    assert!(
+        !ui.contains(container),
+        "the outside press should have closed the popup"
+    );
+    assert!(
+        ui.messages().is_empty(),
+        "and nothing underneath may fire: {:?}",
+        ui.messages()
+    );
+
+    // The *next* press is an ordinary press again and reaches the opener.
+    ui.handle(&click(target.x + 10, target.y + 10));
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+}
+
+/// Escape closes the popup and focus returns to the anchor — a keyboard user
+/// is standing exactly where they were before it opened.
+#[test]
+fn escape_closes_the_popup_and_focus_returns_to_the_anchor() {
+    let (mut ui, opener, container, choice) = popped();
+    ui.focus(Some(choice));
+    assert_eq!(ui.focused(), Some(choice));
+
+    ui.handle(&[key(KeyCode::Escape)]);
+    assert!(!ui.contains(container), "Escape should close the popup");
+    assert_eq!(
+        ui.focused(),
+        Some(opener),
+        "focus should return to the anchor"
+    );
+}
+
+/// Dismissing by pointer returns focus to the anchor too — the rule holds
+/// however the popup closes, including a plain `close_popup` call.
+#[test]
+fn focus_returns_to_the_anchor_however_the_popup_closes() {
+    let (mut ui, opener, _, _) = popped();
+    ui.handle(&click(300, 300));
+    assert_eq!(ui.focused(), Some(opener), "after light dismiss");
+
+    let (mut ui, opener, _, _) = popped();
+    assert!(ui.close_popup());
+    assert_eq!(ui.focused(), Some(opener), "after close_popup");
+    assert!(!ui.close_popup(), "no popup left to close");
+}
+
+/// Tab is confined to the popup while it is up — the same structural trap a
+/// modal gets, because input only ever reaches the topmost scene.
+#[test]
+fn tab_is_confined_inside_the_popup() {
+    let (mut ui, opener, _, choice) = popped();
+    ui.handle(&[key(KeyCode::Tab), key(KeyCode::Tab), key(KeyCode::Tab)]);
+    assert_eq!(
+        ui.focused(),
+        Some(choice),
+        "however many tabs, focus stays in the popup"
+    );
+    let _ = opener;
+}
+
+/// A popup near the bottom edge opens upwards: the flip, driven through the
+/// real tree rather than the geometry function alone.
+#[test]
+fn a_popup_near_the_bottom_edge_opens_upwards() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let opener = ui
+        .add(
+            root,
+            Button::new("Velg", Msg::Save),
+            Rect::new(40, 200, 120, 36),
+        )
+        .expect("opener near the bottom of a 240-tall surface");
+    let container = ui
+        .push_popup(opener, Size::new(160, 90), Side::Below)
+        .expect("popup");
+    let anchor = ui.bounds(opener).expect("anchor");
+    let popup = ui.bounds(container).expect("container");
+    assert_eq!(popup.bottom(), anchor.y - 4, "flipped above");
+}
+
+/// A popup inside a modal is ordinary nesting: the popup captures input while
+/// it is up, closing it returns input to the modal, and the modal's dim is not
+/// doubled by the popup's scene.
+#[test]
+fn a_popup_inside_a_modal_nests_and_does_not_double_dim() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(root, Panel::default(), Rect::new(0, 0, 400, 240))
+        .expect("page");
+
+    let modal = ui.push_scene(110);
+    let opener = ui
+        .add(
+            modal,
+            Button::new("Velg", Msg::Save),
+            Rect::new(120, 60, 120, 36),
+        )
+        .expect("opener in the modal");
+
+    // The dimmed backdrop as it looks with just the modal.
+    let sample = Rect::new(10, 220, 40, 12);
+    let with_modal = pixels_of(&mut ui, sample);
+
+    let container = ui
+        .push_popup(opener, Size::new(140, 60), Side::Below)
+        .expect("popup over a modal");
+    ui.add(container, Panel::default(), Rect::new(0, 0, 140, 60))
+        .expect("panel");
+    let with_popup = pixels_of(&mut ui, sample);
+    assert_eq!(
+        with_modal, with_popup,
+        "the popup must not darken what the modal already dimmed"
+    );
+
+    // Closing the popup returns input to the modal, not to the base scene.
+    ui.handle(&click(20, 225));
+    assert!(!ui.contains(container), "closed");
+    ui.handle(&click(180, 78));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Save],
+        "the modal's opener is reachable again"
+    );
+}
+
+/// Two dimmed scenes do not stack their veils: the backdrop under both is as
+/// dark as one veil, not two.
+#[test]
+fn two_modals_do_not_double_dim_the_backdrop() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(root, Panel::default(), Rect::new(0, 0, 400, 240))
+        .expect("page");
+    let sample = Rect::new(10, 220, 40, 12);
+
+    ui.push_scene(110);
+    let one_veil = pixels_of(&mut ui, sample);
+    ui.push_scene(110);
+    let two_scenes = pixels_of(&mut ui, sample);
+    assert_eq!(
+        one_veil, two_scenes,
+        "a second dimmed scene must not darken the base again"
+    );
+}
+
+/// A popup whose anchor's scene it belongs to conceptually — pops in the wrong
+/// order still leave a sane stack. `pop_scene` pops the popup first because it
+/// is topmost; there is no way to pop the modal out from under it, which is
+/// the property worth asserting.
+#[test]
+fn pops_in_the_wrong_order_cannot_strand_a_popup() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let modal = ui.push_scene(110);
+    let opener = ui
+        .add(
+            modal,
+            Button::new("Velg", Msg::Save),
+            Rect::new(40, 40, 120, 36),
+        )
+        .expect("opener");
+    let container = ui
+        .push_popup(opener, Size::new(100, 50), Side::Below)
+        .expect("popup");
+
+    // The application tries to close the modal while the popup is up. What
+    // actually pops is the topmost scene — the popup — which is the only
+    // answer that leaves no scene referring to dead nodes.
+    assert!(ui.pop_scene());
+    assert!(!ui.contains(container), "the popup went first");
+    assert!(ui.contains(opener), "the modal survived");
+    assert!(ui.pop_scene(), "the modal pops normally afterwards");
+    assert!(!ui.pop_scene(), "and the base scene never pops");
+}

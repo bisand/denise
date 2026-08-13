@@ -13,7 +13,12 @@ use denise_text::{FontId, GlyphSource, TextEngine};
 use slotmap::SlotMap;
 
 use crate::cursor::{Cursor, CursorImage};
-use crate::node::{Node, NodeId, Scene};
+use crate::node::{Node, NodeId, Popup, Scene};
+
+/// Space between a popup and its anchor, in pixels. Small on purpose: a
+/// dropdown visually belongs to its button, and a gap wide enough to see the
+/// page through reads as two unrelated panels.
+const POPUP_GAP: i32 = 4;
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
 
 /// A retained tree of widgets, a stack of scenes, and the damage they generate.
@@ -80,7 +85,11 @@ impl<M: 'static> Ui<M> {
         let root = nodes.insert(Node::new(Box::new(Void), Rect::from_size(size), 0));
         Self {
             nodes,
-            scenes: vec![Scene { root, dim: 0 }],
+            scenes: vec![Scene {
+                root,
+                dim: 0,
+                popup: None,
+            }],
             order: Vec::new(),
             scene_end: Vec::new(),
             order_dirty: true,
@@ -216,7 +225,11 @@ impl<M: 'static> Ui<M> {
         let root = self
             .nodes
             .insert(Node::new(Box::new(Void), Rect::from_size(self.size), index));
-        self.scenes.push(Scene { root, dim });
+        self.scenes.push(Scene {
+            root,
+            dim,
+            popup: None,
+        });
         self.order_dirty = true;
         self.set_focus(None);
         self.pressed = None;
@@ -227,8 +240,68 @@ impl<M: 'static> Ui<M> {
         root
     }
 
+    /// Pushes a popup: a scene anchored to a node, dismissed by clicking away.
+    ///
+    /// The returned container is placed beside `anchor` on the preferred `side`
+    /// — flipping to the other side when the surface has no room, see
+    /// [`anchored`](crate::overlay::anchored) — and the caller adds content to
+    /// it, exactly as [`Tabs`](crate::widgets::Tabs) leaves pages to the
+    /// caller. The container itself draws nothing; the first child is usually a
+    /// [`Panel`](crate::widgets::Panel) filling it.
+    ///
+    /// What makes it a popup rather than a plain scene:
+    ///
+    /// - **A press outside the container closes it, and is swallowed.** The
+    ///   press must not also reach whatever is underneath — a dropdown that
+    ///   closes *and* activates the button behind it is the classic bug. The
+    ///   swallowing is structural: input only ever reaches the topmost scene,
+    ///   so the press has nowhere else to go; closing consumes it entirely.
+    /// - **Escape closes it**, before the focused widget sees the key.
+    /// - **Focus returns to the anchor** on close, however it closes.
+    ///
+    /// There is no dimming: a popup is not a modal. A dialog that takes over is
+    /// [`Ui::push_scene`] with a dim, and a tooltip needs no scene at all —
+    /// just a non-interactive node placed with `anchored` at a high z.
+    ///
+    /// A popup over a modal is ordinary nesting and works; the popup's own
+    /// scene captures input while it is up, and popping it returns input to
+    /// the modal. Popups do not re-anchor when the surface is resized — they
+    /// are transient, and the honest response to a resize is closing them.
+    ///
+    /// Returns `None` when `anchor` does not exist.
+    pub fn push_popup(
+        &mut self,
+        anchor: NodeId,
+        size: Size,
+        side: crate::overlay::Side,
+    ) -> Option<NodeId> {
+        let anchor_bounds = self.bounds(anchor)?;
+        let rect = crate::overlay::anchored(self.size, anchor_bounds, size, side, POPUP_GAP);
+        let root = self.push_scene(0);
+        let container = self
+            .add(root, Void, rect)
+            .expect("a scene root can always take a child");
+        self.scenes.last_mut().expect("just pushed").popup = Some(Popup { anchor, container });
+        Some(container)
+    }
+
+    /// Closes the topmost scene if it is a popup, returning focus to its
+    /// anchor. Returns `false` when the top scene is not a popup.
+    ///
+    /// This is what a press outside the popup and the Escape key call; an
+    /// application closes a popup the same way after acting on a selection.
+    pub fn close_popup(&mut self) -> bool {
+        match self.scenes.last() {
+            Some(scene) if scene.popup.is_some() => self.pop_scene(),
+            _ => false,
+        }
+    }
+
     /// Pops the topmost scene and everything in it. The base scene cannot be
     /// popped; returns `false` if that is all there is.
+    ///
+    /// A popped popup returns focus to its anchor — through here, so it holds
+    /// however the popup is closed.
     pub fn pop_scene(&mut self) -> bool {
         if self.scenes.len() <= 1 {
             return false;
@@ -258,6 +331,12 @@ impl<M: 'static> Ui<M> {
         self.set_focus(None);
         self.pressed = None;
         self.set_hovered(None);
+        if let Some(popup) = scene.popup {
+            // Focus goes back where the popup came from, not to nothing: a
+            // keyboard user who opened a dropdown and pressed Escape is
+            // standing exactly where they were before it opened.
+            self.focus(Some(popup.anchor));
+        }
         true
     }
 
@@ -438,6 +517,20 @@ impl<M: 'static> Ui<M> {
         })
     }
 
+    /// Whether a press at `p` should close the topmost popup instead of being
+    /// delivered: the top scene is a popup and the press is outside its
+    /// container.
+    fn dismisses_popup(&mut self, p: Point) -> bool {
+        let Some(popup) = self.scenes.last().and_then(|s| s.popup) else {
+            return false;
+        };
+        self.ensure_order();
+        !self
+            .nodes
+            .get(popup.container)
+            .is_some_and(|node| node.clip.contains(p))
+    }
+
     // ---------------------------------------------------------------- input
 
     /// Routes a batch of input events into the tree.
@@ -608,10 +701,14 @@ impl<M: 'static> Ui<M> {
             }
             region_canvas.clear(base);
 
+            // Only the topmost veil paints. Two modals stacked would otherwise
+            // double-dim everything under both, and a popup inside a modal must
+            // not darken the modal it serves.
+            let top_veil = self.scenes.iter().rposition(|s| s.dim > 0);
             let mut start = 0;
             for (index, scene) in self.scenes.iter().enumerate() {
                 let end = self.scene_end[index];
-                if scene.dim > 0 {
+                if scene.dim > 0 && top_veil == Some(index) {
                     let veil = region_canvas.clip();
                     region_canvas.fill_rect(veil, Color::rgba(0, 0, 0, scene.dim));
                 }
@@ -668,6 +765,13 @@ impl<M: 'static> Ui<M> {
                 position,
                 ..
             } => {
+                if self.dismisses_popup(*position) {
+                    // Swallowed entirely: the press closed the popup, and must
+                    // not also reach whatever was underneath. The matching Up
+                    // finds nothing pressed and activates nothing.
+                    self.close_popup();
+                    return;
+                }
                 self.move_pointer(*position, true);
                 self.press(event);
             }
@@ -690,6 +794,10 @@ impl<M: 'static> Ui<M> {
                 self.set_hovered(None);
             }
             InputEvent::TouchDown { position, .. } => {
+                if self.dismisses_popup(*position) {
+                    self.close_popup();
+                    return;
+                }
                 self.move_pointer(*position, false);
                 self.press(event);
             }
@@ -713,6 +821,16 @@ impl<M: 'static> Ui<M> {
                 // Tab belongs to the toolkit, not to the focused widget. A panel
                 // with no pointer is driven entirely by this.
                 self.focus_step(modifiers.contains(Modifiers::SHIFT));
+            }
+            InputEvent::Key {
+                code: KeyCode::Escape,
+                state: ElementState::Down,
+                ..
+            } if self.scenes.last().is_some_and(|s| s.popup.is_some()) => {
+                // Escape belongs to the popup before it belongs to the focused
+                // widget: a dropdown open over a text field closes on Escape
+                // rather than handing the key to the field behind it.
+                self.close_popup();
             }
             InputEvent::Key { .. } | InputEvent::Text { .. } => {
                 if let Some(id) = self.focused {

@@ -87,6 +87,22 @@ pub(crate) struct Scene {
     pub(crate) root: NodeId,
     /// Alpha of the backdrop painted under this scene, `0` for none.
     pub(crate) dim: u8,
+    /// Set when this scene is a popup: the node the popup is anchored to and
+    /// the container holding its content. What makes a popup a popup is not the
+    /// scene — input capture comes from scene-ness itself — but the dismissal
+    /// rules: a press outside the container closes it, Escape closes it, and
+    /// focus goes back to the anchor.
+    pub(crate) popup: Option<Popup>,
+}
+
+/// The dismissal bookkeeping of a popup scene.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Popup {
+    /// The node the popup is attached to, and where focus returns on close.
+    pub(crate) anchor: NodeId,
+    /// The positioned container the caller fills. A press outside its bounds
+    /// dismisses the popup.
+    pub(crate) container: NodeId,
 }
 
 #[cfg(test)]
