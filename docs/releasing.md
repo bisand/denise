@@ -103,6 +103,7 @@ So a new crate joins at the next release and not before, which `cargo publish --
 
 | Version | |
 |---|---|
+| [v0.9.0](https://github.com/bisand/denise/releases/tag/v0.9.0) | `denise-video`, the fourteenth crate: hardware decode onto a DRM plane, verified on a Pi 3A+ before it shipped. The second release to create a crate. Clean run |
 | [v0.8.0](https://github.com/bisand/denise/releases/tag/v0.8.0) | Animated relayout — layout tweens and stacks — plus Collapse, Accordion and the drawer. The widget tracker closed with this one. Clean run |
 | [v0.7.0](https://github.com/bisand/denise/releases/tag/v0.7.0) | Timeline and Carousel — twenty-three widgets, and every unblocked widget in the tracker done. Clean run |
 | [v0.6.0](https://github.com/bisand/denise/releases/tag/v0.6.0) | Table, Rating, Avatar and the star primitive — twenty-one widgets, and the widget tracker's arcs and scrolling groups both closed. Clean run |
