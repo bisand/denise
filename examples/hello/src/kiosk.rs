@@ -29,8 +29,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _console = mute_console();
 
     // Built at the display's size, which is why `Hello::new` takes one and centres
-    // itself in it rather than assuming a window.
-    let mut app = Hello::new(size);
+    // itself in it rather than assuming a window. Scale factor 1: a kiosk panel
+    // is designed at its display's native resolution, which is the case where
+    // there is nothing to multiply.
+    let mut app = Hello::new(size, 1.0);
     eprintln!("\ntype a name and press Enter, F12 screenshots, Escape quits\n");
 
     let raw_fds = input.raw_fds();
