@@ -15,7 +15,9 @@ use denise::{
     Role, Size, Theme, theme,
 };
 use denise_ui::Ui;
-use denise_ui::widgets::{Align, Button, Checkbox, Label, Panel, RadioGroup, TextInput, Toggle};
+use denise_ui::widgets::{
+    Align, Button, Checkbox, Label, Panel, Progress, RadioGroup, TextInput, Toggle,
+};
 
 const SIZE: Size = Size::new(800, 834);
 
@@ -234,6 +236,25 @@ fn build(theme: Theme) -> Ui<Msg> {
         )
         .expect("frozen");
     ui.set_enabled(frozen, false);
+
+    // Bars, including the two ends. Empty and full are the values a bar drawn
+    // only at 60% would never show were wrong.
+    for (index, (value, role)) in [
+        (0.0, Role::Primary),
+        (0.35, Role::Primary),
+        (0.8, Role::Warning),
+        (1.0, Role::Success),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        ui.add(
+            form,
+            Progress::new(value).with_role(role),
+            Rect::new(496, 200 + index as i32 * 22, 220, 12),
+        )
+        .expect("bar");
+    }
 
     // Drive the states through real input so the picture cannot drift from what
     // the tree would actually do.

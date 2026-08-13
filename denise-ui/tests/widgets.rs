@@ -3,7 +3,7 @@
 use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Role, Size, theme,
 };
-use denise_ui::widgets::{Button, Checkbox, Label, Panel, RadioGroup, TextInput, Toggle};
+use denise_ui::widgets::{Button, Checkbox, Label, Panel, Progress, RadioGroup, TextInput, Toggle};
 use denise_ui::{NodeId, Ui};
 
 const SIZE: Size = Size::new(400, 240);
@@ -1139,4 +1139,116 @@ fn exactly_one_option_is_drawn_as_chosen() {
         "and the one it replaced should look exactly like an unchosen one"
     );
     assert_eq!(second[0], second[2], "still only one is filled");
+}
+
+// ------------------------------------------------------------------- progress
+
+/// A bar at 20,20 measuring 200x12, between two buttons so Tab has a path.
+fn bar(value: f32) -> (Ui<Msg>, NodeId, NodeId, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let before = ui
+        .add(
+            root,
+            Button::new("Before", Msg::Save),
+            Rect::new(20, 100, 100, 30),
+        )
+        .expect("before");
+    let id = ui
+        .add(root, Progress::new(value), Rect::new(20, 20, 200, 12))
+        .expect("bar");
+    let after = ui
+        .add(
+            root,
+            Button::new("After", Msg::Cancel),
+            Rect::new(140, 100, 100, 30),
+        )
+        .expect("after");
+    (ui, before, id, after)
+}
+
+/// It reports; it does not take input. A bar that could be tabbed to would strand
+/// a keyboard-only panel on something no key does anything to.
+#[test]
+fn a_progress_bar_is_not_a_tab_stop_and_not_clickable() {
+    let (mut ui, before, id, after) = bar(0.5);
+
+    ui.focus(Some(before));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(after), "Tab went straight past the bar");
+
+    ui.handle(&click(120, 26));
+    assert!(ui.messages().is_empty());
+    assert_eq!(
+        ui.focused(),
+        None,
+        "clicking it drops focus like the background"
+    );
+
+    ui.focus(Some(id));
+    assert_eq!(
+        ui.focused(),
+        None,
+        "and it cannot be focused directly either"
+    );
+}
+
+/// The drawing. A `value` that changes while the picture does not is a bar that
+/// reports nothing, and every unit test on the arithmetic would still pass.
+#[test]
+fn the_filled_portion_follows_the_value() {
+    // The pixel at the midpoint of the track: track colour below half, fill
+    // colour above it. One pixel is enough because it is the *right* pixel.
+    let midpoint = |value: f32| -> u32 {
+        let (mut ui, _, id, _) = bar(value);
+        let bounds = ui.bounds(id).expect("bounds");
+        let probe = Rect::new(
+            bounds.x + bounds.width / 2,
+            bounds.y + bounds.height / 2,
+            1,
+            1,
+        );
+        pixels_of(&mut ui, probe)[0]
+    };
+
+    let quarter = midpoint(0.25);
+    let three_quarters = midpoint(0.75);
+    assert_ne!(
+        quarter, three_quarters,
+        "the midpoint pixel should be track at 25% and fill at 75%"
+    );
+    assert_eq!(
+        midpoint(0.0),
+        quarter,
+        "empty and a quarter agree at the midpoint"
+    );
+    assert_eq!(
+        midpoint(1.0),
+        three_quarters,
+        "so do full and three quarters"
+    );
+}
+
+/// The case the widget exists to survive: `done / total` with `total` at zero.
+/// A panic here is a black screen on a kiosk, and a one-pixel bar is a lie.
+#[test]
+fn a_bar_fed_a_nan_draws_the_same_as_an_empty_one() {
+    let empty = {
+        let (mut ui, _, id, _) = bar(0.0);
+        let bounds = ui.bounds(id).expect("bounds");
+        pixels_of(&mut ui, bounds)
+    };
+
+    let (mut ui, _, id, _) = bar(0.5);
+    let bounds = ui.bounds(id).expect("bounds");
+    // The division a caller writes, not a folded `f32::NAN`: `done / total` on
+    // the first frame, before anything has counted how much there is to do.
+    let done = core::hint::black_box(0.0f32);
+    let total = core::hint::black_box(0.0f32);
+    ui.widget_mut::<Progress>(id)
+        .expect("bar")
+        .set_value(done / total);
+    let nan = pixels_of(&mut ui, bounds);
+
+    assert_eq!(nan, empty, "a NaN drew something other than an empty bar");
 }
