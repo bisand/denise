@@ -26,6 +26,12 @@ members = [
     "examples/table-editor",
 ]
 
+# The fuzz targets are a crate, but not one of these. They need nightly and a
+# sanitiser, they are never published, and `versions` asserts that every member
+# shares one version number and pins its siblings exactly — none of which is
+# true or wanted here. `cargo fuzz` builds them from their own manifest.
+exclude = ["fuzz"]
+
 [workspace.package]
 version = "0.10.2"
 edition = "2024"

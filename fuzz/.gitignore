@@ -1,0 +1,8 @@
+# Corpora, crash artifacts and build output: all reproducible, none of it source.
+# A crash worth keeping becomes a unit test in the crate it belongs to, which is
+# where it will actually be run — see
+# `an_absurd_clock_does_not_panic_any_animated_widget` in denise-ui.
+target/
+corpus/
+artifacts/
+coverage/

@@ -53,6 +53,66 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --no-default-features
 
+  advisories:
+    name: the dependency tree is allowed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Four of the crates this workspace pulls in parse bytes nobody here
+      # wrote — `png`, `zune-jpeg` and `gif` behind `denise-image`, `fontdue`
+      # behind `denise-text` — and all four are on by default. An advisory
+      # against any of them used to ship in the next release with nothing
+      # watching, fourteen crates at a time.
+      #
+      # The policy is in `deny.toml`, next to the reasoning for each line.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  miri:
+    name: the unsafe holds up under Miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+
+      # `denise` and `denise-render` are `unsafe`-free and the compiler enforces
+      # that. `denise-ffi` is the other extreme — every entry point takes raw
+      # pointers from a C host — and until this job existed, nothing checked it
+      # but review.
+      #
+      # `--lib` on purpose: `tests/header.rs` walks the source tree with
+      # `read_dir`, which Miri's isolation refuses, and that test is about the C
+      # header agreeing with the exports rather than about memory. Disabling
+      # isolation to run it would trade a real check for a pointless one.
+      - run: cargo miri test -p denise-ffi --lib
+
+  fuzz:
+    name: the decoders and the ABI survive a minute of nonsense
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-fuzz
+
+      # A minute each, which finds regressions rather than new classes of bug —
+      # the long runs belong on a schedule or on somebody's machine. It is
+      # already worth its place: `abi_session` found an overflow panic in the
+      # caret blink within a minute of first existing, reachable from
+      # `Ui::tick` with any large clock.
+      #
+      # The fuzz crate is outside the workspace on purpose; see `exclude` in the
+      # root manifest.
+      - run: cargo fuzz run decode_image -- -max_total_time=60 -rss_limit_mb=4096
+        working-directory: fuzz
+      - run: cargo fuzz run abi_session -- -max_total_time=60 -rss_limit_mb=4096
+        working-directory: fuzz
+
   benches:
     name: benches compile
     runs-on: ubuntu-latest

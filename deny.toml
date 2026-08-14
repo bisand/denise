@@ -1,0 +1,68 @@
+# What the dependency tree is allowed to contain.
+#
+# Fourteen crates go to crates.io together, and four of the things they pull in
+# parse **untrusted bytes** on a panel that may run unattended for a year: `png`,
+# `zune-jpeg` and `gif` behind `denise-image`, and `fontdue` behind
+# `denise-text`. An advisory against any of those ships in the next release
+# unless something is watching, and nothing was.
+#
+# Run it the way CI does:
+#
+#     cargo deny check
+
+[graph]
+# Every target this project claims in its README badge. A dependency that only
+# appears on one of them is still a dependency somebody ships.
+targets = [
+    "aarch64-unknown-linux-gnu",
+    "armv7-unknown-linux-gnueabihf",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+version = 2
+# Unmaintained *transitive* dependencies are worth knowing about but are not
+# somebody else's emergency: warn, and let a human decide. A vulnerability is a
+# different matter and fails by default.
+unmaintained = "workspace"
+
+[bans]
+# Duplicate versions of one crate cost binary size, which is a stated feature
+# here — but they arrive through other people's manifests and are rarely
+# actionable on the day. Worth seeing in the log, not worth failing on.
+multiple-versions = "warn"
+# A wildcard version requirement in a *published* crate is a real problem: it
+# says any version will do, and one of them will not.
+wildcards = "deny"
+# The examples depend on each other by path with no version at all, which reads
+# as a wildcard and is fine: they are `publish = false`, so no manifest of
+# theirs ever reaches anybody. The `versions` job in CI makes the same exception
+# for the same reason.
+allow-wildcard-paths = true
+
+[licenses]
+version = 2
+# Everything in the tree today resolves to one of these. The list is deliberately
+# short and permissive-only: this project is MIT, and a copyleft dependency
+# arriving unnoticed is exactly the surprise worth failing on.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[sources]
+# crates.io and nothing else. A git dependency in a published crate cannot be
+# published at all, so this catches the mistake before the release does.
+unknown-registry = "deny"
+unknown-git = "deny"

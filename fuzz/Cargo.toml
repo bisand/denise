@@ -1,0 +1,40 @@
+# Deliberately **not** a workspace member — see `exclude` in the root manifest.
+#
+# Fuzz targets need nightly and a sanitiser, they are never published, and the
+# workspace has a job asserting that every member shares one version and pins
+# its siblings exactly. A crate that is none of those things does not belong in
+# it.
+[package]
+name = "denise-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+denise = { path = "../denise", features = ["std"] }
+denise-image = { path = "../denise-image" }
+denise-ffi = { path = "../denise-ffi" }
+
+[[bin]]
+name = "decode_image"
+path = "fuzz_targets/decode_image.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "abi_session"
+path = "fuzz_targets/abi_session.rs"
+test = false
+doc = false
+bench = false
+
+# A fuzzer spends its time in the code under test, so it wants that code
+# optimised — and its own bookkeeping is not what we are measuring.
+[profile.release]
+debug = 1
