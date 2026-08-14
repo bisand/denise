@@ -63,6 +63,14 @@ run_with(WindowConfig::default(), Panel::new).unwrap();
 A later scale change — dragging the window to a second display — arrives as
 `InputEvent::SurfaceResized`, carrying the new factor.
 
+## Closing
+
+The window manager's close button ends the run, and the request also arrives as
+`InputEvent::CloseRequested` so an application can save on the way out. An
+application that needs to *stop* the close — unsaved changes, a confirmation —
+overrides `DeniseApp::close_requested` to return `false`, and quits later
+through `exit_requested` once it has its answer.
+
 ## Why it earns its place
 
 Because the alternative is developing blind. A backend that produces the *same*

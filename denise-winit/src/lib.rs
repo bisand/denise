@@ -128,6 +128,24 @@ pub trait DeniseApp {
     fn exit_requested(&self) -> bool {
         false
     }
+
+    /// Whether the window manager's close request should end the run.
+    ///
+    /// Defaults to `true`, because a close button that does not close is a bug in
+    /// every application that has not deliberately decided otherwise. The request
+    /// also arrives in [`update`](DeniseApp::update) as
+    /// [`InputEvent::CloseRequested`], which is where saving on the way out
+    /// belongs.
+    ///
+    /// Override it to `false` to *veto* the close — an unsaved-changes prompt is
+    /// the reason to, and the application then quits by way of
+    /// [`exit_requested`](DeniseApp::exit_requested) once the answer comes back.
+    /// A veto is only as good as that follow-up: an application that never sets
+    /// `exit_requested` has made its window unclosable by anything short of the
+    /// platform's own kill.
+    fn close_requested(&mut self) -> bool {
+        true
+    }
 }
 
 /// Opens a window and runs `app` until it exits.
@@ -347,6 +365,19 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B
                 return;
             }
 
+            // Handled before the surface is borrowed below, because answering it
+            // needs the application: the event goes to the tree either way, and
+            // the answer decides whether this is the last frame.
+            WindowEvent::CloseRequested => {
+                if let Some(surface) = self.surface.as_mut() {
+                    surface.push_event(InputEvent::CloseRequested);
+                }
+                if self.app.as_mut().is_none_or(A::close_requested) {
+                    event_loop.exit();
+                }
+                return;
+            }
+
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
                 return;
@@ -366,10 +397,6 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B
         };
 
         match event {
-            WindowEvent::CloseRequested => {
-                surface.push_event(InputEvent::CloseRequested);
-            }
-
             WindowEvent::CursorMoved { .. } => {
                 surface.push_event(InputEvent::PointerMoved { position: cursor });
             }
