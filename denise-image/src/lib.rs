@@ -65,6 +65,28 @@ pub struct Picture {
 }
 
 impl Picture {
+    /// Builds a picture, or fails if the buffer is not exactly the size claimed.
+    ///
+    /// Every decoder goes through here. The invariant this enforces —
+    /// `pixels.len() == width * height` — is what [`Picture::pixels`] promises
+    /// and what [`PixelView`](denise_render::PixelView) checks before it will
+    /// draw anything, so a mismatch that got this far would not crash: it would
+    /// silently render nothing, from a decode that returned `Ok`. A file that
+    /// cannot honour its own header is malformed, and saying so is more use than
+    /// an invisible image.
+    fn checked(pixels: Vec<u32>, size: Size) -> Result<Self, DecodeError> {
+        let expected = size.width as usize * size.height as usize;
+        if pixels.len() != expected {
+            return Err(DecodeError::Malformed(format!(
+                "the decoder produced {} pixels for a {}x{} image, which needs {expected}",
+                pixels.len(),
+                size.width,
+                size.height,
+            )));
+        }
+        Ok(Self { pixels, size })
+    }
+
     /// Width and height in pixels.
     #[inline]
     pub const fn size(&self) -> Size {
@@ -173,23 +195,23 @@ fn checked_size(width: u32, height: u32) -> Result<Size, DecodeError> {
 
 /// Packs straight-alpha RGBA bytes into premultiplied words.
 #[cfg(feature = "png")]
-fn from_rgba(data: &[u8], size: Size) -> Picture {
+fn from_rgba(data: &[u8], size: Size) -> Result<Picture, DecodeError> {
     let mut pixels: Vec<u32> = data
         .chunks_exact(4)
         .map(|px| u32::from_be_bytes([px[3], px[0], px[1], px[2]]))
         .collect();
     premultiply(&mut pixels);
-    Picture { pixels, size }
+    Picture::checked(pixels, size)
 }
 
 /// Packs opaque RGB bytes into words. Nothing to premultiply.
 #[cfg(any(feature = "png", feature = "jpeg"))]
-fn from_rgb(data: &[u8], size: Size) -> Picture {
+fn from_rgb(data: &[u8], size: Size) -> Result<Picture, DecodeError> {
     let pixels = data
         .chunks_exact(3)
         .map(|px| u32::from_be_bytes([0xFF, px[0], px[1], px[2]]))
         .collect();
-    Picture { pixels, size }
+    Picture::checked(pixels, size)
 }
 
 /// Decodes a PNG. Palette, greyscale and 16-bit files are expanded to 8-bit
@@ -212,15 +234,23 @@ pub fn decode_png(bytes: &[u8]) -> Result<Picture, DecodeError> {
     let out = reader.next_frame(&mut buf).map_err(malformed)?;
     let data = &buf[..out.buffer_size()];
 
+    // `info` describes the canvas; `out` describes the frame that was actually
+    // decoded, and for an APNG whose first frame is smaller than the canvas the
+    // two differ. The pixels in hand are the frame's, so that is what this
+    // picture is — composing a sub-frame onto the canvas is what animation
+    // support will have to do, and guessing at it here would produce an image
+    // whose buffer does not match its own size.
+    let size = checked_size(out.width, out.height)?;
+
     Ok(match out.color_type {
-        png::ColorType::Rgba => from_rgba(data, size),
-        png::ColorType::Rgb => from_rgb(data, size),
+        png::ColorType::Rgba => from_rgba(data, size)?,
+        png::ColorType::Rgb => from_rgb(data, size)?,
         png::ColorType::Grayscale => {
             let pixels = data
                 .iter()
                 .map(|&g| u32::from_be_bytes([0xFF, g, g, g]))
                 .collect();
-            Picture { pixels, size }
+            Picture::checked(pixels, size)?
         }
         png::ColorType::GrayscaleAlpha => {
             let mut pixels: Vec<u32> = data
@@ -228,7 +258,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<Picture, DecodeError> {
                 .map(|px| u32::from_be_bytes([px[1], px[0], px[0], px[0]]))
                 .collect();
             premultiply(&mut pixels);
-            Picture { pixels, size }
+            Picture::checked(pixels, size)?
         }
         // EXPAND turns palette files into one of the arms above.
         png::ColorType::Indexed => {
@@ -260,7 +290,7 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Picture, DecodeError> {
     let data = decoder
         .decode()
         .map_err(|e| DecodeError::Malformed(e.to_string()))?;
-    Ok(from_rgb(&data, size))
+    from_rgb(&data, size)
 }
 
 /// Decodes a GIF to its **first frame**, composed at the file's full logical
@@ -289,13 +319,18 @@ pub fn decode_gif(bytes: &[u8]) -> Result<Picture, DecodeError> {
                 continue;
             }
             let i = ((y * frame.width as u32 + x) * 4) as usize;
-            let px = &frame.buffer[i..i + 4];
+            // `get`, not an index: the buffer's length is the gif crate's promise
+            // about a file this crate did not write, and a truncated frame should
+            // leave transparent pixels rather than panic a panel.
+            let Some(px) = frame.buffer.get(i..i + 4) else {
+                continue;
+            };
             pixels[(dy * size.width + dx) as usize] =
                 u32::from_be_bytes([px[3], px[0], px[1], px[2]]);
         }
     }
     premultiply(&mut pixels);
-    Ok(Picture { pixels, size })
+    Picture::checked(pixels, size)
 }
 
 /// Decodes an uncompressed 24- or 32-bit BMP — which is virtually every BMP
@@ -377,7 +412,7 @@ pub fn decode_bmp(bytes: &[u8]) -> Result<Picture, DecodeError> {
             }
         }
     }
-    Ok(Picture { pixels, size })
+    Picture::checked(pixels, size)
 }
 
 /// Compiles the examples in this crate's README, so they cannot drift from the

@@ -275,3 +275,57 @@ fn unrecognised_bytes_say_so() {
     );
     assert_eq!(decode(&[]), Err(DecodeError::Unrecognised));
 }
+
+// — the invariant every decoder now goes through —
+
+/// Whatever a decoder produces, the buffer matches the size on the tin.
+///
+/// `Picture::pixels` promises `width` words per row, and `PixelView::new` in
+/// `denise-render` checks that before it will draw: a picture whose buffer is
+/// short does not crash, it silently renders nothing from a decode that said
+/// `Ok`. This walks every format the crate can build here and asserts the
+/// arithmetic, so a decoder that starts disagreeing with its own header is
+/// caught at the boundary rather than on a panel.
+#[test]
+fn every_decoded_picture_has_exactly_the_pixels_its_size_claims() {
+    // `width` red columns, `height` rows deep — the shape is what matters here,
+    // not the colour.
+    let block = |width: usize, height: usize| -> Vec<Vec<[u8; 4]>> {
+        vec![vec![[0xC8, 0x28, 0x28, 0xFF]; width]; height]
+    };
+
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("bmp 24-bit", bmp(&block(4, 3), 24, false)),
+        ("bmp 32-bit", bmp(&block(4, 3), 32, false)),
+        ("bmp top-down", bmp(&block(5, 2), 24, true)),
+        // A width whose rows need the four-byte padding, which is where a
+        // stride/width confusion would show up.
+        ("bmp odd width", bmp(&block(3, 3), 24, false)),
+        (
+            "jpeg fixture",
+            include_bytes!("fixtures/two-halves.jpg").to_vec(),
+        ),
+    ];
+
+    for (name, bytes) in cases {
+        let picture = decode(&bytes).unwrap_or_else(|e| panic!("{name} did not decode: {e}"));
+        let size = picture.size();
+        assert_eq!(
+            picture.pixels().len(),
+            size.width as usize * size.height as usize,
+            "{name} produced a buffer that does not match its {}x{}",
+            size.width,
+            size.height,
+        );
+    }
+}
+
+/// A BMP whose header promises more rows than the file carries is malformed,
+/// and says so rather than decoding to a short buffer.
+#[test]
+fn a_bmp_that_outruns_its_own_data_is_malformed() {
+    let rows = vec![vec![[0xC8, 0x28, 0x28, 0xFF]; 4]; 3];
+    let mut bytes = bmp(&rows, 24, false);
+    bytes.truncate(bytes.len() - 12);
+    assert!(matches!(decode_bmp(&bytes), Err(DecodeError::Malformed(_))));
+}
