@@ -465,6 +465,17 @@ impl<M: 'static> Ui<M> {
         self.drawer.is_some()
     }
 
+    /// Whether a popup — a dropdown's option list, a tooltip's anchor menu — is up.
+    ///
+    /// The companion to [`drawer_open`](Ui::drawer_open), and it exists for the
+    /// same reason: these two and only these two make the tree claim Escape. An
+    /// application that binds Escape itself asks both before acting, so a key that
+    /// should dismiss a dropdown does not quit the program instead.
+    #[inline]
+    pub fn popup_open(&self) -> bool {
+        self.scenes.last().is_some_and(|s| s.popup.is_some())
+    }
+
     /// Pops the topmost scene and everything in it. The base scene cannot be
     /// popped; returns `false` if that is all there is.
     ///
