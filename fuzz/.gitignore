@@ -6,3 +6,6 @@ target/
 corpus/
 artifacts/
 coverage/
+
+# Captured by the CI job, uploaded only when something breaks.
+*.log

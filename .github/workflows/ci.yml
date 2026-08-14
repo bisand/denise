@@ -109,19 +109,59 @@ jobs:
       # the long runs belong on a schedule or on somebody's machine. It is
       # already worth its place: `abi_session` found an overflow panic in the
       # caret blink within a minute of first existing, reachable from
-      # `Ui::tick` with any large clock.
+      # `Ui::tick` with any large clock. The fuzz crate is outside the workspace
+      # on purpose; see `exclude` in the root manifest.
       #
-      # The fuzz crate is outside the workspace on purpose; see `exclude` in the
-      # root manifest.
-      # `--target` spelled out, because cargo-fuzz defaults to the triple *it
+      # Three things about the invocation, all learned the hard way:
+      #
+      # `--target` is spelled out because cargo-fuzz defaults to the triple *it
       # was itself built for* — and `install-action` ships a musl build for
       # portability. Left to itself it tries to build the fuzz target with a
       # statically linked libc, which the sanitiser refuses outright:
       # "sanitizer is incompatible with statically linked libc".
-      - run: cargo fuzz run --target x86_64-unknown-linux-gnu decode_image -- -max_total_time=60 -rss_limit_mb=4096
+      #
+      # `-verbosity=0` because libFuzzer narrates every new coverage unit it
+      # finds: four thousand lines per target for a sixty-second run, in a job
+      # whose entire message when it passes is "nothing broke".
+      # `-print_final_stats=1` keeps the handful of numbers that show the run
+      # actually happened, and the full output stays in a file for the one case
+      # where anybody wants it.
+      - name: Fuzz the image decoders
         working-directory: fuzz
-      - run: cargo fuzz run --target x86_64-unknown-linux-gnu abi_session -- -max_total_time=60 -rss_limit_mb=4096
+        run: |
+          cargo fuzz run --target x86_64-unknown-linux-gnu decode_image -- \
+            -max_total_time=60 -rss_limit_mb=4096 -verbosity=0 -print_final_stats=1 \
+            > decode_image.log 2>&1 || {
+              echo "::error::decode_image found an input that breaks the decoders"
+              tail -60 decode_image.log
+              exit 1
+            }
+          grep -E '^stat::' decode_image.log
+
+      - name: Fuzz the C ABI
         working-directory: fuzz
+        run: |
+          cargo fuzz run --target x86_64-unknown-linux-gnu abi_session -- \
+            -max_total_time=60 -rss_limit_mb=4096 -verbosity=0 -print_final_stats=1 \
+            > abi_session.log 2>&1 || {
+              echo "::error::abi_session found a call sequence that breaks the ABI"
+              tail -60 abi_session.log
+              exit 1
+            }
+          grep -E '^stat::' abi_session.log
+
+      # A fuzz failure is worth nothing without the bytes that caused it, and
+      # those live in `fuzz/artifacts` on the runner that is about to be thrown
+      # away. `cargo fuzz run <target> <artifact>` replays one locally.
+      - name: Keep what the fuzzer found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz/artifacts/**
+            fuzz/*.log
+          if-no-files-found: ignore
 
   benches:
     name: benches compile
