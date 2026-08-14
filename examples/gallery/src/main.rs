@@ -4,8 +4,14 @@
 //! cargo run -p gallery
 //! cargo run -p gallery -- --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 //! cargo run -p gallery -- --snapshot shot.ppm
+//! cargo run -p gallery -- --snapshot 2x.ppm --size 2560x1600 --scale 2
 //! cargo run -p gallery --no-default-features --features kiosk     # the display
 //! ```
+//!
+//! `--size` is the surface, in physical pixels, and `--scale` is how many of
+//! those go to a logical one — the pair a HiDPI display hands a window. A
+//! *window* is not told either: it asks the backend, and the layout is written
+//! in logical pixels regardless.
 //!
 //! The proof-of-concept panel: everything the toolkit ships, on one screen,
 //! with a live theme editor driving [`Ui::set_theme`] the way an application
@@ -33,6 +39,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Zero means "until Escape".
     let mut seconds: u64 = 0;
     let mut size = WINDOW;
+    // Snapshots have no display to ask, so the scale is an argument there.
+    // A window gets the real one from the backend; see `window_backend`.
+    let mut scale: f32 = 1.0;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -40,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--font" => font = args.next(),
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "gallery.ppm".into())),
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
             // A window other than the default, mostly for reviewing snapshots
             // of the parts a default-sized first frame leaves below the fold.
             "--size" => {
@@ -60,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let font = system_font::load(font.as_deref());
 
     if let Some(out) = snapshot {
-        return write_snapshot(&mut App::new(size, font), size, &out).map_err(Into::into);
+        return write_snapshot(&mut App::new(size, scale, font), size, &out).map_err(Into::into);
     }
     backend::run(font, size, seconds)
 }
@@ -113,24 +123,31 @@ compile_error!(
 mod window_backend {
     use super::{App, Font};
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
-    use denise_winit::{DeniseApp, WindowConfig, run as run_window};
+    use denise_winit::{DeniseApp, WindowConfig, run_with};
 
     pub fn run(
         font: Font,
         size: denise::Size,
         _seconds: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::new(size, font);
-        // The window system already draws a pointer; the tree must not draw a
-        // second one over it.
-        app.ui.show_cursor(false);
-        run_window(
+        // `run_with`, not `run`: the tree is built after the window exists, which
+        // is the first moment the display's scale factor is knowable. On a Retina
+        // Mac that is 2, the surface behind a 1280×800 window is 2560×1600, and
+        // building for it is the difference between a gallery you can read and
+        // one drawn at half size.
+        run_with(
             WindowConfig {
                 title: "Denise — gallery".into(),
                 size,
                 ..WindowConfig::default()
             },
-            Gallery(app),
+            move |surface, scale| {
+                let mut app = App::new(surface, scale, font);
+                // The window system already draws a pointer; the tree must not
+                // draw a second one over it.
+                app.ui.show_cursor(false);
+                Gallery(app)
+            },
         )?;
         Ok(())
     }
@@ -194,8 +211,10 @@ mod kiosk_backend {
         let (mut input, _keymap) = open_input(size)?;
         let _console = mute_console();
 
-        // Built at the display's size, not a window's.
-        let mut app = App::new(size, font);
+        // Built at the display's size, not a window's, and at its scale — which
+        // a panel wired straight to a framebuffer reports as 1.
+        let scale = surface.scale_factor();
+        let mut app = App::new(size, scale, font);
         eprintln!("\nTab moves, F2 theme, F12 screenshot, Escape quits\n");
 
         let raw_fds = input.raw_fds();

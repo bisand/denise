@@ -111,16 +111,20 @@ fn fold_2(_: bool) -> Message {
 /// widgets rightly refuse.
 struct Swatch {
     color: Color,
+    /// The frame around the colour, in physical pixels: the application scales
+    /// its own drawing exactly as it scales its own rectangles.
+    inset: i32,
 }
 
 impl Widget<Message> for Swatch {
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let b = ctx.bounds;
         let radius = ctx.theme.radius(Radius::Field);
+        let i = self.inset;
         canvas.fill_rounded_rect(b, radius, ctx.theme.color(Role::Base300));
         canvas.fill_rounded_rect(
-            Rect::new(b.x + 2, b.y + 2, b.width - 4, b.height - 4),
-            (radius - 2).max(0),
+            Rect::new(b.x + i, b.y + i, b.width - 2 * i, b.height - 2 * i),
+            (radius - i).max(0),
             self.color,
         );
     }
@@ -158,6 +162,9 @@ pub struct App {
     /// `Some(i)` while an untouched built-in is active; the first edit clears
     /// it and the seeds become the theme.
     builtin: Option<usize>,
+    /// Physical pixels per logical pixel. Every number in this file is logical;
+    /// this is the only place the difference exists.
+    scale: f32,
     dark: bool,
     touch: bool,
     roundness: f32,
@@ -174,9 +181,22 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(size: Size, font: Option<(String, Box<dyn denise_text::GlyphSource>)>) -> Self {
+    /// Builds the tree for a surface of `size` **physical** pixels at `scale`.
+    ///
+    /// The layout below is written in logical pixels and multiplied here, once —
+    /// Denise's whole DPI story, and the reason a panel drawn for an 800×480 Pi
+    /// is legible on a 2× laptop instead of half size. The theme scales its
+    /// metrics, every layout rectangle goes through [`Rect::scaled`] on its way
+    /// into the tree (see [`App::add`]), and text sizes are multiplied like any
+    /// other measurement.
+    pub fn new(
+        size: Size,
+        scale: f32,
+        font: Option<(String, Box<dyn denise_text::GlyphSource>)>,
+    ) -> Self {
         let start_theme = 1; // dark
-        let mut ui: Ui<Message> = Ui::new(size, Theme::BUILT_IN[start_theme]);
+        let mut ui: Ui<Message> = Ui::new(size, Theme::BUILT_IN[start_theme].scaled(scale));
+        let px = |v: u16| ((v as f32) * scale + 0.5) as u16;
 
         // Registered before the first node exists, so every widget is built
         // with its final style and nothing needs restyling afterwards.
@@ -187,24 +207,24 @@ impl App {
                 (
                     TextStyle {
                         font: id,
-                        size_px: 15,
+                        size_px: px(15),
                     },
                     TextStyle {
                         font: id,
-                        size_px: 22,
+                        size_px: px(22),
                     },
                     TextStyle {
                         font: id,
-                        size_px: 12,
+                        size_px: px(12),
                     },
                 )
             }
             None => {
                 eprintln!("no TrueType font found; using the built-in 8x8 bitmap font");
                 (
-                    TextStyle::built_in(16),
-                    TextStyle::built_in(24),
-                    TextStyle::built_in(8),
+                    TextStyle::built_in(px(16)),
+                    TextStyle::built_in(px(24)),
+                    TextStyle::built_in(px(8)),
                 )
             }
         };
@@ -216,6 +236,7 @@ impl App {
             ui,
             seeds,
             builtin: Some(start_theme),
+            scale,
             dark: true,
             touch: false,
             roundness: 1.0,
@@ -245,9 +266,23 @@ impl App {
             small,
             toasts_sent: 0,
         };
-        app.build(size);
+        // Built against the logical extent of that surface: the numbers below
+        // are the ones the layout was designed with, on any display.
+        app.build(app.logical(size));
         app.apply_theme();
         app
+    }
+
+    /// A physical surface size back in the logical units the layout is written in.
+    fn logical(&self, size: Size) -> Size {
+        let to = |v: u32| ((v as f32) / self.scale + 0.5) as u32;
+        Size::new(to(size.width), to(size.height))
+    }
+
+    /// A logical measurement in physical pixels, for the few numbers that do not
+    /// arrive as a [`Rect`].
+    fn px(&self, v: i32) -> i32 {
+        ((v as f32) * self.scale + 0.5) as i32
     }
 
     // ------------------------------------------------------------ the tree
@@ -352,6 +387,7 @@ impl App {
             side,
             Swatch {
                 color: self.seeds[self.seed],
+                inset: self.px(2),
             },
             Rect::new(PAD, 182, 44, 36),
         );
@@ -698,7 +734,7 @@ impl App {
                     (100 + i).to_string(),
                 ]
             }))
-            .with_row_height(30)
+            .with_row_height(self.px(30))
             .with_style(self.body),
             Rect::new(PAD, 44, 520, 190),
         );
@@ -713,7 +749,7 @@ impl App {
                 TimelineItem::new("Valve open").pending(),
                 TimelineItem::new("Done").pending(),
             ])
-            .with_row_height(36)
+            .with_row_height(self.px(36))
             .with_style(self.body),
             Rect::new(570, 44, cw - 570 - PAD, 190),
         );
@@ -857,8 +893,15 @@ impl App {
 
     /// `Ui::add` with the panic this application wants: the tree is built once
     /// at startup from constants, so a failure here is a bug, not a condition.
+    ///
+    /// `layout` is logical and comes out physical. Doing the multiplication here
+    /// rather than at each of the seventy-odd call sites is why the layout above
+    /// still reads as a layout — and [`Rect::scaled`] scales *edges*, so panels
+    /// designed to touch still touch at 1.5× and 1.75×.
     fn add(&mut self, parent: NodeId, widget: impl Widget<Message>, layout: Rect) -> NodeId {
-        self.ui.add(parent, widget, layout).expect("build")
+        self.ui
+            .add(parent, widget, layout.scaled(self.scale))
+            .expect("build")
     }
 
     // ------------------------------------------------------- theme plumbing
@@ -901,7 +944,12 @@ impl App {
             radius_box: round(base.radius_box),
             ..base
         };
-        let theme = theme.with_metrics(metrics).with_depth(self.depth as u8);
+        // Scaled last: the editor's shape controls are logical like everything
+        // else, and the theme reaches the widgets in physical pixels.
+        let theme = theme
+            .with_metrics(metrics)
+            .with_depth(self.depth as u8)
+            .scaled(self.scale);
         self.ui.set_theme(theme);
         self.refresh_readouts();
     }
@@ -1106,13 +1154,15 @@ impl App {
     }
 
     fn open_dialog(&mut self) {
-        let size = self.ui.size();
+        // `Ui::size` is physical; centring is arithmetic on the logical extent
+        // like every other rectangle here, and `add` scales the result.
+        let size = self.logical(self.ui.size());
         let scene = self.ui.push_scene(110);
         let w = 420;
         let h = 170;
         let dialog = self.add(
             scene,
-            denise_ui::widgets::Panel::default().with_border(Role::Primary, 2),
+            denise_ui::widgets::Panel::default().with_border(Role::Primary, self.px(2)),
             Rect::new(
                 (size.width as i32 - w) / 2,
                 (size.height as i32 - h) / 2,
@@ -1151,7 +1201,9 @@ impl App {
     }
 
     fn open_drawer(&mut self) {
-        let Some(drawer) = self.ui.push_drawer(Side::After, 300) else {
+        // The tree places a drawer itself, so this width is physical; its
+        // contents below are logical and go through `add` like the rest.
+        let Some(drawer) = self.ui.push_drawer(Side::After, self.px(300)) else {
             return;
         };
         self.add(
@@ -1281,7 +1333,31 @@ mod tests {
 
     fn app() -> App {
         // No font: the tests are about wiring, and font discovery is I/O.
-        App::new(Size::new(1280, 800), None)
+        App::new(Size::new(1280, 800), 1.0, None)
+    }
+
+    /// The same tree on a 2× display is the same tree, twice the size — the
+    /// property the whole scaling path exists for, checked at the front door.
+    #[test]
+    fn a_hidpi_surface_gets_the_same_layout_at_twice_the_size() {
+        let one = App::new(Size::new(1280, 800), 1.0, None);
+        let two = App::new(Size::new(2560, 1600), 2.0, None);
+
+        let (a, b) = (
+            one.ui.layout(one.nodes.contrast).expect("badge at 1x"),
+            two.ui.layout(two.nodes.contrast).expect("badge at 2x"),
+        );
+        assert_eq!(b, a.scaled(2.0), "the badge is where 2× says it is");
+        assert_eq!(
+            two.ui.theme().metrics,
+            one.ui.theme().metrics.scaled(2.0),
+            "the furniture scaled with it"
+        );
+        assert_eq!(
+            two.heading.size_px,
+            one.heading.size_px * 2,
+            "and so did the text"
+        );
     }
 
     /// The dialog is a scene: opening pushes one, either button pops it.

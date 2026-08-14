@@ -84,6 +84,8 @@ pub struct App {
     nodes: Nodes,
     /// The dimmed confirmation scene, while it is up.
     confirm: Option<NodeId>,
+    /// Physical pixels per logical one. Every number in this file is logical.
+    scale: f32,
     theme_index: usize,
     started: Instant,
     body: TextStyle,
@@ -92,22 +94,31 @@ pub struct App {
 }
 
 impl App {
-    /// Builds the tree once. `body` and `heading` name whichever font was loaded.
+    /// Builds the tree once, for a surface of `size` physical pixels at `scale`.
+    ///
+    /// `body` and `heading` name whichever font was loaded, at sizes their caller
+    /// has already scaled. Every rectangle below is written in logical pixels and
+    /// passed through `s`: the application scales, once, here, which is the whole
+    /// of the DPI story and the reason this layout survives a Retina display.
     pub fn new(
         size: Size,
+        scale: f32,
         path: String,
         table: Table,
         body: TextStyle,
         heading: TextStyle,
     ) -> Self {
-        let mut ui: Ui<Message> = Ui::new(size, Theme::BUILT_IN[0]);
+        let mut ui: Ui<Message> = Ui::new(size, Theme::BUILT_IN[0].scaled(scale));
+        let s = |r: Rect| r.scaled(scale);
+        // The surface back in the units the layout is written in.
+        let logical_w = ((size.width as f32) / scale + 0.5) as i32;
         let mut nodes = Nodes::default();
         let root = ui.root();
 
         nodes.title = ui.add(
             root,
             Label::new("").with_style(heading),
-            Rect::new(GRID_LEFT, 14, 700, 26),
+            s(Rect::new(GRID_LEFT, 14, 700, 26)),
         );
         nodes.heading.extend(nodes.title);
         nodes.body.extend(
@@ -116,7 +127,7 @@ impl App {
                 Label::new("Tab moves, Enter applies, F2 changes theme")
                     .with_style(body)
                     .with_align(Align::End, Align::Center),
-                Rect::new(size.width as i32 - 400, 16, 384, 22),
+                s(Rect::new(logical_w - 400, 16, 384, 22)),
             ),
         );
 
@@ -126,12 +137,12 @@ impl App {
             .add(
                 root,
                 Panel::default(),
-                Rect::new(
+                s(Rect::new(
                     GRID_LEFT,
                     GRID_TOP - 34,
                     GRID_WIDTH,
                     ROW_HEIGHT * VISIBLE_ROWS as i32 + 44,
-                ),
+                )),
             )
             .expect("grid");
 
@@ -140,7 +151,7 @@ impl App {
             nodes.body.extend(ui.add(
                 grid,
                 Label::new(*name).with_style(body).with_role(Role::Accent),
-                Rect::new(x, 8, width, 20),
+                s(Rect::new(x, 8, width, 20)),
             ));
         }
 
@@ -153,7 +164,7 @@ impl App {
                 .add(
                     grid,
                     Button::new("", Message::Select(index)).with_role(Role::Neutral),
-                    Rect::new(6, y, GRID_WIDTH - 12, ROW_HEIGHT - 2),
+                    s(Rect::new(6, y, GRID_WIDTH - 12, ROW_HEIGHT - 2)),
                 )
                 .expect("row");
             nodes.rows.push(row);
@@ -166,7 +177,7 @@ impl App {
                 *slot = ui.add(
                     grid,
                     Label::new("").with_style(body),
-                    Rect::new(x, y + 4, width, 18),
+                    s(Rect::new(x, y + 4, width, 18)),
                 );
             }
             nodes.body.extend(cells.iter().flatten().copied());
@@ -178,12 +189,12 @@ impl App {
             Label::new("")
                 .with_style(body)
                 .with_align(Align::End, Align::Center),
-            Rect::new(
+            s(Rect::new(
                 GRID_LEFT + GRID_WIDTH - 210,
                 GRID_TOP + ROW_HEIGHT * VISIBLE_ROWS as i32 + 16,
                 200,
                 20,
-            ),
+            )),
         );
         nodes.body.extend(nodes.position);
         for (offset, (text, message)) in [("Up", Message::ScrollUp), ("Down", Message::ScrollDown)]
@@ -193,12 +204,12 @@ impl App {
             nodes.body.extend(ui.add(
                 root,
                 Button::new(text, message).with_style(body),
-                Rect::new(
+                s(Rect::new(
                     GRID_LEFT + offset as i32 * 78,
                     GRID_TOP + ROW_HEIGHT * VISIBLE_ROWS as i32 + 14,
                     70,
                     26,
-                ),
+                )),
             ));
         }
 
@@ -209,13 +220,18 @@ impl App {
             .add(
                 root,
                 Panel::default(),
-                Rect::new(form_x, GRID_TOP - 34, size.width as i32 - form_x - 16, 300),
+                s(Rect::new(
+                    form_x,
+                    GRID_TOP - 34,
+                    logical_w - form_x - 16,
+                    300,
+                )),
             )
             .expect("form");
         nodes.heading.extend(ui.add(
             form,
             Label::new("Record").with_style(heading),
-            Rect::new(14, 10, 200, 24),
+            s(Rect::new(14, 10, 200, 24)),
         ));
 
         for (index, name) in Row::COLUMNS.iter().enumerate() {
@@ -223,14 +239,14 @@ impl App {
             nodes.body.extend(ui.add(
                 form,
                 Label::new(*name).with_style(body),
-                Rect::new(14, y, 160, 18),
+                s(Rect::new(14, y, 160, 18)),
             ));
             nodes.fields[index] = ui.add(
                 form,
                 TextInput::<Message>::new()
                     .with_style(body)
                     .with_submit(Message::Apply),
-                Rect::new(14, y + 20, 200, 28),
+                s(Rect::new(14, y + 20, 200, 28)),
             );
             nodes.body.extend(nodes.fields[index]);
         }
@@ -251,14 +267,14 @@ impl App {
             nodes.body.extend(ui.add(
                 root,
                 Button::new(text, message).with_role(role).with_style(body),
-                Rect::new(GRID_LEFT + offset as i32 * 92, actions_y, 84, 30),
+                s(Rect::new(GRID_LEFT + offset as i32 * 92, actions_y, 84, 30)),
             ));
         }
 
         nodes.status = ui.add(
             root,
             Label::new("").with_style(body),
-            Rect::new(GRID_LEFT, actions_y + 42, size.width as i32 - 32, 20),
+            s(Rect::new(GRID_LEFT, actions_y + 42, logical_w - 32, 20)),
         );
         nodes.body.extend(nodes.status);
 
@@ -270,6 +286,7 @@ impl App {
             scroll: 0,
             nodes,
             confirm: None,
+            scale,
             theme_index: 0,
             started: Instant::now(),
             body,
@@ -460,7 +477,8 @@ impl App {
             Message::Reload => self.load(),
             Message::NextTheme => {
                 self.theme_index = (self.theme_index + 1) % Theme::BUILT_IN.len();
-                self.ui.set_theme(Theme::BUILT_IN[self.theme_index]);
+                self.ui
+                    .set_theme(Theme::BUILT_IN[self.theme_index].scaled(self.scale));
             }
         }
     }
@@ -497,7 +515,14 @@ impl App {
             .and_then(|index| self.table.get(index))
             .map(|row| row.name.clone())
             .unwrap_or_default();
+        // `Ui::size` is physical; the dialog is placed in logical units like
+        // everything else and scaled on the way in.
+        let s = |r: Rect| r.scaled(self.scale);
         let size = self.ui.size();
+        let (w, h) = (
+            ((size.width as f32) / self.scale + 0.5) as i32,
+            ((size.height as f32) / self.scale + 0.5) as i32,
+        );
 
         let scene = self.ui.push_scene(150);
         let dialog = self
@@ -505,18 +530,13 @@ impl App {
             .add(
                 scene,
                 Panel::default(),
-                Rect::new(
-                    size.width as i32 / 2 - 200,
-                    size.height as i32 / 2 - 80,
-                    400,
-                    160,
-                ),
+                s(Rect::new(w / 2 - 200, h / 2 - 80, 400, 160)),
             )
             .expect("dialog");
         self.ui.add(
             dialog,
             Label::new("Delete this record?").with_style(self.heading),
-            Rect::new(20, 20, 360, 24),
+            s(Rect::new(20, 20, 360, 24)),
         );
         self.ui.add(
             dialog,
@@ -526,17 +546,17 @@ impl App {
                 name
             })
             .with_style(self.body),
-            Rect::new(20, 52, 360, 20),
+            s(Rect::new(20, 52, 360, 20)),
         );
         let cancel = self.ui.add(
             dialog,
             Button::new("Cancel", Message::CancelDelete),
-            Rect::new(20, 100, 110, 32),
+            s(Rect::new(20, 100, 110, 32)),
         );
         self.ui.add(
             dialog,
             Button::new("Delete", Message::ConfirmDelete).with_role(Role::Error),
-            Rect::new(270, 100, 110, 32),
+            s(Rect::new(270, 100, 110, 32)),
         );
 
         // Focus lands on the safe answer, so Enter on a dialog nobody read does

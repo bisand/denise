@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(out) = snapshot {
-        return write_snapshot(&mut setup.build(WINDOW), &out).map_err(Into::into);
+        return write_snapshot(&mut setup.build(WINDOW, 1.0), &out).map_err(Into::into);
     }
     backend::run(setup, seconds)
 }
@@ -103,13 +103,19 @@ pub struct Setup {
 }
 
 impl Setup {
-    pub fn build(self, size: Size) -> App {
+    /// Builds the tree for a surface of `size` physical pixels at `scale`.
+    ///
+    /// A display reports scale 1 and a window is told what its display says, so
+    /// this is the same call on a Pi and on a Retina Mac — with different numbers.
+    pub fn build(self, size: Size, scale: f32) -> App {
+        let px = |v: u16| ((v as f32) * scale + 0.5) as u16;
         let mut app = App::new(
             size,
+            scale,
             self.path,
             self.table,
-            TextStyle::built_in(16),
-            TextStyle::built_in(24),
+            TextStyle::built_in(px(16)),
+            TextStyle::built_in(px(24)),
         );
         // The font is registered *after* the tree exists, because registering one
         // damages the whole surface — every string on screen may change width —
@@ -185,22 +191,28 @@ compile_error!(
 mod window_backend {
     use super::{App, Message, Setup, WINDOW};
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
-    use denise_winit::{DeniseApp, WindowConfig, run as run_window};
+    use denise_winit::{DeniseApp, WindowConfig, run_with};
 
     pub fn run(setup: Setup, _seconds: u64) -> Result<(), Box<dyn std::error::Error>> {
-        // A window's size is the application's choice, so this one is `WINDOW`.
-        let mut app = setup.build(WINDOW);
-        // The window system already draws a pointer; the tree must not draw a
-        // second one over it. On the kiosk backend there is nothing else drawing
-        // one, so it keeps its own — the same tree, a different right answer.
-        app.ui.show_cursor(false);
-        run_window(
+        // A window's size is the application's choice, so this one is `WINDOW` —
+        // logical, so it covers the same desk on every display. The tree is built
+        // from the callback, because the surface behind that window and the scale
+        // factor that produced it are not knowable any earlier.
+        run_with(
             WindowConfig {
                 title: "Denise — table editor".into(),
                 size: WINDOW,
                 ..WindowConfig::default()
             },
-            Editor(app),
+            move |surface, scale| {
+                let mut app = setup.build(surface, scale);
+                // The window system already draws a pointer; the tree must not
+                // draw a second one over it. On the kiosk backend there is nothing
+                // else drawing one, so it keeps its own — the same tree, a
+                // different right answer.
+                app.ui.show_cursor(false);
+                Editor(app)
+            },
         )?;
         Ok(())
     }
@@ -280,7 +292,7 @@ mod kiosk_backend {
 
         // Built at the display's size, not a window's — which is the whole reason
         // the tree is not constructed until a backend knows how big it is.
-        let mut app = setup.build(size);
+        let mut app = setup.build(size, surface.scale_factor());
         eprintln!("\nTab moves, Enter applies, F2 theme, F12 screenshot, Escape quits\n");
 
         // Built once: the device set does not change, and `poll` updates each

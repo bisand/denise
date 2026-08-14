@@ -33,7 +33,7 @@ use denise::{Rect, Role, Size, theme};
 use denise_ui::widgets::{Button, Label, Panel, TextInput};
 use denise_ui::{NodeId, Ui};
 #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
-use denise_winit::{DeniseApp, WindowConfig, run};
+use denise_winit::{DeniseApp, WindowConfig, run_with};
 
 const WINDOW: Size = Size::new(460, 260);
 
@@ -72,17 +72,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
     {
-        run(
+        run_with(
             WindowConfig {
                 title: "Denise — hello".into(),
+                // Logical: the same apparent window on a Pi and on a Retina Mac.
                 size: WINDOW,
                 ..WindowConfig::default()
             },
-            // A window at scale factor 1. A scale-aware windowed application
-            // would read `SurfaceResized::scale_factor` from the first resize
-            // event and rebuild with it — the snapshot path below shows the
-            // pattern itself.
-            Hello::new(WINDOW, 1.0),
+            // The surface and the display's scale factor, handed over at the one
+            // moment they are both known and nothing has been built yet. The same
+            // two numbers the `--snapshot` path takes from the command line.
+            Hello::new,
         )?;
         Ok(())
     }
