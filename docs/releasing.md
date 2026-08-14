@@ -110,6 +110,7 @@ So a new crate joins at the next release and not before, which `cargo publish --
 
 | Version | |
 |---|---|
+| [v0.11.0](https://github.com/bisand/denise/releases/tag/v0.11.0) | The review pass: `cargo deny`, Miri and fuzzing in CI, plus what they and a reading found — an overflow panic in the caret blink reachable from any large clock, buffer validation that wrapped on 32-bit, a `Picture` that could lie about its size, and examples copying the whole window on every caret blink. Clean run, after two goes at teaching CI to install cargo-fuzz |
 | [v0.10.2](https://github.com/bisand/denise/releases/tag/v0.10.2) | `Ui::popup_open`, and Escape quitting the windowed examples the way it always has on a kiosk — asking the tree first, since a drawer that advertises Escape should get it. Clean run |
 | [v0.10.1](https://github.com/bisand/denise/releases/tag/v0.10.1) | The close button closes the window. `CloseRequested` reached every application and was read by none of them, since `exit_requested` defaults to false — dead on all three platforms, and only noticed on a Mac because Cmd+Q hid it. Clean run |
 | [v0.10.0](https://github.com/bisand/denise/releases/tag/v0.10.0) | The desktop end of the DPI decision: `run_with` hands an application its display's scale factor, and a window's size becomes logical. The scaling path existed and was tested for three releases with nothing on a desktop able to reach it. Clean run |
