@@ -36,7 +36,7 @@ use denise::{
     PointerButton, Rect, Size, Surface,
 };
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{MouseButton, MouseScrollDelta, StartCause, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
@@ -72,7 +72,17 @@ pub enum Error {
 pub struct WindowConfig {
     /// Window title.
     pub title: String,
-    /// Initial inner size in physical pixels.
+    /// Initial inner size in **logical** pixels.
+    ///
+    /// Logical, not physical, so one number describes the same amount of desk on
+    /// every machine: a panel designed at 800×480 covers 800×480 of a Pi's
+    /// framebuffer and the same apparent area on a 2× Retina display, where the
+    /// surface it gets is 1600×960 physical pixels. Asking in physical pixels
+    /// instead is how a window ends up a quarter of its intended size on a Mac.
+    ///
+    /// The surface — and therefore every coordinate the application works in —
+    /// stays physical. Scaling the content to match is the application's job, and
+    /// it is handed the factor at construction by [`run_with`].
     pub size: Size,
     /// Whether the user may resize the window.
     pub resizable: bool,
@@ -121,11 +131,38 @@ pub trait DeniseApp {
 }
 
 /// Opens a window and runs `app` until it exits.
+///
+/// The application is built before the window exists, so it cannot know the
+/// display's scale factor. On a 1× display that is exactly right; on a HiDPI one
+/// it means a tree laid out in physical pixels comes out half size. Use
+/// [`run_with`] there.
 pub fn run<A: DeniseApp>(config: WindowConfig, app: A) -> Result<(), Error> {
+    run_with(config, move |_, _| app)
+}
+
+/// Opens a window and builds the application once the surface behind it is known.
+///
+/// The builder is handed the surface size in **physical** pixels and the display's
+/// scale factor — the two facts a scale-aware tree needs and cannot obtain any
+/// earlier. This is the whole of Denise's DPI story on the desktop: the application
+/// scales, once, at construction, through `Theme::scaled`, `Rect::scaled` and its
+/// own text sizes. Coordinates stay physical everywhere afterwards.
+///
+/// A later scale change — dragging the window to a display with a different DPI —
+/// arrives as [`InputEvent::SurfaceResized`], carrying the new factor. An
+/// application that wants to follow it rebuilds its tree there; one that does not
+/// keeps the scale it was built with and is merely sized wrong on the second
+/// display.
+pub fn run_with<A, B>(config: WindowConfig, build: B) -> Result<(), Error>
+where
+    A: DeniseApp,
+    B: FnOnce(Size, f32) -> A,
+{
     let event_loop = EventLoop::new()?;
     let mut runner = Runner {
         config,
-        app,
+        build: Some(build),
+        app: None,
         window: None,
         surface: None,
         damage: DamageTracker::new(Size::ZERO),
@@ -142,9 +179,11 @@ pub fn run<A: DeniseApp>(config: WindowConfig, app: A) -> Result<(), Error> {
     }
 }
 
-struct Runner<A> {
+struct Runner<A, B> {
     config: WindowConfig,
-    app: A,
+    /// Consumed when the window appears; `None` from then on.
+    build: Option<B>,
+    app: Option<A>,
     window: Option<Rc<Window>>,
     surface: Option<WinitSurface>,
     damage: DamageTracker,
@@ -155,7 +194,7 @@ struct Runner<A> {
     error: Option<Error>,
 }
 
-impl<A: DeniseApp> Runner<A> {
+impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> Runner<A, B> {
     fn fail(&mut self, event_loop: &ActiveEventLoop, err: Error) {
         self.error = Some(err);
         event_loop.exit();
@@ -192,7 +231,7 @@ impl<A: DeniseApp> Runner<A> {
             self.next_frame = now + self.config.frame_interval;
         }
 
-        if self.app.exit_requested() {
+        if self.app.as_ref().is_some_and(A::exit_requested) {
             event_loop.exit();
         }
     }
@@ -207,7 +246,7 @@ impl<A: DeniseApp> Runner<A> {
             events,
             ..
         } = self;
-        let Some(surface) = surface.as_mut() else {
+        let (Some(surface), Some(app)) = (surface.as_mut(), app.as_mut()) else {
             return Ok(false);
         };
 
@@ -240,7 +279,7 @@ impl<A: DeniseApp> Runner<A> {
     }
 }
 
-impl<A: DeniseApp> ApplicationHandler for Runner<A> {
+impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -248,7 +287,9 @@ impl<A: DeniseApp> ApplicationHandler for Runner<A> {
 
         let attrs = Window::default_attributes()
             .with_title(self.config.title.clone())
-            .with_inner_size(PhysicalSize::new(
+            // Logical, so the window covers the same apparent area whatever the
+            // display's DPI. What comes back is physical and may be larger.
+            .with_inner_size(LogicalSize::new(
                 self.config.size.width,
                 self.config.size.height,
             ))
@@ -263,6 +304,12 @@ impl<A: DeniseApp> ApplicationHandler for Runner<A> {
             Ok(surface) => surface,
             Err(err) => return self.fail(event_loop, err),
         };
+
+        // The first moment the scale factor exists, and the last one before a tree
+        // is built from it.
+        if let Some(build) = self.build.take() {
+            self.app = Some(build(surface.size(), surface.scale_factor()));
+        }
 
         self.damage = DamageTracker::new(surface.size());
         self.window = Some(window);

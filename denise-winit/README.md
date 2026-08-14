@@ -34,6 +34,35 @@ run(WindowConfig::default(), Hello).unwrap();
 # }
 ```
 
+## On a HiDPI display
+
+`WindowConfig::size` is **logical**, so one number is the same amount of desk
+everywhere: 1280×800 on a Raspberry Pi is a 1280×800 surface, and on a 2× Retina
+Mac it is a window of the same apparent size with a 2560×1600 surface behind it.
+
+Filling that surface is the application's job, and `run_with` is how it finds
+out it has to:
+
+```rust
+# use denise::{DamageTracker, Frame, InputEvent, Rect, Size};
+# use denise_winit::{DeniseApp, WindowConfig, run_with};
+# struct Panel;
+# impl Panel { fn new(_: Size, _: f32) -> Self { Panel } }
+# impl DeniseApp for Panel {
+#     fn update(&mut self, _: &[InputEvent], _: &mut DamageTracker) {}
+#     fn render(&mut self, _: &mut Frame<'_>, _: &[Rect]) {}
+# }
+# fn demo() {
+// The surface, in physical pixels, and the display's scale factor — handed over
+// at the first moment either exists. The application scales once, here, through
+// `Theme::scaled`, `Rect::scaled` and its own text sizes.
+run_with(WindowConfig::default(), Panel::new).unwrap();
+# }
+```
+
+A later scale change — dragging the window to a second display — arrives as
+`InputEvent::SurfaceResized`, carrying the new factor.
+
 ## Why it earns its place
 
 Because the alternative is developing blind. A backend that produces the *same*

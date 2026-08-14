@@ -434,7 +434,21 @@ and all three are now resolved:
   which is the seam a naive width-times-scale opens. `examples/hello` makes it
   executable: `cargo run -p hello -- --snapshot out.ppm 2` renders the same
   layout at 2×, and the C ABI's `denise_ui_new_scaled` gives embedded hosts —
-  the ones that actually receive `WM_DPICHANGED` — the same lever. The rough
+  the ones that actually receive `WM_DPICHANGED` — the same lever.
+
+  What the decision left dangling for a while was *where a window gets the
+  factor from*, since an application built before its window exists cannot know
+  it: every windowed example passed 1.0 and came out half size on a Retina Mac,
+  correct on the Pi, and nobody could tell whether the mechanism worked because
+  nothing on a desktop used it. Closed by `denise_winit::run_with`, which takes
+  a builder instead of an application and calls it with the surface size and the
+  display's scale factor at the one moment both are known — plus the size in
+  `WindowConfig` becoming **logical**, so 1280×800 is the same amount of desk on
+  a Pi and on a 2× display, where the surface behind it is 2560×1600. `gallery`,
+  `hello` and `table-editor` all build through it; the gallery is the honest
+  test, because it does the multiplication once inside its own `add` helper and
+  seventy-odd rectangles come out right without one of them mentioning DPI. The
+  rough
   edge left open on purpose: widgets default their text to 16 px, so a
   scale-aware application sets text sizes explicitly; theme-driven typography
   would be its own design conversation.

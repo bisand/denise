@@ -365,8 +365,12 @@ is in [docs/design.md](docs/design.md).
   (`Rect::scaled`, which scales edges so touching panels keep touching) and its
   text sizes, all in one place — demonstrated by
   `cargo run -p hello -- --snapshot out.ppm 2`, and available to C hosts as
-  `denise_ui_new_scaled`. `denise-win32` has still never been hosted inside a
-  real DPI-changing dialog, which is what would prove the Windows end.
+  `denise_ui_new_scaled`. On the desktop the factor arrives from the display:
+  `denise_winit::run_with` builds the tree once the window exists and hands it
+  the surface and the scale, and `WindowConfig::size` is logical, so one number
+  is the same amount of desk on a Pi and on a 2× Retina Mac. `denise-win32` has
+  still never been hosted inside a real DPI-changing dialog, which is what would
+  prove the Windows end.
 
 ## Documentation
 
