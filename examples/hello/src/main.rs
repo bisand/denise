@@ -25,6 +25,8 @@
 //! field and the toolkit repaints the field, not the window. That is the one thing
 //! this library is really about, and the way you use it is by not doing anything.
 
+#[cfg(not(all(feature = "kiosk", target_os = "linux")))]
+use std::time::Duration;
 use std::time::Instant;
 
 #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
@@ -271,6 +273,16 @@ impl DeniseApp for Hello {
 
     fn exit_requested(&self) -> bool {
         self.exit
+    }
+
+    /// The caret is the only thing here with a clock, and it wants half a
+    /// second. Saying so is the difference between sixty frames a second and
+    /// two.
+    fn next_frame_in(&self) -> Option<Duration> {
+        let now = self.started.elapsed().as_millis() as u64;
+        self.ui
+            .next_wake_ms()
+            .map(|wake| Duration::from_millis(wake.saturating_sub(now)))
     }
 }
 

@@ -71,6 +71,40 @@ application that needs to *stop* the close — unsaved changes, a confirmation �
 overrides `DeniseApp::close_requested` to return `false`, and quits later
 through `exit_requested` once it has its answer.
 
+## What a frame costs here, and why it is not what a panel costs
+
+A frame in which nothing changed costs nothing: the loop skips the acquire, the
+paint and the present entirely. An idle window sits at well under 1% of a core.
+
+A frame in which *something* changed is a different matter on this backend, and
+the number does not transfer to the hardware. On macOS, softbuffer's
+CoreGraphics backend pays the whole surface three times per present, whatever
+the damage says:
+
+- `buffer_mut` allocates and zeroes a **fresh** buffer every call, so the buffer
+  it hands back is always age-undefined and the shadow has to be copied into it
+  in full;
+- `present_with_damage` discards its damage argument and calls `present`;
+- CoreAnimation then copies the resulting `CGImage` into a texture —
+  `CGContextDrawImage`, again the whole surface.
+
+On a 2560×1600 Retina surface that is roughly 48 MB of memory traffic per
+present. `examples/hello-rect` prints the contradiction as it runs: *1.0% of the
+surface repainted*, beside a CPU figure that says nothing of the sort.
+
+So the only lever here is **presents per second**, which is why
+[`DeniseApp::next_frame_in`] exists and why an application should answer it from
+`Ui::next_wake_ms` rather than let the loop free-run. A `Spinner` asks for 50 ms;
+honouring that instead of ticking it at 60 Hz is a threefold difference in this
+backend's CPU, and no difference at all in what the user sees.
+
+[`DeniseApp::next_frame_in`]: https://docs.rs/denise-winit/latest/denise_winit/trait.DeniseApp.html#method.next_frame_in
+
+So a widget that animates continuously — a spinner, a carousel mid-slide — is
+expensive **here** and cheap on the target, where `present` is a page flip and
+the only cost is rasterising the damage. Judge idle cost on this backend; judge
+animation cost on the panel.
+
 ## Why it earns its place
 
 Because the alternative is developing blind. A backend that produces the *same*

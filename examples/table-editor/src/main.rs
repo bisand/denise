@@ -189,6 +189,8 @@ compile_error!(
 /// A window, on any desktop. Fifty lines, all of them plumbing.
 #[cfg(all(feature = "desktop", not(all(feature = "kiosk", target_os = "linux"))))]
 mod window_backend {
+    use std::time::Duration;
+
     use super::{App, Message, Setup, WINDOW};
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
     use denise_winit::{DeniseApp, WindowConfig, run_with};
@@ -269,6 +271,17 @@ mod window_backend {
 
         fn exit_requested(&self) -> bool {
             self.0.exit
+        }
+
+        /// The same question the kiosk arm answers with `poll_timeout`: how long
+        /// may this sleep? A tree with nothing animating says `None`, and the
+        /// window then waits for input rather than for a clock.
+        fn next_frame_in(&self) -> Option<Duration> {
+            let now = self.0.elapsed_ms();
+            self.0
+                .ui
+                .next_wake_ms()
+                .map(|wake| Duration::from_millis(wake.saturating_sub(now)))
         }
     }
 }

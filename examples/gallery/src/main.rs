@@ -121,6 +121,8 @@ compile_error!(
 /// A window, on any desktop.
 #[cfg(all(feature = "desktop", not(all(feature = "kiosk", target_os = "linux"))))]
 mod window_backend {
+    use std::time::Duration;
+
     use super::{App, Font};
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
     use denise_winit::{DeniseApp, WindowConfig, run_with};
@@ -222,6 +224,18 @@ mod window_backend {
 
         fn exit_requested(&self) -> bool {
             self.exit
+        }
+
+        /// What the tree asked for, which on this screen is the spinner: 50 ms,
+        /// not the 16 the loop would otherwise take. Woken three times as often
+        /// as it moves, a spinner reports a repaint every time and every one of
+        /// those is a full-surface upload on macOS.
+        fn next_frame_in(&self) -> Option<Duration> {
+            let now = self.app.elapsed_ms();
+            self.app
+                .ui
+                .next_wake_ms()
+                .map(|wake| Duration::from_millis(wake.saturating_sub(now)))
         }
     }
 }

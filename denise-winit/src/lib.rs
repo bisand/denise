@@ -129,6 +129,28 @@ pub trait DeniseApp {
         false
     }
 
+    /// How long the loop may sleep before asking for another frame.
+    ///
+    /// The default — `Some(Duration::ZERO)` — means "as often as
+    /// [`WindowConfig::frame_interval`] allows", which is what this backend has
+    /// always done. Answering with a longer wait, or with `None` for "nothing is
+    /// animating, wake me on input", is how an application stops the loop doing
+    /// work nobody asked for.
+    ///
+    /// A tree already knows the answer: `Ui::next_wake_ms` is the deadline of the
+    /// most impatient animation in it. Ignoring it is not free. A `Spinner` asks
+    /// to be woken every 50 ms and moves its arc exactly that often; ticked at
+    /// 60 Hz instead it reports a repaint three times as often as it has anything
+    /// new to show, and every one of those is a present. The kiosk backends have
+    /// always slept on `next_wake_ms` — this is what lets a window agree with
+    /// them.
+    ///
+    /// Input does not wait for this: an event wakes the loop immediately,
+    /// whatever was asked for here.
+    fn next_frame_in(&self) -> Option<Duration> {
+        Some(Duration::ZERO)
+    }
+
     /// Whether the window manager's close request should end the run.
     ///
     /// Defaults to `true`, because a close button that does not close is a bug in
@@ -187,7 +209,7 @@ where
         events: Vec::new(),
         modifiers: ModifiersState::empty(),
         cursor: Point::ZERO,
-        next_frame: Instant::now(),
+        next_frame: Some(Instant::now()),
         error: None,
     };
     event_loop.run_app(&mut runner)?;
@@ -208,7 +230,8 @@ struct Runner<A, B> {
     events: Vec<InputEvent>,
     modifiers: ModifiersState,
     cursor: Point,
-    next_frame: Instant,
+    /// When the next frame is due, or `None` to wait for input.
+    next_frame: Option<Instant>,
     error: Option<Error>,
 }
 
@@ -242,12 +265,16 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> Runner<A, B> {
         // Advance the cadence only when a frame was actually attempted. Doing this
         // from `about_to_wait` instead pushes the deadline further out on every
         // spurious wake-up, and the loop never draws again.
+        //
+        // How far it advances is the application's to say. `frame_interval` is
+        // the floor — a cap on how fast, never a demand — and the answer is
+        // taken after the frame, when whatever just animated has had its say.
         let now = Instant::now();
-        self.next_frame += self.config.frame_interval;
-        if self.next_frame <= now {
-            // We fell behind. Resynchronise rather than replaying missed frames.
-            self.next_frame = now + self.config.frame_interval;
-        }
+        self.next_frame = self
+            .app
+            .as_ref()
+            .map_or(Some(Duration::ZERO), A::next_frame_in)
+            .map(|asked| now + asked.max(self.config.frame_interval));
 
         if self.app.as_ref().is_some_and(A::exit_requested) {
             event_loop.exit();
@@ -271,6 +298,24 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> Runner<A, B> {
         surface.poll(events);
         app.update(events, damage);
         events.clear();
+
+        // Nothing changed: no buffer, no paint, no present, no frame at all.
+        //
+        // This is the whole promise of a damage tracker, and skipping it here
+        // was costing more than everything else in the loop put together. A
+        // present is not free anywhere, and on macOS it is not even
+        // proportional to the damage: CoreAnimation re-uploads the entire
+        // surface through `CGContextDrawImage` on every commit, whatever
+        // rectangles softbuffer was handed. At 60 Hz on a 2560×1600 Retina
+        // surface that is sixteen megabytes a frame — about a gigabyte a
+        // second — to display a window in which nothing had happened.
+        //
+        // The shadow buffer is persistent, so a skipped frame leaves the
+        // screen exactly as it was and the next real frame still only owes the
+        // damage since this one.
+        if damage.is_clean() {
+            return Ok(false);
+        }
 
         let mut frame = match surface.acquire() {
             Ok(frame) => frame,
@@ -332,7 +377,7 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B
         self.damage = DamageTracker::new(surface.size());
         self.window = Some(window);
         self.surface = Some(surface);
-        self.next_frame = Instant::now();
+        self.next_frame = Some(Instant::now());
     }
 
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
@@ -340,7 +385,8 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B
         // the wait constantly for reasons of its own, and a loop that only draws on
         // a clean timeout never draws at all there. Compare against the deadline
         // instead: it is the same test, and it survives spurious wake-ups.
-        if Instant::now() >= self.next_frame
+        if let Some(next) = self.next_frame
+            && Instant::now() >= next
             && let Some(window) = self.window.as_ref()
         {
             window.request_redraw();
@@ -472,6 +518,12 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B
 
             _ => {}
         }
+
+        // Input outranks the cadence. An application that said "wake me in a
+        // second, nothing is moving" still expects its button to light up when
+        // pressed, so anything that arrived here is drawn at the next
+        // opportunity rather than at the deadline.
+        self.next_frame = Some(Instant::now());
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -480,7 +532,12 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B
         }
         // Sleep until the next frame is due rather than spinning. An idle UI should
         // cost nothing, which is the property that has to hold on the real target.
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+        // `None` is the strongest form of that: nothing is animating, so there is
+        // no deadline at all and the loop blocks until something arrives.
+        event_loop.set_control_flow(match self.next_frame {
+            Some(next) => ControlFlow::WaitUntil(next),
+            None => ControlFlow::Wait,
+        });
     }
 }
 
