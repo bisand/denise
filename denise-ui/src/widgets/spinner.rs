@@ -12,19 +12,27 @@ const PERIOD_MS: u64 = 1_000;
 
 /// How often the spinner asks to be redrawn.
 ///
-/// **Twenty frames a second, deliberately, and not sixty.** A rotating object
-/// is the animation least forgiving of a low frame rate — a caret can blink
-/// twice a second and a knob can cross in eight frames, but a ring turning in
-/// visible steps reads as a stutter rather than as a style. So this cannot go
-/// as slow as the rest of the toolkit's animation.
+/// **Sixty frames a second.** A rotating object is the animation least
+/// forgiving of a low frame rate — a caret can blink twice a second and a knob
+/// can cross in eight frames, but a ring turning in visible steps reads as a
+/// stutter rather than as a style.
 ///
-/// It does not need to go as fast as a display, either. Twenty is above the
-/// rate at which a smooth rotation stops reading as separate positions, and it
-/// is a third of the wakes 60 Hz would cost. The drawing itself is not the
-/// expense — the #17 bench puts a spinner-sized arc at about three microseconds
-/// — the **wake** is, and a third of them is a third of the cost of the one
-/// widget in this toolkit that can keep a device awake indefinitely.
-const FRAME_MS: u64 = 50;
+/// This said twenty for a while, on the argument that twenty is above the rate
+/// at which a rotation stops reading as separate positions and costs a third of
+/// the wakes. The first half of that turned out to be wrong by eye: asked for
+/// twenty and *given* twenty, the arc is visibly steppy. It had never actually
+/// been tried, because until the desktop backend started honouring
+/// `next_wake_ms` the loop free-ran at 60 Hz and quietly delivered sixty.
+///
+/// The second half was right, and is the reason this is affordable: the drawing
+/// is not the expense — the #17 bench puts a spinner-sized arc at about three
+/// microseconds — the **wake** is, and each wake ends in a present. That was
+/// costing 16 MB of copying on macOS until `denise-winit` started handing the
+/// compositor an `IOSurface`; a present there is now free, a DRM page flip
+/// always was, and win32 blits the damage rectangle. Sixty wakes a second for
+/// the one widget that can keep a device awake indefinitely is a real cost, and
+/// it is now a small one on every backend this project ships.
+const FRAME_MS: u64 = 16;
 
 /// How much of the ring the moving arc covers.
 ///
@@ -281,9 +289,14 @@ mod tests {
             }
             previous = angle;
         }
+        // 2 000 frames of `FRAME_MS` against the default one-second period, so
+        // one lap per second of simulated time. Stated as the arithmetic rather
+        // than as a number, because the frame rate is a tuning decision and this
+        // test is not about what it happens to be.
+        let laps = 2_000 * FRAME_MS / PERIOD_MS;
         assert!(
-            wraps >= 90,
-            "2000 frames at 20 fps is 100 laps, saw {wraps}"
+            wraps >= laps - laps / 10,
+            "{laps} laps expected from 2000 frames of {FRAME_MS} ms, saw {wraps}"
         );
     }
 
@@ -299,8 +312,10 @@ mod tests {
         let fast = step(500);
         let slow = step(4_000);
         assert!(fast > slow, "{fast} is not more per frame than {slow}");
-        assert_eq!(fast, TURN / 10, "50 ms of a 500 ms period is a tenth");
-        assert_eq!(slow, TURN / 80);
+        // One frame of a period is that fraction of the turn, whatever the frame
+        // rate is: `FRAME_MS / period`.
+        assert_eq!(fast, (TURN as u64 * FRAME_MS / 500) as i32);
+        assert_eq!(slow, (TURN as u64 * FRAME_MS / 4_000) as i32);
     }
 
     /// A period below one frame is clamped: turning more than a full circle

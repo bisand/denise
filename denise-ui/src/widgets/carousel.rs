@@ -15,7 +15,7 @@ const SLIDE_MS: u64 = 250;
 
 /// Frame interval while sliding: 20 fps, [`Spinner`](super::Spinner)'s number
 /// and reasoning — the cost on a Pi-class device is the wakes, not the draws.
-const FRAME_MS: u64 = 50;
+const FRAME_MS: u64 = 16;
 
 /// Dragging past this fraction of the width commits to the next page.
 const COMMIT_DIVISOR: i32 = 4;
