@@ -397,6 +397,14 @@ is in [docs/design.md](docs/design.md).
   `armv7-unknown-linux-gnueabihf`, and asserts the core's dependency tree contains
   no platform crates. An embedded build that quietly starts compiling winit is a
   regression.
+- CI runs `cargo deny` over the whole tree — advisories, licences, sources and
+  wildcards — because four crates it pulls in parse untrusted bytes on a panel
+  that may run for a year. The release waits on CI, so an advisory stops a
+  publish.
+- CI runs Miri over `denise-ffi`, the crate where the raw pointers live, and
+  fuzzes both the image decoders and the C ABI for a minute each. The ABI target
+  earned its place on its first run, with an overflow panic reachable from
+  `Ui::tick`.
 - MSRV 1.95, bumped deliberately rather than tracking stable.
 
 ## Development

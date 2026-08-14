@@ -452,6 +452,35 @@ and all three are now resolved:
   edge left open on purpose: widgets default their text to 16 px, so a
   scale-aware application sets text sizes explicitly; theme-driven typography
   would be its own design conversation.
+- **Nothing looked for bugs that tests do not look for** — resolved by a review
+  pass across security, memory and CPU ([#37](https://github.com/bisand/denise/issues/37)–[#44](https://github.com/bisand/denise/issues/44)), whose finding was
+  less about what it found than about what nothing was watching. Four crates in
+  the tree parse untrusted bytes (`png`, `zune-jpeg`, `gif`, `fontdue`), seven
+  contain `unsafe`, and no job checked either. Now `cargo deny` gates advisories
+  and licences, Miri runs over `denise-ffi` — where the raw pointers are — and
+  both the image decoders and the C ABI are fuzzed for a minute per push.
+
+  The ABI target justified itself immediately: within a minute of first
+  existing it produced `attempt to multiply with overflow` in the caret blink,
+  reachable from `Ui::tick` with any large clock, because every animated widget
+  computed its next wake with plain `+` and `*` on a number the *application*
+  owns. All of them saturate now. Two size validations had the same shape —
+  `stride * (height - 1)` in `usize`, which wraps on `armv7` and lets an
+  undersized buffer pass the check that exists to catch exactly that — and
+  `denise::required_words` is now the one expression all three call sites use,
+  in `u64`, where two `u32`s cannot overflow.
+
+  The other half was invariants nobody stated. `Picture` promised
+  `pixels.len() == width * height` in prose and enforced it nowhere, so an APNG
+  with a first frame smaller than its canvas decoded to `Ok` and then drew
+  nothing at all — `PixelView` checks the length and declines, silently. Every
+  decoder goes through a checked constructor now. And the windowed examples
+  marked the whole surface dirty on every change while their own kiosk arms
+  presented exact rectangles: a caret blink copying sixteen megabytes a second
+  at 2×, in the examples that exist to demonstrate damage tracking.
+  `Ui::pending_damage` is what they were missing — `Ui::damage` reports what
+  `paint` last resolved, which during `update` is still the previous frame.
+
 - **Nothing scrolled** — resolved by
   [#21](https://github.com/bisand/denise/issues/21), in the place the issue
   demanded: the tree, not a widget. A node marked `Ui::set_scrollable` becomes a
