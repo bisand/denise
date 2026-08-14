@@ -234,6 +234,10 @@ mod window_backend {
                         KeyCode::ArrowUp if !self.0.is_confirming() => self.0.move_selection(-1),
                         KeyCode::ArrowDown if !self.0.is_confirming() => self.0.move_selection(1),
                         KeyCode::F2 => self.0.on_message(Message::NextTheme),
+                        // Escape quits, as it does on the kiosk — but not out from
+                        // under the delete confirmation, which is a question that
+                        // deserves an answer rather than an exit.
+                        KeyCode::Escape if !self.0.is_confirming() => self.0.exit = true,
                         _ => {}
                     }
                 }

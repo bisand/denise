@@ -146,41 +146,70 @@ mod window_backend {
                 // The window system already draws a pointer; the tree must not
                 // draw a second one over it.
                 app.ui.show_cursor(false);
-                Gallery(app)
+                Gallery { app, exit: false }
             },
         )?;
         Ok(())
     }
 
-    struct Gallery(App);
+    struct Gallery {
+        app: App,
+        exit: bool,
+    }
+
+    impl Gallery {
+        /// Whether Escape is this application's to act on, or the tree's.
+        ///
+        /// The tree claims Escape for exactly two things — an open popup and a
+        /// drawer on top — and the gallery's drawer says so on its own face
+        /// ("Escape, or a press on the dim, slides it out"). A dialog is a pushed
+        /// scene with its own buttons, and quitting out from under one would be
+        /// answering a question nobody answered. So the key quits only when there
+        /// is nothing on screen to dismiss.
+        fn escape_is_mine(&self) -> bool {
+            !self.app.ui.popup_open()
+                && !self.app.ui.drawer_open()
+                && self.app.ui.scene_count() == 1
+        }
+    }
 
     impl DeniseApp for Gallery {
         fn update(&mut self, events: &[InputEvent], damage: &mut DamageTracker) {
             for event in events {
-                if let InputEvent::Key {
-                    code: KeyCode::F2,
+                let InputEvent::Key {
+                    code,
                     state: ElementState::Down,
                     ..
                 } = event
-                {
-                    self.0
-                        .on_message(super::Message::UseTheme(self.0.next_builtin()));
+                else {
+                    continue;
+                };
+                match code {
+                    KeyCode::F2 => self
+                        .app
+                        .on_message(super::Message::UseTheme(self.app.next_builtin())),
+                    KeyCode::Escape if self.escape_is_mine() => self.exit = true,
+                    _ => {}
                 }
             }
 
-            self.0.ui.handle(events);
-            let now = self.0.elapsed_ms();
-            self.0.ui.tick(now);
-            self.0.handle(now);
+            self.app.ui.handle(events);
+            let now = self.app.elapsed_ms();
+            self.app.ui.tick(now);
+            self.app.handle(now);
 
-            if self.0.ui.needs_paint() {
+            if self.app.ui.needs_paint() {
                 damage.add_full();
             }
         }
 
         fn render(&mut self, frame: &mut Frame<'_>, _damage: &[Rect]) {
-            self.0.ui.paint(frame);
-            self.0.ui.presented();
+            self.app.ui.paint(frame);
+            self.app.ui.presented();
+        }
+
+        fn exit_requested(&self) -> bool {
+            self.exit
         }
     }
 }

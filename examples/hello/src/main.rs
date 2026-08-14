@@ -28,7 +28,7 @@
 use std::time::Instant;
 
 #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
-use denise::{DamageTracker, Frame, InputEvent};
+use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode};
 use denise::{Rect, Role, Size, theme};
 use denise_ui::widgets::{Button, Label, Panel, TextInput};
 use denise_ui::{NodeId, Ui};
@@ -95,6 +95,10 @@ struct Hello {
     /// The label to write the greeting into.
     greeting: NodeId,
     started: Instant,
+    /// Set by Escape, read by the window backend. The kiosk loop returns out of
+    /// itself instead, which is why this only exists on the other side.
+    #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
+    exit: bool,
 }
 
 impl Hello {
@@ -184,6 +188,8 @@ impl Hello {
             name,
             greeting,
             started: Instant::now(),
+            #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
+            exit: false,
         }
     }
 
@@ -212,6 +218,20 @@ impl Hello {
 #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
 impl DeniseApp for Hello {
     fn update(&mut self, events: &[InputEvent], damage: &mut DamageTracker) {
+        // Escape quits, as it does on the kiosk. Nothing here opens a popup or a
+        // drawer, so the key is unambiguously this application's; the gallery,
+        // which does open both, asks the tree first.
+        for event in events {
+            if let InputEvent::Key {
+                code: KeyCode::Escape,
+                state: ElementState::Down,
+                ..
+            } = event
+            {
+                self.exit = true;
+            }
+        }
+
         self.ui.handle(events);
         // Drives the caret blink. A tree with nothing animating asks to be woken
         // never, which is why an idle panel costs nothing.
@@ -238,6 +258,10 @@ impl DeniseApp for Hello {
         // free; a kiosk backend takes the tree's own rectangles instead.
         self.ui.paint(frame);
         self.ui.presented();
+    }
+
+    fn exit_requested(&self) -> bool {
+        self.exit
     }
 }
 
