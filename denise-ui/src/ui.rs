@@ -1330,6 +1330,18 @@ impl<M: 'static> Ui<M> {
     }
 
     /// Messages emitted since the last drain.
+    ///
+    /// **Drain every frame.** The queue has no ceiling, and it is the one thing
+    /// in the tree that does not: toasts cap at three and drop the oldest, damage
+    /// coalesces into [`MAX_DAMAGE_RECTS`](denise::MAX_DAMAGE_RECTS) and then
+    /// collapses to its bounds, but messages accumulate for as long as an
+    /// application keeps handling events without reading them. That is deliberate
+    /// — dropping one silently would lose a button press, and no widget can know
+    /// which press mattered — so it is the application's contract to keep, and
+    /// the failure mode is a slow leak on a panel expected to run for a year.
+    ///
+    /// An application that deliberately ignores messages for a while should call
+    /// this and discard the result rather than let them pile up.
     #[inline]
     pub fn drain_messages(&mut self) -> Drain<'_, M> {
         self.messages.drain(..)
@@ -1368,6 +1380,21 @@ impl<M: 'static> Ui<M> {
     #[inline]
     pub fn damage(&self) -> &[Rect] {
         self.damage.resolved()
+    }
+
+    /// What has changed since the last present, before [`Ui::paint`] has run.
+    ///
+    /// [`Ui::damage`] cannot answer this: it reports what `paint` last resolved,
+    /// so before this frame is painted it still describes the previous one. A
+    /// backend that must know the dirty region *before* drawing — anything
+    /// marking damage from `DeniseApp::update`, which happens ahead of `render`
+    /// — asks here instead, and gets this frame's rectangles.
+    ///
+    /// Empty when the whole surface is dirty, which [`Ui::needs_paint`]
+    /// distinguishes from nothing being dirty at all.
+    #[inline]
+    pub fn pending_damage(&self) -> &[Rect] {
+        self.damage.pending()
     }
 
     /// Retires this frame's damage. Call after a successful present.

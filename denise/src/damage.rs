@@ -209,6 +209,26 @@ impl DamageTracker {
         !self.force_full && self.history[self.head].is_empty()
     }
 
+    /// What has been marked dirty *this frame*, before any buffer age widens it.
+    ///
+    /// Distinct from [`resolved`](DamageTracker::resolved), which is the answer
+    /// [`resolve`](DamageTracker::resolve) last gave and therefore describes the
+    /// previous frame until this one is resolved. This is what a caller wants
+    /// when it has to hand one tracker's damage to another before either has
+    /// seen a buffer — a tree inside a backend's event loop, which is exactly
+    /// the arrangement `DeniseApp::update` puts them in.
+    ///
+    /// Empty when the whole surface is marked: there is no rectangle list in
+    /// that case, and [`is_clean`](DamageTracker::is_clean) is how to tell the
+    /// two apart.
+    #[inline]
+    pub fn pending(&self) -> &[Rect] {
+        if self.force_full {
+            return &[];
+        }
+        self.history[self.head].as_slice()
+    }
+
     /// Damage that must actually be repainted into a buffer of the given age.
     ///
     /// For [`BufferAge::Frames(n)`](BufferAge::Frames) this is the union of the
@@ -278,6 +298,39 @@ mod tests {
         t.resolve(BufferAge::Undefined);
         t.end_frame();
         t
+    }
+
+    /// `pending` is this frame's damage; `resolved` is still last frame's answer
+    /// until `resolve` runs. Handing one tracker's damage to another before
+    /// either has seen a buffer depends on the difference.
+    #[test]
+    fn pending_is_this_frame_while_resolved_is_still_the_last_one() {
+        let mut t = tracker();
+        t.add(Rect::new(10, 10, 20, 20));
+        t.resolve(BufferAge::Frames(1));
+        t.end_frame();
+
+        t.add(Rect::new(50, 50, 8, 8));
+        assert_eq!(t.pending(), &[Rect::new(50, 50, 8, 8)], "this frame");
+        assert_eq!(
+            t.resolved(),
+            &[Rect::new(10, 10, 20, 20)],
+            "resolve has not run since, so this is the previous answer"
+        );
+    }
+
+    /// A full mark has no rectangle list to hand over, and says so by being
+    /// empty rather than by naming the surface — `is_clean` is what separates
+    /// "everything" from "nothing".
+    #[test]
+    fn pending_is_empty_for_a_full_mark_and_for_a_clean_frame() {
+        let mut t = tracker();
+        assert!(t.pending().is_empty());
+        assert!(t.is_clean(), "nothing marked");
+
+        t.add_full();
+        assert!(t.pending().is_empty());
+        assert!(!t.is_clean(), "everything marked");
     }
 
     #[test]

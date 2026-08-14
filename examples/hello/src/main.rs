@@ -246,16 +246,25 @@ impl DeniseApp for Hello {
             }
         }
 
+        // What changed, not the window. A caret blinking in the field marks one
+        // small rectangle, and one small rectangle is what gets copied.
         if self.ui.needs_paint() {
-            damage.add_full();
+            let pending = self.ui.pending_damage();
+            if pending.is_empty() {
+                damage.add_full();
+            } else {
+                for rect in pending {
+                    damage.add(*rect);
+                }
+            }
         }
     }
 
     fn render(&mut self, frame: &mut Frame<'_>, _damage: &[Rect]) {
         // The tree keeps its own damage and repaints only the widgets that
-        // changed, whatever it is asked to cover. The full-surface mark above is
-        // about what gets *copied to the screen*, which on a development window is
-        // free; a kiosk backend takes the tree's own rectangles instead.
+        // changed, whatever it is asked to cover. What `update` marks above is
+        // what gets *copied to the screen* afterwards — the same rectangles, so
+        // the window and a kiosk display do the same amount of work.
         self.ui.paint(frame);
         self.ui.presented();
     }

@@ -198,8 +198,20 @@ mod window_backend {
             self.app.ui.tick(now);
             self.app.handle(now);
 
+            // The tree's own rectangles, not `add_full`. The window copies
+            // exactly what changed, which is the thing this toolkit is about —
+            // and at 2x it is the difference between copying a caret and
+            // copying sixteen megabytes a second. An empty list with
+            // `needs_paint` set means the tree wants everything.
             if self.app.ui.needs_paint() {
-                damage.add_full();
+                let pending = self.app.ui.pending_damage();
+                if pending.is_empty() {
+                    damage.add_full();
+                } else {
+                    for rect in pending {
+                        damage.add(*rect);
+                    }
+                }
             }
         }
 
@@ -325,7 +337,18 @@ mod kiosk_backend {
                 continue;
             };
             match code {
-                KeyCode::Escape => return false,
+                // Escape quits, but the tree gets it first when there is
+                // something to dismiss — the drawer says "Escape, or a press on
+                // the dim, slides it out" on its own face, and a dropdown closes
+                // on the same key. The window backend asks exactly this, which is
+                // the point: one application, one answer, two displays.
+                KeyCode::Escape
+                    if !app.ui.popup_open()
+                        && !app.ui.drawer_open()
+                        && app.ui.scene_count() == 1 =>
+                {
+                    return false;
+                }
                 KeyCode::F2 => app.on_message(Message::UseTheme(app.next_builtin())),
                 KeyCode::F12 => *shoot = true,
                 _ => {}

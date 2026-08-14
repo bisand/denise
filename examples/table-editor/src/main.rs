@@ -248,8 +248,17 @@ mod window_backend {
             self.0.ui.tick(now);
             self.0.handle(now);
 
+            // The tree's rectangles, the same ones the kiosk arm presents.
+            // An empty list with `needs_paint` set means everything.
             if self.0.ui.needs_paint() {
-                damage.add_full();
+                let pending = self.0.ui.pending_damage();
+                if pending.is_empty() {
+                    damage.add_full();
+                } else {
+                    for rect in pending {
+                        damage.add(*rect);
+                    }
+                }
             }
         }
 
@@ -391,7 +400,10 @@ mod kiosk_backend {
                 continue;
             };
             match code {
-                KeyCode::Escape => return false,
+                // Not out from under the delete confirmation, which is a question
+                // that deserves an answer — the same guard the window backend
+                // applies.
+                KeyCode::Escape if !app.is_confirming() => return false,
                 KeyCode::ArrowUp if !app.is_confirming() => app.move_selection(-1),
                 KeyCode::ArrowDown if !app.is_confirming() => app.move_selection(1),
                 KeyCode::F2 => app.on_message(Message::NextTheme),
