@@ -98,7 +98,12 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-fuzz
+      # The explicit form. `install-action@cargo-fuzz` resolves — it is a real
+      # tag — and then installs nothing, leaving `cargo fuzz` to fail as an
+      # unknown command two steps later.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
 
       # A minute each, which finds regressions rather than new classes of bug —
       # the long runs belong on a schedule or on somebody's machine. It is
