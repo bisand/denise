@@ -363,7 +363,9 @@ impl<M: 'static> Widget<M> for Toggle<M> {
         }
         Animation {
             repaint: true,
-            next_ms: Some(now_ms + FRAME_MS),
+            // Saturating: the clock is the application's, and its value is not
+            // this widget's to assume anything about.
+            next_ms: Some(now_ms.saturating_add(FRAME_MS)),
         }
     }
 

@@ -435,7 +435,17 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
         self.caret_on = on;
         Animation {
             repaint,
-            next_ms: Some(self.blink_epoch + (elapsed / BLINK_MS + 1) * BLINK_MS),
+            // Saturating, because `now_ms` is the application's clock and this
+            // widget does not get to assume anything about it. A host that
+            // counts from the Unix epoch, or a fuzzer that passes `u64::MAX`,
+            // must not be able to panic a panel through the caret blink.
+            next_ms: Some(
+                self.blink_epoch.saturating_add(
+                    (elapsed / BLINK_MS)
+                        .saturating_add(1)
+                        .saturating_mul(BLINK_MS),
+                ),
+            ),
         }
     }
 }

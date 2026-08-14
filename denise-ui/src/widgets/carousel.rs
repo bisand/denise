@@ -429,12 +429,14 @@ impl<M: 'static> Widget<M> for Carousel<M> {
                     self.held_since = now_ms;
                     Animation {
                         repaint: true,
-                        next_ms: self.advance_ms.map(|interval| now_ms + interval),
+                        // Saturating throughout: the clock is the application's,
+                        // and every deadline here is derived from it.
+                        next_ms: self.advance_ms.map(|i| now_ms.saturating_add(i)),
                     }
                 } else {
                     Animation {
                         repaint: true,
-                        next_ms: Some(now_ms + FRAME_MS),
+                        next_ms: Some(now_ms.saturating_add(FRAME_MS)),
                     }
                 }
             }
@@ -443,13 +445,13 @@ impl<M: 'static> Widget<M> for Carousel<M> {
                 // advance clock waits for it to lift. One distant check keeps
                 // the animation alive without costing frames.
                 repaint: false,
-                next_ms: self.advance_ms.map(|interval| now_ms + interval),
+                next_ms: self.advance_ms.map(|i| now_ms.saturating_add(i)),
             },
             Motion::Still => match self.advance_ms {
                 None => Animation::NONE,
                 Some(interval) if self.pages.len() < 2 => Animation {
                     repaint: false,
-                    next_ms: Some(now_ms + interval),
+                    next_ms: Some(now_ms.saturating_add(interval)),
                 },
                 Some(interval) => {
                     let due = self.held_since.saturating_add(interval);
@@ -472,7 +474,7 @@ impl<M: 'static> Widget<M> for Carousel<M> {
                         self.held_since = now_ms;
                         Animation {
                             repaint: true,
-                            next_ms: Some(now_ms + FRAME_MS),
+                            next_ms: Some(now_ms.saturating_add(FRAME_MS)),
                         }
                     }
                 }

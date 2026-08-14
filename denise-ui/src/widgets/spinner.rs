@@ -208,7 +208,9 @@ impl<M: 'static> Widget<M> for Spinner {
             repaint: self.angle() != before,
             // Never `None`. This is the unbounded case #19 made expressible, and
             // the only thing that stops it is the node going away.
-            next_ms: Some(now_ms + FRAME_MS),
+            // Saturating: the clock is the application's, and its value is not
+            // this widget's to assume anything about.
+            next_ms: Some(now_ms.saturating_add(FRAME_MS)),
         }
     }
 }

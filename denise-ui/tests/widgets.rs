@@ -5629,3 +5629,53 @@ fn a_press_on_the_drawer_itself_does_not_close_it() {
     ui.tick(2_000);
     assert!(ui.drawer_open(), "still up: nothing was closing");
 }
+
+/// A clock the widgets do not get to have opinions about.
+///
+/// `Ui::tick` takes the application's `now_ms`, and the C ABI hands it straight
+/// through from a host — so its value is somebody else's business. Every
+/// animated widget computes its next wake from it, and every one of those
+/// computations used to be plain `+` or `*`: `u64::MAX` panicked a panel through
+/// the caret blink, in debug, from one call.
+///
+/// Found by the `abi_session` fuzz target within a minute of it existing, which
+/// is the argument for having it.
+#[test]
+fn an_absurd_clock_does_not_panic_any_animated_widget() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+
+    let field = ui
+        .add(root, TextInput::<Msg>::new(), Rect::new(20, 20, 200, 30))
+        .expect("field");
+    ui.add(
+        root,
+        Toggle::new("Mute", Msg::Muted),
+        Rect::new(20, 60, 160, 24),
+    )
+    .expect("toggle");
+    ui.add(root, Spinner::new(), Rect::new(20, 100, 32, 32))
+        .expect("spinner");
+    let carousel = Carousel::new(Msg::Page)
+        .with_picture(vec![0xFFCC_0000; 16], Size::new(4, 4))
+        .with_picture(vec![0xFF00_CC00; 16], Size::new(4, 4))
+        .auto_advance(3_000);
+    let carousel = ui
+        .add(root, carousel, Rect::new(20, 140, 200, 80))
+        .expect("carousel");
+    ui.request_animation(carousel);
+
+    // Focused, so the caret is live and the blink arithmetic actually runs.
+    ui.focus(Some(field));
+
+    for now in [0, 1, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
+        ui.tick(now);
+        // Whatever it asks for, it is a time that exists.
+        if let Some(next) = ui.next_wake_ms() {
+            assert!(
+                next >= now || next == u64::MAX,
+                "a wake in the past: {next}"
+            );
+        }
+    }
+}
