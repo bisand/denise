@@ -113,9 +113,14 @@ jobs:
       #
       # The fuzz crate is outside the workspace on purpose; see `exclude` in the
       # root manifest.
-      - run: cargo fuzz run decode_image -- -max_total_time=60 -rss_limit_mb=4096
+      # `--target` spelled out, because cargo-fuzz defaults to the triple *it
+      # was itself built for* — and `install-action` ships a musl build for
+      # portability. Left to itself it tries to build the fuzz target with a
+      # statically linked libc, which the sanitiser refuses outright:
+      # "sanitizer is incompatible with statically linked libc".
+      - run: cargo fuzz run --target x86_64-unknown-linux-gnu decode_image -- -max_total_time=60 -rss_limit_mb=4096
         working-directory: fuzz
-      - run: cargo fuzz run abi_session -- -max_total_time=60 -rss_limit_mb=4096
+      - run: cargo fuzz run --target x86_64-unknown-linux-gnu abi_session -- -max_total_time=60 -rss_limit_mb=4096
         working-directory: fuzz
 
   benches:
