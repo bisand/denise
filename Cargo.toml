@@ -78,6 +78,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std"] 
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std"] }
 windows = "0.62"
 windows-core = "0.62"
 winit = "0.30"

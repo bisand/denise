@@ -26,6 +26,9 @@
 //! ```
 
 mod keymap;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(not(target_os = "macos"))]
 mod surface;
 
 use std::rc::Rc;
@@ -42,7 +45,21 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
+#[cfg(target_os = "macos")]
+pub use macos::MacSurface;
+#[cfg(not(target_os = "macos"))]
 pub use surface::WinitSurface;
+
+/// The surface this backend presents through, which is not the same everywhere.
+///
+/// softbuffer on every platform but one; on macOS an `IOSurface` handed straight
+/// to the window's layer, because softbuffer's CoreGraphics backend copies the
+/// whole surface three times per present and ignores the damage. See
+/// [`macos`](self) for the measurements.
+#[cfg(target_os = "macos")]
+type PlatformSurface = MacSurface;
+#[cfg(not(target_os = "macos"))]
+type PlatformSurface = WinitSurface;
 
 /// Nominal pixels per wheel notch, for platforms that report scroll in lines.
 const LINE_HEIGHT_PX: f32 = 16.0;
@@ -59,12 +76,19 @@ pub enum Error {
     Window(#[from] winit::error::OsError),
 
     /// softbuffer could not bind to the window or present.
+    ///
+    /// Absent on macOS, which does not present through softbuffer.
+    #[cfg(not(target_os = "macos"))]
     #[error("softbuffer: {0}")]
     Softbuffer(#[from] softbuffer::SoftBufferError),
 
     /// A surface operation failed.
     #[error(transparent)]
     Surface(#[from] denise::SurfaceError),
+
+    /// The platform's presentation path could not be set up.
+    #[error("present: {0}")]
+    Present(String),
 }
 
 /// How the preview window is created.
@@ -225,7 +249,7 @@ struct Runner<A, B> {
     build: Option<B>,
     app: Option<A>,
     window: Option<Rc<Window>>,
-    surface: Option<WinitSurface>,
+    surface: Option<PlatformSurface>,
     damage: DamageTracker,
     events: Vec<InputEvent>,
     modifiers: ModifiersState,
@@ -363,7 +387,7 @@ impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B
             Err(err) => return self.fail(event_loop, err.into()),
         };
 
-        let surface = match WinitSurface::new(window.clone()) {
+        let surface = match PlatformSurface::new(window.clone()) {
             Ok(surface) => surface,
             Err(err) => return self.fail(event_loop, err),
         };

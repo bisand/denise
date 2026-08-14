@@ -12,9 +12,33 @@ homepage.workspace = true
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-softbuffer = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 winit = { workspace = true }
+
+# On macOS the whole present path is different, and it has to be: softbuffer's
+# CoreGraphics backend allocates a fresh buffer per frame, reports a buffer age
+# of 0 so the shadow is copied in full, and discards the damage rectangles it is
+# handed. `denise-macos` already owns the answer — pixels in an `IOSurface` the
+# compositor reads where they lie — so this borrows it rather than growing a
+# second copy. Measured on a 1040x720 surface with one spinner: 9.2% of a core
+# to 2.0%.
+# softbuffer presents everywhere except macOS, where its CoreGraphics backend is
+# the problem rather than the solution — see `macos.rs`. Not compiled there at
+# all, so the bad path cannot be reached by accident.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+softbuffer = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+denise-macos = { workspace = true }
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["objc2-quartz-core", "NSView"] }
+objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
+objc2-io-surface = { workspace = true, features = ["IOSurfaceRef"] }
+objc2-quartz-core = { workspace = true, features = [
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
 
 [dev-dependencies]
 denise-render = { workspace = true, features = ["std"] }

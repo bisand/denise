@@ -76,34 +76,29 @@ through `exit_requested` once it has its answer.
 A frame in which nothing changed costs nothing: the loop skips the acquire, the
 paint and the present entirely. An idle window sits at well under 1% of a core.
 
-A frame in which *something* changed is a different matter on this backend, and
-the number does not transfer to the hardware. On macOS, softbuffer's
-CoreGraphics backend pays the whole surface three times per present, whatever
-the damage says:
+A frame in which something changed is presented by the platform's own path, and
+those differ more than they should. win32 `BitBlt`s the damage rectangles into a
+persistent DIB section; x11, wayland and kms do the equivalent; all of them
+report a real buffer age, so only what changed is ever copied.
 
-- `buffer_mut` allocates and zeroes a **fresh** buffer every call, so the buffer
-  it hands back is always age-undefined and the shadow has to be copied into it
-  in full;
-- `present_with_damage` discards its damage argument and calls `present`;
-- CoreAnimation then copies the resulting `CGImage` into a texture —
-  `CGContextDrawImage`, again the whole surface.
+**macOS does not go through softbuffer at all here.** Its CoreGraphics backend
+allocates and zeroes a fresh buffer on every `buffer_mut`, reports an age of 0 so
+the shadow has to be copied in full, and discards the damage rectangles in
+`present_with_damage` — three passes over the whole surface per frame, which on
+a 2560×1600 Retina window cost 48.8% of a core to animate one spinner. So this
+backend presents through [`denise-macos`] instead: a pair of `IOSurface`s the
+compositor reads in place, alternated so CoreAnimation sees a new object each
+frame. The same window, the same spinner, at 60 frames a second rather than 20:
 
-On a 2560×1600 Retina surface that is roughly 48 MB of memory traffic per
-present. `examples/hello-rect` prints the contradiction as it runs: *1.0% of the
-surface repainted*, beside a CPU figure that says nothing of the sort.
+| | CPU |
+|---|---|
+| softbuffer, 60 fps | 48.8% |
+| softbuffer, 20 fps | 24.5% |
+| `IOSurface` pair, 60 fps | **3.5%** |
 
-So the only lever here is **presents per second**, which is why
-[`DeniseApp::next_frame_in`] exists and why an application should answer it from
-`Ui::next_wake_ms` rather than let the loop free-run. A `Spinner` asks for 50 ms;
-honouring that instead of ticking it at 60 Hz is a threefold difference in this
-backend's CPU, and no difference at all in what the user sees.
-
-[`DeniseApp::next_frame_in`]: https://docs.rs/denise-winit/latest/denise_winit/trait.DeniseApp.html#method.next_frame_in
-
-So a widget that animates continuously — a spinner, a carousel mid-slide — is
-expensive **here** and cheap on the target, where `present` is a page flip and
-the only cost is rasterising the damage. Judge idle cost on this backend; judge
-animation cost on the panel.
+For reference, the same tree on a Raspberry Pi 3A+ over DRM is 4.2%, and on
+Windows 0.5%. The desktop backends are now within sight of the hardware, which
+is the only claim this crate ever wanted to make.
 
 ## Why it earns its place
 
@@ -116,7 +111,9 @@ is a far smaller place to look.
 It also keeps the contract honest: two independent implementations of `Surface` is
 the minimum at which "the trait describes the problem" stops being an assertion.
 
-Runs on Linux, macOS and Windows, on **winit** and **softbuffer** — the only two
+Runs on Linux, macOS and Windows. Windowing and input come from **winit**
+everywhere; presentation comes from **softbuffer**, except on macOS where it
+comes from [`denise-macos`] for the reasons above. They are the only
 dependencies in the whole workspace that are there purely for convenience.
 
 ## Where this sits
@@ -140,3 +137,4 @@ than own the window.
 MIT licensed.
 
 [Denise]: https://github.com/bisand/denise
+[`denise-macos`]: https://crates.io/crates/denise-macos

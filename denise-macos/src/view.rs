@@ -11,11 +11,15 @@ use std::cell::RefCell;
 
 use denise::{ElementState, InputEvent, Modifiers, Point, PointerButton, Rect, Size, Surface};
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSEvent, NSEventModifierFlags, NSGraphicsContext, NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
+use objc2_core_foundation::CGFloat;
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+use objc2_io_surface::IOSurfaceRef;
+use objc2_quartz_core::CATransaction;
 
 use crate::Error;
 use crate::keymap::key_code;
@@ -107,6 +111,51 @@ define_class!(
         #[unsafe(method(acceptsFirstMouse:))]
         fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
             true
+        }
+
+        /// Take the `updateLayer` path rather than the `drawRect:` one.
+        ///
+        /// This is the whole of the zero-copy present. Answering `true` tells
+        /// AppKit not to allocate a backing store and not to ask for drawing;
+        /// it calls `updateLayer` instead, and what that assigns is the buffer
+        /// the rasteriser has already written. Nothing is copied on the way to
+        /// the screen.
+        ///
+        /// `drawRect:` remains below for hosts that drive the view themselves.
+        #[unsafe(method(wantsUpdateLayer))]
+        fn wants_update_layer(&self) -> bool {
+            true
+        }
+
+        /// Hands the compositor the surface. Called instead of `drawRect:`.
+        #[unsafe(method(updateLayer))]
+        fn update_layer(&self) {
+            let Some(layer) = self.layer() else {
+                return;
+            };
+            let state = self.ivars().borrow();
+            let surface = state.surface.io_surface();
+
+            // A layer's contents must be told the scale it is in, or a Retina
+            // surface is drawn at twice its size and the bottom right of the
+            // panel goes missing.
+            layer.setContentsScale(CGFloat::from(state.surface.scale_factor()));
+
+            // SAFETY: `IOSurfaceRef` is toll-free bridged to the `IOSurface`
+            // class — documented, and the reason `contents` accepts one at all.
+            // The pointer is valid while `state.surface` lives, and the layer
+            // retains what it is given.
+            let contents: &AnyObject =
+                unsafe { &*(surface as *const IOSurfaceRef).cast::<AnyObject>() };
+            // Actions off: `contents` is animatable, and its default action
+            // cross-fades over a quarter of a second. A view redrawing at sixty
+            // frames a second would spend all of them fading between buffers.
+            CATransaction::begin();
+            CATransaction::setDisableActions(true);
+            // SAFETY: assigning `contents` on the main thread, which is where
+            // AppKit calls `updateLayer`.
+            unsafe { layer.setContents(Some(contents)) };
+            CATransaction::commit();
         }
 
         #[unsafe(method(drawRect:))]
@@ -300,6 +349,9 @@ impl DeniseView {
         // SAFETY: `initWithFrame:` is `NSView`'s designated initialiser and the
         // ivars are set before it runs, as `define_class!` requires.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        // Layer-backed, because `updateLayer` above is only ever called for a
+        // view that has a layer to update.
+        this.setWantsLayer(true);
         this.install_tracking_area();
         Ok(this)
     }
@@ -327,6 +379,17 @@ impl DeniseView {
         state
             .delegate
             .update(&mut state.surface, &events, &mut state.damage);
+
+        // Published here rather than by the delegate, so that a delegate written
+        // against the single-buffered version keeps working. With two surfaces
+        // alternating, `present` is what makes the frame just drawn the one the
+        // layer shows — a delegate that painted and never presented would draw
+        // for ever into a buffer nobody is looking at.
+        //
+        // A no-op when the delegate did not acquire a frame: `present` only
+        // swaps if there was something to swap, so an update that changed
+        // nothing leaves the current frame on screen.
+        let _ = state.surface.present(&state.damage);
         // Reuse the allocation rather than the contents.
         state.events = events;
         state.events.clear();

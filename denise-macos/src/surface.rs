@@ -6,13 +6,19 @@
 //! with is still pointing at a `Vec` that moved. It also means CoreGraphics picks
 //! the row pitch — and it does not pick the width.
 
-use core::ptr::NonNull;
+use core::ptr::{NonNull, null_mut};
 
 use denise::{BufferAge, Frame, PixelFormat, Rect, Size, Surface, SurfaceError};
-use objc2_core_foundation::{CFRetained, CGFloat, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{
+    CFDictionary, CFNumber, CFRetained, CFString, CGFloat, CGPoint, CGRect, CGSize,
+};
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapContextGetBytesPerRow,
-    CGBitmapContextGetData, CGColorSpace, CGContext, CGImageAlphaInfo, CGImageByteOrderInfo,
+    CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext, CGImageAlphaInfo,
+    CGImageByteOrderInfo,
+};
+use objc2_io_surface::{
+    IOSurfaceLockOptions, IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceHeight,
+    kIOSurfacePixelFormat, kIOSurfaceWidth,
 };
 
 use crate::Error;
@@ -26,16 +32,80 @@ fn bitmap_info() -> u32 {
     CGImageByteOrderInfo::Order32Little.0 | CGImageAlphaInfo::NoneSkipFirst.0
 }
 
+/// `'BGRA'` as IOSurface spells it: the four-character code for 32-bit
+/// little-endian BGRA, which is the same memory layout as `bitmap_info` above
+/// and as every other surface in this project.
+const PIXEL_FORMAT_BGRA: i32 = i32::from_be_bytes(*b"BGRA");
+
+/// Allocates an IOSurface for `size`, letting it choose its own row alignment.
+///
+/// The properties are the minimum that produces a CPU-writable 32-bit surface:
+/// anything omitted is derived. `BytesPerRow` in particular is deliberately not
+/// requested — IOSurface aligns rows to suit the hardware, and asking for a
+/// tighter pitch than it wants is how you get a surface it will not accelerate.
+fn new_io_surface(size: Size) -> Result<CFRetained<IOSurfaceRef>, Error> {
+    let number = |value: i64| CFNumber::new_i64(value);
+    // SAFETY: reading IOSurface's own property-key statics, which are constants
+    // the framework guarantees for the life of the process.
+    let keys: [&CFString; 4] = unsafe {
+        [
+            kIOSurfaceWidth,
+            kIOSurfaceHeight,
+            kIOSurfaceBytesPerElement,
+            kIOSurfacePixelFormat,
+        ]
+    };
+    let owned = [
+        number(i64::from(size.width)),
+        number(i64::from(size.height)),
+        number(4),
+        number(i64::from(PIXEL_FORMAT_BGRA)),
+    ];
+    let values: [&CFNumber; 4] = [&owned[0], &owned[1], &owned[2], &owned[3]];
+
+    let properties = CFDictionary::from_slices(&keys, &values);
+    // SAFETY: every key is one of IOSurface's own, and every value is the type
+    // that key is documented to take.
+    unsafe { IOSurfaceRef::new(properties.as_opaque()) }.ok_or(Error::BitmapContext)
+}
+
+/// One of the two buffers, and everything needed to draw into it.
+struct Buffer {
+    io_surface: CFRetained<IOSurfaceRef>,
+    context: CFRetained<CGContext>,
+    /// The pixels inside `io_surface`. The address is stable for the surface's
+    /// lifetime; the lock taken around each frame is about coherency, not about
+    /// where the buffer is.
+    pixels: NonNull<u32>,
+}
+
 /// A pixel buffer a Cocoa view draws from.
 ///
-/// Persistent and always current, so [`BufferAge::Frames(1)`] is the honest answer
-/// on every frame and incremental repaint works — unlike a surface handed out by a
-/// compositor, where the buffer you get back is two frames stale and the damage
-/// has to be widened to match.
+/// **Two `IOSurface`s, shown alternately.** One is handed to a `CALayer` as its
+/// contents, where CoreAnimation reads it in place — no copy, and a cost that
+/// does not scale with the size of the window. The obvious alternative, a
+/// `CGImage` per frame, is copied whole on every commit however little of it
+/// changed: on a 1040×720 surface with one spinner animating, that is the
+/// difference between 9.2% of a core and 2%.
+///
+/// The pair is not for tearing, though it helps there too. It is because
+/// assigning the *same* object to `contents` tells CoreAnimation nothing: the
+/// property has not changed, so it has no reason to look at the buffer again,
+/// and the window shows the first frame for ever while the application draws
+/// happily into memory nobody is reading. Two surfaces means every present
+/// assigns a different object, which is a change it cannot miss. The private
+/// `-[CALayer setContentsChanged]` is the other way, and not one a published
+/// crate should take.
+///
+/// So the buffer handed back by [`Surface::acquire`] is two frames old, not one,
+/// and [`BufferAge::Frames(2)`] is what says so — which is exactly the case
+/// `DamageTracker` exists to widen for.
 pub struct ViewSurface {
-    context: CFRetained<CGContext>,
-    /// The pixels CoreGraphics allocated. Valid for as long as `context` lives.
-    pixels: NonNull<u32>,
+    buffers: [Buffer; 2],
+    /// The buffer the layer is showing. The other one is the next frame's.
+    front: usize,
+    /// Whether a frame is out, and therefore whether the back buffer is locked.
+    drawing: bool,
     /// Words per row, which is `CGBitmapContextGetBytesPerRow / 4` and is *not*
     /// `size.width`: CoreGraphics aligns rows, typically to 32 bytes.
     stride: u32,
@@ -43,7 +113,44 @@ pub struct ViewSurface {
     scale_factor: f32,
 }
 
+impl Buffer {
+    /// One `IOSurface` and a bitmap context that draws straight into it.
+    fn new(size: Size, space: &CGColorSpace) -> Result<Self, Error> {
+        let io_surface = new_io_surface(size)?;
+        let bytes_per_row = io_surface.bytes_per_row();
+        let pixels = io_surface.base_address().cast::<u32>();
+
+        // SAFETY: the buffer belongs to `io_surface`, which this struct holds,
+        // and is at least `bytes_per_row * height` bytes. Passing it explicitly
+        // — rather than a null `data` — is what puts the rasteriser's output
+        // inside the surface the compositor reads.
+        let context = unsafe {
+            CGBitmapContextCreate(
+                pixels.as_ptr().cast(),
+                size.width as usize,
+                size.height as usize,
+                8,
+                bytes_per_row,
+                Some(space),
+                bitmap_info(),
+            )
+        }
+        .ok_or(Error::BitmapContext)?;
+
+        Ok(Self {
+            io_surface,
+            context,
+            pixels,
+        })
+    }
+}
+
 impl ViewSurface {
+    /// The buffer being drawn into: the one the layer is *not* showing.
+    fn back(&self) -> &Buffer {
+        &self.buffers[1 - self.front]
+    }
+
     /// Allocates a surface `size` physical pixels across.
     ///
     /// `scale_factor` is the view's backing scale — 2.0 on a Retina display — and
@@ -55,35 +162,25 @@ impl ViewSurface {
         }
         let space = CGColorSpace::new_device_rgb().ok_or(Error::ColorSpace)?;
 
-        // SAFETY: a null `data` asks CoreGraphics to allocate and own the pixels,
-        // which is the documented behaviour and the reason this backend uses it.
-        // Passing 0 for `bytes_per_row` lets it pick the alignment it wants.
-        let context = unsafe {
-            CGBitmapContextCreate(
-                core::ptr::null_mut(),
-                size.width as usize,
-                size.height as usize,
-                8,
-                0,
-                Some(&space),
-                bitmap_info(),
-            )
+        let one = Buffer::new(size, &space)?;
+        let two = Buffer::new(size, &space)?;
+        let bytes_per_row = one.io_surface.bytes_per_row();
+        // Two surfaces of one size get one pitch, and the `&mut [u32]` handed out
+        // by `acquire` is built from a single `stride` for both.
+        if bytes_per_row != two.io_surface.bytes_per_row() {
+            return Err(Error::BitmapContext);
         }
-        .ok_or(Error::BitmapContext)?;
-
-        let data = CGBitmapContextGetData(Some(&context));
-        let pixels = NonNull::new(data.cast::<u32>()).ok_or(Error::BitmapContext)?;
-        let bytes_per_row = CGBitmapContextGetBytesPerRow(Some(&context));
-        // A pitch that is not a whole number of words would make the `&mut [u32]`
-        // below unsound. CoreGraphics has never produced one for a 32-bit format,
-        // and this is cheaper than trusting that.
+        // A pitch that is not a whole number of words would make that slice
+        // unsound. CoreGraphics has never produced one for a 32-bit format, and
+        // this is cheaper than trusting that.
         if !bytes_per_row.is_multiple_of(4) {
             return Err(Error::BitmapContext);
         }
 
         Ok(Self {
-            context,
-            pixels,
+            buffers: [one, two],
+            front: 0,
+            drawing: false,
             stride: (bytes_per_row / 4) as u32,
             size,
             scale_factor,
@@ -120,7 +217,8 @@ impl ViewSurface {
     /// AppKit installs for a **flipped** view. In an unflipped one the image
     /// arrives upside down, silently.
     pub unsafe fn draw_into(&self, context: &CGContext, bounds: CGRect) {
-        let Some(image) = CGBitmapContextCreateImage(Some(&self.context)) else {
+        let Some(image) = CGBitmapContextCreateImage(Some(&self.buffers[self.front].context))
+        else {
             return;
         };
 
@@ -142,11 +240,20 @@ impl ViewSurface {
         CGContext::restore_g_state(Some(context));
     }
 
+    /// The buffer to hand a `CALayer` as its contents.
+    ///
+    /// `IOSurfaceRef` is toll-free bridged to the `IOSurface` class, which is
+    /// what makes it assignable to `contents` at all.
+    #[inline]
+    pub fn io_surface(&self) -> &IOSurfaceRef {
+        &self.buffers[self.front].io_surface
+    }
+
     /// The bitmap context, for a caller that wants to draw over Denise's output
     /// with CoreGraphics itself.
     #[inline]
     pub fn context(&self) -> &CGContext {
-        &self.context
+        &self.back().context
     }
 
     /// Converts a damage rectangle in physical pixels to the view's points.
@@ -167,6 +274,19 @@ impl ViewSurface {
     }
 }
 
+impl Drop for ViewSurface {
+    fn drop(&mut self) {
+        if self.drawing {
+            // SAFETY: as in `present`.
+            let _ = unsafe {
+                self.back()
+                    .io_surface
+                    .unlock(IOSurfaceLockOptions(0), null_mut())
+            };
+        }
+    }
+}
+
 impl Surface for ViewSurface {
     fn size(&self) -> Size {
         self.size
@@ -181,25 +301,61 @@ impl Surface for ViewSurface {
     }
 
     fn acquire(&mut self) -> Result<Frame<'_>, SurfaceError> {
+        // Locked for the duration of the drawing and no longer. Holding it
+        // across frames looks like it should be free — one writer, and `Frame`
+        // already excludes a second — and it is not: the lock is what the
+        // compositor waits on to read the surface, so a lock that is never
+        // released is a window that draws one frame and then freezes.
+        //
+        // SAFETY: a null seed pointer is documented as "do not report the seed".
+        if !self.drawing {
+            // SAFETY: a null seed pointer is documented as "do not report the
+            // seed", and the matching unlock happens in `present` or `drop`.
+            let taken = unsafe {
+                self.back()
+                    .io_surface
+                    .lock(IOSurfaceLockOptions(0), null_mut())
+            };
+            if taken != 0 {
+                return Err(SurfaceError::NotReady);
+            }
+            self.drawing = true;
+        }
+
         let len = self.stride as usize * self.size.height as usize;
         // SAFETY: `pixels` is the allocation CoreGraphics made for `context`, which
         // this struct owns and which is `stride * height` words by construction.
         // Nothing else holds a reference to it: `draw_into` takes `&self` and only
         // snapshots through CoreGraphics, and `Frame` borrows `self` mutably for as
         // long as it lives.
-        let pixels = unsafe { core::slice::from_raw_parts_mut(self.pixels.as_ptr(), len) };
+        let pixels = unsafe { core::slice::from_raw_parts_mut(self.back().pixels.as_ptr(), len) };
         Frame::new(
             pixels,
             self.size,
             self.stride,
             PixelFormat::Xrgb8888,
-            // Ours, persistent, and never handed to anyone else, so it always holds
-            // exactly what was last drawn into it.
-            BufferAge::Frames(1),
+            // Two buffers alternating: what is handed back was last drawn two
+            // frames ago, and `DamageTracker` widens for exactly that.
+            BufferAge::Frames(2),
         )
     }
 
     fn present(&mut self, _damage: &[Rect]) -> Result<(), SurfaceError> {
+        // Handing the buffer back to whoever wants to read it, and making it the
+        // one the layer is shown next. The swap is what changes the object a
+        // `CALayer` is given, which is the only thing that makes CoreAnimation
+        // look at the pixels again.
+        if self.drawing {
+            // SAFETY: the lock was taken in `acquire`, with the same options.
+            let _ = unsafe {
+                self.back()
+                    .io_surface
+                    .unlock(IOSurfaceLockOptions(0), null_mut())
+            };
+            self.drawing = false;
+            self.front = 1 - self.front;
+        }
+
         // Nothing to do: the view draws from this surface when AppKit asks it to,
         // and telling AppKit *what* to ask about is `DeniseView`'s job, because it
         // is the only one holding the view.
@@ -212,6 +368,7 @@ mod tests {
     use super::*;
     use denise::Color;
     use denise_render::Canvas;
+    use objc2_core_graphics::{CGBitmapContextGetBytesPerRow, CGBitmapContextGetData};
 
     #[test]
     fn core_graphics_picks_the_stride_and_it_is_not_the_width() {
@@ -276,6 +433,10 @@ mod tests {
                 canvas.fill_rect(Rect::new(0, y, N as i32, 1), Color::from_rgb888(shade));
             }
         }
+        // Published, which with two buffers is what makes this the one a host
+        // reads: `draw_into` shows the last *presented* frame, not the one being
+        // drawn into.
+        source.present(&[]).expect("present");
 
         let space = CGColorSpace::new_device_rgb().expect("colour space");
         // SAFETY: a null `data` asks CoreGraphics to allocate, as in `new`.
@@ -311,9 +472,19 @@ mod tests {
         // SAFETY: `dest` owns `dest_stride * N` words and outlives this slice.
         let drawn = unsafe { core::slice::from_raw_parts(dest_data, dest_stride * N as usize) };
 
-        let mut frame = source.acquire().expect("frame");
+        // The front buffer, read back through a fresh frame over the same memory.
+        // `acquire` hands out the *back* one, so this reads the presented buffer
+        // directly rather than through it.
+        let stride = source.stride() as usize;
+        // SAFETY: the front buffer owns `stride * N` words and outlives this.
+        let front = unsafe {
+            core::slice::from_raw_parts(
+                source.buffers[source.front].pixels.as_ptr(),
+                stride * N as usize,
+            )
+        };
         for y in 0..N {
-            let expected = frame.row_mut(y).expect("source row")[0] & 0x00FF_FFFF;
+            let expected = front[y as usize * stride] & 0x00FF_FFFF;
             let actual = drawn[y as usize * dest_stride] & 0x00FF_FFFF;
             assert_eq!(
                 actual, expected,

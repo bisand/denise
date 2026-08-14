@@ -452,6 +452,47 @@ and all three are now resolved:
   edge left open on purpose: widgets default their text to 16 px, so a
   scale-aware application sets text sizes explicitly; theme-driven typography
   would be its own design conversation.
+- **The desktop backends cost what a desktop costs, not what a panel costs** —
+  found by looking at Activity Monitor rather than by any test. One spinner on a
+  Retina Mac burned 48.8% of a core; the same tree on a Pi 3A+ moved the needle
+  by 1.37%, and on Windows by 0.5%.
+
+  Three causes, in increasing order of how much they taught. The loop presented
+  **every** frame whether or not anything had changed, which is a damage tracker
+  the backend then ignores. It also free-ran at 60 Hz while the tree was asking,
+  through `Ui::next_wake_ms`, to be woken every 50 ms — the kiosk loops had
+  honoured that from the start, so a window was the odd one out;
+  `DeniseApp::next_frame_in` is how it stops being. Together those took 48.8% to
+  22%.
+
+  The rest was macOS, and it was structural. softbuffer's CoreGraphics backend
+  allocates and zeroes a fresh buffer per `buffer_mut`, reports a buffer age of
+  0 so the shadow is copied in full, and drops the damage rectangles on the
+  floor in `present_with_damage` — three passes over the whole surface, per
+  frame, where win32 blits the damage into a persistent DIB. So macOS does not
+  use softbuffer here: the pixels live in a pair of `IOSurface`s that
+  CoreAnimation reads in place, which is what `denise-macos` was already doing
+  for an embedded view. 3.5% at 60 fps, on the same window that started at 48.8%.
+
+  **The pair is the part worth remembering.** One surface is enough for the
+  copying and not enough for the compositor: assigning the same object to
+  `contents` changes no property, so CoreAnimation never looks at the buffer
+  again and the window freezes on its first frame while the application draws
+  contentedly into memory nobody reads. Two surfaces make every present a
+  visible change. Getting there also cost a permanently held `IOSurfaceLock`
+  (which stalls the compositor outright), an implicit 250 ms cross-fade on every
+  `contents` assignment (fifteen of them overlapping at 60 fps, which looks like
+  two frames a second), and a transaction nobody flushed because this loop
+  blocks in `WaitUntil` rather than in AppKit's own cycle.
+
+  The methodological lesson is sharper than the technical one: **a CPU
+  measurement cannot tell "efficient" from "not drawing"**, and three of those
+  four bugs produced *lower* CPU while being more broken. The check that
+  actually settled it reads the layer's `contents` back and asks the surface
+  whether anyone is using it — `DENISE_MACOS_DEBUG=1` still prints it — and it
+  should have existed before the first measurement was quoted, not after the
+  fourth wrong one.
+
 - **Nothing looked for bugs that tests do not look for** — resolved by a review
   pass across security, memory and CPU ([#37](https://github.com/bisand/denise/issues/37)–[#44](https://github.com/bisand/denise/issues/44)), whose finding was
   less about what it found than about what nothing was watching. Four crates in

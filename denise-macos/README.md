@@ -46,6 +46,32 @@ drive it, and `ViewSurface` is the `denise::Surface` behind a layer-backed conte
   composited sprite stays off: `Ui::show_cursor(false)`, a decision that sticks
   rather than one the next mouse move overrides.
 
+## How a frame reaches the screen
+
+Two `IOSurface`s, shown alternately. The rasteriser draws into whichever one the
+compositor is not showing, and `present` swaps them; the view hands the new one
+to its `CALayer` as `contents`, where CoreAnimation reads it **in place**.
+Nothing is copied between the tree and the screen.
+
+The pair is not only about tearing. Assigning the *same* object to `contents`
+tells CoreAnimation nothing — the property has not changed, so it has no reason
+to look at the buffer again, and the window shows its first frame for ever while
+the application draws happily into memory nobody reads. Two surfaces means every
+present assigns a different object, which is a change it cannot miss.
+
+Consequences worth knowing:
+
+- **The buffer is two frames old**, so `acquire` reports `BufferAge::Frames(2)`
+  and `DamageTracker` widens the repaint to match. That is the case it exists
+  for.
+- **`present` is what publishes.** The view calls it after the delegate returns,
+  so a delegate that only paints keeps working — but a host driving a
+  `ViewSurface` itself must present, or nothing reaches the screen.
+
+The alternative, a `CGImage` snapshot per frame, is copied whole on every commit
+however little of it changed. On a 1040×720 view with one spinner: 9.2% of a
+core against 0.6%.
+
 ## Platform
 
 macOS only; elsewhere the crate compiles to almost nothing. Built on **objc2**, so

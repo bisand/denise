@@ -25,13 +25,19 @@ objc2-app-kit = { workspace = true, features = [
     # only reachable with these on.
     "objc2-core-foundation",
     "objc2-core-graphics",
+    "objc2-quartz-core",
     "NSEvent",
     "NSGraphicsContext",
     "NSResponder",
     "NSTrackingArea",
     "NSView",
 ] }
-objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
+objc2-core-foundation = { workspace = true, features = [
+    "CFCGTypes",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+] }
 objc2-core-graphics = { workspace = true, features = [
     "CGBitmapContext",
     "CGColorSpace",
@@ -39,6 +45,23 @@ objc2-core-graphics = { workspace = true, features = [
     "CGImage",
 ] }
 objc2-foundation = { workspace = true, features = ["NSGeometry"] }
+
+# The zero-copy present path. An `IOSurface` handed to a `CALayer` as its
+# contents is read by the compositor where it lies; a `CGImage` is copied, whole,
+# on every commit. See the module docs in `surface.rs` for the measurements.
+objc2-io-surface = { workspace = true, features = [
+    "IOSurfaceRef",
+    "IOSurfaceTypes",
+    "objc2-core-foundation",
+    # `IOSurfaceLock` returns a `kern_return_t`, which the bindings spell with
+    # libc's type — so the lock is unreachable without this.
+    "libc",
+] }
+objc2-quartz-core = { workspace = true, features = [
+    "CALayer",
+    "CATransaction",
+    "objc2-core-foundation",
+] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 denise-render = { workspace = true, features = ["std"] }
