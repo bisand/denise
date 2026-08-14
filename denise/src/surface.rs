@@ -70,6 +70,25 @@ pub struct Frame<'a> {
     age: BufferAge,
 }
 
+/// How many words a buffer must hold to cover `size` at `stride`.
+///
+/// `u64`, and deliberately not `usize`. Both inputs are `u32` and both come from
+/// a caller who may be wrong about them, and on a 32-bit target — `armv7` is one
+/// of this project's — `stride * (height - 1)` overflows a `usize` and wraps: a
+/// geometry needing 4 550 000 000 words then validates happily against a
+/// 255 032 704-word buffer, and the paint path indexes past the end of it. The
+/// product of two `u32`s cannot overflow a `u64`, so this answer is the same on
+/// every target.
+///
+/// Zero for an empty size, which no caller should be asking about.
+#[inline]
+pub const fn required_words(size: Size, stride: u32) -> u64 {
+    if size.is_empty() {
+        return 0;
+    }
+    stride as u64 * (size.height as u64 - 1) + size.width as u64
+}
+
 impl<'a> Frame<'a> {
     /// Wraps a backend buffer.
     ///
@@ -91,10 +110,12 @@ impl<'a> Frame<'a> {
                 actual: stride as usize,
             });
         }
-        let required = stride as usize * (size.height as usize - 1) + size.width as usize;
-        if pixels.len() < required {
+        let required = required_words(size, stride);
+        if (pixels.len() as u64) < required {
             return Err(SurfaceError::BufferTooSmall {
-                required,
+                // Saturated only in the case that cannot fit the machine anyway,
+                // where the number's job is to appear in a message.
+                required: usize::try_from(required).unwrap_or(usize::MAX),
                 actual: pixels.len(),
             });
         }
@@ -287,6 +308,35 @@ impl core::error::Error for BackendMessage {}
 mod tests {
     use super::*;
     use alloc::vec;
+
+    /// The geometry that used to slip through the buffer check on a 32-bit
+    /// target. `required_words` answers in `u64`, so the number is the same on
+    /// the machine running this test and on an `armv7` panel.
+    ///
+    /// 70 000 × 65 000 at stride 70 000 needs 4 550 000 000 words. In `usize`
+    /// arithmetic on 32 bits that wraps to 255 032 704 — small enough that a
+    /// quarter-gigaword buffer would have been accepted for it, after which
+    /// `Canvas::row_span` indexes past the end and panics.
+    #[test]
+    fn a_geometry_that_overflows_32_bit_arithmetic_is_still_measured_honestly() {
+        let size = Size::new(70_000, 65_000);
+        assert_eq!(required_words(size, 70_000), 4_550_000_000);
+        // What the old expression produced once truncated to 32 bits.
+        assert_ne!(4_550_000_000_u64 & 0xFFFF_FFFF, 4_550_000_000);
+
+        // And the check that consumes it rejects a buffer of the wrapped size.
+        let mut buf = vec![0u32; 1024];
+        assert!(
+            Frame::new(
+                &mut buf,
+                size,
+                70_000,
+                PixelFormat::Xrgb8888,
+                BufferAge::Undefined,
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn rejects_stride_below_width() {

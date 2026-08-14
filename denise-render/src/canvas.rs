@@ -19,9 +19,11 @@ impl<'a> PixelView<'a> {
         if size.is_empty() || stride < size.width {
             return None;
         }
+        // `required_words` computes in `u64` on purpose; see its documentation for
+        // the 32-bit wrap this avoids.
+        let required = denise::required_words(size, stride);
         let stride = stride as usize;
-        let required = stride * (size.height as usize - 1) + size.width as usize;
-        (pixels.len() >= required).then_some(Self {
+        (pixels.len() as u64 >= required).then_some(Self {
             pixels,
             size,
             stride,

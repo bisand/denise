@@ -73,9 +73,10 @@ pub unsafe extern "C" fn denise_ui_paint(ui: *mut DeniseUi, frame: *const Denise
         if size.is_empty() || description.stride < description.width {
             return DENISE_ERR_INVALID;
         }
-        let required = description.stride as usize * (description.height as usize - 1)
-            + description.width as usize;
-        if description.len < required {
+        // In `u64`, because `len` is the host's word and this is the check that
+        // decides whether to trust it. See `denise::required_words`.
+        let required = denise::required_words(size, description.stride);
+        if (description.len as u64) < required {
             return DENISE_ERR_BUFFER_TOO_SMALL;
         }
 

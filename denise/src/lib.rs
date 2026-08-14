@@ -63,7 +63,7 @@ pub use geom::{Point, Rect, Size};
 pub use input::{
     ElementState, InputEvent, InputSource, KeyCode, Modifiers, PointerButton, TouchId,
 };
-pub use surface::{BufferAge, Frame, PixelFormat, Surface, SurfaceError};
+pub use surface::{BufferAge, Frame, PixelFormat, Surface, SurfaceError, required_words};
 pub use theme::{ColorScheme, Metrics, Radius, Role, Theme};
 
 /// Compiles the examples in this crate's README, so they cannot drift from the API
