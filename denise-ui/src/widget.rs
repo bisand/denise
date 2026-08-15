@@ -13,6 +13,8 @@ use denise::{InputEvent, Rect, Theme};
 use denise_render::Canvas;
 use denise_text::TextEngine;
 
+use crate::motion::Wake;
+
 /// Upcast to [`Any`], so an application can get its concrete widget type back out
 /// of the tree. Blanket-implemented; never implement it by hand.
 pub trait AsAny: 'static {
@@ -250,16 +252,39 @@ impl<'a, M> EventCtx<'a, M> {
 pub struct Animation {
     /// `true` if the widget's appearance changed and it needs repainting.
     pub repaint: bool,
-    /// When the widget wants to be asked again, in the same clock as `now_ms`.
-    pub next_ms: Option<u64>,
+    /// When the widget wants to be asked again — at the tree's rate, at a
+    /// particular time, or never.
+    pub next: Wake,
 }
 
 impl Animation {
     /// Nothing is animating.
     pub const NONE: Self = Self {
         repaint: false,
-        next_ms: None,
+        next: Wake::Never,
     };
+
+    /// Moving: repaint, and come back at the tree's animation rate.
+    ///
+    /// The answer nearly every mid-transition widget wants, and the reason none
+    /// of them carries a frame-rate constant any more — how fast "the tree's
+    /// rate" is belongs to [`Motion`](crate::Motion).
+    pub const MOVING: Self = Self {
+        repaint: true,
+        next: Wake::Animating,
+    };
+
+    /// Waiting for a deadline, with nothing to repaint until it arrives.
+    ///
+    /// The toast arrangement: one wake at the moment something is due, rather
+    /// than a frame a tick spent noticing that it is not due yet.
+    #[inline]
+    pub const fn due_at(due_ms: u64) -> Self {
+        Self {
+            repaint: false,
+            next: Wake::At(due_ms),
+        }
+    }
 }
 
 /// A thing that draws itself in a rectangle and reacts to input.
@@ -300,21 +325,52 @@ pub trait Widget<M>: AsAny {
 
     /// Advances time-based state. Called only while this widget has asked to
     /// animate — see [`EventCtx::request_animation`] — and stops being called
-    /// the moment it answers `next_ms: None`.
+    /// the moment it answers [`Wake::Never`].
     ///
     /// The contract is deliberate about who holds the responsibility: **the
     /// widget keeps itself animating, and must stop asking.** On a panel that
     /// spends its day idle, a bounded transition — a knob crossing, a toast
     /// fading — costs its duration and then hands the CPU back. An animation
-    /// that never answers `None` keeps the device awake for as long as its node
-    /// is visible, which is legitimate for a spinner and ruinous for anything
-    /// that merely forgot. [`Ui::animating`](crate::Ui::animating) exists so a
-    /// test can prove a tree at rest holds nobody awake.
+    /// that never answers [`Wake::Never`] keeps the device awake for as long as
+    /// its node is visible, which is legitimate for a spinner and ruinous for
+    /// anything that merely forgot. [`Ui::animating`](crate::Ui::animating)
+    /// exists so a test can prove a tree at rest holds nobody awake.
     ///
     /// May be called earlier than the time it asked for: the tree wakes for the
     /// most impatient animation and asks everybody. Answer honestly for the
     /// clock given and it comes out right.
+    ///
+    /// # Say what kind of waiting it is
+    ///
+    /// A widget that is *moving* answers [`Wake::Animating`] and lets
+    /// [`Motion`](crate::Motion) decide how often that is — one setting, tree
+    /// wide, which a widget with its own frame-rate constant would opt out of
+    /// without meaning to. A widget waiting for something to *happen* answers
+    /// [`Wake::At`] with the time, and the rate never touches it.
     fn animate(&mut self, now_ms: u64) -> Animation {
+        let _ = now_ms;
+        Animation::NONE
+    }
+
+    /// Lands whatever is in flight at its end state, without animating it.
+    ///
+    /// Called instead of [`animate`](Widget::animate) while the tree's
+    /// [`Motion`](crate::Motion) is [`Motion::None`](crate::Motion::None) —
+    /// reduced motion, or a power budget with no room for movement. A knob
+    /// arrives, a slide is over, a fade is not a fade.
+    ///
+    /// The return is an ordinary [`Animation`], so a widget that has a
+    /// **schedule** as well as a motion keeps it: a carousel that lands its
+    /// slide instantly still answers [`Wake::At`] for its auto-advance, because
+    /// turning motion off is not the same as stopping the clock. [`Wake::
+    /// Animating`](Wake::Animating) is the one answer that means nothing here —
+    /// there is no rate to come back at — and the tree reads it as
+    /// [`Wake::Never`].
+    ///
+    /// The default settles nothing and asks for nothing, which is right for the
+    /// widgets that do not animate and for unbounded ones like a spinner: under
+    /// `Motion::None` a spinner simply does not turn.
+    fn snap(&mut self, now_ms: u64) -> Animation {
         let _ = now_ms;
         Animation::NONE
     }

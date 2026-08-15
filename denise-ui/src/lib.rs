@@ -46,6 +46,7 @@
 extern crate alloc;
 
 pub mod cursor;
+pub mod motion;
 mod node;
 pub mod overlay;
 mod toast;
@@ -55,6 +56,7 @@ pub mod widget;
 pub mod widgets;
 
 pub use cursor::{ARROW, CROSSHAIR, Cursor, CursorImage};
+pub use motion::{Motion, Wake};
 pub use node::NodeId;
 pub use overlay::{Side, anchored};
 pub use ui::Ui;

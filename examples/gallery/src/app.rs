@@ -21,7 +21,7 @@ use denise_ui::widgets::{
     Fit, Image, Label, List, ListItem, Presence, Progress, RadialProgress, RadioGroup, Rating,
     Select, Slider, Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, open_select,
 };
-use denise_ui::{Event, EventCtx, Handled, NodeId, PaintCtx, Side, TextStyle, Ui, Widget};
+use denise_ui::{Event, EventCtx, Handled, Motion, NodeId, PaintCtx, Side, TextStyle, Ui, Widget};
 
 const HEADER_H: i32 = 52;
 const SIDEBAR_W: i32 = 300;
@@ -193,9 +193,13 @@ impl App {
         size: Size,
         scale: f32,
         font: Option<(String, Box<dyn denise_text::GlyphSource>)>,
+        motion: Motion,
     ) -> Self {
         let start_theme = 1; // dark
         let mut ui: Ui<Message> = Ui::new(size, Theme::BUILT_IN[start_theme].scaled(scale));
+        // How fast everything here moves — the spinner, the carousel's slides,
+        // the drawer, the toggles — in one call, before a single node exists.
+        ui.set_motion(motion);
         let px = |v: u16| ((v as f32) * scale + 0.5) as u16;
 
         // Registered before the first node exists, so every widget is built
@@ -1333,15 +1337,15 @@ mod tests {
 
     fn app() -> App {
         // No font: the tests are about wiring, and font discovery is I/O.
-        App::new(Size::new(1280, 800), 1.0, None)
+        App::new(Size::new(1280, 800), 1.0, None, Motion::default())
     }
 
     /// The same tree on a 2× display is the same tree, twice the size — the
     /// property the whole scaling path exists for, checked at the front door.
     #[test]
     fn a_hidpi_surface_gets_the_same_layout_at_twice_the_size() {
-        let one = App::new(Size::new(1280, 800), 1.0, None);
-        let two = App::new(Size::new(2560, 1600), 2.0, None);
+        let one = App::new(Size::new(1280, 800), 1.0, None, Motion::default());
+        let two = App::new(Size::new(2560, 1600), 2.0, None, Motion::default());
 
         let (a, b) = (
             one.ui.layout(one.nodes.contrast).expect("badge at 1x"),

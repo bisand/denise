@@ -5,17 +5,17 @@ use alloc::vec::Vec;
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Size};
 use denise_render::Canvas;
 
+use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::image::{Fit, Image};
 use crate::widgets::style::{focus_ring, interactive_pair};
 
 /// How long a slide takes. A quarter second reads as motion without making a
 /// person wait for it.
+///
+/// A **duration**: [`Motion`](crate::Motion) decides how often the slide is
+/// sampled on the way, never how long it lasts.
 const SLIDE_MS: u64 = 250;
-
-/// Frame interval while sliding: 20 fps, [`Spinner`](super::Spinner)'s number
-/// and reasoning — the cost on a Pi-class device is the wakes, not the draws.
-const FRAME_MS: u64 = 16;
 
 /// Dragging past this fraction of the width commits to the next page.
 const COMMIT_DIVISOR: i32 = 4;
@@ -34,7 +34,7 @@ const DOT_GAP: i32 = 14;
 
 /// What the carousel is doing between input events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Motion {
+enum Phase {
     /// Showing the current page, waiting for input or the advance clock.
     Still,
     /// A finger holds the pages displaced by a fraction of the width,
@@ -92,7 +92,7 @@ enum Motion {
 pub struct Carousel<M> {
     pages: Vec<Image>,
     current: usize,
-    motion: Motion,
+    phase: Phase,
     /// Where a drag started, and the width it is measured against.
     grip: Option<(Point, i32)>,
     /// The advance interval, if the application asked for one.
@@ -109,7 +109,7 @@ impl<M> Carousel<M> {
         Self {
             pages: Vec::new(),
             current: 0,
-            motion: Motion::Still,
+            phase: Phase::Still,
             grip: None,
             advance_ms: None,
             held_since: 0,
@@ -124,7 +124,7 @@ impl<M> Carousel<M> {
         Self {
             pages: Vec::new(),
             current: 0,
-            motion: Motion::Still,
+            phase: Phase::Still,
             grip: None,
             advance_ms: None,
             held_since: 0,
@@ -182,7 +182,7 @@ impl<M> Carousel<M> {
     pub fn set_current(&mut self, index: usize) {
         if index < self.pages.len() {
             self.current = index;
-            self.motion = Motion::Still;
+            self.phase = Phase::Still;
         }
     }
 
@@ -191,6 +191,22 @@ impl<M> Carousel<M> {
         self.pages
             .push(Image::new(pixels, size).with_fit(Fit::Cover));
         self.pages.len() - 1
+    }
+
+    /// When the advance clock next wants waking, or [`Wake::Never`] if there is
+    /// no clock.
+    ///
+    /// A deadline rather than a rate, so it is untouched by
+    /// [`Motion`](crate::Motion): a carousel set to advance every eight seconds
+    /// advances every eight seconds at any frame rate, and at none.
+    ///
+    /// Saturating, because the clock is the application's and every deadline
+    /// here is derived from it.
+    fn advance_wake(&self, now_ms: u64) -> Wake {
+        match self.advance_ms {
+            Some(interval) => Wake::At(now_ms.saturating_add(interval)),
+            None => Wake::Never,
+        }
     }
 
     /// The page `steps` away, wrapping — a rotator is a cycle.
@@ -202,10 +218,10 @@ impl<M> Carousel<M> {
     /// The current displacement as a fraction of the width, [`WHOLE`] being
     /// one page.
     fn fraction_at(&self, now_ms: u64) -> i32 {
-        match self.motion {
-            Motion::Still => 0,
-            Motion::Dragging { fraction } => fraction,
-            Motion::Sliding { fraction, from_ms } => {
+        match self.phase {
+            Phase::Still => 0,
+            Phase::Dragging { fraction } => fraction,
+            Phase::Sliding { fraction, from_ms } => {
                 slide_fraction(fraction, now_ms.saturating_sub(from_ms))
             }
         }
@@ -223,7 +239,7 @@ impl<M> Carousel<M> {
     /// doing the work — so it came out, the `label_box` rule.
     fn arrive(&mut self, target: usize, fraction: i32, ctx: &mut EventCtx<'_, M>) {
         self.current = target;
-        self.motion = Motion::Sliding {
+        self.phase = Phase::Sliding {
             fraction,
             from_ms: ctx.now_ms,
         };
@@ -334,7 +350,7 @@ impl<M: 'static> Widget<M> for Carousel<M> {
                 self.grip = Some((*position, width));
                 // A touch catches a slide where it is; the drag takes over
                 // from the slide's current displacement.
-                self.motion = Motion::Dragging {
+                self.phase = Phase::Dragging {
                     fraction: self.fraction_at(ctx.now_ms),
                 };
                 self.held_since = ctx.now_ms;
@@ -351,10 +367,10 @@ impl<M: 'static> Widget<M> for Carousel<M> {
                 let fraction = ((i64::from(position.x - grip.x) * i64::from(WHOLE))
                     / i64::from(width.max(1))) as i32;
                 let fraction = fraction.clamp(-WHOLE, WHOLE);
-                if self.motion == (Motion::Dragging { fraction }) {
+                if self.phase == (Phase::Dragging { fraction }) {
                     return Handled::No;
                 }
-                self.motion = Motion::Dragging { fraction };
+                self.phase = Phase::Dragging { fraction };
                 Handled::Yes
             }
 
@@ -366,8 +382,8 @@ impl<M: 'static> Widget<M> for Carousel<M> {
                 if self.grip.take().is_none() {
                     return Handled::No;
                 }
-                let fraction = match self.motion {
-                    Motion::Dragging { fraction } => fraction,
+                let fraction = match self.phase {
+                    Phase::Dragging { fraction } => fraction,
                     _ => 0,
                 };
                 let commit = WHOLE / COMMIT_DIVISOR;
@@ -380,13 +396,13 @@ impl<M: 'static> Widget<M> for Carousel<M> {
                 } else if fraction != 0 {
                     // Not far enough: spring back. No message — the page did
                     // not change. The hold restarts when the spring lands.
-                    self.motion = Motion::Sliding {
+                    self.phase = Phase::Sliding {
                         fraction,
                         from_ms: ctx.now_ms,
                     };
                     ctx.request_animation();
                 } else {
-                    self.motion = Motion::Still;
+                    self.phase = Phase::Still;
                 }
                 Handled::Yes
             }
@@ -420,61 +436,99 @@ impl<M: 'static> Widget<M> for Carousel<M> {
     }
 
     fn animate(&mut self, now_ms: u64) -> Animation {
-        match self.motion {
-            Motion::Sliding { from_ms, .. } => {
+        match self.phase {
+            Phase::Sliding { from_ms, .. } => {
                 if now_ms.saturating_sub(from_ms) >= SLIDE_MS {
                     // Arrived. The hold starts now; the advance clock decides
                     // whether there is anything left to wake for.
-                    self.motion = Motion::Still;
+                    self.phase = Phase::Still;
                     self.held_since = now_ms;
                     Animation {
                         repaint: true,
-                        // Saturating throughout: the clock is the application's,
-                        // and every deadline here is derived from it.
-                        next_ms: self.advance_ms.map(|i| now_ms.saturating_add(i)),
+                        next: self.advance_wake(now_ms),
                     }
                 } else {
-                    Animation {
-                        repaint: true,
-                        next_ms: Some(now_ms.saturating_add(FRAME_MS)),
-                    }
+                    // Mid-slide: the tree's rate, whatever it is set to.
+                    Animation::MOVING
                 }
             }
-            Motion::Dragging { .. } => Animation {
+            Phase::Dragging { .. } => Animation {
                 // A finger holds the pages: nothing moves by itself, and the
                 // advance clock waits for it to lift. One distant check keeps
                 // the animation alive without costing frames.
                 repaint: false,
-                next_ms: self.advance_ms.map(|i| now_ms.saturating_add(i)),
+                next: self.advance_wake(now_ms),
             },
-            Motion::Still => match self.advance_ms {
+            Phase::Still => match self.advance_ms {
                 None => Animation::NONE,
-                Some(interval) if self.pages.len() < 2 => Animation {
+                // A one-page carousel has nothing to advance to, and asking at
+                // the interval rather than dropping out keeps the clock running
+                // for pages added later.
+                Some(_) if self.pages.len() < 2 => Animation {
                     repaint: false,
-                    next_ms: Some(now_ms.saturating_add(interval)),
+                    next: self.advance_wake(now_ms),
                 },
                 Some(interval) => {
                     let due = self.held_since.saturating_add(interval);
                     if now_ms < due {
                         // Holding: one wake at the deadline, the toast
                         // arrangement — no repaint until it fires.
-                        Animation {
-                            repaint: false,
-                            next_ms: Some(due),
-                        }
+                        Animation::due_at(due)
                     } else {
                         // Due: slide to the next page. No message — see the
                         // note on the type — the clock is the machine talking
                         // to itself.
                         self.current = self.neighbour(1);
-                        self.motion = Motion::Sliding {
+                        self.phase = Phase::Sliding {
                             fraction: WHOLE,
                             from_ms: now_ms,
                         };
                         self.held_since = now_ms;
+                        Animation::MOVING
+                    }
+                }
+            },
+        }
+    }
+
+    /// Pages change without sliding, and **keep changing**.
+    ///
+    /// The distinction the whole [`Motion`](crate::Motion) design turns on: the
+    /// slide is motion and goes away, the eight-second advance is a schedule and
+    /// does not. A signage rotator under reduced motion is still a rotator — it
+    /// cuts between pictures instead of sliding between them.
+    fn snap(&mut self, now_ms: u64) -> Animation {
+        match self.phase {
+            Phase::Sliding { .. } => {
+                self.phase = Phase::Still;
+                self.held_since = now_ms;
+                Animation {
+                    repaint: true,
+                    next: self.advance_wake(now_ms),
+                }
+            }
+            // A finger is holding the pages where they are. That displacement is
+            // not the tree's animation to land — it is where the person put it.
+            Phase::Dragging { .. } => Animation {
+                repaint: false,
+                next: self.advance_wake(now_ms),
+            },
+            Phase::Still => match self.advance_ms {
+                None => Animation::NONE,
+                Some(_) if self.pages.len() < 2 => Animation {
+                    repaint: false,
+                    next: self.advance_wake(now_ms),
+                },
+                Some(interval) => {
+                    let due = self.held_since.saturating_add(interval);
+                    if now_ms < due {
+                        Animation::due_at(due)
+                    } else {
+                        self.current = self.neighbour(1);
+                        self.held_since = now_ms;
                         Animation {
                             repaint: true,
-                            next_ms: Some(now_ms.saturating_add(FRAME_MS)),
+                            next: self.advance_wake(now_ms),
                         }
                     }
                 }
@@ -547,11 +601,11 @@ mod tests {
         c.held_since = 1_000;
         let hold = Widget::<usize>::animate(&mut c, 2_000);
         assert!(!hold.repaint, "a hold must not repaint");
-        assert_eq!(hold.next_ms, Some(9_000), "one wake, at the deadline");
+        assert_eq!(hold.next, Wake::At(9_000), "one wake, at the deadline");
         // Asked again before the deadline — the tree wakes for the most
         // impatient animation and asks everybody — same answer.
         let again = Widget::<usize>::animate(&mut c, 5_000);
-        assert_eq!(again.next_ms, Some(9_000));
+        assert_eq!(again.next, Wake::At(9_000));
         assert_eq!(c.current(), 0, "and the page has not moved");
     }
 
@@ -563,23 +617,23 @@ mod tests {
         c.held_since = 0;
         let due = Widget::<usize>::animate(&mut c, 8_000);
         assert!(due.repaint);
-        assert_eq!(due.next_ms, Some(8_000 + FRAME_MS), "sliding at frame rate");
+        assert_eq!(due.next, Wake::Animating, "sliding at the tree's rate");
         assert_eq!(c.current(), 1);
 
         // The slide finishes; the next wake is the next deadline.
         let settled = Widget::<usize>::animate(&mut c, 8_000 + SLIDE_MS);
         assert!(settled.repaint, "the landing frame paints");
-        assert_eq!(settled.next_ms, Some(8_000 + SLIDE_MS + 8_000));
-        assert_eq!(c.motion, Motion::Still);
+        assert_eq!(settled.next, Wake::At(8_000 + SLIDE_MS + 8_000));
+        assert_eq!(c.phase, Phase::Still);
 
         // Asked again mid-hold — the tree wakes for the most impatient
         // animation and asks everybody, so a spinner elsewhere on the screen
         // asks this carousel every frame. The hold must hold: same deadline,
         // no advance. This is what the landing's clock restart is *for*; the
-        // landing's own `next_ms` return covers the quiet case by itself.
+        // landing's own `Wake::At` covers the quiet case by itself.
         let mid_hold = Widget::<usize>::animate(&mut c, 8_000 + SLIDE_MS + 1_000);
         assert!(!mid_hold.repaint);
-        assert_eq!(mid_hold.next_ms, Some(8_000 + SLIDE_MS + 8_000));
+        assert_eq!(mid_hold.next, Wake::At(8_000 + SLIDE_MS + 8_000));
         assert_eq!(c.current(), 1, "an early ask must not advance the page");
     }
 
@@ -613,13 +667,13 @@ mod tests {
     #[test]
     fn set_current_is_silent_and_clamped() {
         let mut c = carousel(3);
-        c.motion = Motion::Sliding {
+        c.phase = Phase::Sliding {
             fraction: WHOLE,
             from_ms: 0,
         };
         c.set_current(2);
         assert_eq!(c.current(), 2);
-        assert_eq!(c.motion, Motion::Still);
+        assert_eq!(c.phase, Phase::Still);
         c.set_current(99);
         assert_eq!(c.current(), 2, "out of range does nothing");
     }

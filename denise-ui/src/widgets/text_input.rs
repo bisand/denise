@@ -6,6 +6,7 @@ use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
+use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::style::{Align, focus_ring, interactive_pair};
 
@@ -435,11 +436,17 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
         self.caret_on = on;
         Animation {
             repaint,
+            // A deadline, not a frame rate: the caret flips at the end of each
+            // blink and wants exactly one wake to do it. Halving the tree's
+            // animation rate must not halve the blink, and turning motion off
+            // must not stop it — a caret that has stopped blinking is a field
+            // that looks like it has lost focus.
+            //
             // Saturating, because `now_ms` is the application's clock and this
             // widget does not get to assume anything about it. A host that
             // counts from the Unix epoch, or a fuzzer that passes `u64::MAX`,
             // must not be able to panic a panel through the caret blink.
-            next_ms: Some(
+            next: Wake::At(
                 self.blink_epoch.saturating_add(
                     (elapsed / BLINK_MS)
                         .saturating_add(1)
@@ -447,5 +454,12 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                 ),
             ),
         }
+    }
+
+    /// Blinking is a schedule, so it survives [`Motion::None`](crate::Motion)
+    /// unchanged — there is nothing to land, and stopping it would be a
+    /// regression dressed up as a preference.
+    fn snap(&mut self, now_ms: u64) -> Animation {
+        Widget::<M>::animate(self, now_ms)
     }
 }

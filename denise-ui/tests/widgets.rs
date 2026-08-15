@@ -8,7 +8,7 @@ use denise_ui::widgets::{
     ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
     Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle,
 };
-use denise_ui::{Animation, NodeId, PaintCtx, Ui, Widget};
+use denise_ui::{Animation, Motion, NodeId, PaintCtx, Ui, Widget};
 
 const SIZE: Size = Size::new(400, 240);
 
@@ -2396,14 +2396,13 @@ impl Widget<Msg> for Toast {
     fn animate(&mut self, now_ms: u64) -> Animation {
         let born = *self.born_ms.get_or_insert(now_ms);
         if now_ms.saturating_sub(born) >= self.lifetime_ms {
-            // Expired. Answering `None` is the hand-back; the application
+            // Expired. Answering `Wake::Never` is the hand-back; the application
             // notices through `animating()` falling, or just removes the node.
             return Animation::NONE;
         }
-        Animation {
-            repaint: true,
-            next_ms: Some(now_ms + 16),
-        }
+        // A custom widget written the way the trait asks: it says it is moving
+        // and the tree decides how often that is.
+        Animation::MOVING
     }
 }
 
@@ -2469,6 +2468,176 @@ fn two_widgets_animate_at_once_and_the_scene_wakes_for_the_sooner() {
     assert_eq!(ui.animating(), 1, "the toast is done, the caret is not");
     let wake = ui.next_wake_ms().expect("the caret still blinks");
     assert!(wake >= 500, "the survivor's cadence, not the departed's");
+}
+
+/// One setting decides how often everything moving is looked at, and the
+/// widgets carry no rate of their own — which is what makes a deployment able
+/// to halve the cost of a spinning panel from outside the widget.
+#[test]
+fn the_animation_rate_is_one_setting_for_the_whole_tree() {
+    let wakes_in_a_second = |motion: Motion| {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let spinner = ui
+            .add(root, Spinner::new(), Rect::new(100, 80, 48, 48))
+            .expect("spinner");
+        ui.request_animation(spinner);
+        ui.set_motion(motion);
+
+        let mut now = 0;
+        let mut wakes = 0u32;
+        while let Some(next) = ui.next_wake_ms() {
+            if next > 1_000 {
+                break;
+            }
+            now = next.max(now);
+            ui.tick(now);
+            wakes += 1;
+        }
+        wakes
+    };
+
+    let fast = wakes_in_a_second(Motion::Every(16));
+    let slow = wakes_in_a_second(Motion::Every(33));
+    assert!(
+        (60..=64).contains(&fast),
+        "16 ms is about sixty wakes a second, saw {fast}"
+    );
+    // Halved, which is the whole claim — and the Pi measurement this was built
+    // for: 4.20% of a core at 16 ms against 1.37% at 50.
+    assert!(
+        (fast / 2).abs_diff(slow) <= 1,
+        "{slow} wakes at 33 ms is not half of {fast} at 16"
+    );
+}
+
+/// The rate is a **sample rate**: a coarser one draws a transition in fewer
+/// positions and never makes it take longer. A duration is a duration.
+#[test]
+fn a_slower_rate_makes_a_transition_coarser_and_not_slower() {
+    let arrived_at = |motion: Motion| {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let panel = ui
+            .add(root, Panel::default(), Rect::new(0, 0, 100, 40))
+            .expect("panel");
+        ui.set_motion(motion);
+        ui.animate_layout(panel, Rect::new(0, 200, 100, 40), 200);
+
+        // Tick at the rate the tree asks for, and report when it landed.
+        let mut now = 0;
+        while let Some(next) = ui.next_wake_ms() {
+            now = next.max(now);
+            ui.tick(now);
+            if ui.animating() == 0 {
+                break;
+            }
+            assert!(now < 10_000, "a 200 ms tween that never landed");
+        }
+        (now, ui.layout(panel).expect("panel"))
+    };
+
+    let (fast, fast_rect) = arrived_at(Motion::Every(16));
+    let (slow, slow_rect) = arrived_at(Motion::Every(50));
+    assert_eq!(fast_rect, Rect::new(0, 200, 100, 40));
+    assert_eq!(slow_rect, fast_rect, "both land in the same place");
+    // Within one frame of the duration either way: a sampled animation lands on
+    // the first tick at or after its deadline, and that tick is up to one
+    // interval late. What must not happen is the 50 ms run taking three times
+    // as long as the 16 ms one.
+    assert!((200..=216).contains(&fast), "landed at {fast}, not 200");
+    assert!((200..=250).contains(&slow), "landed at {slow}, not 200");
+}
+
+/// `Motion::None` is not "very slow": everything lands at once, the animating
+/// set empties, and the tree asks for nothing at all. That last part is the
+/// point — reduced motion on a kiosk should let the device idle, not leave it
+/// waking for animations nobody can see.
+#[test]
+fn no_motion_lands_everything_and_leaves_the_tree_asleep() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let panel = ui
+        .add(root, Panel::default(), Rect::new(0, 0, 100, 40))
+        .expect("panel");
+    let spinner = ui
+        .add(root, Spinner::new(), Rect::new(100, 80, 48, 48))
+        .expect("spinner");
+    let toggle = ui
+        .add(
+            root,
+            Toggle::new("Logg", Msg::Logging),
+            Rect::new(20, 20, 160, 40),
+        )
+        .expect("toggle");
+
+    ui.request_animation(spinner);
+    ui.animate_layout(panel, Rect::new(0, 200, 100, 40), 200);
+    ui.handle(&click(30, 40));
+    ui.tick(0);
+    assert_eq!(ui.animating(), 3, "a spinner, a tween and a crossing knob");
+
+    ui.set_motion(Motion::None);
+    assert_eq!(
+        ui.next_wake_ms(),
+        Some(0),
+        "a changed setting needs one tick to take effect"
+    );
+    ui.tick(10);
+
+    assert_eq!(ui.animating(), 0, "nothing is left animating");
+    assert_eq!(ui.next_wake_ms(), None, "and the loop may sleep for good");
+    assert_eq!(
+        ui.layout(panel),
+        Some(Rect::new(0, 200, 100, 40)),
+        "the tween landed rather than stopping part way"
+    );
+    let knob = ui.widget::<Toggle<Msg>>(toggle).expect("toggle").checked();
+    assert!(knob, "the switch is still a switch");
+}
+
+/// A schedule is not a frame rate. A carousel told to advance every eight
+/// seconds does that at any rate, and with no motion at all — it cuts between
+/// pictures instead of sliding between them.
+#[test]
+fn a_deadline_survives_every_animation_setting() {
+    let advanced_at = |motion: Motion| {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let pixels = vec![0xFF00_0000u32; 4];
+        let carousel = ui
+            .add(
+                root,
+                Carousel::new(Msg::Page)
+                    .with_picture(pixels.clone(), Size::new(2, 2))
+                    .with_picture(pixels, Size::new(2, 2))
+                    .auto_advance(8_000),
+                Rect::new(0, 0, 200, 120),
+            )
+            .expect("carousel");
+        ui.set_motion(motion);
+        ui.request_animation(carousel);
+
+        let mut now = 0;
+        while let Some(next) = ui.next_wake_ms() {
+            now = next.max(now);
+            ui.tick(now);
+            if ui
+                .widget::<Carousel<Msg>>(carousel)
+                .expect("carousel")
+                .current()
+                == 1
+            {
+                return now;
+            }
+            assert!(now < 20_000, "a carousel that never advanced");
+        }
+        panic!("the advance clock stopped asking");
+    };
+
+    assert_eq!(advanced_at(Motion::Every(16)), 8_000);
+    assert_eq!(advanced_at(Motion::Every(200)), 8_000);
+    assert_eq!(advanced_at(Motion::None), 8_000, "no motion, same clock");
 }
 
 /// Hiding a node stops its animation: an invisible spinner spinning forever is

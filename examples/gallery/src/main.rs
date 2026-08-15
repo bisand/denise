@@ -3,6 +3,8 @@
 //! ```text
 //! cargo run -p gallery
 //! cargo run -p gallery -- --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+//! cargo run -p gallery -- --motion 33          # 30 fps animation
+//! cargo run -p gallery -- --motion off         # reduced motion
 //! cargo run -p gallery -- --snapshot shot.ppm
 //! cargo run -p gallery -- --snapshot 2x.ppm --size 2560x1600 --scale 2
 //! cargo run -p gallery --no-default-features --features kiosk     # the display
@@ -12,6 +14,10 @@
 //! those go to a logical one — the pair a HiDPI display hands a window. A
 //! *window* is not told either: it asks the backend, and the layout is written
 //! in logical pixels regardless.
+//!
+//! `--motion` is the animation rate, in milliseconds between samples, or `off`.
+//! It costs what a spinner costs: this gallery keeps one turning, and halving
+//! the rate halves what an otherwise idle window spends.
 //!
 //! The proof-of-concept panel: everything the toolkit ships, on one screen,
 //! with a live theme editor driving [`Ui::set_theme`] the way an application
@@ -29,6 +35,7 @@ mod app;
 
 use app::{App, Message};
 use denise::Size;
+use denise_ui::Motion;
 
 const WINDOW: Size = Size::new(1280, 800);
 
@@ -42,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Snapshots have no display to ask, so the scale is an argument there.
     // A window gets the real one from the backend; see `window_backend`.
     let mut scale: f32 = 1.0;
+    let mut motion = Motion::default();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -50,6 +58,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "gallery.ppm".into())),
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
+            "--motion" => {
+                motion = match args.next().as_deref() {
+                    Some("off" | "none") => Motion::None,
+                    Some(ms) => Motion::Every(ms.parse().unwrap_or(16)),
+                    None => Motion::default(),
+                }
+            }
             // A window other than the default, mostly for reviewing snapshots
             // of the parts a default-sized first frame leaves below the fold.
             "--size" => {
@@ -70,9 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let font = system_font::load(font.as_deref());
 
     if let Some(out) = snapshot {
-        return write_snapshot(&mut App::new(size, scale, font), size, &out).map_err(Into::into);
+        return write_snapshot(&mut App::new(size, scale, font, motion), size, &out)
+            .map_err(Into::into);
     }
-    backend::run(font, size, seconds)
+    backend::run(font, size, seconds, motion)
 }
 
 /// Draws one frame into a PPM, with no window and no event loop.
@@ -131,6 +147,7 @@ mod window_backend {
         font: Font,
         size: denise::Size,
         _seconds: u64,
+        motion: denise_ui::Motion,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // `run_with`, not `run`: the tree is built after the window exists, which
         // is the first moment the display's scale factor is knowable. On a Retina
@@ -144,7 +161,7 @@ mod window_backend {
                 ..WindowConfig::default()
             },
             move |surface, scale| {
-                let mut app = App::new(surface, scale, font);
+                let mut app = App::new(surface, scale, font, motion);
                 // The window system already draws a pointer; the tree must not
                 // draw a second one over it.
                 app.ui.show_cursor(false);
@@ -259,6 +276,7 @@ mod kiosk_backend {
         font: Font,
         _size: denise::Size,
         seconds: u64,
+        motion: denise_ui::Motion,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // A display's size is the one it has; `--size` is a window thing.
         let mut surface = Display::open(bare_linux::PresentMode::Immediate)?;
@@ -269,7 +287,7 @@ mod kiosk_backend {
         // Built at the display's size, not a window's, and at its scale — which
         // a panel wired straight to a framebuffer reports as 1.
         let scale = surface.scale_factor();
-        let mut app = App::new(size, scale, font);
+        let mut app = App::new(size, scale, font, motion);
         eprintln!("\nTab moves, F2 theme, F12 screenshot, Escape quits\n");
 
         let raw_fds = input.raw_fds();

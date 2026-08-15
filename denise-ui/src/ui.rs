@@ -21,13 +21,8 @@ use crate::tooltip::Tooltip;
 /// dropdown visually belongs to its button, and a gap wide enough to see the
 /// page through reads as two unrelated panels.
 const POPUP_GAP: i32 = 4;
+use crate::motion::{Motion, Wake};
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
-
-/// Frames while a layout tween is flying: 20 fps, [`Spinner`]'s number and
-/// reasoning — on a Pi-class device the cost is the wakes, not the draws.
-///
-/// [`Spinner`]: crate::widgets::Spinner
-const TWEEN_FRAME_MS: u64 = 50;
 
 /// A drawer's life, tracked by the tree.
 #[derive(Clone, Copy, Debug)]
@@ -126,10 +121,13 @@ pub struct Ui<M: 'static> {
     now_ms: u64,
     next_wake: Option<u64>,
     /// Nodes that have asked to animate. Emptied by their own `animate` answers:
-    /// a widget returning `next_ms: None` drops out. Kept deliberately small and
+    /// a widget returning [`Wake::Never`] drops out. Kept deliberately small and
     /// deliberately visible — [`Ui::animating`] exists so a test can assert a
     /// tree at rest holds nobody awake.
     animating: Vec<NodeId>,
+    /// How fast everything in the tree animates, and whether it does at all.
+    /// The one place the rate is decided — see [`Motion`].
+    motion: Motion,
     /// Layout tweens in flight: nodes the *tree* is carrying from one
     /// rectangle to another. Bounded by construction — every tween has a
     /// duration and is removed at arrival — and counted by [`Ui::animating`]
@@ -182,6 +180,7 @@ impl<M: 'static> Ui<M> {
             now_ms: 0,
             next_wake: None,
             animating: Vec::new(),
+            motion: Motion::default(),
             tweens: Vec::new(),
             drawer: None,
             cursor_auto: true,
@@ -1152,11 +1151,18 @@ impl<M: 'static> Ui<M> {
     ///
     /// A node gets into that set through [`EventCtx::request_animation`] or
     /// [`Ui::request_animation`], and out of it by its own answer: an
-    /// [`Animation`] with `next_ms: None` is the widget saying it is done. The
+    /// [`Animation`](crate::Animation) with [`Wake::Never`] is the widget
+    /// saying it is done. The
     /// tree never keeps a widget animating; the widget keeps itself animating,
     /// and the tree keeps the evidence — see [`Ui::animating`].
+    ///
+    /// **How often** a moving widget is asked is the tree's decision, not the
+    /// widget's: a widget answers [`Wake::Animating`] and [`Ui::motion`] turns
+    /// that into a time. A widget answering [`Wake::At`] has named a deadline
+    /// instead, and the rate does not touch it.
     pub fn tick(&mut self, now_ms: u64) {
         self.now_ms = now_ms;
+        let interval = self.motion.interval_ms();
         let mut wake: Option<u64> = None;
         let mut i = 0;
         while i < self.animating.len() {
@@ -1166,18 +1172,30 @@ impl<M: 'static> Ui<M> {
                 self.animating.swap_remove(i);
                 continue;
             };
-            let animation = node.widget.animate(now_ms);
+            // Under `Motion::None` a widget is asked to land rather than to
+            // move, once, and is then expected to have nothing left to do.
+            let animation = match interval {
+                Some(_) => node.widget.animate(now_ms),
+                None => node.widget.snap(now_ms),
+            };
             let clip = node.clip;
             if animation.repaint {
                 self.damage.add(clip);
             }
-            match animation.next_ms {
+            // The scene wakes for the most impatient animation, and everybody is
+            // asked again at that point. A widget's `animate` must therefore
+            // tolerate being called before the time it asked for — all of them
+            // already did, because `tick`'s clock was always the caller's.
+            let next = match animation.next {
+                Wake::Never => None,
+                // The saturating add that every widget used to do for itself.
+                // `Wake::Animating` under `Motion::None` is a widget that could
+                // not land: there is no rate to come back at, so it stops.
+                Wake::Animating => interval.map(|ms| now_ms.saturating_add(ms)),
+                Wake::At(due) => Some(due),
+            };
+            match next {
                 Some(next) => {
-                    // The scene wakes for the most impatient animation, and
-                    // everybody is asked again at that point. A widget's
-                    // `animate` must therefore tolerate being called before the
-                    // time it asked for — all of them already did, because
-                    // `tick`'s clock was always the caller's.
                     wake = Some(wake.map_or(next, |w: u64| w.min(next)));
                     i += 1;
                 }
@@ -1199,14 +1217,24 @@ impl<M: 'static> Ui<M> {
                 self.tweens.swap_remove(i);
                 continue;
             }
-            let rect = tween.at(now_ms);
+            // The tree's own animation, sampled at the tree's own rate — and
+            // with no rate at all, a tween is a `set_layout` that happens to
+            // have been asked for politely.
+            let rect = match interval {
+                Some(_) => tween.at(now_ms),
+                None => tween.to,
+            };
             self.apply_layout(tween.id, rect);
             if rect == tween.to {
                 self.tweens.swap_remove(i);
                 continue;
             }
-            let next = now_ms + TWEEN_FRAME_MS;
-            wake = Some(wake.map_or(next, |w: u64| w.min(next)));
+            // Only reachable with an interval: a tween with no rate landed on
+            // `to` above and is already gone.
+            if let Some(ms) = interval {
+                let next = now_ms.saturating_add(ms);
+                wake = Some(wake.map_or(next, |w: u64| w.min(next)));
+            }
             i += 1;
         }
 
@@ -1308,6 +1336,45 @@ impl<M: 'static> Ui<M> {
         // Wake immediately: the event loop may already be deciding how long to
         // sleep, and the newly animating widget has not been asked yet.
         self.next_wake = Some(self.next_wake.map_or(self.now_ms, |w| w.min(self.now_ms)));
+    }
+
+    /// How fast the tree animates, and whether it does at all.
+    #[inline]
+    pub const fn motion(&self) -> Motion {
+        self.motion
+    }
+
+    /// Sets the rate every moving thing in the tree runs at.
+    ///
+    /// One decision covering spinners, knobs crossing, carousel slides, layout
+    /// tweens and toast fades — see [`Motion`] for what it is and is not.
+    ///
+    /// ```ignore
+    /// ui.set_motion(Motion::Every(33));  // 30 fps: half the wakes
+    /// ui.set_motion(Motion::None);       // reduced motion
+    /// ```
+    ///
+    /// # Where the setting belongs
+    ///
+    /// Here rather than on [`Theme`], although the theme already carries
+    /// `metrics` and `depth` and motion tokens would not be absurd beside them.
+    /// A theme is an **identity** — swapping dark for light must not change the
+    /// power budget — while the frame rate is a **deployment** decision, and the
+    /// same panel wants a different answer on a bench and on a battery. Putting
+    /// it on the tree also puts it next to the thing it acts on: the animating
+    /// set is here, and so is the wake this feeds.
+    ///
+    /// Takes effect at the next [`Ui::tick`], which is asked for immediately —
+    /// an event loop may be blocked on input right now with a sleep it worked
+    /// out under the old setting.
+    pub fn set_motion(&mut self, motion: Motion) {
+        self.motion = motion;
+        // The notification stack is not a node, so `tick` cannot reach it the
+        // way it reaches widgets.
+        self.toasts.set_motion(motion);
+        if self.animating() > 0 || self.toasts.len() > 0 {
+            self.next_wake = Some(self.now_ms);
+        }
     }
 
     /// How many nodes are currently animating.

@@ -6,6 +6,7 @@ use denise::{ElementState, InputEvent, KeyCode, Rect, Role, Theme};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
+use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
@@ -13,10 +14,10 @@ use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 ///
 /// Short enough that nobody waits for it and long enough to read as movement
 /// rather than as a dropped frame.
+///
+/// A **duration**, not a frame rate: [`Motion`](crate::Motion) decides how many
+/// positions the knob is drawn in on the way, and never how long it takes.
 const TRAVEL_MS: u64 = 120;
-
-/// Roughly 60 Hz while the knob is moving, and never otherwise.
-const FRAME_MS: u64 = 16;
 
 /// Knob positions are fixed-point over this range, so the whole widget is
 /// integer arithmetic — `denise-ui` is `no_std` and the rasteriser is integer
@@ -199,6 +200,9 @@ impl<M> Toggle<M> {
     }
 
     /// Ends any transition immediately, wherever it had got to.
+    ///
+    /// The arrival itself. [`Widget::snap`] is the tree asking for it to happen
+    /// now.
     fn settle(&mut self) {
         self.from = Self::target(self.checked);
     }
@@ -361,11 +365,21 @@ impl<M: 'static> Widget<M> for Toggle<M> {
             self.settle();
             return Animation::NONE;
         }
+        // Moving, at whatever rate the tree animates at. The crossing still
+        // takes `TRAVEL_MS` either way: a coarser rate draws it in fewer
+        // positions, it does not draw it more slowly.
+        Animation::MOVING
+    }
+
+    /// The knob arrives at once. A switch is the clearest case for reduced
+    /// motion: the slide was always a courtesy, and the value never depended on
+    /// it.
+    fn snap(&mut self, now_ms: u64) -> Animation {
+        let moving = self.moving(now_ms);
+        self.settle();
         Animation {
-            repaint: true,
-            // Saturating: the clock is the application's, and its value is not
-            // this widget's to assume anything about.
-            next_ms: Some(now_ms.saturating_add(FRAME_MS)),
+            repaint: moving,
+            next: Wake::Never,
         }
     }
 

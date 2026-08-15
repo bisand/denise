@@ -71,7 +71,7 @@ Twenty-five of them, deliberately few:
 | `Avatar` | A picture, or initials on a colour derived from them |
 | `Table` | Cells under a pinned header. **Windows its data, so row count is free** |
 | `Timeline` | Events in order: time, disc, connector, label |
-| `Carousel` | Pictures sliding on the animation clock. **One wake per hold** |
+| `Carousel` | Pictures sliding on the advance clock. **One wake per hold** |
 | `Collapse` | A section that folds to its header; `Accordion` adds exclusivity |
 | `Video` | The rectangle a video plane sits in — the frames never come through the tree |
 
@@ -90,6 +90,49 @@ press, focus and enabled are tracked by the tree; moving, resizing, showing or
 removing a node damages both the old rectangle and the new. `Ui::render` returns
 `false` and draws nothing when nothing changed, which is the state a kiosk should
 be in almost all the time.
+
+## One knob for how fast animation runs
+
+```rust,ignore
+ui.set_motion(Motion::Every(33));  // 30 fps: half the wakes, half the cost
+ui.set_motion(Motion::None);       // reduced motion, or a tight power budget
+```
+
+Every moving thing in the tree runs at this rate — spinners, knobs crossing,
+carousel slides, layout tweens, toast fades — because a widget says *that* it is
+moving (`Wake::Animating`) and the tree says *when*. It used to be four private
+constants in four widgets, which is one decision copied four times and reachable
+from nowhere.
+
+It is a **sample rate and not a duration**. A toggle still crosses in 120 ms and
+a carousel still advances after eight seconds at any setting: those are
+deadlines, spelled `Wake::At`, and turning the rate down draws a transition in
+fewer positions rather than making it take longer. Quantising a schedule to a
+frame rate would be a bug, so the two are different words.
+
+`Motion::None` is not merely a very slow rate. Transitions land at their end
+state at once, the animating set empties, and the tree asks for no wake at all —
+the `prefers-reduced-motion` answer, and the right setting where any animation
+is a bad trade. Schedules survive it: a tooltip still appears after its dwell, a
+toast still goes after its hold, a carousel still rotates. It cuts between
+pictures instead of sliding between them.
+
+The default is 16 ms, because sixty is what stops a turning arc reading as a
+stutter. What that costs is the gallery on a Pi 3A+ over DRM, one spinner
+turning, with nothing changed between runs but the flag:
+
+| | CPU |
+|---|---|
+| 16 ms, the default | 4.20% |
+| 33 ms | 2.06% |
+| 50 ms | 1.26% |
+| off | **0.00%** |
+
+Which of those is right depends on the deployment, which is why it is a setting
+on the tree and not a constant in a widget — and not on `Theme`, since swapping
+dark for light should not change the power budget. A single widget that
+genuinely differs can still override it, `Spinner::with_frame_ms` being the one
+that does.
 
 ## What is not here
 

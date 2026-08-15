@@ -4,35 +4,21 @@
 use denise::Role;
 use denise_render::{Canvas, TURN};
 
+use crate::motion::{Motion, Wake};
 use crate::widget::{Animation, PaintCtx, Widget};
 use crate::widgets::radial::{ring, ring_colors, thickness_for};
 
 /// How long one revolution takes by default.
 const PERIOD_MS: u64 = 1_000;
 
-/// How often the spinner asks to be redrawn.
+/// The shortest revolution a spinner will accept.
 ///
-/// **Sixty frames a second.** A rotating object is the animation least
-/// forgiving of a low frame rate — a caret can blink twice a second and a knob
-/// can cross in eight frames, but a ring turning in visible steps reads as a
-/// stutter rather than as a style.
-///
-/// This said twenty for a while, on the argument that twenty is above the rate
-/// at which a rotation stops reading as separate positions and costs a third of
-/// the wakes. The first half of that turned out to be wrong by eye: asked for
-/// twenty and *given* twenty, the arc is visibly steppy. It had never actually
-/// been tried, because until the desktop backend started honouring
-/// `next_wake_ms` the loop free-ran at 60 Hz and quietly delivered sixty.
-///
-/// The second half was right, and is the reason this is affordable: the drawing
-/// is not the expense — the #17 bench puts a spinner-sized arc at about three
-/// microseconds — the **wake** is, and each wake ends in a present. That was
-/// costing 16 MB of copying on macOS until `denise-winit` started handing the
-/// compositor an `IOSurface`; a present there is now free, a DRM page flip
-/// always was, and win32 blits the damage rectangle. Sixty wakes a second for
-/// the one widget that can keep a device awake indefinitely is a real cost, and
-/// it is now a small one on every backend this project ships.
-const FRAME_MS: u64 = 16;
+/// A period below the sampling interval would turn more than a full circle
+/// between frames, which is a spinner that looks stopped or, worse, looks like
+/// it is going backwards. The tree's interval is not knowable here — it belongs
+/// to [`Motion`] and can be changed after this widget is built — so the clamp
+/// uses the default one, which is the fastest rate anybody is likely to set.
+const MIN_PERIOD_MS: u64 = Motion::DEFAULT_INTERVAL_MS;
 
 /// How much of the ring the moving arc covers.
 ///
@@ -49,7 +35,7 @@ const SWEEP: i32 = TURN * 3 / 4;
 /// # It must be started, and it must be stopped
 ///
 /// **This is the widget that can keep a device awake.** It is unbounded by
-/// nature: [`animate`](Widget::animate) never answers `next_ms: None` while the
+/// nature: [`animate`](Widget::animate) never answers [`Wake::Never`] while the
 /// node is visible, which is exactly what
 /// [`Ui::request_animation`](crate::Ui::request_animation) says it is allowed to
 /// do and exactly what it costs.
@@ -84,6 +70,11 @@ pub struct Spinner {
     role: Role,
     thickness: Option<i32>,
     period_ms: u64,
+    /// This spinner's own sampling interval, overriding the tree's.
+    ///
+    /// `None` — the usual case — means it turns at whatever rate
+    /// [`Motion`](crate::Motion) says, along with everything else.
+    frame_ms: Option<u64>,
     /// How far into the current revolution the arc is, in milliseconds.
     ///
     /// **Time accumulates, not angle.** Adding a per-frame angle would truncate
@@ -104,6 +95,7 @@ impl Spinner {
             role: Role::Primary,
             thickness: None,
             period_ms: PERIOD_MS,
+            frame_ms: None,
             phase_ms: 0,
             last_ms: None,
         }
@@ -124,11 +116,30 @@ impl Spinner {
 
     /// Sets how long one revolution takes.
     ///
-    /// Clamped to at least one frame: a period below the frame interval would
-    /// turn more than a full circle between frames, which is a spinner that
-    /// looks stopped or, worse, looks like it is going backwards.
+    /// Clamped to the default sampling interval,
+    /// [`Motion::DEFAULT_INTERVAL_MS`](crate::Motion::DEFAULT_INTERVAL_MS): a
+    /// period shorter than a frame turns more than a full circle between them,
+    /// which looks stopped or, worse, looks like it is going backwards.
     pub fn with_period_ms(mut self, period_ms: u64) -> Self {
-        self.period_ms = period_ms.max(FRAME_MS);
+        self.period_ms = period_ms.max(MIN_PERIOD_MS);
+        self
+    }
+
+    /// Gives this spinner its own sampling interval, in milliseconds.
+    ///
+    /// **Almost nothing should call this.** The rate belongs to the tree —
+    /// [`Ui::set_motion`](crate::Ui::set_motion) — so that one decision covers
+    /// every moving thing on the panel and a deployment can turn all of it down
+    /// at once. This is the escape hatch for the spinner that genuinely differs
+    /// from everything around it: a ring that must keep turning smoothly on a
+    /// panel whose other animation has been coarsened, or a decorative one that
+    /// should cost less than the rest.
+    ///
+    /// It overrides [`Motion::Every`] and is overridden by
+    /// [`Motion::None`](crate::Motion::None) in turn — reduced motion is a
+    /// person's decision, and a widget does not get to opt out of it.
+    pub fn with_frame_ms(mut self, frame_ms: u64) -> Self {
+        self.frame_ms = Some(frame_ms.max(1));
         self
     }
 
@@ -145,7 +156,14 @@ impl Spinner {
 
     /// Replaces the revolution period, clamped as [`Spinner::with_period_ms`].
     pub fn set_period_ms(&mut self, period_ms: u64) {
-        self.period_ms = period_ms.max(FRAME_MS);
+        self.period_ms = period_ms.max(MIN_PERIOD_MS);
+    }
+
+    /// Sets or clears this spinner's own sampling interval — see
+    /// [`Spinner::with_frame_ms`], which is where the argument for not using it
+    /// is written down.
+    pub fn set_frame_ms(&mut self, frame_ms: Option<u64>) {
+        self.frame_ms = frame_ms.map(|ms| ms.max(1));
     }
 }
 
@@ -214,18 +232,37 @@ impl<M: 'static> Widget<M> for Spinner {
             // most impatient animation and asks everybody, so a spinner is
             // routinely asked before the time it wanted.
             repaint: self.angle() != before,
-            // Never `None`. This is the unbounded case #19 made expressible, and
-            // the only thing that stops it is the node going away.
-            // Saturating: the clock is the application's, and its value is not
-            // this widget's to assume anything about.
-            next_ms: Some(now_ms.saturating_add(FRAME_MS)),
+            // Never `Wake::Never`. This is the unbounded case #19 made
+            // expressible, and the only thing that stops it is the node going
+            // away — or motion being turned off, which is what [`Widget::snap`] is for.
+            //
+            // How fast "animating" is belongs to the tree. The override says a
+            // time instead, saturating because the clock is the application's
+            // and its value is not this widget's to assume anything about.
+            next: match self.frame_ms {
+                None => Wake::Animating,
+                Some(ms) => Wake::At(now_ms.saturating_add(ms)),
+            },
         }
+    }
+
+    /// Nothing to land: a spinner has no end state to arrive at, so under
+    /// [`Motion::None`](crate::Motion::None) it simply stops turning and leaves
+    /// a still ring. That is the honest reading of "no motion" for the one
+    /// widget that is nothing but motion.
+    fn snap(&mut self, _now_ms: u64) -> Animation {
+        Animation::NONE
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The interval these tests step the clock by: whatever the tree's default
+    /// rate is, since that is what a spinner asking for [`Wake::Animating`]
+    /// will actually be given.
+    const FRAME_MS: u64 = Motion::DEFAULT_INTERVAL_MS;
 
     /// `animate` comes from `Widget<M>`, and a `Spinner` is not generic over
     /// the message type — so the tests pick one for it.
@@ -322,13 +359,49 @@ mod tests {
     /// between frames looks stopped, or backwards.
     #[test]
     fn an_impossibly_short_period_is_clamped_to_a_frame() {
-        for asked in [0, 1, 10, FRAME_MS - 1] {
+        for asked in [0, 1, 10, MIN_PERIOD_MS - 1] {
             let spinner = Spinner::new().with_period_ms(asked);
-            assert_eq!(spinner.period_ms, FRAME_MS, "asked for {asked}");
+            assert_eq!(spinner.period_ms, MIN_PERIOD_MS, "asked for {asked}");
         }
         let mut spinner = Spinner::new();
         spinner.set_period_ms(0);
-        assert_eq!(spinner.period_ms, FRAME_MS);
+        assert_eq!(spinner.period_ms, MIN_PERIOD_MS);
+    }
+
+    /// The default is the tree's rate, and the override is a time — which is
+    /// what lets one spinner differ from everything around it without any
+    /// widget carrying a frame-rate constant.
+    #[test]
+    fn a_spinner_asks_for_the_trees_rate_unless_told_otherwise() {
+        let mut spinner = Spinner::new();
+        assert_eq!(tick(&mut spinner, 1_000).next, Wake::Animating);
+
+        let mut own = Spinner::new().with_frame_ms(100);
+        assert_eq!(tick(&mut own, 1_000).next, Wake::At(1_100));
+
+        // Zero is a busy loop, not a rate.
+        let mut zero = Spinner::new().with_frame_ms(0);
+        assert_eq!(tick(&mut zero, 1_000).next, Wake::At(1_001));
+
+        // And the override can be given back.
+        own.set_frame_ms(None);
+        assert_eq!(tick(&mut own, 1_100).next, Wake::Animating);
+    }
+
+    /// A spinner has no end state, so turning motion off stops it rather than
+    /// landing it somewhere — and, importantly, drops it out of the animating
+    /// set instead of leaving it asking for frames nobody will deliver.
+    #[test]
+    fn no_motion_stops_a_spinner_rather_than_landing_it() {
+        let mut spinner = Spinner::new();
+        tick(&mut spinner, 1_000);
+        let angle = spinner.angle();
+        assert_eq!(
+            Widget::<()>::snap(&mut spinner, 2_000),
+            Animation::NONE,
+            "a still ring wants nothing"
+        );
+        assert_eq!(spinner.angle(), angle, "and it did not jump on the way");
     }
 
     /// It never stops asking. This is the unbounded case, and the test says so
@@ -339,8 +412,9 @@ mod tests {
         let mut spinner = Spinner::new();
         for frame in 0..200u64 {
             let animation = tick(&mut spinner, frame * FRAME_MS);
-            assert!(
-                animation.next_ms.is_some(),
+            assert_ne!(
+                animation.next,
+                Wake::Never,
                 "frame {frame}: a spinner must keep asking"
             );
         }

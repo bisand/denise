@@ -100,6 +100,13 @@ For reference, the same tree on a Raspberry Pi 3A+ over DRM is 4.2%, and on
 Windows 0.5%. The desktop backends are now within sight of the hardware, which
 is the only claim this crate ever wanted to make.
 
+How much of that a panel spends is the application's decision rather than this
+crate's: `Ui::set_motion` sets the rate everything animates at, and
+`Motion::None` leaves the tree asking for no wake at all — at which point
+`next_frame_in` answers `None` and the loop blocks on input, the state a kiosk
+should be in almost all the time. `cargo run -p gallery -- --motion 33` is the
+lever in one flag.
+
 ## Why it earns its place
 
 Because the alternative is developing blind. A backend that produces the *same*

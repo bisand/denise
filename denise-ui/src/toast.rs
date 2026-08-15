@@ -37,6 +37,8 @@ use denise::{Color, Point, Radius, Rect, Role, Size, Theme};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
+use crate::motion::Motion;
+
 /// How long a toast takes to fade in.
 const FADE_IN_MS: u64 = 120;
 
@@ -84,10 +86,18 @@ impl Note {
     }
 
     /// Opacity at `now_ms`, `0..=255`, and `None` once it has expired.
-    fn alpha(&self, now_ms: u64) -> Option<u8> {
+    ///
+    /// Under [`Motion::None`] there are no fades to be part-way through, so a
+    /// toast is opaque for its whole life and then gone. The *life* is
+    /// unchanged: how long a notification stays readable is not a motion
+    /// setting.
+    fn alpha(&self, now_ms: u64, motion: Motion) -> Option<u8> {
         let age = now_ms.saturating_sub(self.born_ms);
         if age >= self.life_ms() {
             return None;
+        }
+        if !motion.animates() {
+            return Some(255);
         }
         if age < FADE_IN_MS {
             return Some((age * 255 / FADE_IN_MS.max(1)) as u8);
@@ -106,7 +116,13 @@ impl Note {
     /// frame; during the hold it wants exactly one wake, at the instant the
     /// fade-out starts. A toast holding for four seconds therefore costs one
     /// wake, not two hundred and forty.
-    fn next_wake(&self, now_ms: u64, frame_ms: u64) -> u64 {
+    ///
+    /// With no motion there are no fades, so it wants exactly one wake in its
+    /// whole life: the moment it goes.
+    fn next_wake(&self, now_ms: u64, motion: Motion) -> u64 {
+        let Some(frame_ms) = motion.interval_ms() else {
+            return self.born_ms.saturating_add(self.life_ms());
+        };
         let age = now_ms.saturating_sub(self.born_ms);
         let fading_at = FADE_IN_MS + self.hold_ms;
         if age < FADE_IN_MS {
@@ -133,9 +149,11 @@ pub(crate) struct Toasts {
     /// knows the answer is gone.
     last_painted: Option<Rect>,
     style: TextStyle,
-    /// How often a *fading* toast asks to be redrawn. A fade is short, so this
-    /// is the one place the toolkit spends frames freely.
-    frame_ms: u64,
+    /// The tree's animation setting, which is what a *fading* toast asks to be
+    /// redrawn at. A copy rather than a parameter on six methods, kept in step
+    /// by [`Ui::set_motion`](crate::Ui::set_motion) — the stack is not a node,
+    /// so nothing else would carry it here.
+    motion: Motion,
 }
 
 impl Toasts {
@@ -144,8 +162,13 @@ impl Toasts {
             notes: Vec::new(),
             last_painted: None,
             style: TextStyle::built_in(16),
-            frame_ms: 33,
+            motion: Motion::default(),
         }
+    }
+
+    /// Follows the tree's animation setting.
+    pub(crate) fn set_motion(&mut self, motion: Motion) {
+        self.motion = motion;
     }
 
     /// Adds a notification, dropping the oldest if the stack is full.
@@ -175,7 +198,8 @@ impl Toasts {
     /// Drops expired toasts. Returns `true` if any went.
     pub(crate) fn retire(&mut self, now_ms: u64) -> bool {
         let before = self.notes.len();
-        self.notes.retain(|note| note.alpha(now_ms).is_some());
+        self.notes
+            .retain(|note| note.alpha(now_ms, self.motion).is_some());
         self.notes.len() != before
     }
 
@@ -189,6 +213,11 @@ impl Toasts {
     pub(crate) fn is_changing(&self, now_ms: u64) -> bool {
         self.notes.iter().any(|note| {
             let age = now_ms.saturating_sub(note.born_ms);
+            if !self.motion.animates() {
+                // Nothing fades, so the only frame that changes anything is the
+                // one where it goes.
+                return age >= note.life_ms();
+            }
             age < FADE_IN_MS || age >= FADE_IN_MS + note.hold_ms
         })
     }
@@ -197,7 +226,7 @@ impl Toasts {
     pub(crate) fn next_wake(&self, now_ms: u64) -> Option<u64> {
         self.notes
             .iter()
-            .map(|note| note.next_wake(now_ms, self.frame_ms))
+            .map(|note| note.next_wake(now_ms, self.motion))
             .min()
     }
 
@@ -249,7 +278,7 @@ impl Toasts {
         let mut out = Vec::new();
         let mut bottom = surface.height as i32 - MARGIN;
         for (index, note) in self.notes.iter().enumerate().rev() {
-            let Some(alpha) = note.alpha(now_ms) else {
+            let Some(alpha) = note.alpha(now_ms, self.motion) else {
                 continue;
             };
             let size = measure(note, self.style, surface, engine);
@@ -360,6 +389,11 @@ mod tests {
 
     const SURFACE: Size = Size::new(400, 240);
 
+    /// The tree's default rate, which is what a stack nobody has reconfigured
+    /// fades at.
+    const INTERVAL: u64 = Motion::DEFAULT_INTERVAL_MS;
+    const MOTION: Motion = Motion::Every(INTERVAL);
+
     fn note(now_ms: u64) -> Note {
         Note {
             text: String::from("Lagret"),
@@ -373,21 +407,25 @@ mod tests {
     #[test]
     fn a_toast_fades_in_holds_and_fades_out_by_itself() {
         let note = note(1_000);
-        assert_eq!(note.alpha(1_000), Some(0), "born invisible");
-        assert!(note.alpha(1_000 + FADE_IN_MS / 2).expect("fading in") > 0);
-        assert_eq!(note.alpha(1_000 + FADE_IN_MS), Some(255), "arrived");
+        assert_eq!(note.alpha(1_000, MOTION), Some(0), "born invisible");
+        assert!(
+            note.alpha(1_000 + FADE_IN_MS / 2, MOTION)
+                .expect("fading in")
+                > 0
+        );
+        assert_eq!(note.alpha(1_000 + FADE_IN_MS, MOTION), Some(255), "arrived");
         assert_eq!(
-            note.alpha(1_000 + FADE_IN_MS + HOLD_MS / 2),
+            note.alpha(1_000 + FADE_IN_MS + HOLD_MS / 2, MOTION),
             Some(255),
             "holding"
         );
 
         let fading = 1_000 + FADE_IN_MS + HOLD_MS + FADE_OUT_MS / 2;
-        let half = note.alpha(fading).expect("fading out");
+        let half = note.alpha(fading, MOTION).expect("fading out");
         assert!((80..180).contains(&half), "half way out is {half}");
 
-        assert_eq!(note.alpha(1_000 + note.life_ms()), None, "gone");
-        assert_eq!(note.alpha(u64::MAX), None, "and stays gone");
+        assert_eq!(note.alpha(1_000 + note.life_ms(), MOTION), None, "gone");
+        assert_eq!(note.alpha(u64::MAX, MOTION), None, "and stays gone");
     }
 
     /// **The cost claim.** A holding toast asks for one wake, at the instant it
@@ -398,15 +436,19 @@ mod tests {
         let fading_at = FADE_IN_MS + HOLD_MS;
 
         // Just after it arrives, the next wake is the whole hold away.
-        let wake = note.next_wake(FADE_IN_MS, 33);
+        let wake = note.next_wake(FADE_IN_MS, MOTION);
         assert_eq!(wake, fading_at, "a holding toast wakes once, at the fade");
 
         // Still one wake, most of the way through the hold.
-        assert_eq!(note.next_wake(fading_at - 1, 33), fading_at);
+        assert_eq!(note.next_wake(fading_at - 1, MOTION), fading_at);
 
         // During the fades it wants frames.
-        assert_eq!(note.next_wake(0, 33), 33, "fading in");
-        assert_eq!(note.next_wake(fading_at + 10, 33), fading_at + 43, "out");
+        assert_eq!(note.next_wake(0, MOTION), INTERVAL, "fading in");
+        assert_eq!(
+            note.next_wake(fading_at + 10, MOTION),
+            fading_at + 10 + INTERVAL,
+            "out"
+        );
     }
 
     /// A tree with no toasts asks for nothing at all.

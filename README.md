@@ -344,6 +344,13 @@ is in [docs/design.md](docs/design.md).
   to a target over a duration, through the same path `set_layout` uses — damage,
   reflow and stacked siblings come along on every frame, and the tween lands
   exactly and goes silent. With `set_stack`, this is the accordion mechanism.
+- **How fast animation runs is one setting.** `Ui::set_motion` sets the rate for
+  everything that moves — spinners, crossings, slides, tweens, toast fades —
+  because a widget says *that* it is moving and the tree says *when*. It is a
+  sample rate and not a duration: a coarser setting draws a transition in fewer
+  positions, and deadlines like a carousel's eight-second advance are untouched.
+  `Motion::None` lands everything at once and leaves the tree asking for no wake
+  at all, which is both the reduced-motion answer and the tightest power budget.
 - **No text selection, clipboard or word motion** in `TextInput`. The measurement
   it needs exists; the editing model does not.
 - **One surface, so no second window.** A modal is another scene over a dimmed

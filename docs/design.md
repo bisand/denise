@@ -410,7 +410,7 @@ and all three are now resolved:
   [#19](https://github.com/bisand/denise/issues/19). Animation is now *requested*:
   a widget asks for frames at the moment it starts needing them
   (`EventCtx::request_animation`, or `Ui::request_animation` for a widget nobody
-  touches), and drops out by answering `next_ms: None` — the widget keeps itself
+  touches), and drops out by answering `Wake::Never` — the widget keeps itself
   animating and must stop asking. A toast that appears, waits and fades without
   ever being focused is now expressible; `Toggle` finishes its crossing when
   focus moves away instead of settling defensively. What survived the change is
@@ -492,6 +492,61 @@ and all three are now resolved:
   whether anyone is using it — `DENISE_MACOS_DEBUG=1` still prints it — and it
   should have existed before the first measurement was quoted, not after the
   fourth wrong one.
+
+- **How fast animation runs was four constants and nobody's decision** —
+  resolved by [#45](https://github.com/bisand/denise/issues/45), immediately
+  after the CPU work above made the number matter. `Spinner`, `Carousel` and
+  `Toggle` each held a private `FRAME_MS = 16` and `Ui` a private
+  `TWEEN_FRAME_MS = 50`: one decision copied four times, reachable from nowhere,
+  and wrong in two directions at once. Sixty frames a second is what stops a
+  turning arc reading as a stutter on a desktop, and it is 4.20% of a Pi 3A+'s
+  core for as long as a spinner is on screen, against 1.37% at fifty.
+
+  The setting is `Ui::set_motion`, and the interesting part is what had to
+  change before it could exist. A widget used to answer `next_ms: Option<u64>`,
+  which spelled two unrelated things identically: a spinner asking for "another
+  frame in 16 ms" and a carousel asking for "the next page in eight seconds". A
+  setting that halved one would silently have halved the other, so `Wake` splits
+  them — **`Wake::Animating` is a rate the tree owns, `Wake::At` is a deadline it
+  must not touch.** Halving the rate now makes an animation coarser and never
+  slower, and `Toggle`'s 120 ms crossing, `Carousel`'s advance and the caret
+  blink are all unaffected by it, which is a test rather than a claim.
+
+  `Motion::None` is the other half, and is not merely a very slow rate:
+  transitions land at their end state, the animating set empties, and the tree
+  asks for no wake at all. That needed a second trait method — `Widget::snap`,
+  "land what is in flight, now" — because a widget derives its position from a
+  clock the tree cannot fast-forward. It is the `prefers-reduced-motion` answer
+  and the right setting on hardware where any animation is a bad trade, and it
+  stops **motion** rather than **schedules**: the carousel cuts between pictures
+  instead of sliding, and still rotates.
+
+  Two placement decisions worth recording. It is on `Ui` rather than `Theme`,
+  although the theme already carries `metrics` and `depth`: a theme is an
+  identity, and swapping dark for light should not change the power budget,
+  while the rate is a deployment decision that differs for the same panel on a
+  bench and on a battery. And it is on the *tree* rather than on the widgets,
+  which means a custom widget gets the setting for free by answering
+  `Wake::Animating` — a widget with its own frame-rate constant would opt out of
+  a tree-wide policy without meaning to. `Spinner::with_frame_ms` is the escape
+  hatch for the one that genuinely differs, and `Motion::None` overrides even
+  that, because reduced motion is a person's decision.
+
+  The gallery on a Pi 3A+ over DRM, one spinner turning, `--motion` the only
+  thing changed between runs:
+
+  | | CPU |
+  |---|---|
+  | 16 ms, the default | 4.20% |
+  | 33 ms | 2.06% |
+  | 50 ms | 1.26% |
+  | off | **0.00%** |
+
+  The 16 ms figure is the same 4.20% measured before any of this existed, which
+  is the check that the mechanism costs nothing when it is not used. The last
+  row is the one worth having: with no motion the tree asks for no wake at all,
+  the backend blocks on input, and the device idles like a panel with nothing
+  animating on it — because that is now what it is.
 
 - **Nothing looked for bugs that tests do not look for** — resolved by a review
   pass across security, memory and CPU ([#37](https://github.com/bisand/denise/issues/37)–[#44](https://github.com/bisand/denise/issues/44)), whose finding was
