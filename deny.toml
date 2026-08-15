@@ -61,6 +61,20 @@ allow = [
     "Zlib",
 ]
 
+# The browser example fired the copyleft alarm this section exists for, and a
+# human decided: per-crate exceptions, not a wider allow list, so the *next*
+# MPL arrival still gets stopped and read. Nothing here reaches crates.io —
+# the example is `publish = false` — and nothing here is modified, which is
+# the case MPL-2.0's file-level terms leave indistinguishable from MIT in
+# practice. CDLA-Permissive-2.0 is Mozilla's licence for the CA certificate
+# *data* in webpki-roots: permissive, and data, not code.
+exceptions = [
+    { crate = "cssparser", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros", allow = ["MPL-2.0"] },
+    { crate = "dtoa-short", allow = ["MPL-2.0"] },
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
+
 [sources]
 # crates.io and nothing else. A git dependency in a published crate cannot be
 # published at all, so this catches the mistake before the release does.
