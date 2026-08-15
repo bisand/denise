@@ -1,6 +1,6 @@
 //! The scanout surface: dumb buffers, modeset, and page flips.
 
-use denise::{Frame, PixelFormat, Rect, Size, Surface, SurfaceError};
+use denise::{Frame, MAX_DAMAGE_RECTS, PixelFormat, Rect, Size, Surface, SurfaceError};
 use drm::Device as _;
 use drm::DriverCapability;
 use drm::buffer::Buffer as _;
@@ -43,10 +43,11 @@ pub enum PresentMode {
     /// content, where a tear crosses something worth looking at". A scrolling
     /// viewport turned out to be exactly that, and the flicker was reported from a
     /// Pi within a day of the gallery gaining one. So the mode is no longer a
-    /// promise about every frame: **a frame whose damage spans a quarter of the
+    /// promise about every frame: **a frame whose damage covers a quarter of the
     /// screen's rows or more flips at vblank anyway**, and this asks for async
     /// flips on the frames where the seam is short and the latency is felt. See
-    /// [`flip_flags_for`], including why it counts rows rather than pixels.
+    /// [`flip_flags_for`], including why it counts rows rather than pixels, and
+    /// why it counts the rows covered rather than the rows spanned.
     ///
     /// Requires `DRM_CAP_ASYNC_PAGE_FLIP`; drivers without it fall back to
     /// [`PresentMode::Vsync`], and [`DrmSurface::present_mode`] reports what was
@@ -210,6 +211,26 @@ const TEAR_FREE_DENOMINATOR: u32 = 4;
 /// toolbar forty rows tall can tear freely — the seam is a thin band that is gone
 /// next frame. A narrow column down the whole screen cannot.
 ///
+/// # Covered, not spanned
+///
+/// Which leaves how to count the rows when the damage is in several pieces. The
+/// first answer here was the bounding box, on the reasoning that one flip
+/// changes the buffer for every rectangle at once, so the beam can seam anywhere
+/// between them. True, and it measures the wrong thing: the beam can seam there,
+/// but nobody can *see* it there. Outside the damage both buffers hold the same
+/// pixels — that is what repainting to the buffer's age guarantees — and a seam
+/// between two identical images is not a seam.
+///
+/// So it counts the rows the damage actually covers, which is what the earlier
+/// reasoning was reaching for anyway: the sidebar covers 1016 rows whichever way
+/// it is counted, and still waits. What changes is the frame this backend was
+/// never meant to catch. The gallery keeps a spinner turning at the top of the
+/// screen, so every frame while a pointer is somewhere in the lower two thirds
+/// carried a 48-row spinner, a 24-row cursor, and a bounding box spanning the
+/// eight hundred untouched rows between them — vblank-paced, all of it, from a
+/// rule written for scrolling. Counting coverage puts that frame back at 72 rows
+/// and back on the async path it was on in 0.13.0.
+///
 /// An empty damage list means the caller presented without saying what changed,
 /// which cannot be assumed to be small.
 fn flip_flags_for(mode: PresentMode, damage: &[Rect], surface: Size) -> PageFlipFlags {
@@ -223,22 +244,67 @@ fn flip_flags_for(mode: PresentMode, damage: &[Rect], surface: Size) -> PageFlip
         return synced;
     }
 
-    // Bounds rather than each rectangle's own height: two updates far apart
-    // vertically leave the rows between them untouched, but a single flip still
-    // changes the buffer for all of them at once, so the beam can seam anywhere
-    // in the span.
-    let bounds = damage
-        .iter()
-        .copied()
-        .reduce(|acc, r| acc.union(&r))
-        .unwrap_or(Rect::ZERO);
-    let rows = bounds.height.max(0) as u32;
+    let rows = damaged_rows(damage, surface);
 
     if rows * TEAR_FREE_DENOMINATOR >= surface.height * TEAR_FREE_NUMERATOR {
         synced
     } else {
         immediate
     }
+}
+
+/// How many of the surface's scanlines the damage covers, counting an overlap
+/// once.
+///
+/// The vertical extents, merged. Rectangles arrive in no particular order and
+/// may overlap, so this sorts them by top edge — an insertion sort over at most
+/// [`MAX_DAMAGE_RECTS`] items, in a fixed array, because this runs once per
+/// frame on a Pi and must not allocate — and then sweeps, extending the run
+/// while the next span starts before the current one ends.
+///
+/// Rows outside the surface cannot tear, so each span is clipped first. A list
+/// longer than the tracker's own capacity is something this backend has no
+/// business guessing about: it reports the full height, and the caller gets a
+/// vblank.
+fn damaged_rows(damage: &[Rect], surface: Size) -> u32 {
+    if damage.len() > MAX_DAMAGE_RECTS {
+        return surface.height;
+    }
+
+    let bottom_edge = surface.height as i32;
+    let mut spans = [(0i32, 0i32); MAX_DAMAGE_RECTS];
+    let mut len = 0;
+
+    for rect in damage {
+        let top = rect.y.clamp(0, bottom_edge);
+        let bottom = rect.bottom().clamp(0, bottom_edge);
+        if bottom <= top {
+            continue;
+        }
+        let mut i = len;
+        while i > 0 && spans[i - 1].0 > top {
+            spans[i] = spans[i - 1];
+            i -= 1;
+        }
+        spans[i] = (top, bottom);
+        len += 1;
+    }
+
+    let mut rows: u32 = 0;
+    let mut i = 0;
+    while i < len {
+        let (start, mut end) = spans[i];
+        i += 1;
+        // Sorted by top edge, so anything that starts at or before this run's
+        // current end belongs to the same run — and may extend it.
+        while i < len && spans[i].0 <= end {
+            end = end.max(spans[i].1);
+            i += 1;
+        }
+        rows += (end - start) as u32;
+    }
+
+    rows
 }
 
 /// A display brought up under our control, scanning out CPU-rendered buffers.
@@ -585,16 +651,16 @@ mod tests {
         );
     }
 
-    /// Bounds, not each rectangle on its own. Two specks far apart leave the
-    /// rows between them untouched, but one flip changes the buffer for all of
-    /// them at once, so the beam can seam anywhere in the span.
+    /// What the damage covers, not what it spans. Two specks far apart leave
+    /// the rows between them untouched, and untouched rows are identical in
+    /// both buffers, so the seam the beam can put there shows nothing.
     #[test]
-    fn scattered_damage_is_judged_by_what_it_spans() {
+    fn scattered_damage_is_judged_by_what_it_covers() {
         let corners = [Rect::new(0, 0, 60, 40), Rect::new(1860, 1040, 60, 40)];
         assert_eq!(
             flip_flags_for(PresentMode::Immediate, &corners, SCREEN),
-            PageFlipFlags::EVENT,
-            "two specks at opposite corners span every row between them"
+            PageFlipFlags::EVENT | PageFlipFlags::ASYNC,
+            "eighty rows in two places, not the thousand between them"
         );
 
         let neighbours = [Rect::new(40, 700, 220, 48), Rect::new(280, 700, 220, 48)];
@@ -602,6 +668,79 @@ mod tests {
             flip_flags_for(PresentMode::Immediate, &neighbours, SCREEN),
             PageFlipFlags::EVENT | PageFlipFlags::ASYNC,
             "two buttons side by side are still two buttons"
+        );
+    }
+
+    /// The frame this rule was costing, and the reason it was reported: the
+    /// gallery's spinner sits at the top and re-damages itself every motion
+    /// tick, so hovering anything below it produced a bounding box most of the
+    /// screen tall. Nothing about that frame is worth a vblank.
+    #[test]
+    fn a_spinner_and_a_pointer_far_apart_are_two_small_things() {
+        let spinner = Rect::new(736, 46, 48, 48);
+        let cursor = Rect::new(910, 812, 16, 24);
+        let hovered = Rect::new(820, 780, 220, 48);
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &[spinner, cursor, hovered], SCREEN),
+            PageFlipFlags::EVENT | PageFlipFlags::ASYNC,
+            "a spinner, a cursor and a highlight cover well under a quarter"
+        );
+    }
+
+    /// A scroll damages one tall rectangle, and the whole point is that it is
+    /// still caught once the count stops being a bounding box.
+    #[test]
+    fn coverage_still_catches_the_frames_bounds_caught() {
+        let sidebar = [Rect::new(12, 52, 300, 1016)];
+        assert_eq!(damaged_rows(&sidebar, SCREEN), 1016);
+
+        let viewport = [Rect::new(320, 60, 1560, 1000)];
+        assert_eq!(damaged_rows(&viewport, SCREEN), 1000);
+    }
+
+    /// Rectangles arrive in no order and may overlap. A row under two of them
+    /// is still one row.
+    #[test]
+    fn overlapping_and_unsorted_rows_are_counted_once() {
+        let stacked = [
+            Rect::new(0, 300, 100, 100),
+            Rect::new(0, 100, 100, 100),
+            Rect::new(0, 350, 100, 100),
+        ];
+        assert_eq!(
+            damaged_rows(&stacked, SCREEN),
+            250,
+            "100 at 100..200, then 150 at 300..450"
+        );
+
+        let abutting = [Rect::new(0, 100, 100, 50), Rect::new(0, 150, 100, 50)];
+        assert_eq!(damaged_rows(&abutting, SCREEN), 100, "one run, not two");
+    }
+
+    /// Rows off the bottom of the panel are never scanned out, so they cannot
+    /// tear and do not count.
+    #[test]
+    fn rows_outside_the_surface_do_not_count() {
+        let overhang = [Rect::new(0, 1000, 100, 400)];
+        assert_eq!(damaged_rows(&overhang, SCREEN), 80);
+
+        let above = [Rect::new(0, -50, 100, 60)];
+        assert_eq!(damaged_rows(&above, SCREEN), 10);
+
+        let offscreen = [Rect::new(0, 1080, 100, 40)];
+        assert_eq!(damaged_rows(&offscreen, SCREEN), 0);
+    }
+
+    /// More rectangles than the tracker can hold is not something this backend
+    /// can reason about, and it is not going to guess in the direction that
+    /// tears.
+    #[test]
+    fn an_oversized_list_is_treated_as_everything() {
+        let many = [Rect::new(0, 0, 8, 8); MAX_DAMAGE_RECTS + 1];
+        assert_eq!(damaged_rows(&many, SCREEN), SCREEN.height);
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &many, SCREEN),
+            PageFlipFlags::EVENT
         );
     }
 

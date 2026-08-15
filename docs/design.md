@@ -427,6 +427,30 @@ after the first fix shipped. Counting rows keeps the case async flips exist for,
 a wide shallow band whose seam is as short as the band, and catches the narrow
 column an area test cannot see.
 
+**And a third go, from the same panel: rows *covered*, not rows *spanned*.** The
+row count started as the damage's bounding box, justified by the observation that
+one flip changes the buffer for every rectangle at once, so the beam can seam
+anywhere between them. True, and beside the point — the beam can seam there,
+nobody can see it there. Untouched rows are identical in both buffers, because
+that is precisely what repainting to the buffer's age guarantees, and a seam
+between two identical images is not a seam. What the bounding box cost was the
+frame nobody had thought to check: the gallery's spinner sits at the top of the
+screen and re-damages itself every motion tick, so hovering anything in the lower
+two thirds produced a 48-row spinner, a 24-row cursor, and a box spanning the
+eight hundred rows between them. Every such frame took a vblank it did not need,
+which put a 16 ms motion rate against a 16.7 ms refresh and read as flicker on
+the control under the pointer — a regression introduced by the fix above, and
+reported within a day of it, the same way the fix above was. Coverage puts that
+frame back at 72 rows. Nothing that mattered changes: a scroll and a sidebar are
+each *one* rectangle, and one rectangle covers exactly what it spans.
+
+The general lesson is worth more than the fix. Both wrong versions were wrong in
+the same way — they measured a proxy (pixels, then the extent between rectangles)
+instead of the thing that decides whether a human sees an artefact, which is how
+much of what the beam draws differs between the two buffers. The third version
+measures that directly, and it is the first one that has no obvious frame it
+mishandles.
+
 The measurement around it is worth keeping for the next person, because two
 plausible explanations died on the way. Scrolling is **not** over-damaging: one
 scroll produces exactly one rectangle, the viewport. It is **not** input

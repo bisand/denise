@@ -70,7 +70,7 @@ the text being read, and — because an async flip never blocks — nothing pace
 loop, so the same Pi spends a whole core producing torn frames at 14.5 ms each
 for as long as a finger keeps moving.
 
-So the flip follows the damage rather than the setting alone: **damage spanning
+So the flip follows the damage rather than the setting alone: **damage covering
 under a quarter of the screen's rows flips async, at or above it waits for
 vblank.** The latency stays where it is felt, the pacing arrives on the frames
 that cannot afford to go without it, and an application does not have to know
@@ -82,8 +82,19 @@ compared damaged *pixels* against the surface, and a Pi still flashed
 occasionally. The gallery's sidebar is 300×1016 on a 1920×1080 panel: 14.7% of
 the pixels and 94% of the scanlines, so it went out async and tore across almost
 the whole height of the screen. A tear is a horizontal seam, so what matters is
-how many rows the damage spans. A full-width toolbar forty rows tall may still
+how many rows the damage touches. A full-width toolbar forty rows tall may still
 tear freely; a narrow column down the whole screen may not.
+
+**Covered, not spanned** — which took a third. Counting rows by the damage's
+bounding box says that two small updates at opposite ends of the screen are a
+full-height frame, and they are not: outside the damage both buffers hold the
+same pixels, so a seam falling between them shows nothing. The gallery keeps a
+spinner turning at the top, so every frame with a pointer in the lower two
+thirds carried a spinner, a cursor and a bounding box across the eight hundred
+untouched rows between — vblank-paced, from a rule written for scrolling, and
+reported as flicker on the hovered control. The count is now the rows the
+rectangles actually cover, overlaps once. The sidebar covers 1016 either way and
+still waits.
 
 ## Testing
 
