@@ -84,6 +84,9 @@ pub struct App {
     needs_relayout: bool,
     /// The page `Select` whose popup is open, if any.
     open_select_target: Option<NodeId>,
+    /// Pages already read, keyed by URL sans fragment: Back and Forward
+    /// show them without a request, the way going back should feel.
+    page_cache: std::collections::HashMap<String, String>,
 }
 
 struct Chrome {
@@ -145,6 +148,7 @@ impl App {
             css_inflight: std::collections::HashMap::new(),
             needs_relayout: false,
             open_select_target: None,
+            page_cache: std::collections::HashMap::new(),
         };
         match start.as_deref().and_then(to_url) {
             Some(url) => {
@@ -235,7 +239,7 @@ impl App {
                 self.history.save_scroll(scroll);
                 if let Some(entry) = self.history.back() {
                     let (url, restore) = (entry.url.clone(), entry.scroll);
-                    self.navigate(url, false, restore);
+                    self.revisit(url, restore);
                 }
             }
             Message::Forward => {
@@ -243,7 +247,7 @@ impl App {
                 self.history.save_scroll(scroll);
                 if let Some(entry) = self.history.forward() {
                     let (url, restore) = (entry.url.clone(), entry.scroll);
-                    self.navigate(url, false, restore);
+                    self.revisit(url, restore);
                 }
             }
             Message::Reload => {
@@ -386,6 +390,18 @@ impl App {
         self.show_page(html, url, Point::ZERO);
     }
 
+    /// Back or Forward: the cached page if we still hold it — instant, no
+    /// spinner — else the ordinary fetch. Reload never comes here.
+    fn revisit(&mut self, url: Url, restore: Point) {
+        if let Some(html) = self.page_cache.get(&cache_key(&url)).cloned() {
+            self.pending = None;
+            self.ui.set_visible(self.chrome.spinner, false);
+            self.show_page(html, url, restore);
+            return;
+        }
+        self.navigate(url, false, restore);
+    }
+
     fn navigate(&mut self, url: Url, push: bool, restore: Point) {
         if push {
             let scroll = self.ui.scroll(self.chrome.content);
@@ -436,7 +452,18 @@ impl App {
                 self.ui.set_visible(self.chrome.spinner, false);
 
                 let html = match done.result {
-                    Ok(Fetched::Text(html)) => html,
+                    Ok(Fetched::Text(html)) => {
+                        // Worth remembering; error pages are not. The cap
+                        // is crude on purpose — twenty pages of history is
+                        // plenty and eviction policy is not this example's
+                        // subject.
+                        if self.page_cache.len() >= 20 {
+                            self.page_cache.clear();
+                        }
+                        self.page_cache
+                            .insert(cache_key(&done.final_url), html.clone());
+                        html
+                    }
                     Ok(Fetched::Bytes(_)) => error_page("that was not a page"),
                     Err(e) => error_page(&e),
                 };
@@ -484,9 +511,12 @@ impl App {
                     .as_ref()
                     .and_then(|p| p.images.iter().find(|j| j.dom == dom))
                     .map(|j| j.node)
-                    && let Some(widget) = self.ui.widget_mut::<denise_ui::widgets::Image>(node)
                 {
-                    widget.set_pixels(pixels.clone(), size);
+                    let target = self.ui.layout(node).unwrap_or(Rect::ZERO);
+                    let (fitted, fitted_size) = fit_pixels(&pixels, size, target);
+                    if let Some(widget) = self.ui.widget_mut::<denise_ui::widgets::Image>(node) {
+                        widget.set_pixels(fitted, fitted_size);
+                    }
                 }
                 self.natural.insert(dom, size);
                 self.pixels.insert(dom, (pixels, size));
@@ -618,9 +648,11 @@ impl App {
             .collect();
         let mut queued = 0;
         for (dom, src, node) in jobs {
-            if let Some((pixels, size)) = self.pixels.get(&dom) {
+            if let Some((pixels, size)) = self.pixels.get(&dom).cloned() {
+                let target = self.ui.layout(node).unwrap_or(Rect::ZERO);
+                let (fitted, fitted_size) = fit_pixels(&pixels, size, target);
                 if let Some(widget) = self.ui.widget_mut::<denise_ui::widgets::Image>(node) {
-                    widget.set_pixels(pixels.clone(), *size);
+                    widget.set_pixels(fitted, fitted_size);
                 }
                 continue;
             }
@@ -1012,6 +1044,59 @@ fn to_url(text: &str) -> Option<Url> {
     Url::parse(&format!("https://{text}")).ok()
 }
 
+/// Pre-scales decoded pixels to the box they will fill, box-filtering the
+/// downscale that the widget's nearest-neighbour blit would turn to
+/// gravel. The arithmetic is `Fit::Contain`'s own, so what the widget then
+/// blits is 1:1. Upscales are left to the blit — blur only beats blocky
+/// going down. Premultiplied channels average correctly as they are.
+fn fit_pixels(pixels: &[u32], size: Size, target: Rect) -> (Vec<u32>, Size) {
+    let (sw, sh) = (size.width as i64, size.height as i64);
+    if sw == 0 || sh == 0 || target.width <= 0 || target.height <= 0 {
+        return (pixels.to_vec(), size);
+    }
+    let (rw, rh) = (target.width as i64, target.height as i64);
+    let (dw, dh) = if sw * rh > sh * rw {
+        (rw, (sh * rw / sw).max(1))
+    } else {
+        ((sw * rh / sh).max(1), rh)
+    };
+    if dw >= sw || dh >= sh {
+        return (pixels.to_vec(), size);
+    }
+    let mut out = vec![0u32; (dw * dh) as usize];
+    for dy in 0..dh {
+        let y0 = (dy * sh / dh) as usize;
+        let y1 = (((dy + 1) * sh / dh) as usize).max(y0 + 1);
+        for dx in 0..dw {
+            let x0 = (dx * sw / dw) as usize;
+            let x1 = (((dx + 1) * sw / dw) as usize).max(x0 + 1);
+            let (mut a, mut r, mut g, mut b) = (0u64, 0u64, 0u64, 0u64);
+            for y in y0..y1 {
+                let row = y * sw as usize;
+                for x in x0..x1 {
+                    let p = pixels[row + x];
+                    a += (p >> 24) as u64 & 0xff;
+                    r += (p >> 16) as u64 & 0xff;
+                    g += (p >> 8) as u64 & 0xff;
+                    b += p as u64 & 0xff;
+                }
+            }
+            let n = ((y1 - y0) * (x1 - x0)) as u64;
+            out[(dy * dw + dx) as usize] = (((a / n) as u32) << 24)
+                | (((r / n) as u32) << 16)
+                | (((g / n) as u32) << 8)
+                | ((b / n) as u32);
+        }
+    }
+    (out, Size::new(dw as u32, dh as u32))
+}
+
+fn cache_key(url: &Url) -> String {
+    let mut key = url.clone();
+    key.set_fragment(None);
+    key.into()
+}
+
 /// The same page, fragments aside.
 fn same_document(a: &Url, b: &Url) -> bool {
     let mut a = a.clone();
@@ -1125,7 +1210,8 @@ mod tests {
         assert!(app.history.can_back());
 
         app.on_message(Message::Back);
-        pump(&mut app);
+        // The cache answers Back before the network could: no fetch at all.
+        assert!(!app.loading(), "back came from the page cache");
         let (_, here) = app.source.as_ref().expect("a source");
         // Back lands on the fragment entry the jump created.
         assert!(here.as_str().ends_with("basic.html#verse"));

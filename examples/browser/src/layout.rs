@@ -15,18 +15,20 @@
 //! gallery follows; measuring and painting must agree exactly, so they use
 //! the same numbers.
 //!
-//! What is not here, on purpose: floats and positioning. The content flows
-//! in document order, which trades fidelity for a page that is always
-//! readable — the right trade for an example that fits in one file. Tables
-//! are the one exception fidelity won: real columns, because a rank beside
-//! a headline is what a table *means*, and stacked cells are not readable,
-//! just linear.
+//! What is not here, on purpose: positioning. The content flows in
+//! document order, which trades fidelity for a page that is always
+//! readable — the right trade for an example that fits in one file. Two
+//! exceptions fidelity won: tables get real columns, because a rank beside
+//! a headline is what a table *means*; and floats stand aside as bands the
+//! line breaker keeps out of, because a picture with prose running past it
+//! is how articles have been typeset since long before CSS.
 
 use std::collections::HashMap;
 
-use denise::{Color, Rect, Size};
+use denise::{Color, Point, Rect, Size};
 use denise_text::{FontId, TextEngine, TextStyle};
 
+use crate::css::{ClearSide, FloatSide, Length};
 use crate::dom::{Dom, NodeData};
 use crate::forms::{FormsModel, RenderControl};
 use crate::style::{Cascade, ComputedStyle, Display, TextAlign};
@@ -184,12 +186,53 @@ pub fn layout_page(
     let x = margin[3];
     let y = margin[0];
     let inner = (width - margin[3] - margin[1]).max(1);
-    let height = l.block(body, x, y, inner, None);
+    let height = l.block(body, x, y, inner, None, &[]);
     PageLayout {
         leaves: l.leaves,
         height: y + height + margin[2],
         anchors: l.anchors,
     }
+}
+
+/// One float's shadow over the flow: within `top..bottom`, lines and blocks
+/// keep out of its side. Absolute coordinates, physical pixels.
+#[derive(Clone, Copy)]
+struct Band {
+    side: FloatSide,
+    x: i32,
+    width: i32,
+    top: i32,
+    bottom: i32,
+}
+
+/// The horizontal window left between the bands overlapping `y0..y1`,
+/// within a content box starting at `cx`, `cw` wide.
+fn band_window(bands: &[Band], cx: i32, cw: i32, y0: i32, y1: i32, gap: i32) -> (i32, i32) {
+    let mut left = cx;
+    let mut right = cx + cw;
+    for band in bands {
+        if band.bottom <= y0 || band.top >= y1 {
+            continue;
+        }
+        match band.side {
+            FloatSide::Left => left = left.max(band.x + band.width + gap),
+            FloatSide::Right => right = right.min(band.x - gap),
+        }
+    }
+    (left, right.max(left + 1))
+}
+
+/// The first y at which the named sides are all past, from `y` down.
+fn clear_bottom(bands: &[Band], side: ClearSide, y: i32) -> i32 {
+    bands
+        .iter()
+        .filter(|b| match side {
+            ClearSide::Left => b.side == FloatSide::Left,
+            ClearSide::Right => b.side == FloatSide::Right,
+            ClearSide::Both => true,
+        })
+        .map(|b| b.bottom)
+        .fold(y, i32::max)
 }
 
 struct Layouter<'a> {
@@ -258,10 +301,78 @@ impl Layouter<'_> {
         }
     }
 
+    /// What box an `<img>` claims: attributes first, the decoded size
+    /// second, a placeholder last — the box an image reserves before it
+    /// arrives is what keeps the text from jumping when it does. `None`
+    /// for sources the decoder will never manage (SVG, `data:`): a
+    /// permanently blank reservation is worse than absence.
+    fn image_spec(&self, idx: usize, style: &ComputedStyle) -> Option<ObjSpec> {
+        let src = self.dom.attr(idx, "src")?;
+        let path = src.split(['?', '#']).next().unwrap_or(src);
+        if path.to_ascii_lowercase().ends_with(".svg") || src.starts_with("data:") {
+            return None;
+        }
+        let attr = |name: &str| {
+            self.dom
+                .attr(idx, name)
+                .and_then(|v| v.trim().parse::<i32>().ok())
+                .filter(|v| *v > 0)
+        };
+        let natural = self.natural.get(&idx).copied();
+        let (w_attr, h_attr) = (attr("width"), attr("height"));
+        // An author width (CSS) outranks the width attribute.
+        let css_w = style
+            .width
+            .map(|w| match w {
+                Length::Px(px) => px,
+                Length::Em(em) => (f32::from(style.font_size) * em).round() as i32,
+                Length::Percent(_) => w_attr.unwrap_or(300),
+            })
+            .filter(|w| *w > 0);
+        let w_attr = css_w.or(w_attr);
+        let sized = (w_attr.is_some() && h_attr.is_some()) || natural.is_some();
+        let (w, h) = match (w_attr, h_attr, natural) {
+            (Some(w), Some(h), _) => (w, h),
+            (Some(w), None, Some(n)) => (w, (w * n.height as i32) / (n.width as i32).max(1)),
+            (None, Some(h), Some(n)) => ((h * n.width as i32) / (n.height as i32).max(1), h),
+            (Some(w), None, None) => (w, w * 3 / 4),
+            (None, Some(h), None) => (h * 4 / 3, h),
+            (None, None, Some(n)) => (n.width as i32, n.height as i32),
+            (None, None, None) => (300, 150),
+        };
+        Some(ObjSpec {
+            dom: idx,
+            width: self.px(w).max(1),
+            height: self.px(h).max(1),
+            kind: ObjKind::Image {
+                src: src.to_string(),
+                sized,
+            },
+        })
+    }
+
+    /// Resolves an author width against the containing block, physical px.
+    fn resolve_width(&self, width: Length, container: i32, style: &ComputedStyle) -> i32 {
+        match width {
+            Length::Px(px) => self.px(px),
+            Length::Em(em) => self.px((f32::from(style.font_size) * em).round() as i32),
+            Length::Percent(p) => (container as f32 * p) as i32,
+        }
+    }
+
     /// Lays out `idx` as a block whose border box starts at `(x, y)` and is
-    /// `width` wide. Returns the border-box height. Margins are the caller's
+    /// `width` wide, keeping clear of `bands` — the floats of enclosing
+    /// blocks. Returns the border-box height. Margins are the caller's
     /// business; a marker is the parent list's.
-    fn block(&mut self, idx: usize, x: i32, y: i32, width: i32, marker: Option<String>) -> i32 {
+    fn block(
+        &mut self,
+        idx: usize,
+        x: i32,
+        y: i32,
+        width: i32,
+        marker: Option<String>,
+        bands: &[Band],
+    ) -> i32 {
         let style = self.cascade.styles[idx].clone();
 
         if self.dom.tag(idx) == Some("hr") {
@@ -271,6 +382,32 @@ impl Layouter<'_> {
                 leaf: Leaf::Rule,
             });
             return height;
+        }
+
+        // A floated (or otherwise blockified) image is its own block: one
+        // leaf, sized like any other picture, no children to walk.
+        if self.dom.tag(idx) == Some("img") {
+            if let Some(spec) = self.image_spec(idx, &style) {
+                let w = spec.width.min(width);
+                let h = if spec.width > width {
+                    (spec.height * width) / spec.width.max(1)
+                } else {
+                    spec.height
+                };
+                let ObjKind::Image { src, sized } = spec.kind else {
+                    unreachable!("image_spec makes images");
+                };
+                self.leaves.push(Placed {
+                    rect: Rect::new(x, y, w, h),
+                    leaf: Leaf::Image {
+                        dom: idx,
+                        src,
+                        sized,
+                    },
+                });
+                return h;
+            }
+            return 0;
         }
 
         // The background's height is not known until the children are; a
@@ -320,6 +457,12 @@ impl Layouter<'_> {
             }
         }
 
+        // The floats of enclosing blocks, plus this block's own as they are
+        // placed — siblings see them, descendants' flows run past them.
+        let mut local: Vec<Band> = bands.to_vec();
+        let inherited = local.len();
+        let gap = self.px(8);
+
         // Children: inline-level runs gather until a block interrupts them.
         let mut inline: Vec<InlineToken> = Vec::new();
         let mut ends_with_space = true; // swallows leading whitespace
@@ -334,8 +477,63 @@ impl Layouter<'_> {
                 Display::Inline => {
                     self.collect_inline(child, &mut inline, &mut ends_with_space, style.pre);
                 }
+                Display::Block | Display::ListItem if child_style.float.is_some() => {
+                    // A float: out of the flow, against a side, remembered
+                    // as a band everything after it must run around.
+                    self.flush_flow(
+                        &mut inline,
+                        cx,
+                        &mut cy,
+                        cw,
+                        &style,
+                        &mut pending_margin,
+                        &local,
+                    );
+                    let side = child_style.float.expect("matched");
+                    let margin = self.px4(child_style.margin);
+                    // An author width first; a floated image's own box
+                    // second; two fifths of the container as the shrug.
+                    let fw = child_style
+                        .width
+                        .map(|w| self.resolve_width(w, cw, child_style))
+                        .or_else(|| {
+                            (self.dom.tag(child) == Some("img"))
+                                .then(|| self.image_spec(child, child_style))
+                                .flatten()
+                                .map(|spec| spec.width)
+                        })
+                        .unwrap_or(cw * 2 / 5)
+                        .clamp(16, (cw - gap).max(16));
+                    // Below every earlier float on the same side.
+                    let mut fy = cy + margin[0];
+                    for band in &local {
+                        if band.side == side {
+                            fy = fy.max(band.bottom);
+                        }
+                    }
+                    let fx = match side {
+                        FloatSide::Left => cx + margin[3],
+                        FloatSide::Right => cx + cw - fw - margin[1],
+                    };
+                    let fh = self.block(child, fx, fy, fw, None, &local);
+                    local.push(Band {
+                        side,
+                        x: fx,
+                        width: fw,
+                        top: fy,
+                        bottom: fy + fh + margin[2].max(gap),
+                    });
+                }
                 Display::Block | Display::ListItem => {
-                    self.flush_flow(&mut inline, cx, &mut cy, cw, &style, &mut pending_margin);
+                    self.flush_flow(
+                        &mut inline,
+                        cx,
+                        &mut cy,
+                        cw,
+                        &style,
+                        &mut pending_margin,
+                        &local,
+                    );
                     ends_with_space = true;
 
                     let child_marker = if child_style.display == Display::ListItem {
@@ -350,16 +548,37 @@ impl Layouter<'_> {
                     };
                     let margin = self.px4(child_style.margin);
                     cy += pending_margin.max(margin[0]);
-                    let bx = cx + margin[3];
-                    let bw = (cw - margin[3] - margin[1]).max(1);
-                    let h = self.block(child, bx, cy, bw, child_marker);
+                    if let Some(clear) = child_style.clear {
+                        cy = clear_bottom(&local, clear, cy);
+                    }
+                    // The window the floats leave at this height; a block
+                    // that starts beside a float stays narrowed to its end,
+                    // which early browsers did too.
+                    let (wl, wr) = band_window(&local, cx, cw, cy, cy + 1, gap);
+                    let bx = wl + margin[3];
+                    let bw = (wr - wl - margin[3] - margin[1]).max(1);
+                    let h = self.block(child, bx, cy, bw, child_marker, &local);
                     cy += h;
                     pending_margin = margin[2];
                 }
             }
         }
-        self.flush_flow(&mut inline, cx, &mut cy, cw, &style, &mut pending_margin);
+        self.flush_flow(
+            &mut inline,
+            cx,
+            &mut cy,
+            cw,
+            &style,
+            &mut pending_margin,
+            &local,
+        );
         cy += pending_margin;
+
+        // A block contains its own floats; those it merely inherited are
+        // its parent's problem.
+        for band in &local[inherited..] {
+            cy = cy.max(band.bottom);
+        }
 
         let height = (cy + padding[2]) - y;
         if let Some(leaf) = background {
@@ -506,7 +725,7 @@ impl Layouter<'_> {
                     .max(1);
                 let cell_w =
                     widths[col..col + span].iter().sum::<i32>() + spacing * (span as i32 - 1);
-                let h = self.block(cell, x_of(&widths, col), cy, cell_w.max(8), None);
+                let h = self.block(cell, x_of(&widths, col), cy, cell_w.max(8), None, &[]);
                 row_height = row_height.max(h);
                 col += span;
             }
@@ -569,6 +788,7 @@ impl Layouter<'_> {
     /// the current position, spending any margin owed by the block above it.
     /// A group with nothing worth a line spends nothing — the margin stays
     /// pending for whatever block comes next.
+    #[allow(clippy::too_many_arguments)]
     fn flush_flow(
         &mut self,
         tokens: &mut Vec<InlineToken>,
@@ -577,6 +797,7 @@ impl Layouter<'_> {
         width: i32,
         container: &ComputedStyle,
         pending_margin: &mut i32,
+        bands: &[Band],
     ) {
         let tokens = core::mem::take(tokens);
         let has_ink = tokens.iter().any(|t| match t {
@@ -587,7 +808,7 @@ impl Layouter<'_> {
             return;
         }
         *cy += core::mem::take(pending_margin);
-        let (flow, objects) = self.break_lines(tokens, width, container);
+        let (flow, objects) = self.break_lines(tokens, width, container, Point::new(x, *cy), bands);
         let height = flow.height;
         self.leaves.push(Placed {
             rect: Rect::new(x, *cy, width, height),
@@ -651,50 +872,10 @@ impl Layouter<'_> {
                 *ends_with_space = true;
             }
             NodeData::Element { .. } if self.dom.tag(idx) == Some("img") => {
-                let Some(src) = self.dom.attr(idx, "src") else {
+                let Some(spec) = self.image_spec(idx, style) else {
                     return;
                 };
-                // A format the decoder will never manage gets no box at
-                // all: a permanently blank reservation is worse than
-                // absence. SVG logos are the everyday case.
-                let path = src.split(['?', '#']).next().unwrap_or(src);
-                if path.to_ascii_lowercase().ends_with(".svg") || src.starts_with("data:") {
-                    return;
-                }
-                // Attributes first, the decoded size second, a placeholder
-                // box last — the box an image reserves before it arrives is
-                // what keeps the text from jumping when it does.
-                let attr = |name: &str| {
-                    self.dom
-                        .attr(idx, name)
-                        .and_then(|v| v.trim().parse::<i32>().ok())
-                        .filter(|v| *v > 0)
-                };
-                let natural = self.natural.get(&idx).copied();
-                let (w_attr, h_attr) = (attr("width"), attr("height"));
-                let sized = (w_attr.is_some() && h_attr.is_some()) || natural.is_some();
-                let (w, h) = match (w_attr, h_attr, natural) {
-                    (Some(w), Some(h), _) => (w, h),
-                    (Some(w), None, Some(n)) => {
-                        (w, (w * n.height as i32) / (n.width as i32).max(1))
-                    }
-                    (None, Some(h), Some(n)) => {
-                        ((h * n.width as i32) / (n.height as i32).max(1), h)
-                    }
-                    (Some(w), None, None) => (w, w * 3 / 4),
-                    (None, Some(h), None) => (h * 4 / 3, h),
-                    (None, None, Some(n)) => (n.width as i32, n.height as i32),
-                    (None, None, None) => (300, 150),
-                };
-                out.push(InlineToken::Object(ObjSpec {
-                    dom: idx,
-                    width: self.px(w).max(1),
-                    height: self.px(h).max(1),
-                    kind: ObjKind::Image {
-                        src: src.to_string(),
-                        sized,
-                    },
-                }));
+                out.push(InlineToken::Object(spec));
                 *ends_with_space = false;
             }
             NodeData::Element { .. }
@@ -757,6 +938,8 @@ impl Layouter<'_> {
         tokens: Vec<InlineToken>,
         max_width: i32,
         container: &ComputedStyle,
+        origin: Point,
+        bands: &[Band],
     ) -> (FlowLayout, Vec<PlacedObject>) {
         let container_style = self.text_style(container);
         let mut runs: Vec<StyledRun> = Vec::new();
@@ -770,6 +953,44 @@ impl Layouter<'_> {
         let mut y = 0i32;
         // A space seen since the last word, and the style it was spoken in.
         let mut space: Option<TextStyle> = None;
+
+        // Floats narrow individual lines, not the flow: each line asks what
+        // window the bands leave at its height, and a line pinched to
+        // nothing drops below the pinching float instead.
+        let gap = self.px(8);
+        let est = self.engine.line_height(container_style).max(1);
+        let min_line = self.px(60).min(max_width);
+        let mut line_off = 0i32;
+        let mut line_w = max_width;
+        macro_rules! rewindow {
+            () => {{
+                loop {
+                    let (l, r) = band_window(
+                        bands,
+                        origin.x,
+                        max_width,
+                        origin.y + y,
+                        origin.y + y + est,
+                        gap,
+                    );
+                    line_off = l - origin.x;
+                    line_w = r - l;
+                    if line_w >= min_line {
+                        break;
+                    }
+                    let below = bands
+                        .iter()
+                        .filter(|b| b.bottom > origin.y + y)
+                        .map(|b| b.bottom - origin.y)
+                        .min();
+                    match below {
+                        Some(next) if next > y => y = next,
+                        _ => break,
+                    }
+                }
+            }};
+        }
+        rewindow!();
 
         macro_rules! commit {
             ($fallback:expr) => {{
@@ -801,7 +1022,7 @@ impl Layouter<'_> {
                 if container.text_align == TextAlign::Center {
                     let frag_end = frags.last().map_or(0, |f| f.x + f.width);
                     let obj_end = objs.last().map_or(0, |(s, x)| x + s.width);
-                    let shift = ((max_width - frag_end.max(obj_end)) / 2).max(0);
+                    let shift = ((line_w - frag_end.max(obj_end)) / 2).max(0);
                     for frag in &mut frags {
                         frag.x += shift;
                     }
@@ -809,11 +1030,20 @@ impl Layouter<'_> {
                         *x += shift;
                     }
                 }
+                // The line's window offset lands here, once, on everything.
+                for frag in &mut frags {
+                    frag.x += line_off;
+                }
                 for (spec, x) in objs.drain(..) {
                     placed.push(PlacedObject {
                         dom: spec.dom,
                         kind: spec.kind,
-                        rect: Rect::new(x, y + baseline - spec.height, spec.width, spec.height),
+                        rect: Rect::new(
+                            x + line_off,
+                            y + baseline - spec.height,
+                            spec.width,
+                            spec.height,
+                        ),
                     });
                 }
                 lines.push(Line {
@@ -825,6 +1055,7 @@ impl Layouter<'_> {
                 y += height;
                 cursor = 0;
                 space = None;
+                rewindow!();
             }};
         }
 
@@ -832,17 +1063,32 @@ impl Layouter<'_> {
             match token {
                 InlineToken::Break(style) => commit!(style),
                 InlineToken::Object(mut spec) => {
+                    // An empty line squeezed by a float that cannot hold
+                    // this box drops below the floats first.
+                    if frags.is_empty()
+                        && objs.is_empty()
+                        && spec.width > line_w
+                        && line_w < max_width
+                        && let Some(below) = bands
+                            .iter()
+                            .filter(|b| b.bottom > origin.y + y)
+                            .map(|b| b.bottom - origin.y)
+                            .max()
+                    {
+                        y = y.max(below);
+                        rewindow!();
+                    }
                     // Wider than the line entirely: scale down, keeping shape.
-                    if spec.width > max_width {
-                        spec.height = (spec.height * max_width) / spec.width.max(1);
-                        spec.width = max_width;
+                    if spec.width > line_w {
+                        spec.height = (spec.height * line_w) / spec.width.max(1);
+                        spec.width = line_w;
                     }
                     let line_empty = frags.is_empty() && objs.is_empty();
                     let space_width = match (space, line_empty) {
                         (Some(s), false) => self.engine.measure_line(s, " "),
                         _ => 0,
                     };
-                    if !line_empty && cursor + space_width + spec.width > max_width {
+                    if !line_empty && cursor + space_width + spec.width > line_w {
                         commit!(container_style);
                         objs.push((spec, 0));
                         cursor = objs.last().expect("just pushed").0.width;
@@ -899,7 +1145,7 @@ impl Layouter<'_> {
                             (Some(s), false) => self.engine.measure_line(s, " "),
                             _ => 0,
                         };
-                        if !line_empty && cursor + space_width + word_width > max_width {
+                        if !line_empty && cursor + space_width + word_width > line_w {
                             commit!(style);
                             // The word starts the next line, without the space.
                             frags.push(Fragment {
@@ -1201,6 +1447,66 @@ mod tests {
             .find(|(id, _)| id == "verse")
             .expect("the id was recorded");
         assert!(anchor.1 > 0, "below the opening paragraph");
+    }
+
+    #[test]
+    fn a_float_stands_aside_and_the_text_runs_past() {
+        let page = layout(
+            "<div style=\"float: right; width: 400px\">tall<br>tall<br>tall<br>tall</div>\
+             <p>words words words words words words words words words words words words \
+             words words words words words words words words</p>",
+            800,
+        );
+        let rects = flows_rects(&page);
+        // The float's own flow sits on the right (400 logical = 200 physical).
+        assert!(
+            rects[0].x >= 800 - 200 - 12,
+            "float content at {}",
+            rects[0].x
+        );
+        // The paragraph's lines keep left and stop short of the float.
+        let flows = flows(&page);
+        let para = flows.last().unwrap();
+        let first = &para.lines[0];
+        let end = first.fragments.last().map(|f| f.x + f.width).unwrap();
+        assert!(end <= 800 - 200, "first line ends at {end}");
+        assert_eq!(first.fragments[0].x, 0);
+        assert!(para.lines.len() > 1, "the narrowed lines wrapped");
+    }
+
+    #[test]
+    fn clear_drops_below_the_float() {
+        let page = layout(
+            "<div style=\"float: left; width: 200px\">x<br>x<br>x<br>x</div>\
+             <p style=\"clear: both\">below</p>",
+            800,
+        );
+        let rects = flows_rects(&page);
+        // The cleared paragraph starts below the float's bottom, back at
+        // the left edge.
+        assert!(
+            rects[1].y >= rects[0].y + rects[0].height,
+            "below the float"
+        );
+        assert!(rects[1].x <= 8, "back at the left, not beside");
+    }
+
+    #[test]
+    fn the_align_attribute_still_floats_an_image() {
+        let page = layout(
+            "<p><img src=\"pic.png\" width=\"100\" height=\"100\" align=\"right\">\
+             beside the picture</p>",
+            800,
+        );
+        let image = page
+            .leaves
+            .iter()
+            .find_map(|p| match &p.leaf {
+                Leaf::Image { .. } => Some(p.rect),
+                _ => None,
+            })
+            .expect("the image floated as a block");
+        assert!(image.x >= 800 - 50 - 12, "on the right at {}", image.x);
     }
 
     #[test]

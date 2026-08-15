@@ -46,6 +46,24 @@ struct Compound {
     tag: Option<String>,
     id: Option<String>,
     classes: Vec<String>,
+    attrs: Vec<AttrCheck>,
+}
+
+/// `[attr]`, `[attr=v]`, `[attr~=v]` — the three forms modern Wikipedia
+/// floats its thumbnails with (`figure[typeof~=mw:File/Thumb]`). The
+/// fancier operators reject their selector, as pseudo-classes do.
+#[derive(Clone)]
+struct AttrCheck {
+    name: String,
+    op: AttrOp,
+    value: String,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AttrOp {
+    Exists,
+    Equals,
+    Includes,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +81,9 @@ pub enum Decl {
     /// Side index 0..4 = top, right, bottom, left. Logical px.
     Margin(usize, i32),
     Padding(usize, i32),
+    Float(Option<FloatSide>),
+    Clear(Option<ClearSide>),
+    Width(Length),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,6 +91,29 @@ pub enum FontSize {
     Px(i32),
     /// Relative to the inherited size.
     Em(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FloatSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClearSide {
+    Left,
+    Right,
+    Both,
+}
+
+/// A width, in the units a page actually uses for one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Length {
+    Px(i32),
+    /// Of the element's own font size.
+    Em(f32),
+    /// Of the containing block's width.
+    Percent(f32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -108,7 +152,7 @@ impl Stylesheet {
         let specificity = chain.iter().fold((0, 0, 0), |acc, c| {
             (
                 acc.0 + u32::from(c.id.is_some()),
-                acc.1 + c.classes.len() as u32,
+                acc.1 + (c.classes.len() + c.attrs.len()) as u32,
                 acc.2 + u32::from(c.tag.is_some()),
             )
         });
@@ -209,13 +253,27 @@ fn compound_matches(dom: &Dom, idx: usize, compound: &Compound) -> bool {
             return false;
         }
     }
+    for check in &compound.attrs {
+        let Some(value) = dom.attr(idx, &check.name) else {
+            return false;
+        };
+        let holds = match check.op {
+            AttrOp::Exists => true,
+            AttrOp::Equals => value == check.value,
+            AttrOp::Includes => value.split_ascii_whitespace().any(|v| v == check.value),
+        };
+        if !holds {
+            return false;
+        }
+    }
     true
 }
 
 /// Comma-separated selectors; each is a whitespace chain of compounds.
 /// `>` is read as a descendant, which is looser than the author meant and
-/// right more often than dropping the rule. Anything with `[`, `:` or `*`
-/// oddities this matcher cannot evaluate rejects that selector alone.
+/// right more often than dropping the rule. Anything this matcher cannot
+/// evaluate — pseudo-classes, sibling combinators, exotic attribute
+/// operators — rejects that selector alone.
 fn parse_selectors(text: &str) -> Vec<Vec<Compound>> {
     text.split(',')
         .filter_map(|selector| {
@@ -226,12 +284,15 @@ fn parse_selectors(text: &str) -> Vec<Vec<Compound>> {
                     chain.push(Compound::default());
                     continue;
                 }
+                if part == "+" || part == "~" {
+                    return None;
+                }
                 // `:link` is "an unvisited link", and this browser has
                 // never visited anywhere — so it means every link, and
                 // dropping `a:link { color }` would unstyle half the old
                 // web. Every other pseudo-class stays unanswerable.
                 let part = part.strip_suffix(":link").unwrap_or(part);
-                if part.contains(['[', ':', '+', '~']) {
+                if part.contains(':') {
                     return None;
                 }
                 chain.push(parse_compound(part)?);
@@ -244,15 +305,21 @@ fn parse_selectors(text: &str) -> Vec<Vec<Compound>> {
 fn parse_compound(text: &str) -> Option<Compound> {
     let mut compound = Compound::default();
     let mut rest = text;
-    if !rest.starts_with(['.', '#']) {
-        let end = rest.find(['.', '#']).unwrap_or(rest.len());
+    if !rest.starts_with(['.', '#', '[']) {
+        let end = rest.find(['.', '#', '[']).unwrap_or(rest.len());
         compound.tag = Some(rest[..end].to_ascii_lowercase());
         rest = &rest[end..];
     }
     while !rest.is_empty() {
         let kind = rest.as_bytes()[0];
         rest = &rest[1..];
-        let end = rest.find(['.', '#']).unwrap_or(rest.len());
+        if kind == b'[' {
+            let close = rest.find(']')?;
+            compound.attrs.push(parse_attr_check(&rest[..close])?);
+            rest = &rest[close + 1..];
+            continue;
+        }
+        let end = rest.find(['.', '#', '[']).unwrap_or(rest.len());
         let name = &rest[..end];
         if name.is_empty() {
             return None;
@@ -265,6 +332,30 @@ fn parse_compound(text: &str) -> Option<Compound> {
         rest = &rest[end..];
     }
     Some(compound)
+}
+
+fn parse_attr_check(text: &str) -> Option<AttrCheck> {
+    let text = text.trim();
+    let (name, op, value) = if let Some((name, value)) = text.split_once("~=") {
+        (name, AttrOp::Includes, value)
+    } else if let Some((name, value)) = text.split_once('=') {
+        // `^=`, `$=`, `*=`, `|=` would have left their sigil on the name.
+        if name.ends_with(['^', '$', '*', '|']) {
+            return None;
+        }
+        (name, AttrOp::Equals, value)
+    } else {
+        (text, AttrOp::Exists, "")
+    };
+    let name = name.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    Some(AttrCheck {
+        name: name.to_ascii_lowercase(),
+        op,
+        value: value.trim().trim_matches(['"', '\'']).to_string(),
+    })
 }
 
 /// One run of rules: a stylesheet, or the inside of a matching `@media`
@@ -491,6 +582,42 @@ fn declaration(name: &str, value: &mut Parser<'_, '_>, out: &mut Vec<Decl>) {
                 out.push(Decl::Display(CssDisplay::None));
             }
         }
+        "float" => {
+            if let Ok(Token::Ident(word)) = value.next() {
+                match word.to_ascii_lowercase().as_str() {
+                    "left" => out.push(Decl::Float(Some(FloatSide::Left))),
+                    "right" => out.push(Decl::Float(Some(FloatSide::Right))),
+                    "none" => out.push(Decl::Float(None)),
+                    _ => {}
+                }
+            }
+        }
+        "clear" => {
+            if let Ok(Token::Ident(word)) = value.next() {
+                match word.to_ascii_lowercase().as_str() {
+                    "left" => out.push(Decl::Clear(Some(ClearSide::Left))),
+                    "right" => out.push(Decl::Clear(Some(ClearSide::Right))),
+                    "both" => out.push(Decl::Clear(Some(ClearSide::Both))),
+                    "none" => out.push(Decl::Clear(None)),
+                    _ => {}
+                }
+            }
+        }
+        "width" => match value.next() {
+            Ok(Token::Dimension { value: v, unit, .. }) => {
+                let v = *v;
+                match unit.to_ascii_lowercase().as_str() {
+                    "px" => out.push(Decl::Width(Length::Px(v.round() as i32))),
+                    "em" => out.push(Decl::Width(Length::Em(v))),
+                    "rem" => out.push(Decl::Width(Length::Px((v * 16.0).round() as i32))),
+                    _ => {}
+                }
+            }
+            Ok(Token::Percentage { unit_value, .. }) => {
+                out.push(Decl::Width(Length::Percent(*unit_value)));
+            }
+            _ => {}
+        },
         // A linearising renderer has no "out of flow" to put these in, and
         // what authors position absolutely is overwhelmingly overlay
         // furniture — dropdown menus, skip links, modals. Reader modes drop

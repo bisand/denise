@@ -65,15 +65,19 @@ page headlessly into a PPM for eyes or tests.
 
 **No JavaScript**, ever — that is the line between an example and a decade.
 Server-rendered pages (Wikipedia, Hacker News, DuckDuckGo Lite, docs, the
-old web) read well; an SPA renders the empty shell it serves. No floats,
-no positioning, no flex or grid — content flows in document order:
-*readable is the promise; fidelity is not.* Tables are the exception: real
-columns, widths negotiated from `width` attributes, spacer images and
-short cells, up to eight across — beyond that they stack. Media queries
-are answered for `screen` and the real viewport width; absolutely
-positioned overlays are dropped the way reader modes drop them; `#fragment`
-links scroll instead of refetching. No mid-word
-breaking, no bidi or shaping. Nearest-neighbour image scaling. No WebP or
+old web) read well; an SPA renders the empty shell it serves. No
+positioning, no flex or grid — content flows in document order: *readable
+is the promise; fidelity is not.* Two exceptions earned their keep: tables
+get real columns, widths negotiated from `width` attributes, spacer images
+and short cells, up to eight across; and floats stand aside while the text
+runs past them, `clear` honoured, the old `align` attribute included.
+Media queries are answered for `screen` and the real viewport width;
+absolutely positioned overlays are dropped the way reader modes drop them;
+`#fragment` links scroll instead of refetching; Back and Forward come from
+an in-memory page cache, instantly; downscaled images are box-filtered
+smooth before the blit. No mid-word
+breaking, no bidi or shaping. Upscaled images stay nearest-neighbour
+(downscales are filtered). No WebP or
 SVG. No multiline `textarea` editing, no file inputs, no tabs, no cache,
 no selection, no find-in-page. Cookies last as long as the process.
 

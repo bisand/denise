@@ -12,7 +12,7 @@
 
 use denise::Color;
 
-use crate::css::{CssDisplay, Decl, FontSize, Stylesheet};
+use crate::css::{ClearSide, CssDisplay, Decl, FloatSide, FontSize, Length, Stylesheet};
 use crate::dom::{Dom, NodeData};
 
 /// How a node participates in layout.
@@ -54,6 +54,12 @@ pub struct ComputedStyle {
     pub pre: bool,
     /// Index into [`Cascade::links`] when this node is inside an `<a href>`.
     pub link: Option<usize>,
+    /// Taken out of the flow and stood at a side; text runs past it.
+    pub float: Option<FloatSide>,
+    /// Refuses to sit beside the named floats.
+    pub clear: Option<ClearSide>,
+    /// An explicit width, resolved by layout against the containing block.
+    pub width: Option<Length>,
 }
 
 /// The three colours the defaults need from outside: what the theme calls
@@ -88,6 +94,9 @@ pub fn cascade(dom: &Dom, palette: &Palette, sheet: &Stylesheet) -> Cascade {
         text_align: TextAlign::Left,
         pre: false,
         link: None,
+        float: None,
+        clear: None,
+        width: None,
     };
     let mut out = Cascade {
         styles: vec![root.clone(); dom.nodes.len()],
@@ -143,11 +152,21 @@ fn style_into(
             {
                 style.color = c;
             }
-            if dom
+            match dom
                 .attr(idx, "align")
-                .is_some_and(|a| a.eq_ignore_ascii_case("center"))
+                .map(str::to_ascii_lowercase)
+                .as_deref()
             {
-                style.text_align = TextAlign::Center;
+                Some("center") => style.text_align = TextAlign::Center,
+                // On the replaced-and-table family, `align` was the float
+                // of its day; on prose it meant text alignment.
+                Some("left") if matches!(name.local.as_ref(), "img" | "table" | "iframe") => {
+                    style.float = Some(FloatSide::Left);
+                }
+                Some("right") if matches!(name.local.as_ref(), "img" | "table" | "iframe") => {
+                    style.float = Some(FloatSide::Right);
+                }
+                _ => {}
             }
             // The author's turn: matched rules in cascade order, then the
             // style attribute, which outranks them all.
@@ -160,6 +179,10 @@ fn style_into(
                 for decl in &Stylesheet::parse_inline(inline) {
                     apply(decl, &mut style, parent);
                 }
+            }
+            // CSS's own rule: floating blockifies.
+            if style.float.is_some() && style.display == Display::Inline {
+                style.display = Display::Block;
             }
             style
         }
@@ -199,6 +222,9 @@ fn apply(decl: &Decl, style: &mut ComputedStyle, parent: &ComputedStyle) {
         }
         Decl::Margin(side, value) => style.margin[*side] = *value,
         Decl::Padding(side, value) => style.padding[*side] = *value,
+        Decl::Float(side) => style.float = *side,
+        Decl::Clear(side) => style.clear = *side,
+        Decl::Width(width) => style.width = Some(*width),
     }
 }
 
@@ -210,6 +236,9 @@ fn inherit(parent: &ComputedStyle) -> ComputedStyle {
         background: None,
         margin: [0; 4],
         padding: [0; 4],
+        float: None,
+        clear: None,
+        width: None,
         ..parent.clone()
     }
 }
