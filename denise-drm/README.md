@@ -58,10 +58,30 @@ property. The second has a legacy equivalent for the one plane that matters, the
 hardware cursor. So the legacy path gets this working on real hardware at a third
 of the code, behind a seam atomic can take over when planes earn their keep.
 
+## When a frame tears, and when it waits
+
+`PresentMode::Immediate` flips without waiting for vblank, because on a Pi 3A+ at
+1920×1080 that wait is about 17 ms and it is felt as lag by the person pressing
+the button. A button redrawing itself damages a few thousand pixels, so the seam
+where the panel switched buffers mid-scan is small, brief and invisible.
+
+A scrolling viewport is the other case, and it fails twice over. The seam crosses
+the text being read, and — because an async flip never blocks — nothing paces the
+loop, so the same Pi spends a whole core producing torn frames at 14.5 ms each
+for as long as a finger keeps moving.
+
+So the flip follows the damage rather than the setting alone: **under a quarter
+of the surface it is async, at or above it waits for vblank.** The latency stays
+where it is felt, the pacing arrives on the frames that cannot afford to go
+without it, and an application does not have to know which kind of frame it just
+drew. `PresentMode::Vsync` is still an absolute promise; it is `Immediate` that
+became a preference.
+
 ## Testing
 
-Mode selection and the swapchain are platform-independent *on purpose* and are unit
-tested everywhere, including on machines with no DRM device. They hold the
+Mode selection, the swapchain and the flip decision are platform-independent *on
+purpose* and are unit tested everywhere, including on machines with no DRM
+device. They hold the
 decisions that are hard to debug in the field and easy to check on a laptop.
 Everything else is a thin wrapper over ioctls and can only be proven on real
 hardware — which it has been, on a Raspberry Pi.

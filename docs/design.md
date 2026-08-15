@@ -403,6 +403,31 @@ one per widget, before the rule was. It now lives in one function, `style::muted
 which mutes a pair that can afford it and returns one that cannot unchanged:
 legible and undifferentiated beats differentiated and illegible.
 
+**A tear is not one cost, it is two.** `PresentMode::Immediate` asks for async
+page flips, and its documentation had already named the case it would fail —
+"reconsider for signage or anything with large fast-moving content, where a tear
+crosses something worth looking at". The gallery grew a scrolling viewport, and
+the flicker was reported from a Pi within a day. What the note had not said is
+that the seam is the smaller half. An async flip never blocks, so nothing paces
+the loop: a Pi 3A+ paints a scrolled 1920x1080 viewport in **14.5 ms**, and it
+will spend a whole core producing torn frames back to back for as long as a
+finger keeps moving. The frame that most needs not to tear is the same frame that
+most needs the brakes, so the mode now follows the damage rather than being set
+once for everything — under a quarter of the surface it flips async, at or above
+it waits for vblank. `Surface::present` had been handed the damage since the
+beginning and DRM had been throwing it away.
+
+The measurement around it is worth keeping for the next person, because two
+plausible explanations died on the way. Scrolling is **not** over-damaging: one
+scroll produces exactly one rectangle, the viewport. It is **not** input
+handling: sixteen scroll events cost 6 us. And it is **not** `Ui::paint`'s clear
+being redundant under an opaque panel, which looked like a clean 2x on a
+synthetic tree and moved 14.5 ms to 14.3 on the real one — the gallery's viewport
+is a `Void`, so the clear *is* the background and there is nothing to skip. A
+synthetic benchmark can only measure the tree you built for it. What is left is
+fill bandwidth, and the only cure for that is not repainting the whole viewport:
+[#46](https://github.com/bisand/denise/issues/46).
+
 Three limits were found by building against them rather than by design review,
 and all three are now resolved:
 

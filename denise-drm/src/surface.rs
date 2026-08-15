@@ -39,12 +39,21 @@ pub enum PresentMode {
     /// small, brief and in practice invisible — a control panel redrawing a button
     /// is nothing like a compositor scrolling a window.
     ///
-    /// Reconsider for signage or anything with large fast-moving content, where a
-    /// tear crosses something worth looking at. Requires `DRM_CAP_ASYNC_PAGE_FLIP`;
-    /// drivers without it fall back to [`PresentMode::Vsync`], and
-    /// [`DrmSurface::present_mode`] reports what was actually obtained.
+    /// This used to say "reconsider for signage or anything with large fast-moving
+    /// content, where a tear crosses something worth looking at". A scrolling
+    /// viewport turned out to be exactly that, and the flicker was reported from a
+    /// Pi within a day of the gallery gaining one. So the mode is no longer a
+    /// promise about every frame: **a frame that damages a quarter of the surface
+    /// or more flips at vblank anyway**, and this asks for async flips on the
+    /// frames where the seam is small and the latency is felt. See
+    /// [`flip_flags_for`].
     ///
-    /// **This mode does not pace the caller.** See [`DrmSurface`].
+    /// Requires `DRM_CAP_ASYNC_PAGE_FLIP`; drivers without it fall back to
+    /// [`PresentMode::Vsync`], and [`DrmSurface::present_mode`] reports what was
+    /// actually obtained.
+    ///
+    /// **This mode paces the caller only on its large frames.** See
+    /// [`DrmSurface`].
     #[default]
     Immediate,
 
@@ -156,6 +165,69 @@ impl Scanout {
     }
 }
 
+/// Above this share of the surface, a frame flips at vblank even under
+/// [`PresentMode::Immediate`].
+///
+/// A quarter, expressed as a numerator over [`TEAR_FREE_DENOMINATOR`] so the
+/// comparison stays in integers. The number is not delicate: real damage is
+/// either a control redrawing itself, which is well under a percent, or
+/// something that moved everything, which is most of the screen. There is very
+/// little in between, so anywhere in the middle picks the same frames.
+const TEAR_FREE_NUMERATOR: u64 = 1;
+const TEAR_FREE_DENOMINATOR: u64 = 4;
+
+/// Which page flip this frame gets: async, or paced by vblank.
+///
+/// **The tear is not the whole cost of tearing.** An async flip lands wherever
+/// the beam happens to be, which for a button redrawing itself puts a seam a few
+/// pixels tall somewhere nobody is looking. For a frame that moved everything —
+/// a scrolling viewport — the seam crosses the thing being read, which is
+/// exactly the case [`PresentMode::Immediate`]'s own documentation says to
+/// reconsider. It reads as flicker, and it was reported as flicker.
+///
+/// The second half is pacing. An async flip never blocks, so a loop that redraws
+/// while input keeps arriving runs as fast as the CPU allows: a Pi 3 A+ paints a
+/// scrolled 1920x1080 viewport in about 14.5 ms, so it will spend a whole core
+/// producing frames that tear, one after another. A vblank-paced flip makes
+/// [`Surface::acquire`] wait for the retire, which caps the loop at the refresh
+/// rate for free. The frame that most needs not to tear is the same frame that
+/// most needs the brakes.
+///
+/// So the mode follows the damage rather than being set once for everything: the
+/// low latency [`PresentMode::Immediate`] exists for is kept where it is felt —
+/// a press lighting a button — and given up on the frames where it is neither
+/// felt nor affordable.
+///
+/// An empty damage list means the caller presented without saying what changed,
+/// which cannot be assumed to be small.
+fn flip_flags_for(mode: PresentMode, damage: &[Rect], surface: Size) -> PageFlipFlags {
+    let synced = PageFlipFlags::EVENT;
+    let immediate = PageFlipFlags::EVENT | PageFlipFlags::ASYNC;
+
+    if mode == PresentMode::Vsync {
+        return synced;
+    }
+    if damage.is_empty() {
+        return synced;
+    }
+
+    // Bounds rather than the sum of areas: two rectangles that overlap would
+    // count their intersection twice, and the union is what a beam crosses.
+    let bounds = damage
+        .iter()
+        .copied()
+        .reduce(|acc, r| acc.union(&r))
+        .unwrap_or(Rect::ZERO);
+    let damaged = u64::from(bounds.width.max(0) as u32) * u64::from(bounds.height.max(0) as u32);
+    let whole = u64::from(surface.width) * u64::from(surface.height);
+
+    if damaged * TEAR_FREE_DENOMINATOR >= whole * TEAR_FREE_NUMERATOR {
+        synced
+    } else {
+        immediate
+    }
+}
+
 /// A display brought up under our control, scanning out CPU-rendered buffers.
 ///
 /// Takes DRM master on construction and gives it back on drop, restoring whatever
@@ -168,13 +240,16 @@ impl Scanout {
 /// previous flip retires, so a bare `loop { acquire; draw; present }` runs at
 /// exactly the refresh rate and costs nothing extra.
 ///
-/// Under [`PresentMode::Immediate`] — the default — nothing waits. The same loop
-/// runs as fast as the CPU allows and will happily use a whole core drawing
-/// frames no one will ever see. An application must either draw only when
+/// Under [`PresentMode::Immediate`] — the default — a small frame does not wait.
+/// The same loop runs as fast as the CPU allows and will happily use a whole core
+/// drawing frames no one will ever see. An application must either draw only when
 /// something changed, which damage tracking makes natural, or keep a frame
 /// deadline of its own. `examples/kiosk` does both.
 ///
-/// This is not a flaw in async flips; it is what removing the wait means.
+/// This is not a flaw in async flips; it is what removing the wait means. It is
+/// also why a *large* frame gives the wait back: see [`flip_flags_for`], where
+/// the same decision that keeps a seam off a scrolling viewport is what stops the
+/// loop repainting it a hundred times a second.
 #[derive(Debug)]
 pub struct DrmSurface {
     // `pub(crate)` for the cursor plane, which lives in its own module and needs
@@ -191,7 +266,6 @@ pub struct DrmSurface {
     flip_pending: bool,
     /// The mode actually in force, after checking what the driver supports.
     present_mode: PresentMode,
-    flip_flags: PageFlipFlags,
     saved_crtc: Option<crtc::Info>,
     mode_name: String,
     /// The hardware cursor plane's buffer, allocated on first use. `None` until
@@ -245,10 +319,6 @@ impl DrmSurface {
             PresentMode::Immediate if async_capable => PresentMode::Immediate,
             _ => PresentMode::Vsync,
         };
-        let flip_flags = match present_mode {
-            PresentMode::Vsync => PageFlipFlags::EVENT,
-            PresentMode::Immediate => PageFlipFlags::EVENT | PageFlipFlags::ASYNC,
-        };
 
         card.set_crtc(crtc, Some(buffers[0].fb), (0, 0), &[connector], Some(mode))
             .map_err(|source| DrmError::SetMode {
@@ -272,7 +342,6 @@ impl DrmSurface {
             stride: pitch / 4,
             flip_pending: false,
             present_mode,
-            flip_flags,
             saved_crtc,
             mode_name: format!("{width}x{height}@{}", mode.vrefresh()),
             cursor: None,
@@ -385,18 +454,18 @@ impl Surface for DrmSurface {
         )
     }
 
-    fn present(&mut self, _damage: &[Rect]) -> Result<(), SurfaceError> {
-        // The damage list is deliberately ignored. A page flip swaps whole
-        // buffers; there is no partial upload to restrict. Damage still pays for
-        // itself here, upstream, in the pixels the rasteriser never touched —
-        // which is the larger win anyway. Wiring damage into the presentation
-        // would need atomic modesetting and FB_DAMAGE_CLIPS, and most drivers
-        // ignore that property regardless.
+    fn present(&mut self, damage: &[Rect]) -> Result<(), SurfaceError> {
+        // Damage cannot restrict the *upload* — a page flip swaps whole buffers,
+        // and wiring partial updates in would need atomic modesetting and
+        // `FB_DAMAGE_CLIPS`, which most drivers ignore. It can decide something
+        // else, though: whether this particular frame is one a tear would show
+        // on. See `flip_flags_for`.
         let index = self.swapchain.current();
         let fb = self.buffers[index].fb;
+        let flags = flip_flags_for(self.present_mode, damage, self.size);
 
         self.card
-            .page_flip(self.crtc, fb, self.flip_flags, None)
+            .page_flip(self.crtc, fb, flags, None)
             .map_err(DrmError::PageFlip)?;
 
         self.flip_pending = true;
@@ -444,5 +513,94 @@ impl Drop for DrmSurface {
         }
 
         self.card.release_master();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SCREEN: Size = Size::new(1920, 1080);
+
+    /// A button lighting up is the case async flips exist for: the seam is a few
+    /// pixels tall, in one place, and gone next frame — and the press that
+    /// caused it is what the latency is measured against.
+    #[test]
+    fn a_small_frame_still_flips_immediately() {
+        let button = [Rect::new(40, 700, 220, 48)];
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &button, SCREEN),
+            PageFlipFlags::EVENT | PageFlipFlags::ASYNC
+        );
+    }
+
+    /// A scrolled viewport is the case it does not: the seam crosses the text
+    /// being read. This is the frame that was reported as flicker from a Pi.
+    #[test]
+    fn a_scrolled_viewport_waits_for_vblank() {
+        let viewport = [Rect::new(320, 60, 1560, 1000)];
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &viewport, SCREEN),
+            PageFlipFlags::EVENT,
+            "a frame that moved everything must not tear"
+        );
+    }
+
+    /// Bounds, not the sum of areas. Two rectangles far apart cover very little
+    /// between them but a tear would still land between the two — and counting
+    /// their overlap twice, if they had any, would fail the other way.
+    #[test]
+    fn scattered_damage_is_judged_by_what_it_spans() {
+        let corners = [Rect::new(0, 0, 60, 40), Rect::new(1860, 1040, 60, 40)];
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &corners, SCREEN),
+            PageFlipFlags::EVENT,
+            "two specks at opposite corners span the whole screen"
+        );
+
+        let neighbours = [Rect::new(40, 700, 220, 48), Rect::new(280, 700, 220, 48)];
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &neighbours, SCREEN),
+            PageFlipFlags::EVENT | PageFlipFlags::ASYNC,
+            "two buttons side by side are still two buttons"
+        );
+    }
+
+    /// A present that did not say what changed cannot be assumed to be small.
+    #[test]
+    fn damage_nobody_declared_is_treated_as_everything() {
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &[], SCREEN),
+            PageFlipFlags::EVENT
+        );
+    }
+
+    /// Asking for vsync gets vsync, whatever the damage. The mode is still a
+    /// promise; it is only `Immediate` that became a preference.
+    #[test]
+    fn vsync_is_never_overridden() {
+        for damage in [&[][..], &[Rect::new(0, 0, 4, 4)][..]] {
+            assert_eq!(
+                flip_flags_for(PresentMode::Vsync, damage, SCREEN),
+                PageFlipFlags::EVENT
+            );
+        }
+    }
+
+    /// The threshold itself, from both sides, on a screen where a quarter is a
+    /// round number of rows.
+    #[test]
+    fn the_threshold_is_a_quarter_of_the_surface() {
+        let screen = Size::new(1000, 1000);
+        let just_under = [Rect::new(0, 0, 1000, 249)];
+        let just_over = [Rect::new(0, 0, 1000, 250)];
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &just_under, screen),
+            PageFlipFlags::EVENT | PageFlipFlags::ASYNC
+        );
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &just_over, screen),
+            PageFlipFlags::EVENT
+        );
     }
 }
