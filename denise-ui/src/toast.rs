@@ -238,10 +238,22 @@ impl Toasts {
     /// lands a fade changes pixels, so it is a frame that changed, whatever the
     /// clock says. A toast holding at an opacity it has already been drawn at
     /// is still free, which is the property that had to survive.
+    /// # Going is not a repaint question
+    ///
+    /// One thing here is *not* answered by comparing against what was drawn.
+    /// A toast whose life is over has to be let go whether or not anybody ever
+    /// painted it — this is the predicate [`Ui::tick`](crate::Ui::tick) gates
+    /// [`retire`](Toasts::retire) on, and a tree that ticks without painting is
+    /// an ordinary thing: a headless test, a surface that has not been acquired
+    /// yet, an application that skipped a frame. Comparing alone said an
+    /// expired toast that had never been drawn was unchanged — `None` against
+    /// `None` — so it was never retired, the stack grew, and the tree never
+    /// went back to sleep.
     pub(crate) fn is_changing(&self, now_ms: u64) -> bool {
-        self.notes
-            .iter()
-            .any(|note| note.alpha(now_ms, self.motion) != note.painted_alpha)
+        self.notes.iter().any(|note| {
+            let alpha = note.alpha(now_ms, self.motion);
+            alpha.is_none() || alpha != note.painted_alpha
+        })
     }
 
     /// The soonest any toast needs a frame.
@@ -470,6 +482,31 @@ mod tests {
             !toasts.is_changing(now),
             "and then stop asking, or the hold is not free"
         );
+    }
+
+    /// **A toast nobody ever painted still has to go.**
+    ///
+    /// The regression the first version of the comparison caused, and the one
+    /// the unit tests above could not see because they all draw. `is_changing`
+    /// gates retirement as well as damage, and comparing what would be drawn
+    /// against what *was* drawn made an expired-but-never-painted toast look
+    /// unchanged: `None` against `None`. The stack then grew without bound and
+    /// the tree never went idle. A headless tick is not exotic — a test, a
+    /// surface not yet acquired, a skipped frame.
+    #[test]
+    fn a_toast_that_was_never_drawn_still_expires() {
+        let mut toasts = Toasts::new();
+        toasts.set_motion(MOTION);
+        toasts.push(String::from("Lagret"), Role::Success, HOLD_MS, 0);
+
+        let dead = FADE_IN_MS + HOLD_MS + FADE_OUT_MS;
+        assert!(
+            toasts.is_changing(dead),
+            "its life is over; that is a change whoever was looking"
+        );
+        assert!(toasts.retire(dead), "and retiring it takes it");
+        assert_eq!(toasts.len(), 0);
+        assert!(!toasts.is_changing(dead), "an empty stack asks for nothing");
     }
 
     /// The other half of that: a toast holding still costs nothing. The whole
