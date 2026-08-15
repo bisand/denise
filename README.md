@@ -153,6 +153,25 @@ cargo run -p gallery --no-default-features --features kiosk   # the display itse
 <img src="assets/screenshots/gallery.png" width="860"
      alt="The gallery: a theme editor sidebar beside live widgets — role buttons, form controls, sliders driving a progress ring, ratings and a spinner">
 
+## The browser
+
+[`examples/browser`](examples/browser) is the composability proof: a small
+web browser in which every visible thing is a Denise widget. Real pages —
+Hacker News, Wikipedia, DuckDuckGo Lite — fetched over rustls, parsed with
+html5ever, laid out by the example's own block-and-inline engine, and drawn
+entirely through the toolkit: page text through the shared text engine,
+images through `denise-image`, and a form's controls as the actual
+`TextInput`, `Checkbox`, `RadioGroup` and `Select`, submitting for real.
+No JavaScript, on purpose. The same binary drives a window or a bare panel.
+
+```bash
+cargo run -p browser -- https://news.ycombinator.com
+cargo run -p browser --no-default-features --features kiosk   # the display itself
+```
+
+<img src="assets/screenshots/browser-form.png" width="860"
+     alt="The browser rendering an HTML form: headings and styled text laid out by the example's engine, with the form's inputs, checkbox, radio group, dropdown and buttons all visibly Denise widgets">
+
 ## What it costs when nothing happens
 
 The number that matters for a panel that runs for a year. On a Raspberry Pi 3 A+

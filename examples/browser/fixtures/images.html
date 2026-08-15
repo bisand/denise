@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head><title>Fixture: images</title></head>
+<body>
+<h1>Pictures in the flow</h1>
+<p>An inline image with declared size <img src="stripe.png" width="48" height="32">
+sits on the baseline like a word. The text keeps flowing around the line it
+landed on, and the line grows to hold it.</p>
+
+<p>This one declares nothing: <img src="stripe.png"> — its box is a guess
+until the bytes arrive, and then the page relayouts once, to the truth.</p>
+
+<p>A missing picture <img src="no-such-file.png" width="40" height="40"> keeps
+its reserved box and the text keeps its place; a broken image is not worth
+interrupting reading for.</p>
+</body>
+</html>

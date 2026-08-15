@@ -1,0 +1,53 @@
+[package]
+name = "browser"
+description = "A small web browser, every pixel of it a Denise widget: the composability proof."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# The same compile-time backend choice as gallery, and for the same reason:
+# no runtime probe can tell a kiosk Pi from a desktop Pi.
+#
+#   cargo run -p browser -- https://example.com                    # a window
+#   cargo run -p browser --no-default-features --features kiosk    # the display
+#
+# `tls` is default and separable on purpose: rustls's `ring` has C in it,
+# which is the one thing this workspace's toolchain-free cross story (see
+# .cargo/config.toml) cannot link. So a kiosk cross-build from a Mac works
+# out of the box for `http:` and `file:`, and `--features kiosk,tls` buys
+# `https:` at the price of a musl cross toolchain.
+[features]
+default = ["desktop", "tls"]
+desktop = ["dep:denise-winit"]
+kiosk = ["dep:bare-linux", "dep:denise-evdev", "dep:rustix"]
+tls = ["ureq/rustls"]
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+# The workspace pin keeps default features off; a browser wants the decoders.
+denise-image = { workspace = true, features = ["png", "jpeg", "gif"] }
+denise-render = { workspace = true, features = ["std"] }
+denise-text = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype"] }
+denise-winit = { workspace = true, optional = true }
+system-font = { path = "../system-font" }
+
+# The other half of a browser: bytes off the wire into a tree. The precedent
+# is denise-image's decoders — pure-Rust parsers for untrusted input, and the
+# rendering stays entirely Denise. rustls is why the kiosk build still
+# cross-compiles to aarch64-musl as one static binary.
+html5ever = "0.39"
+cssparser = "0.37"
+url = "2"
+ureq = { version = "3", default-features = false, features = ["gzip", "charset", "cookies"] }
+
+# The kiosk backend exists on Linux and nowhere else.
+[target.'cfg(target_os = "linux")'.dependencies]
+bare-linux = { path = "../bare-linux", optional = true }
+denise-evdev = { workspace = true, optional = true }
+rustix = { workspace = true, features = ["event", "std"], optional = true }

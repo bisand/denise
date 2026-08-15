@@ -1180,6 +1180,43 @@ somebody paid for.
 | **35 built-in themes** | Three. |
 | **`--depth` as a shadow** | Kept as a number. A real blur is expensive in software and spills outside the widget's bounds, so every damage rectangle would have to be inflated by the blur radius. |
 
+## The browser example
+
+`examples/browser` exists to answer one question with a workload nobody would
+design a panel toolkit for: can real web pages be rendered *with Denise
+widgets*? Hacker News, Wikipedia and DuckDuckGo Lite say yes — fetched over
+rustls, parsed by html5ever, and every visible thing on screen a widget: page
+text through the shared engine, images through `denise-image`, form controls
+as the toolkit's own `TextInput`, `Checkbox`, `RadioGroup` and `Select`,
+submitting real GET and POST. No JavaScript, which is the line between an
+example and a decade.
+
+The toolkit lacks three things a browser needs, and the point of the example
+is that all three were built *on top*, from public API, without touching a
+crate:
+
+- **A layout engine.** Block boxes and a run-aware line breaker over
+  `measure_line`, each line committed at the tallest ascent on it.
+  `draw_line` taking a baseline origin — a decision made back in M4 for no
+  reason this ambitious — is exactly what mixed sizes on one line require.
+- **Rich text.** A widget owning precomputed styled fragments. Paint measures
+  nothing; links are rectangles recorded at layout time. Bold is a second
+  font, because a `TextStyle` is honestly a font and a size.
+- **A waker.** There is none, deliberately, so the fetch thread posts to a
+  channel and the loop polls at 40 ms *only while something is in flight*.
+  Idle still costs nothing with a network attached, which was the property
+  worth defending.
+
+What the workload found, recorded for whenever these earn fixing: `Ui::new`
+hardcodes the 64 KB glyph atlas, and a style-heavy page would like to hand it
+a bigger one; there is no multiline text editing for `<textarea>` to map
+onto; `blit_scaled`'s nearest-neighbour shows on photographs; and a font's
+character map can lie — macOS Arial claims U+21BB and draws the `.notdef`
+box, which is why the reload button became an arc the rasteriser draws
+itself. A browser is also mostly scrolling, so
+[#46](https://github.com/bisand/denise/issues/46) matters more with this
+example in the tree than it did before.
+
 ## Milestones
 
 | | | |
