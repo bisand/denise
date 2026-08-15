@@ -8,6 +8,7 @@
 //! cargo run -p gallery -- --snapshot shot.ppm
 //! cargo run -p gallery -- --snapshot 2x.ppm --size 2560x1600 --scale 2
 //! cargo run -p gallery --no-default-features --features kiosk     # the display
+//! cargo run -p gallery --no-default-features --features kiosk -- --present vsync
 //! ```
 //!
 //! `--size` is the surface, in physical pixels, and `--scale` is how many of
@@ -18,6 +19,15 @@
 //! `--motion` is the animation rate, in milliseconds between samples, or `off`.
 //! It costs what a spinner costs: this gallery keeps one turning, and halving
 //! the rate halves what an otherwise idle window spends.
+//!
+//! `--present vsync` gives up the async page flip and waits for the scanout,
+//! which costs about 17 ms of latency and makes tearing impossible. It is here
+//! to answer one question on hardware, because the two things it separates look
+//! alike to a person watching the panel: a **tear** is one frame torn across a
+//! seam, and a **stale buffer** is two frames alternating. Both read as flicker.
+//! If `--present vsync` removes it, it was the flip; if it does not, the flip
+//! was never involved and the damage is wrong somewhere. Kiosk only — a window's
+//! presentation belongs to whatever is compositing it.
 //!
 //! The proof-of-concept panel: everything the toolkit ships, on one screen,
 //! with a live theme editor driving [`Ui::set_theme`] the way an application
@@ -50,11 +60,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A window gets the real one from the backend; see `window_backend`.
     let mut scale: f32 = 1.0;
     let mut motion = Motion::default();
+    // Immediate is the kiosk default; see the header for what asking for the
+    // other one is worth.
+    let mut vsync = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--font" => font = args.next(),
+            "--present" => {
+                vsync = match args.next().as_deref() {
+                    Some("vsync") => true,
+                    Some("immediate") => false,
+                    other => {
+                        eprintln!("--present takes vsync or immediate, not {other:?}");
+                        return Ok(());
+                    }
+                }
+            }
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "gallery.ppm".into())),
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
@@ -88,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return write_snapshot(&mut App::new(size, scale, font, motion), size, &out)
             .map_err(Into::into);
     }
-    backend::run(font, size, seconds, motion)
+    backend::run(font, size, seconds, motion, vsync)
 }
 
 /// Draws one frame into a PPM, with no window and no event loop.
@@ -148,6 +171,9 @@ mod window_backend {
         size: denise::Size,
         _seconds: u64,
         motion: denise_ui::Motion,
+        // A window does not choose: the compositor owns the flip, and softbuffer
+        // has nowhere to put the preference even if it did.
+        _vsync: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // `run_with`, not `run`: the tree is built after the window exists, which
         // is the first moment the display's scale factor is knowable. On a Retina
@@ -277,9 +303,15 @@ mod kiosk_backend {
         _size: denise::Size,
         seconds: u64,
         motion: denise_ui::Motion,
+        vsync: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // A display's size is the one it has; `--size` is a window thing.
-        let mut surface = Display::open(bare_linux::PresentMode::Immediate)?;
+        let mode = if vsync {
+            bare_linux::PresentMode::Vsync
+        } else {
+            bare_linux::PresentMode::Immediate
+        };
+        let mut surface = Display::open(mode)?;
         let size = surface.size();
         let (mut input, _keymap) = open_input(size)?;
         let _console = mute_console();

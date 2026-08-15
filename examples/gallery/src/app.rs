@@ -1334,6 +1334,7 @@ fn hsv(h: f32, s: f32, v: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use denise::{ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton};
 
     fn app() -> App {
         // No font: the tests are about wiring, and font discovery is I/O.
@@ -1442,6 +1443,455 @@ mod tests {
         app.on_message(Message::Spin(false));
         app.ui.tick(10_000);
         assert_eq!(app.ui.animating(), 0, "nothing left mid-fold");
+    }
+
+    /// Flicker is a *property*, and this is it: **the buffer just presented
+    /// holds what a full repaint of the same tree would hold.**
+    ///
+    /// A panel flickering at the refresh rate is two buffers disagreeing, shown
+    /// alternately. That is what damage tracking risks and what buffer age is
+    /// for — repaint only this frame's damage into a buffer that is two frames
+    /// old and last frame's pixels stay in it, alternating with the right ones
+    /// for as long as nothing damages them again. It looks exactly like a tear
+    /// to a person watching a panel, and unlike a tear it does not need
+    /// hardware to find.
+    ///
+    /// Note what the property is *not*: at rest the two buffers do not agree,
+    /// and must not be expected to. Only the presented one has been brought up
+    /// to date; the other is a frame behind by design, and buffer age is the
+    /// promise that it will be caught up before it is shown. What has to be
+    /// true is that whatever went to the panel is right.
+    ///
+    /// So: two trees, the same events. One runs the DRM kiosk loop with the
+    /// display taken out — two buffers, age two, `paint` then `presented` — and
+    /// the other repaints everything from scratch every time, which is slow and
+    /// cannot be wrong. They must agree at every checkpoint. The spinner is put
+    /// to bed first, because a tree that never stops changing never settles.
+    #[test]
+    fn the_presented_buffer_is_what_a_full_repaint_would_have_drawn() {
+        const SIZE: Size = Size::new(1280, 800);
+        const PIXELS: usize = (SIZE.width * SIZE.height) as usize;
+
+        fn blank() -> Vec<u32> {
+            vec![0u32; PIXELS]
+        }
+
+        fn paint_into(ui: &mut Ui<Message>, buffer: &mut [u32], age: denise::BufferAge) {
+            let mut frame =
+                denise::Frame::new(buffer, SIZE, SIZE.width, denise::PixelFormat::Xrgb8888, age)
+                    .expect("frame");
+            ui.paint(&mut frame);
+            drop(frame);
+            ui.presented();
+        }
+
+        /// The kiosk loop: alternate buffers, report which one went out.
+        struct Swapped {
+            buffers: [Vec<u32>; 2],
+            frame: u64,
+        }
+
+        impl Swapped {
+            /// Presents until the tree stops asking, the way the loop's
+            /// `needs_paint` guard does, and answers with the buffer the panel
+            /// would be showing. Capped, so a tree that never settles fails
+            /// here rather than hanging.
+            fn settle(&mut self, ui: &mut Ui<Message>, now_ms: u64) -> &[u32] {
+                let mut shown = 0;
+                for _ in 0..64 {
+                    ui.tick(now_ms);
+                    if !ui.needs_paint() {
+                        return &self.buffers[shown];
+                    }
+                    // The first pass over the buffers has nothing to be old
+                    // relative to, which is what `Undefined` means and what the
+                    // swapchain reports.
+                    let age = if self.frame < 2 {
+                        denise::BufferAge::Undefined
+                    } else {
+                        denise::BufferAge::Frames(2)
+                    };
+                    shown = (self.frame % 2) as usize;
+                    paint_into(ui, &mut self.buffers[shown], age);
+                    self.frame += 1;
+                }
+                panic!("the tree never came to rest");
+            }
+        }
+
+        let mut app = App::new(SIZE, 1.0, None, Motion::default());
+        let mut reference = App::new(SIZE, 1.0, None, Motion::default());
+        // The one legitimate insomniac; see the test below.
+        for tree in [&mut app, &mut reference] {
+            tree.on_message(Message::Spin(false));
+        }
+
+        let mut swap = Swapped {
+            buffers: [blank(), blank()],
+            frame: 0,
+        };
+        let mut truth = blank();
+
+        // Both trees see the same events at the same clock, so any difference
+        // in pixels is the incremental path's alone.
+        let check = |app: &mut App,
+                     reference: &mut App,
+                     swap: &mut Swapped,
+                     truth: &mut Vec<u32>,
+                     events: &[InputEvent],
+                     now: u64,
+                     what: &str| {
+            app.ui.handle(events);
+            reference.ui.handle(events);
+
+            let shown = swap.settle(&mut app.ui, now);
+
+            reference.ui.tick(now);
+            reference.ui.invalidate_all();
+            paint_into(&mut reference.ui, truth, denise::BufferAge::Undefined);
+
+            if let Some(at) = shown.iter().zip(truth.iter()).position(|(a, b)| a != b) {
+                let (x, y) = (at % SIZE.width as usize, at / SIZE.width as usize);
+                panic!(
+                    "{what}: the panel is showing stale pixels from ({x}, {y}) \
+                     — incremental {:#010x}, full repaint {:#010x}",
+                    shown[at], truth[at]
+                );
+            }
+        };
+
+        let at = |ui: &Ui<Message>, id: NodeId| {
+            let bounds = ui.layout(id).expect("laid out");
+            Point::new(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+        };
+
+        check(
+            &mut app,
+            &mut reference,
+            &mut swap,
+            &mut truth,
+            &[],
+            0,
+            "the first frame",
+        );
+
+        // Over a button, over a list, over a rating — the gestures the flicker
+        // was reported on, each settled before the next.
+        let stops = [
+            at(&app.ui, app.nodes.theme_list),
+            at(&app.ui, app.nodes.mode_select),
+            at(&app.ui, app.nodes.stars),
+            at(&app.ui, app.nodes.seed_select),
+        ];
+        for (step, position) in stops.into_iter().enumerate() {
+            check(
+                &mut app,
+                &mut reference,
+                &mut swap,
+                &mut truth,
+                &[InputEvent::PointerMoved { position }],
+                1_000 + step as u64 * 1_000,
+                &format!("hovering stop {step} at {position:?}"),
+            );
+        }
+
+        // And a popup, which is the case with the most to go wrong: a scene
+        // pushed over the tree, painted above everything, then dismissed —
+        // and dismissing it is what leaves a footprint behind.
+        let target = stops[3];
+        let click = |state| InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state,
+            position: target,
+            modifiers: Modifiers::default(),
+        };
+        check(
+            &mut app,
+            &mut reference,
+            &mut swap,
+            &mut truth,
+            &[click(ElementState::Down), click(ElementState::Up)],
+            5_000,
+            "with a popup open",
+        );
+        check(
+            &mut app,
+            &mut reference,
+            &mut swap,
+            &mut truth,
+            &[InputEvent::Key {
+                code: KeyCode::Escape,
+                state: ElementState::Down,
+                repeat: false,
+                modifiers: Modifiers::default(),
+            }],
+            6_000,
+            "after the popup closed",
+        );
+    }
+
+    /// The same property, but checked on **every frame of a moving tree**
+    /// rather than only once it stops.
+    ///
+    /// The test above settles before it looks, so it only ever judges the last
+    /// frame of an animation — and the last frame of an animation is the one
+    /// most likely to be right, because whatever damage was missed on the way
+    /// has usually been marked by something else by then. Flicker is reported
+    /// on *moving* things: a hover highlight crossing in, a toast arriving, a
+    /// popup opening. Those are the frames nobody was checking.
+    ///
+    /// So this steps the clock on the tree's own motion grid — sixteen
+    /// milliseconds, the rate both trees are set to, so neither can be caught
+    /// mid-sample by the other — and compares what the panel would be showing
+    /// against a full repaint after every single tick, through a hover, a
+    /// toast, and a popup.
+    ///
+    /// A frame the incremental tree declines to paint is compared too. If the
+    /// tree moved and did not ask for a repaint, the panel is showing a stale
+    /// frame, and that is the same defect seen from the other side.
+    #[test]
+    fn every_frame_of_a_moving_tree_is_what_a_full_repaint_would_have_drawn() {
+        const SIZE: Size = Size::new(1280, 800);
+        const PIXELS: usize = (SIZE.width * SIZE.height) as usize;
+        /// The motion rate both trees run at, so their samples line up.
+        const STEP_MS: u64 = 16;
+
+        fn paint_into(ui: &mut Ui<Message>, buffer: &mut [u32], age: denise::BufferAge) {
+            let mut frame =
+                denise::Frame::new(buffer, SIZE, SIZE.width, denise::PixelFormat::Xrgb8888, age)
+                    .expect("frame");
+            ui.paint(&mut frame);
+            drop(frame);
+            ui.presented();
+        }
+
+        let mut app = App::new(SIZE, 1.0, None, Motion::default());
+        let mut reference = App::new(SIZE, 1.0, None, Motion::default());
+
+        let mut buffers = [vec![0u32; PIXELS], vec![0u32; PIXELS]];
+        let mut truth = vec![0u32; PIXELS];
+        let mut frame: u64 = 0;
+        let mut shown = 0usize;
+
+        let at = |ui: &Ui<Message>, id: NodeId| {
+            let bounds = ui.layout(id).expect("laid out");
+            Point::new(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+        };
+        let press = |position, state| InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state,
+            position,
+            modifiers: Modifiers::default(),
+        };
+
+        // What the panel would be showing after one turn of the kiosk loop,
+        // against what the tree actually looks like at that instant.
+        let mut step =
+            |app: &mut App, reference: &mut App, events: &[InputEvent], now: u64, what: &str| {
+                app.ui.handle(events);
+                reference.ui.handle(events);
+                app.ui.tick(now);
+                reference.ui.tick(now);
+
+                if app.ui.needs_paint() {
+                    let age = if frame < 2 {
+                        denise::BufferAge::Undefined
+                    } else {
+                        denise::BufferAge::Frames(2)
+                    };
+                    shown = (frame % 2) as usize;
+                    paint_into(&mut app.ui, &mut buffers[shown], age);
+                    frame += 1;
+                }
+
+                reference.ui.invalidate_all();
+                paint_into(&mut reference.ui, &mut truth, denise::BufferAge::Undefined);
+
+                // The shape of a disagreement says what it is: a rectangle is a
+                // region that was never repainted, a scatter of edge pixels is
+                // something drawn slightly differently.
+                let mut wrong = 0usize;
+                let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+                let mut first = None;
+                for (offset, (a, b)) in buffers[shown].iter().zip(truth.iter()).enumerate() {
+                    if a == b {
+                        continue;
+                    }
+                    let (x, y) = (
+                        (offset % SIZE.width as usize) as i32,
+                        (offset / SIZE.width as usize) as i32,
+                    );
+                    wrong += 1;
+                    first.get_or_insert((x, y, *a, *b));
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+                if let Some((x, y, got, want)) = first {
+                    let repainted = format!("{:?}", app.ui.damage());
+                    // Which of the two things this can be: the trees have drifted
+                    // apart in state, or painting a region differs from painting
+                    // the surface. Ask the incremental tree to draw everything and
+                    // see which buffer it agrees with.
+                    let mut its_own_full = vec![0u32; PIXELS];
+                    app.ui.invalidate_all();
+                    paint_into(&mut app.ui, &mut its_own_full, denise::BufferAge::Undefined);
+                    let same_tree = its_own_full == truth;
+                    // The pattern says which failure this is: a ring is an edge
+                    // blended against the wrong backdrop, a solid block is
+                    // something not drawn at all, a shifted disc is a position.
+                    let mut map = String::new();
+                    for row in (y0 - 1).max(0)..=(y1 + 1).min(SIZE.height as i32 - 1) {
+                        for col in (x0 - 1).max(0)..=(x1 + 1).min(SIZE.width as i32 - 1) {
+                            let at = row as usize * SIZE.width as usize + col as usize;
+                            map.push(match (buffers[shown][at], truth[at]) {
+                                (a, b) if a == b => '.',
+                                (a, b) if (a & 0xff).abs_diff(b & 0xff) > 64 => '#',
+                                _ => '+',
+                            });
+                        }
+                        map.push('\n');
+                    }
+                    panic!(
+                        "{what} at {now} ms: {wrong} stale pixels in \
+                     ({x0}, {y0})..=({x1}, {y1}), {} by {} — first at ({x}, {y}), \
+                     panel {got:#010x}, tree {want:#010x}\n\
+                     repainted: {repainted}\n\
+                     the same tree painted whole matches the reference: {same_tree}\n{map}",
+                        x1 - x0 + 1,
+                        y1 - y0 + 1,
+                    );
+                }
+            };
+
+        let mut now = 0;
+        // Settle the opening frame first; the spinner keeps both trees moving
+        // from here on, which is the point.
+        for _ in 0..4 {
+            step(&mut app, &mut reference, &[], now, "opening");
+            now += STEP_MS;
+        }
+
+        // A hover crossing in, held while its transition runs.
+        let list = at(&app.ui, app.nodes.theme_list);
+        step(
+            &mut app,
+            &mut reference,
+            &[InputEvent::PointerMoved { position: list }],
+            now,
+            "hover arriving",
+        );
+        now += STEP_MS;
+        for _ in 0..12 {
+            step(&mut app, &mut reference, &[], now, "hover settling");
+            now += STEP_MS;
+        }
+
+        // A toast, which arrives at the bottom of the screen and moves.
+        app.on_message(Message::ShowToast);
+        reference.on_message(Message::ShowToast);
+        for _ in 0..24 {
+            step(&mut app, &mut reference, &[], now, "toast arriving");
+            now += STEP_MS;
+        }
+
+        // And a popup over the lot.
+        let select = at(&app.ui, app.nodes.seed_select);
+        let click = |state| InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state,
+            position: select,
+            modifiers: Modifiers::default(),
+        };
+        step(
+            &mut app,
+            &mut reference,
+            &[
+                InputEvent::PointerMoved { position: select },
+                click(ElementState::Down),
+                click(ElementState::Up),
+            ],
+            now,
+            "popup opening",
+        );
+        now += STEP_MS;
+        for _ in 0..12 {
+            step(&mut app, &mut reference, &[], now, "popup settling");
+            now += STEP_MS;
+        }
+
+        // Escape the popup, then sweep the pointer over the whole surface.
+        // Hover is where the flicker was reported and the gallery has far more
+        // widgets than there are named fields on `Nodes`, so rather than pick
+        // four and hope, this walks a grid over every one of them and lets each
+        // frame answer for itself.
+        step(
+            &mut app,
+            &mut reference,
+            &[InputEvent::Key {
+                code: KeyCode::Escape,
+                state: ElementState::Down,
+                repeat: false,
+                modifiers: Modifiers::default(),
+            }],
+            now,
+            "popup dismissed",
+        );
+        now += STEP_MS;
+
+        let mut y = 8;
+        while y < SIZE.height as i32 {
+            let mut x = 8;
+            while x < SIZE.width as i32 {
+                let position = Point::new(x, y);
+                step(
+                    &mut app,
+                    &mut reference,
+                    &[InputEvent::PointerMoved { position }],
+                    now,
+                    &format!("sweeping onto {position:?}"),
+                );
+                now += STEP_MS;
+                // A second frame on the same spot: a state change that lands
+                // one frame late shows up here and nowhere else.
+                step(
+                    &mut app,
+                    &mut reference,
+                    &[],
+                    now,
+                    &format!("resting on {position:?}"),
+                );
+                now += STEP_MS;
+
+                // Hovering is half the report; the other half is interacting.
+                // Press, release and scroll wherever the pointer has got to,
+                // whatever is under it — a press that opens a dialog or sends a
+                // toast is coverage, not a problem, because both trees get the
+                // same events and have to agree about the result.
+                for events in [
+                    &[press(position, ElementState::Down)][..],
+                    &[press(position, ElementState::Up)][..],
+                    &[InputEvent::PointerScroll {
+                        delta_x: 0.0,
+                        delta_y: 40.0,
+                        position,
+                    }][..],
+                    &[][..],
+                ] {
+                    step(
+                        &mut app,
+                        &mut reference,
+                        events,
+                        now,
+                        &format!("interacting at {position:?}"),
+                    );
+                    now += STEP_MS;
+                }
+                x += 64;
+            }
+            y += 64;
+        }
     }
 
     /// A tree at rest holds nobody awake — except the spinner, which is the

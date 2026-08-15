@@ -76,6 +76,13 @@ struct Note {
     role: Role,
     born_ms: u64,
     hold_ms: u64,
+    /// The opacity this toast was last actually drawn at, or `None` before it
+    /// has ever been drawn.
+    ///
+    /// This is what makes "is it changing?" answerable rather than guessed at.
+    /// See [`Toasts::is_changing`] for the frame that went missing while the
+    /// question was answered from the clock instead.
+    painted_alpha: Option<u8>,
 }
 
 impl Note {
@@ -181,6 +188,7 @@ impl Toasts {
             role,
             born_ms: now_ms,
             hold_ms,
+            painted_alpha: None,
         });
     }
 
@@ -210,16 +218,30 @@ impl Toasts {
     /// that damaged itself every tick would repaint the bottom of the screen
     /// sixty times a second for four seconds to show a picture that never
     /// changed — which is the thing this whole design exists to avoid.
+    ///
+    /// # Ask the pixels, not the clock
+    ///
+    /// This used to answer from the clock: changing while `age < FADE_IN_MS`,
+    /// and again once the hold was over. It is the obvious reading of "is it
+    /// fading?" and it drops the frame that matters most — the one where the
+    /// fade *lands*. At 120 ms and a 16 ms rate the last damaged sample is age
+    /// 112, drawn at alpha 238; the frame at age 128 is the one that first
+    /// draws 255, and the clock had already called the fade over.
+    ///
+    /// One frame of a toast being 7% dim is nothing. What it costs is the whole
+    /// hold: with double buffering the *undamaged* frame still repaints the
+    /// buffer it is handed, so one buffer holds a 255 toast and the other keeps
+    /// the 238 one, and the panel alternates between them sixty times a second
+    /// for four seconds. That is what was reported from the Pi as the toasts
+    /// trembling, and it is why the answer here is now a comparison against
+    /// what was last *drawn* rather than a window on the clock: the frame that
+    /// lands a fade changes pixels, so it is a frame that changed, whatever the
+    /// clock says. A toast holding at an opacity it has already been drawn at
+    /// is still free, which is the property that had to survive.
     pub(crate) fn is_changing(&self, now_ms: u64) -> bool {
-        self.notes.iter().any(|note| {
-            let age = now_ms.saturating_sub(note.born_ms);
-            if !self.motion.animates() {
-                // Nothing fades, so the only frame that changes anything is the
-                // one where it goes.
-                return age >= note.life_ms();
-            }
-            age < FADE_IN_MS || age >= FADE_IN_MS + note.hold_ms
-        })
+        self.notes
+            .iter()
+            .any(|note| note.alpha(now_ms, self.motion) != note.painted_alpha)
     }
 
     /// The soonest any toast needs a frame.
@@ -328,6 +350,15 @@ impl Toasts {
             .iter()
             .map(|&(_, rect, _)| rect)
             .reduce(|a, b| a.union(&b));
+        // What [`Toasts::is_changing`] compares against next frame. Recorded
+        // for every placed note even though the canvas is clipped to one damage
+        // region at a time and this runs once per region: a note that is
+        // changing has had its whole footprint damaged by `Ui::damage_toasts`,
+        // so the regions of a frame cover it between them, and every call in
+        // that frame records the same opacity.
+        for &(index, _, alpha) in &placed {
+            self.notes[index].painted_alpha = Some(alpha);
+        }
         for &(index, rect, alpha) in &placed {
             let note = &self.notes[index];
             // Both colours from one pairing, and both faded together — the
@@ -400,7 +431,63 @@ mod tests {
             role: Role::Success,
             born_ms: now_ms,
             hold_ms: HOLD_MS,
+            painted_alpha: None,
         }
+    }
+
+    /// **The frame that lands the fade must be a frame that repaints.**
+    ///
+    /// The regression this is here for: `is_changing` answered from the clock,
+    /// so the sample that first draws full opacity — the one at or just past
+    /// `FADE_IN_MS` — was called "not changing" and never damaged. One buffer
+    /// therefore kept the last fading opacity for the whole hold while the
+    /// other held 255, and a double-buffered panel alternated between them.
+    /// Reported from a Pi as the toasts trembling.
+    #[test]
+    fn the_frame_that_lands_the_fade_is_a_frame_that_changed() {
+        let mut toasts = Toasts::new();
+        toasts.set_motion(MOTION);
+        toasts.push(String::from("Lagret"), Role::Success, HOLD_MS, 0);
+
+        // Walk the fade on the tree's own grid, recording what each damaged
+        // frame would have drawn, exactly as `Ui::paint` does.
+        let mut now = 0;
+        let mut last_drawn = None;
+        while now < FADE_IN_MS + INTERVAL * 4 {
+            if toasts.is_changing(now) {
+                last_drawn = toasts.notes[0].alpha(now, MOTION);
+                toasts.notes[0].painted_alpha = last_drawn;
+            }
+            now += INTERVAL;
+        }
+
+        assert_eq!(
+            last_drawn,
+            Some(255),
+            "the fade has to have been drawn at the opacity it holds at"
+        );
+        assert!(
+            !toasts.is_changing(now),
+            "and then stop asking, or the hold is not free"
+        );
+    }
+
+    /// The other half of that: a toast holding still costs nothing. The whole
+    /// design claim rests on it.
+    #[test]
+    fn a_toast_that_has_been_drawn_where_it_is_asks_for_nothing() {
+        let mut toasts = Toasts::new();
+        toasts.set_motion(MOTION);
+        toasts.push(String::from("Lagret"), Role::Success, HOLD_MS, 0);
+        toasts.notes[0].painted_alpha = Some(255);
+
+        for now in [FADE_IN_MS, FADE_IN_MS + 1_000, FADE_IN_MS + HOLD_MS - 1] {
+            assert!(!toasts.is_changing(now), "still at 255 at {now} ms");
+        }
+        assert!(
+            toasts.is_changing(FADE_IN_MS + HOLD_MS + INTERVAL),
+            "and wakes again when the fade-out has moved it"
+        );
     }
 
     /// The whole life, without anybody touching it: in, hold, out, gone.

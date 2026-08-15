@@ -362,8 +362,25 @@ impl<M: 'static> Widget<M> for Toggle<M> {
             // `moving` cheap and, more importantly, stops this widget asking for
             // another frame — a toggle that kept requesting wakes would hold a
             // kiosk's CPU awake for the life of the device.
+            //
+            // **The arrival is a frame, and it used to be dropped.** `moving`
+            // goes false the moment `elapsed` reaches `TRAVEL_MS`, and that is
+            // the first tick on which `position` answers `target` — so the last
+            // frame anyone painted had the knob a step short of the end. On a
+            // double-buffered display that does not merely look imprecise: one
+            // buffer holds the knob short and the other holds it home, and a
+            // panel that keeps presenting alternates between them for as long
+            // as the toggle is on screen. It was reported from a Pi as flicker
+            // on the control under the pointer.
+            //
+            // So arriving repaints, and only settling again is free. Which is
+            // what `snap` next door had right all along: `repaint: moving`.
+            let arriving = self.from != Self::target(self.checked);
             self.settle();
-            return Animation::NONE;
+            return Animation {
+                repaint: arriving,
+                next: Wake::Never,
+            };
         }
         // Moving, at whatever rate the tree animates at. The crossing still
         // takes `TRAVEL_MS` either way: a coarser rate draws it in fewer
@@ -493,6 +510,56 @@ mod tests {
             "and stays there rather than overshooting"
         );
         assert!(!toggle.moving(1_000 + TRAVEL_MS));
+    }
+
+    /// **The frame that lands the crossing must be a frame that repaints.**
+    ///
+    /// The regression this is here for. `moving` goes false the instant
+    /// `elapsed` reaches `TRAVEL_MS`, and that same instant is the first at
+    /// which `position` answers `SCALE` — so the arrival was a frame nobody
+    /// painted, and every frame before it had the knob short of the end. One
+    /// buffer of a double-buffered panel therefore kept the knob short while
+    /// the other had it home, and a display that keeps presenting alternates
+    /// between the two. It was reported from a Pi as flicker on the control
+    /// under the pointer, and it is the same defect the toast stack had.
+    #[test]
+    fn the_frame_that_lands_the_crossing_repaints() {
+        let mut toggle: Toggle<bool> = Toggle::new("Mute", |on| on);
+        toggle.checked = true;
+        toggle.from = 0;
+        toggle.started_ms = 1_000;
+
+        let last_moving = toggle.animate(1_000 + TRAVEL_MS - 1);
+        assert!(last_moving.repaint, "still crossing");
+        assert!(
+            toggle.position(1_000 + TRAVEL_MS - 1) < SCALE,
+            "and short of the end, which is what makes the next frame matter"
+        );
+
+        let landing = toggle.animate(1_000 + TRAVEL_MS);
+        assert!(
+            landing.repaint,
+            "the knob reached the end on this frame; somebody has to draw it there"
+        );
+        assert_eq!(landing.next, Wake::Never, "and then stop asking");
+    }
+
+    /// The other half: a toggle sitting still is free. Asking for a repaint
+    /// every tick would hold a kiosk's CPU awake for the life of the device,
+    /// which is the cost the arrival must not be paid for with.
+    #[test]
+    fn a_settled_toggle_asks_for_nothing() {
+        let mut toggle: Toggle<bool> = Toggle::new("Mute", |on| on);
+        toggle.checked = true;
+        toggle.from = 0;
+        toggle.started_ms = 1_000;
+        toggle.animate(1_000 + TRAVEL_MS);
+
+        for now in [1_000 + TRAVEL_MS, 2_000, 9_999_999] {
+            let idle = toggle.animate(now);
+            assert!(!idle.repaint, "nothing changed at {now} ms");
+            assert_eq!(idle.next, Wake::Never);
+        }
     }
 
     /// A clock that goes backwards — a host that resets its epoch, or a `tick`
