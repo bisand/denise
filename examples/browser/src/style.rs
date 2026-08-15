@@ -280,10 +280,10 @@ fn ua_defaults(tag: &str, parent: &ComputedStyle, palette: &Palette) -> Computed
         | "dt" | "hr" => {
             s.display = Display::Block;
         }
-        // The table family, linearised: every cell a block of its own —
-        // readable is the promise; columns are not. A table also stops an
-        // inherited `text-align` at its border, because the ancestral
-        // `<center>` was centring the *table*, not every line in it.
+        // The table family: cells are blocks internally, and the layout
+        // pass gives rows real columns. A table also stops an inherited
+        // `text-align` at its border, because the ancestral `<center>` was
+        // centring the *table*, not every line in it.
         "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" => {
             s.display = Display::Block;
             s.text_align = TextAlign::Left;
@@ -299,6 +299,10 @@ fn ua_defaults(tag: &str, parent: &ComputedStyle, palette: &Palette) -> Computed
         "u" | "ins" => s.underline = true,
         "small" => s.font_size = 13,
         "big" => s.font_size = 19,
+        // Footnote markers at body size dominate the word they annotate;
+        // the size drop is most of what super/subscript means here — the
+        // baseline shift is not rendered.
+        "sup" | "sub" => s.font_size = (parent.font_size * 3 / 4).max(8),
         "center" => {
             s.display = Display::Block;
             s.text_align = TextAlign::Center;
@@ -325,7 +329,7 @@ mod tests {
 
     fn styled(html: &str) -> (Dom, Cascade) {
         let dom = Dom::parse(html);
-        let cascade = cascade(&dom, &palette(), &Stylesheet::parse(""));
+        let cascade = cascade(&dom, &palette(), &Stylesheet::parse("", 800));
         (dom, cascade)
     }
 
@@ -335,7 +339,7 @@ mod tests {
             r#"<style>p { color: red; margin-top: 4px; }</style>
                <p style="color: navy">t</p>"#,
         );
-        let sheet = Stylesheet::parse(&dom.text_content(dom.find("style").unwrap()));
+        let sheet = Stylesheet::parse(&dom.text_content(dom.find("style").unwrap()), 800);
         let c = cascade(&dom, &palette(), &sheet);
         let p = dom.find("p").unwrap();
         assert_eq!(c.styles[p].color, Color::rgb(0, 0, 128), "inline wins");
@@ -345,7 +349,7 @@ mod tests {
     #[test]
     fn display_none_silences_a_subtree() {
         let dom = Dom::parse(r#"<div class="nav">chrome</div><p>content</p>"#);
-        let sheet = Stylesheet::parse(".nav { display: none; }");
+        let sheet = Stylesheet::parse(".nav { display: none; }", 800);
         let c = cascade(&dom, &palette(), &sheet);
         let div = dom.find("div").unwrap();
         assert_eq!(c.styles[div].display, Display::None);
@@ -355,7 +359,7 @@ mod tests {
     fn em_sizes_compound_through_the_tree() {
         let dom =
             Dom::parse(r#"<div style="font-size: 20px"><p style="font-size: 2em">t</p></div>"#);
-        let c = cascade(&dom, &palette(), &Stylesheet::parse(""));
+        let c = cascade(&dom, &palette(), &Stylesheet::parse("", 800));
         let p = dom.find("p").unwrap();
         assert_eq!(c.styles[p].font_size, 40);
     }

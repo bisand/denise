@@ -66,8 +66,13 @@ page headlessly into a PPM for eyes or tests.
 **No JavaScript**, ever — that is the line between an example and a decade.
 Server-rendered pages (Wikipedia, Hacker News, DuckDuckGo Lite, docs, the
 old web) read well; an SPA renders the empty shell it serves. No floats,
-no positioning, no flex or grid — tables linearise, content flows in
-document order: *readable is the promise; fidelity is not.* No mid-word
+no positioning, no flex or grid — content flows in document order:
+*readable is the promise; fidelity is not.* Tables are the exception: real
+columns, widths negotiated from `width` attributes, spacer images and
+short cells, up to eight across — beyond that they stack. Media queries
+are answered for `screen` and the real viewport width; absolutely
+positioned overlays are dropped the way reader modes drop them; `#fragment`
+links scroll instead of refetching. No mid-word
 breaking, no bidi or shaping. Nearest-neighbour image scaling. No WebP or
 SVG. No multiline `textarea` editing, no file inputs, no tabs, no cache,
 no selection, no find-in-page. Cookies last as long as the process.

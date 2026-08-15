@@ -35,6 +35,8 @@ pub struct Page {
     pub selects: Vec<NodeId>,
     /// What relative form actions resolve against.
     pub base: Url,
+    /// Element ids to their content-relative y, for `#fragment` scrolling.
+    pub anchors: Vec<(String, i32)>,
 }
 
 fn checkbox_toggled(_: bool) -> Message {
@@ -70,6 +72,7 @@ pub fn build(
     let root = ui
         .add(viewport, Void, Rect::new(0, 0, width, layout.height))
         .expect("the viewport exists");
+    let anchors = layout.anchors;
     let mut images = Vec::new();
     let mut controls = HashMap::new();
     let mut selects = Vec::new();
@@ -191,5 +194,6 @@ pub fn build(
         controls,
         selects,
         base,
+        anchors,
     }
 }

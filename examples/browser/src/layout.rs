@@ -15,9 +15,12 @@
 //! gallery follows; measuring and painting must agree exactly, so they use
 //! the same numbers.
 //!
-//! What is not here, on purpose: floats, positioning, tables as grids. The
-//! content flows in document order, which trades fidelity for a page that is
-//! always readable — the right trade for an example that fits in one file.
+//! What is not here, on purpose: floats and positioning. The content flows
+//! in document order, which trades fidelity for a page that is always
+//! readable — the right trade for an example that fits in one file. Tables
+//! are the one exception fidelity won: real columns, because a rank beside
+//! a headline is what a table *means*, and stacked cells are not readable,
+//! just linear.
 
 use std::collections::HashMap;
 
@@ -140,6 +143,9 @@ pub struct PageLayout {
     pub leaves: Vec<Placed>,
     /// Total content height, the number the scroll range comes from.
     pub height: i32,
+    /// Element ids and where they landed, for `#fragment` navigation.
+    /// Physical pixels from the page top, block-level elements only.
+    pub anchors: Vec<(String, i32)>,
 }
 
 /// Lays out a whole document into `width` physical pixels.
@@ -170,6 +176,7 @@ pub fn layout_page(
         forms,
         engine,
         leaves: Vec::new(),
+        anchors: Vec::new(),
     };
     let body = dom.find("body").unwrap_or(0);
     let style = &cascade.styles[body];
@@ -181,6 +188,7 @@ pub fn layout_page(
     PageLayout {
         leaves: l.leaves,
         height: y + height + margin[2],
+        anchors: l.anchors,
     }
 }
 
@@ -193,6 +201,7 @@ struct Layouter<'a> {
     forms: &'a FormsModel,
     engine: &'a mut TextEngine,
     leaves: Vec<Placed>,
+    anchors: Vec<(String, i32)>,
 }
 
 /// A box heading into a line: an image or a form control, already sized,
@@ -207,6 +216,13 @@ struct ObjSpec {
 enum ObjKind {
     Image { src: String, sized: bool },
     Control,
+}
+
+/// What a table cell says about its column's width.
+enum CellWidth {
+    Fixed(i32),
+    Flexible,
+    DontCare,
 }
 
 /// An object the breaker placed, relative to its flow's origin.
@@ -286,6 +302,24 @@ impl Layouter<'_> {
             });
         }
 
+        // A record for the anchor table: `#fragment` scrolls here.
+        if let Some(id) = self.dom.attr(idx, "id") {
+            self.anchors.push((id.to_string(), y));
+        }
+
+        // A table with real rows gets real columns.
+        if self.dom.tag(idx) == Some("table") {
+            let rows = self.table_rows(idx);
+            if !rows.is_empty() {
+                cy += self.table(idx, &rows, cx, cy, cw);
+                let height = (cy + padding[2]) - y;
+                if let Some(leaf) = background {
+                    self.leaves[leaf].rect = Rect::new(x, y, width, height);
+                }
+                return height;
+            }
+        }
+
         // Children: inline-level runs gather until a block interrupts them.
         let mut inline: Vec<InlineToken> = Vec::new();
         let mut ends_with_space = true; // swallows leading whitespace
@@ -332,6 +366,203 @@ impl Layouter<'_> {
             self.leaves[leaf].rect = Rect::new(x, y, width, height);
         }
         height
+    }
+
+    /// The rows of a table, each a list of its cells, with everything
+    /// `display: none` already gone. Empty when the table has no usable
+    /// rows — or too many columns to be worth eleven-pixel ones, in which
+    /// case the caller linearises the way it always did.
+    fn table_rows(&self, table: usize) -> Vec<Vec<usize>> {
+        let mut rows: Vec<Vec<usize>> = Vec::new();
+        // Rows sit either directly under the table or under its sections;
+        // scan both without duplicating.
+        let mut holders: Vec<usize> = vec![table];
+        holders.extend(
+            self.dom.nodes[table]
+                .children
+                .iter()
+                .copied()
+                .filter(|&c| matches!(self.dom.tag(c), Some("thead" | "tbody" | "tfoot"))),
+        );
+        for holder in holders {
+            for &row in &self.dom.nodes[holder].children {
+                if self.dom.tag(row) != Some("tr")
+                    || self.cascade.styles[row].display == Display::None
+                {
+                    continue;
+                }
+                let cells: Vec<usize> = self.dom.nodes[row]
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|&c| {
+                        matches!(self.dom.tag(c), Some("td" | "th"))
+                            && self.cascade.styles[c].display != Display::None
+                    })
+                    .collect();
+                if !cells.is_empty() {
+                    rows.push(cells);
+                }
+            }
+        }
+        let columns = rows.iter().map(|r| self.row_span(r)).max().unwrap_or(0);
+        if !(2..=8).contains(&columns) {
+            return Vec::new();
+        }
+        rows
+    }
+
+    fn colspan(&self, cell: usize) -> usize {
+        self.dom
+            .attr(cell, "colspan")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(1)
+            .clamp(1, 8)
+    }
+
+    fn row_span(&self, cells: &[usize]) -> usize {
+        cells.iter().map(|&c| self.colspan(c)).sum()
+    }
+
+    /// Table layout, the simple honest kind: columns share the width
+    /// equally unless a cell asks for one — a `width` attribute in px or
+    /// percent, or a cell that is nothing but a sized image, the spacer
+    /// idiom the old web indents comment threads with. Row height is the
+    /// tallest cell's. No rowspan; a cell spans columns and that is all.
+    fn table(&mut self, _table: usize, rows: &[Vec<usize>], x: i32, y: i32, width: i32) -> i32 {
+        let spacing = self.px(4);
+        let columns = rows.iter().map(|r| self.row_span(r)).max().unwrap_or(1);
+        let avail = (width - spacing * (columns as i32 - 1)).max(columns as i32);
+
+        // What the cells ask for, per column. A cell with prose makes its
+        // whole column flexible — a rank column is only narrow because
+        // *nothing* in it ever wants room; one long cell anywhere means
+        // the "More" link at the bottom must not pin the story column.
+        let mut requested: Vec<Option<i32>> = vec![None; columns];
+        let mut flexible: Vec<bool> = vec![false; columns];
+        for row in rows {
+            let mut col = 0usize;
+            for &cell in row {
+                let span = self.colspan(cell).min(columns - col.min(columns - 1));
+                if span == 1 && col < columns {
+                    match self.cell_width_request(cell, avail) {
+                        CellWidth::Fixed(w) => {
+                            let slot = &mut requested[col];
+                            *slot = Some(slot.map_or(w, |prev: i32| prev.max(w)));
+                        }
+                        CellWidth::Flexible => flexible[col] = true,
+                        CellWidth::DontCare => {}
+                    }
+                }
+                col += span;
+            }
+        }
+        for (req, flex) in requested.iter_mut().zip(&flexible) {
+            if *flex {
+                *req = None;
+            }
+        }
+        // Columns nobody spoke for — every cell empty — collapse to a
+        // sliver rather than sharing the prose's width; if *no* column is
+        // flexible, they inherit the flexibility instead.
+        let sliver = self.px(16);
+        if !flexible.iter().any(|&f| f) {
+            flexible.fill(true);
+        } else {
+            for (req, flex) in requested.iter_mut().zip(&flexible) {
+                if req.is_none() && !*flex {
+                    *req = Some(sliver);
+                }
+            }
+        }
+        // Requests are honoured while they leave the prose room to breathe;
+        // a table that asks for everything gets equal shares instead.
+        let asked: i32 = requested.iter().flatten().copied().sum();
+        let asked_cols = requested.iter().flatten().count();
+        let mut widths: Vec<i32> = vec![0; columns];
+        if asked_cols == columns || asked * 4 > avail * 3 {
+            let each = avail / columns as i32;
+            widths.fill(each);
+        } else {
+            let remainder = avail - asked;
+            let each = remainder / (columns - asked_cols) as i32;
+            for (w, req) in widths.iter_mut().zip(&requested) {
+                *w = req.unwrap_or(each).max(8);
+            }
+        }
+
+        let x_of = |widths: &[i32], col: usize| {
+            x + widths[..col].iter().sum::<i32>() + spacing * col as i32
+        };
+
+        let mut cy = y;
+        for row in rows {
+            let mut col = 0usize;
+            let mut row_height = 0;
+            for &cell in row {
+                let span = self
+                    .colspan(cell)
+                    .min(columns - col.min(columns - 1))
+                    .max(1);
+                let cell_w =
+                    widths[col..col + span].iter().sum::<i32>() + spacing * (span as i32 - 1);
+                let h = self.block(cell, x_of(&widths, col), cy, cell_w.max(8), None);
+                row_height = row_height.max(h);
+                col += span;
+            }
+            cy += row_height + spacing;
+        }
+        (cy - y - spacing).max(0)
+    }
+
+    /// A cell's own idea of its width: the `width` attribute in px or
+    /// percent; a lone sized image inside a cell with no text, which is how
+    /// spacer indentation was always written; a snippet of text short
+    /// enough to be a rank or a vote count — measured, so a "17." column is
+    /// as wide as "17.". Prose answers Flexible, an empty cell has no
+    /// opinion at all.
+    fn cell_width_request(&mut self, cell: usize, avail: i32) -> CellWidth {
+        if let Some(value) = self.dom.attr(cell, "width") {
+            let value = value.trim();
+            if let Some(percent) = value.strip_suffix('%') {
+                if let Ok(p) = percent.trim().parse::<f32>() {
+                    return CellWidth::Fixed(((avail as f32 * p / 100.0) as i32).max(8));
+                }
+            } else if let Ok(px) = value.parse::<i32>() {
+                return CellWidth::Fixed(self.px(px).max(8));
+            }
+        }
+        let text = self.dom.text_content(cell);
+        let text = text.trim();
+        if text.is_empty() {
+            let mut widest: Option<i32> = None;
+            self.widest_sized_image(cell, &mut widest);
+            return match widest {
+                Some(w) => CellWidth::Fixed(self.px(w).max(8)),
+                None => CellWidth::DontCare,
+            };
+        }
+        if text.chars().count() <= 12 && !text.contains('\n') {
+            let style = self.cascade.styles[cell].clone();
+            let ts = self.text_style(&style);
+            let measured = self.engine.measure_line(ts, text);
+            return CellWidth::Fixed(measured + self.px(8));
+        }
+        CellWidth::Flexible
+    }
+
+    fn widest_sized_image(&self, idx: usize, widest: &mut Option<i32>) {
+        if self.dom.tag(idx) == Some("img")
+            && let Some(w) = self
+                .dom
+                .attr(idx, "width")
+                .and_then(|v| v.trim().parse::<i32>().ok())
+        {
+            *widest = Some(widest.map_or(w, |prev| prev.max(w)));
+        }
+        for &child in &self.dom.nodes[idx].children {
+            self.widest_sized_image(child, widest);
+        }
     }
 
     /// Breaks the gathered inline tokens into lines and places the flow at
@@ -423,6 +654,13 @@ impl Layouter<'_> {
                 let Some(src) = self.dom.attr(idx, "src") else {
                     return;
                 };
+                // A format the decoder will never manage gets no box at
+                // all: a permanently blank reservation is worse than
+                // absence. SVG logos are the everyday case.
+                let path = src.split(['?', '#']).next().unwrap_or(src);
+                if path.to_ascii_lowercase().ends_with(".svg") || src.starts_with("data:") {
+                    return;
+                }
                 // Attributes first, the decoded size second, a placeholder
                 // box last — the box an image reserves before it arrives is
                 // what keeps the text from jumping when it does.
@@ -754,7 +992,7 @@ mod tests {
     /// 8 px size these tests run at (UA 16 px at scale 0.5).
     fn layout(html: &str, width: i32) -> PageLayout {
         let dom = Dom::parse(html);
-        let c = cascade(&dom, &palette(), &crate::css::Stylesheet::parse(""));
+        let c = cascade(&dom, &palette(), &crate::css::Stylesheet::parse("", 800));
         let mut engine = TextEngine::new();
         let fonts = Fonts::all(denise_text::FontId(0));
         let forms = crate::forms::extract(&dom);
@@ -906,6 +1144,63 @@ mod tests {
     fn whitespace_only_markup_makes_no_flow() {
         let page = layout("<div> \n\t </div>", 800);
         assert!(flows(&page).is_empty());
+    }
+
+    #[test]
+    fn a_table_lays_its_cells_side_by_side() {
+        let page = layout(
+            "<table><tr><td>left</td><td>right</td></tr>\
+             <tr><td>a</td><td>b</td></tr></table>",
+            800,
+        );
+        let rects = flows_rects(&page);
+        assert_eq!(rects.len(), 4);
+        // First row: same top, different columns.
+        assert_eq!(rects[0].y, rects[1].y);
+        assert!(rects[1].x > rects[0].x + 100, "a real second column");
+        // Second row sits below the first.
+        assert!(rects[2].y > rects[0].y);
+        assert_eq!(rects[2].x, rects[0].x, "columns line up down the rows");
+    }
+
+    #[test]
+    fn a_spacer_cell_indents_like_the_old_web() {
+        // The comment-thread idiom: an empty cell holding a sized image.
+        let page = layout(
+            "<table><tr><td><img src=s.gif width=40 height=1></td>\
+             <td>the comment text itself</td></tr></table>",
+            800,
+        );
+        let rects = flows_rects(&page);
+        // The text cell starts just past the 20-px spacer (40 logical at
+        // scale 0.5), not at the halfway mark an equal split would give.
+        assert!(rects[0].x < 40, "text at {}", rects[0].x);
+    }
+
+    #[test]
+    fn a_wide_table_still_linearises() {
+        let page = layout(
+            "<table><tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td>\
+             <td>6</td><td>7</td><td>8</td><td>9</td></tr></table>",
+            800,
+        );
+        let rects = flows_rects(&page);
+        // Nine columns in 800px would be unreadable; they stack instead.
+        assert!(rects.windows(2).all(|w| w[1].y > w[0].y));
+    }
+
+    #[test]
+    fn ids_become_anchors_at_their_height() {
+        let page = layout(
+            "<p>opening</p><h2 id=\"verse\">a heading far down</h2>",
+            800,
+        );
+        let anchor = page
+            .anchors
+            .iter()
+            .find(|(id, _)| id == "verse")
+            .expect("the id was recorded");
+        assert!(anchor.1 > 0, "below the opening paragraph");
     }
 
     #[test]

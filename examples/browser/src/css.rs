@@ -80,7 +80,9 @@ pub enum CssDisplay {
 }
 
 impl Stylesheet {
-    pub fn parse(css: &str) -> Self {
+    /// `viewport` is the width media queries are asked against, in CSS
+    /// (logical) pixels.
+    pub fn parse(css: &str, viewport: i32) -> Self {
         let mut sheet = Self {
             rules: Vec::new(),
             by_id: HashMap::new(),
@@ -90,50 +92,7 @@ impl Stylesheet {
         };
         let mut input = ParserInput::new(css);
         let mut parser = Parser::new(&mut input);
-        let mut start = parser.position();
-        loop {
-            match parser.next() {
-                Err(_) => break,
-                Ok(Token::CurlyBracketBlock) => {
-                    let prelude = parser.slice_from(start);
-                    let prelude = prelude[..prelude.len() - 1].to_string();
-                    let decls = parser
-                        .parse_nested_block(|block| {
-                            Ok::<_, cssparser::ParseError<'_, ()>>(parse_declarations(block))
-                        })
-                        .unwrap_or_default();
-                    if !decls.is_empty() {
-                        for selector in parse_selectors(&prelude) {
-                            sheet.push(selector, decls.clone());
-                        }
-                    }
-                    start = parser.position();
-                }
-                Ok(Token::AtKeyword(_)) => {
-                    // At-rules are skipped whole, `@media` included: this
-                    // renderer has one medium and no width breakpoints
-                    // worth lying about. The block must be consumed *now* —
-                    // an unconsumed block is skipped lazily, after the next
-                    // rule's prelude would already have swallowed it.
-                    loop {
-                        match parser.next() {
-                            Err(_) => break,
-                            Ok(Token::Semicolon) => break,
-                            Ok(Token::CurlyBracketBlock) => {
-                                let _ = parser.parse_nested_block(|block| {
-                                    while block.next().is_ok() {}
-                                    Ok::<_, cssparser::ParseError<'_, ()>>(())
-                                });
-                                break;
-                            }
-                            Ok(_) => {}
-                        }
-                    }
-                    start = parser.position();
-                }
-                Ok(_) => {}
-            }
-        }
+        parse_rules(&mut parser, &mut sheet, viewport);
         sheet
     }
 
@@ -308,6 +267,106 @@ fn parse_compound(text: &str) -> Option<Compound> {
     Some(compound)
 }
 
+/// One run of rules: a stylesheet, or the inside of a matching `@media`
+/// block — the recursion that makes nested media work for free.
+fn parse_rules(parser: &mut Parser<'_, '_>, sheet: &mut Stylesheet, viewport: i32) {
+    let mut start = parser.position();
+    loop {
+        match parser.next() {
+            Err(_) => break,
+            Ok(Token::CurlyBracketBlock) => {
+                let prelude = parser.slice_from(start);
+                let prelude = prelude[..prelude.len() - 1].to_string();
+                let decls = parser
+                    .parse_nested_block(|block| {
+                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_declarations(block))
+                    })
+                    .unwrap_or_default();
+                if !decls.is_empty() {
+                    for selector in parse_selectors(&prelude) {
+                        sheet.push(selector, decls.clone());
+                    }
+                }
+                start = parser.position();
+            }
+            Ok(Token::AtKeyword(name)) => {
+                let media = name.eq_ignore_ascii_case("media");
+                // The block must be consumed *now* — an unconsumed block is
+                // skipped lazily, after the next rule's prelude would
+                // already have swallowed it.
+                let condition_start = parser.position();
+                loop {
+                    match parser.next() {
+                        Err(_) => break,
+                        Ok(Token::Semicolon) => break,
+                        Ok(Token::CurlyBracketBlock) => {
+                            let condition = {
+                                let s = parser.slice_from(condition_start);
+                                s[..s.len() - 1].to_string()
+                            };
+                            if media && media_matches(&condition, viewport) {
+                                let _ = parser.parse_nested_block(|block| {
+                                    parse_rules(block, sheet, viewport);
+                                    Ok::<_, cssparser::ParseError<'_, ()>>(())
+                                });
+                            } else {
+                                // Every other at-rule, and media this one
+                                // medium is not: consumed and dropped.
+                                let _ = parser.parse_nested_block(|block| {
+                                    while block.next().is_ok() {}
+                                    Ok::<_, cssparser::ParseError<'_, ()>>(())
+                                });
+                            }
+                            break;
+                        }
+                        Ok(_) => {}
+                    }
+                }
+                start = parser.position();
+            }
+            Ok(_) => {}
+        }
+    }
+}
+
+/// The half of media queries a one-medium renderer can answer honestly:
+/// `screen` and `all` are what this is, `print` is not, and width limits
+/// compare against the real viewport. A term it cannot evaluate — `not`,
+/// `prefers-*`, unknown features — fails its alternative, because applying
+/// a dark-scheme block to a light page is worse than skipping it.
+fn media_matches(condition: &str, viewport: i32) -> bool {
+    let condition = condition.to_ascii_lowercase();
+    condition.split(',').any(|alternative| {
+        let alternative = alternative.trim();
+        if alternative.is_empty() {
+            return false;
+        }
+        alternative.split(" and ").all(|term| {
+            let term = term.trim().trim_start_matches("only ").trim();
+            match term {
+                "screen" | "all" => true,
+                _ if term.starts_with("not ") => false,
+                _ if term.starts_with('(') => {
+                    let inner = term.trim_matches(['(', ')']);
+                    let Some((feature, value)) = inner.split_once(':') else {
+                        return false;
+                    };
+                    let px = value
+                        .trim()
+                        .strip_suffix("px")
+                        .and_then(|v| v.trim().parse::<f32>().ok().map(|v| v.round() as i32));
+                    match (feature.trim(), px) {
+                        ("min-width", Some(px)) => viewport >= px,
+                        ("max-width", Some(px)) => viewport <= px,
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        })
+    })
+}
+
 fn parse_declarations(parser: &mut Parser<'_, '_>) -> Vec<Decl> {
     let mut out = Vec::new();
     while !parser.is_exhausted() {
@@ -423,6 +482,25 @@ fn declaration(name: &str, value: &mut Parser<'_, '_>, out: &mut Vec<Decl>) {
                     }
                     _ => {}
                 }
+            }
+        }
+        "visibility" => {
+            if let Ok(Token::Ident(word)) = value.next()
+                && matches!(word.to_ascii_lowercase().as_str(), "hidden" | "collapse")
+            {
+                out.push(Decl::Display(CssDisplay::None));
+            }
+        }
+        // A linearising renderer has no "out of flow" to put these in, and
+        // what authors position absolutely is overwhelmingly overlay
+        // furniture — dropdown menus, skip links, modals. Reader modes drop
+        // them; so does this one. `sticky` stays: it is in-flow content
+        // that merely wants to linger.
+        "position" => {
+            if let Ok(Token::Ident(word)) = value.next()
+                && matches!(word.to_ascii_lowercase().as_str(), "absolute" | "fixed")
+            {
+                out.push(Decl::Display(CssDisplay::None));
             }
         }
         "margin" | "padding" => {
@@ -643,7 +721,7 @@ mod tests {
     #[test]
     fn a_rule_finds_its_element() {
         let dom = Dom::parse(r#"<p class="lead big">text</p><p>plain</p>"#);
-        let sheet = Stylesheet::parse(".lead { color: #ff0000; }");
+        let sheet = Stylesheet::parse(".lead { color: #ff0000; }", 800);
         let lead = dom.find("p").unwrap();
         assert_eq!(
             decls(&dom, &sheet, lead),
@@ -656,7 +734,10 @@ mod tests {
     #[test]
     fn specificity_outranks_source_order() {
         let dom = Dom::parse(r#"<p id="x" class="c">t</p>"#);
-        let sheet = Stylesheet::parse("#x { color: red; } .c { color: blue; } p { color: green; }");
+        let sheet = Stylesheet::parse(
+            "#x { color: red; } .c { color: blue; } p { color: green; }",
+            800,
+        );
         let p = dom.find("p").unwrap();
         let all = decls(&dom, &sheet, p);
         // Cascade order: the id's declaration comes last and wins.
@@ -667,7 +748,10 @@ mod tests {
     #[test]
     fn descendants_walk_all_the_way_up() {
         let dom = Dom::parse(r#"<div class="outer"><p><b>deep</b></p></div>"#);
-        let sheet = Stylesheet::parse(".outer b { font-weight: bold; } .other b { color: red; }");
+        let sheet = Stylesheet::parse(
+            ".outer b { font-weight: bold; } .other b { color: red; }",
+            800,
+        );
         let b = dom.find("b").unwrap();
         assert_eq!(decls(&dom, &sheet, b), vec![Decl::Bold(true)]);
     }
@@ -677,6 +761,7 @@ mod tests {
         let sheet = Stylesheet::parse(
             "p { grid-template-columns: repeat(3, 1fr); color: navy; transition: all .2s; \
              margin: 4px 8px; }",
+            800,
         );
         let dom = Dom::parse("<p>t</p>");
         let p = dom.find("p").unwrap();
@@ -689,7 +774,7 @@ mod tests {
 
     #[test]
     fn pseudo_selectors_reject_only_their_own_rule() {
-        let sheet = Stylesheet::parse("a:hover { color: red; } a { color: blue; }");
+        let sheet = Stylesheet::parse("a:hover { color: red; } a { color: blue; }", 800);
         let dom = Dom::parse("<a href=x>t</a>");
         let a = dom.find("a").unwrap();
         assert_eq!(
@@ -711,9 +796,10 @@ mod tests {
     }
 
     #[test]
-    fn media_blocks_are_skipped_whole() {
+    fn a_false_media_query_skips_its_block_whole() {
         let sheet = Stylesheet::parse(
             "@media (max-width: 600px) { p { display: none; } } p { color: black; }",
+            800,
         );
         let dom = Dom::parse("<p>t</p>");
         let p = dom.find("p").unwrap();
@@ -724,10 +810,57 @@ mod tests {
     }
 
     #[test]
+    fn a_true_media_query_admits_its_rules() {
+        let sheet = Stylesheet::parse(
+            "@media screen and (min-width: 600px) { p { color: navy; } } \
+             @media print { p { display: none; } } \
+             @media screen { @media (max-width: 2000px) { p { font-weight: bold; } } }",
+            800,
+        );
+        let dom = Dom::parse("<p>t</p>");
+        let p = dom.find("p").unwrap();
+        let got = decls(&dom, &sheet, p);
+        assert!(
+            got.contains(&Decl::Color(Color::rgb(0, 0, 128))),
+            "screen + width applies"
+        );
+        assert!(got.contains(&Decl::Bold(true)), "nested media recurses");
+        assert!(
+            !got.contains(&Decl::Display(CssDisplay::None)),
+            "print stays out"
+        );
+    }
+
+    #[test]
+    fn media_alternatives_need_only_one_true() {
+        assert!(media_matches("print, screen", 800));
+        assert!(media_matches("only screen and (min-width: 100px)", 800));
+        assert!(!media_matches("not screen", 800));
+        assert!(
+            !media_matches("(prefers-color-scheme: dark)", 800),
+            "unanswerable fails"
+        );
+        assert!(!media_matches("screen and (min-width: 1200px)", 800));
+    }
+
+    #[test]
+    fn overlays_and_invisibility_leave_the_flow() {
+        let got = Stylesheet::parse_inline("position: absolute");
+        assert_eq!(got, vec![Decl::Display(CssDisplay::None)]);
+        let got = Stylesheet::parse_inline("visibility: hidden");
+        assert_eq!(got, vec![Decl::Display(CssDisplay::None)]);
+        // Sticky is in-flow content that merely lingers; relative is layout
+        // this renderer ignores rather than removes.
+        assert!(Stylesheet::parse_inline("position: sticky").is_empty());
+        assert!(Stylesheet::parse_inline("position: relative").is_empty());
+    }
+
+    #[test]
     fn colours_in_every_costume() {
         let sheet = Stylesheet::parse(
             "p { color: #abc; } b { color: #aabbcc; } i { color: rgb(1, 2, 3); } \
              u { background: transparent; }",
+            800,
         );
         let dom = Dom::parse("<p><b><i><u>t</u></i></b></p>");
         assert_eq!(

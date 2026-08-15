@@ -391,6 +391,23 @@ impl App {
             let scroll = self.ui.scroll(self.chrome.content);
             self.history.save_scroll(scroll);
         }
+        // A fragment on the page already showing is a scroll, not a fetch:
+        // a table of contents would be unusable if every entry re-downloaded
+        // the article it points into.
+        if url.fragment().is_some()
+            && self
+                .source
+                .as_ref()
+                .is_some_and(|(_, current)| same_document(current, &url))
+        {
+            if push {
+                self.history.push(url.clone());
+            }
+            self.set_url_bar(url.as_str());
+            self.refresh_nav_buttons();
+            self.scroll_to_fragment(&url);
+            return;
+        }
         if url.scheme() == "about" {
             if push {
                 self.history.push(url.clone());
@@ -549,7 +566,9 @@ impl App {
                 queued_css += 1;
             }
         }
-        let sheet = crate::css::Stylesheet::parse(&css);
+        // Media queries ask about CSS pixels, which are our logical ones.
+        let viewport = (self.size.width as f32 / self.scale).round() as i32;
+        let sheet = crate::css::Stylesheet::parse(&css, viewport);
         let styled = cascade(&dom, &self.palette, &sheet);
         let links = styled
             .links
@@ -622,11 +641,34 @@ impl App {
             queued += 1;
         }
         self.set_url_bar(url.as_str());
+        self.refresh_nav_buttons();
+        self.source = Some((html, url.clone()));
+        // A freshly arrived page with a fragment opens at the fragment.
+        if restore == Point::ZERO && url.fragment().is_some() {
+            self.scroll_to_fragment(&url);
+        }
+    }
+
+    fn refresh_nav_buttons(&mut self) {
         self.ui
             .set_enabled(self.chrome.back, self.history.can_back());
         self.ui
             .set_enabled(self.chrome.forward, self.history.can_forward());
-        self.source = Some((html, url));
+    }
+
+    fn scroll_to_fragment(&mut self, url: &Url) {
+        let Some(fragment) = url.fragment() else {
+            return;
+        };
+        let target = self.page.as_ref().and_then(|p| {
+            p.anchors
+                .iter()
+                .find(|(id, _)| id == fragment)
+                .map(|&(_, y)| y)
+        });
+        if let Some(y) = target {
+            self.ui.set_scroll(self.chrome.content, Point::new(0, y));
+        }
     }
 
     fn set_url_bar(&mut self, text: &str) {
@@ -970,6 +1012,15 @@ fn to_url(text: &str) -> Option<Url> {
     Url::parse(&format!("https://{text}")).ok()
 }
 
+/// The same page, fragments aside.
+fn same_document(a: &Url, b: &Url) -> bool {
+    let mut a = a.clone();
+    let mut b = b.clone();
+    a.set_fragment(None);
+    b.set_fragment(None);
+    a == b
+}
+
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -1049,12 +1100,25 @@ mod tests {
         );
         pump(&mut app);
         let page = app.page.as_ref().expect("a page");
-        assert!(!page.links.is_empty(), "the fixture has links");
-        let target = page.links[0].clone().expect("the relative link resolved");
-        assert!(target.as_str().ends_with("second.html"));
+        assert!(page.links.len() >= 2, "the fixture has links");
+        // Link 0 is the in-page fragment: a scroll, not a fetch.
+        let anchor = page.links[0].clone().expect("the fragment resolved");
+        assert_eq!(anchor.fragment(), Some("verse"));
         assert!(!app.history.can_back(), "one entry so far");
-
         app.on_message(Message::Navigate(0));
+        assert!(!app.loading(), "no fetch for a fragment");
+        assert!(
+            app.ui.scroll(app.chrome.content).y > 0,
+            "scrolled to the verse section"
+        );
+        assert!(app.history.can_back(), "the jump is a history entry");
+
+        // Link 1 leaves the page for real.
+        let target = app.page.as_ref().unwrap().links[1]
+            .clone()
+            .expect("the relative link resolved");
+        assert!(target.as_str().ends_with("second.html"));
+        app.on_message(Message::Navigate(1));
         pump(&mut app);
         let (_, here) = app.source.as_ref().expect("a source");
         assert!(here.as_str().ends_with("second.html"));
@@ -1063,7 +1127,8 @@ mod tests {
         app.on_message(Message::Back);
         pump(&mut app);
         let (_, here) = app.source.as_ref().expect("a source");
-        assert!(here.as_str().ends_with("basic.html"));
+        // Back lands on the fragment entry the jump created.
+        assert!(here.as_str().ends_with("basic.html#verse"));
         assert!(app.history.can_forward());
     }
 
