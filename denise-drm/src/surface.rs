@@ -43,10 +43,10 @@ pub enum PresentMode {
     /// content, where a tear crosses something worth looking at". A scrolling
     /// viewport turned out to be exactly that, and the flicker was reported from a
     /// Pi within a day of the gallery gaining one. So the mode is no longer a
-    /// promise about every frame: **a frame that damages a quarter of the surface
-    /// or more flips at vblank anyway**, and this asks for async flips on the
-    /// frames where the seam is small and the latency is felt. See
-    /// [`flip_flags_for`].
+    /// promise about every frame: **a frame whose damage spans a quarter of the
+    /// screen's rows or more flips at vblank anyway**, and this asks for async
+    /// flips on the frames where the seam is short and the latency is felt. See
+    /// [`flip_flags_for`], including why it counts rows rather than pixels.
     ///
     /// Requires `DRM_CAP_ASYNC_PAGE_FLIP`; drivers without it fall back to
     /// [`PresentMode::Vsync`], and [`DrmSurface::present_mode`] reports what was
@@ -165,16 +165,15 @@ impl Scanout {
     }
 }
 
-/// Above this share of the surface, a frame flips at vblank even under
-/// [`PresentMode::Immediate`].
+/// Above this share of the surface's **rows**, a frame flips at vblank even
+/// under [`PresentMode::Immediate`].
 ///
-/// A quarter, expressed as a numerator over [`TEAR_FREE_DENOMINATOR`] so the
-/// comparison stays in integers. The number is not delicate: real damage is
-/// either a control redrawing itself, which is well under a percent, or
-/// something that moved everything, which is most of the screen. There is very
-/// little in between, so anywhere in the middle picks the same frames.
-const TEAR_FREE_NUMERATOR: u64 = 1;
-const TEAR_FREE_DENOMINATOR: u64 = 4;
+/// A quarter, as a numerator over [`TEAR_FREE_DENOMINATOR`] so the comparison
+/// stays in integers. The number is not delicate: real damage either spans a
+/// control, which is a few dozen rows, or something that moved a whole column,
+/// which is nearly all of them. There is very little in between.
+const TEAR_FREE_NUMERATOR: u32 = 1;
+const TEAR_FREE_DENOMINATOR: u32 = 4;
 
 /// Which page flip this frame gets: async, or paced by vblank.
 ///
@@ -198,6 +197,19 @@ const TEAR_FREE_DENOMINATOR: u64 = 4;
 /// a press lighting a button — and given up on the frames where it is neither
 /// felt nor affordable.
 ///
+/// # Rows, not area
+///
+/// The first version of this compared the damaged *area* against the surface,
+/// and a Pi still flashed occasionally. The gallery's sidebar is 300 by 1016 on
+/// a 1920x1080 panel: **14.7% of the pixels, and 94% of the scanlines.** It went
+/// out async and tore across almost the whole height of the screen.
+///
+/// A tear is a horizontal seam, and it appears when the buffer changes under the
+/// beam part-way down. What decides whether it is visible is therefore how many
+/// **rows** the damage spans, not how much of the surface it covers. A full-width
+/// toolbar forty rows tall can tear freely — the seam is a thin band that is gone
+/// next frame. A narrow column down the whole screen cannot.
+///
 /// An empty damage list means the caller presented without saying what changed,
 /// which cannot be assumed to be small.
 fn flip_flags_for(mode: PresentMode, damage: &[Rect], surface: Size) -> PageFlipFlags {
@@ -211,17 +223,18 @@ fn flip_flags_for(mode: PresentMode, damage: &[Rect], surface: Size) -> PageFlip
         return synced;
     }
 
-    // Bounds rather than the sum of areas: two rectangles that overlap would
-    // count their intersection twice, and the union is what a beam crosses.
+    // Bounds rather than each rectangle's own height: two updates far apart
+    // vertically leave the rows between them untouched, but a single flip still
+    // changes the buffer for all of them at once, so the beam can seam anywhere
+    // in the span.
     let bounds = damage
         .iter()
         .copied()
         .reduce(|acc, r| acc.union(&r))
         .unwrap_or(Rect::ZERO);
-    let damaged = u64::from(bounds.width.max(0) as u32) * u64::from(bounds.height.max(0) as u32);
-    let whole = u64::from(surface.width) * u64::from(surface.height);
+    let rows = bounds.height.max(0) as u32;
 
-    if damaged * TEAR_FREE_DENOMINATOR >= whole * TEAR_FREE_NUMERATOR {
+    if rows * TEAR_FREE_DENOMINATOR >= surface.height * TEAR_FREE_NUMERATOR {
         synced
     } else {
         immediate
@@ -546,16 +559,42 @@ mod tests {
         );
     }
 
-    /// Bounds, not the sum of areas. Two rectangles far apart cover very little
-    /// between them but a tear would still land between the two — and counting
-    /// their overlap twice, if they had any, would fail the other way.
+    /// The gallery's sidebar, exactly: 300 by 1016 on a 1920x1080 panel. It is
+    /// under 15% of the pixels and over 90% of the scanlines, and judging it by
+    /// area sent it out async — which is the flash that was still being seen
+    /// after the first version of this shipped.
+    #[test]
+    fn a_narrow_column_down_the_screen_is_not_a_small_frame() {
+        let sidebar = [Rect::new(12, 52, 300, 1016)];
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &sidebar, SCREEN),
+            PageFlipFlags::EVENT,
+            "14.7% of the pixels, 94% of the rows: a tear crosses the lot"
+        );
+    }
+
+    /// And the other way round, which is why this is rows and not "any big
+    /// dimension": a band across the whole width can seam without anybody
+    /// noticing, because the seam is as short as the band.
+    #[test]
+    fn a_wide_shallow_band_may_still_tear() {
+        let toolbar = [Rect::new(0, 0, 1920, 40)];
+        assert_eq!(
+            flip_flags_for(PresentMode::Immediate, &toolbar, SCREEN),
+            PageFlipFlags::EVENT | PageFlipFlags::ASYNC
+        );
+    }
+
+    /// Bounds, not each rectangle on its own. Two specks far apart leave the
+    /// rows between them untouched, but one flip changes the buffer for all of
+    /// them at once, so the beam can seam anywhere in the span.
     #[test]
     fn scattered_damage_is_judged_by_what_it_spans() {
         let corners = [Rect::new(0, 0, 60, 40), Rect::new(1860, 1040, 60, 40)];
         assert_eq!(
             flip_flags_for(PresentMode::Immediate, &corners, SCREEN),
             PageFlipFlags::EVENT,
-            "two specks at opposite corners span the whole screen"
+            "two specks at opposite corners span every row between them"
         );
 
         let neighbours = [Rect::new(40, 700, 220, 48), Rect::new(280, 700, 220, 48)];
@@ -590,10 +629,10 @@ mod tests {
     /// The threshold itself, from both sides, on a screen where a quarter is a
     /// round number of rows.
     #[test]
-    fn the_threshold_is_a_quarter_of_the_surface() {
+    fn the_threshold_is_a_quarter_of_the_rows() {
         let screen = Size::new(1000, 1000);
-        let just_under = [Rect::new(0, 0, 1000, 249)];
-        let just_over = [Rect::new(0, 0, 1000, 250)];
+        let just_under = [Rect::new(0, 0, 8, 249)];
+        let just_over = [Rect::new(0, 0, 8, 250)];
         assert_eq!(
             flip_flags_for(PresentMode::Immediate, &just_under, screen),
             PageFlipFlags::EVENT | PageFlipFlags::ASYNC

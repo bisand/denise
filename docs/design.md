@@ -413,9 +413,19 @@ the loop: a Pi 3A+ paints a scrolled 1920x1080 viewport in **14.5 ms**, and it
 will spend a whole core producing torn frames back to back for as long as a
 finger keeps moving. The frame that most needs not to tear is the same frame that
 most needs the brakes, so the mode now follows the damage rather than being set
-once for everything — under a quarter of the surface it flips async, at or above
-it waits for vblank. `Surface::present` had been handed the damage since the
+once for everything. `Surface::present` had been handed the damage since the
 beginning and DRM had been throwing it away.
+
+**What the damage is measured in took a second go, and a report from the panel.**
+The first version compared damaged *area* against the surface, which is the
+obvious thing and is wrong: a tear is a horizontal seam, so what decides whether
+it is visible is how many **scanlines** the damage spans. The gallery's sidebar
+is 300 by 1016 on a 1920x1080 screen — 14.7% of the pixels and 94% of the rows —
+so it slipped under an area threshold and tore down almost the full height of the
+display, which is exactly the "just a flash from time to time" that came back
+after the first fix shipped. Counting rows keeps the case async flips exist for,
+a wide shallow band whose seam is as short as the band, and catches the narrow
+column an area test cannot see.
 
 The measurement around it is worth keeping for the next person, because two
 plausible explanations died on the way. Scrolling is **not** over-damaging: one

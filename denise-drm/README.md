@@ -70,12 +70,20 @@ the text being read, and — because an async flip never blocks — nothing pace
 loop, so the same Pi spends a whole core producing torn frames at 14.5 ms each
 for as long as a finger keeps moving.
 
-So the flip follows the damage rather than the setting alone: **under a quarter
-of the surface it is async, at or above it waits for vblank.** The latency stays
-where it is felt, the pacing arrives on the frames that cannot afford to go
-without it, and an application does not have to know which kind of frame it just
-drew. `PresentMode::Vsync` is still an absolute promise; it is `Immediate` that
-became a preference.
+So the flip follows the damage rather than the setting alone: **damage spanning
+under a quarter of the screen's rows flips async, at or above it waits for
+vblank.** The latency stays where it is felt, the pacing arrives on the frames
+that cannot afford to go without it, and an application does not have to know
+which kind of frame it just drew. `PresentMode::Vsync` is still an absolute
+promise; it is `Immediate` that became a preference.
+
+**Rows, not area** — which took a second go to get right. The first version
+compared damaged *pixels* against the surface, and a Pi still flashed
+occasionally. The gallery's sidebar is 300×1016 on a 1920×1080 panel: 14.7% of
+the pixels and 94% of the scanlines, so it went out async and tore across almost
+the whole height of the screen. A tear is a horizontal seam, so what matters is
+how many rows the damage spans. A full-width toolbar forty rows tall may still
+tear freely; a narrow column down the whole screen may not.
 
 ## Testing
 
