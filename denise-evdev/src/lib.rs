@@ -24,6 +24,19 @@
 //! together with the DRM device's descriptor, so the process idles in the kernel
 //! until either input arrives or the display retires a flip — rather than spinning
 //! to ask.
+//!
+//! # Devices that arrive late
+//!
+//! The set is not fixed, so that list of descriptors is not either. A wireless
+//! mouse asleep when the panel starts has no `/dev/input/event*` node at all — the
+//! receiver enumerates, the mouse does not — and the node appears whenever
+//! somebody first moves it, which on a machine left running is measured in
+//! minutes rather than seconds. `poll` opens it then, and a loop holding a list
+//! made at startup would neither read it nor wake for it.
+//!
+//! So: ask [`InputBackend::devices_changed`] each pass, and take
+//! [`InputBackend::raw_fds`] again when it says yes. `examples/bare-linux`
+//! packages that as `Waits` and every kiosk example uses it.
 
 pub mod codes;
 pub mod keymap;

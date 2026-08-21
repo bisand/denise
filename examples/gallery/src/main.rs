@@ -286,13 +286,11 @@ mod window_backend {
 /// The display itself, on a Linux machine with no desktop.
 #[cfg(all(feature = "kiosk", target_os = "linux"))]
 mod kiosk_backend {
-    use std::os::fd::BorrowedFd;
     use std::time::{Duration, Instant};
 
     use super::{App, Font, Message};
-    use bare_linux::{Display, capture, mute_console, open_input, poll_timeout};
+    use bare_linux::{Display, Waits, capture, mute_console, open_input, poll_timeout};
     use denise::{ElementState, InputEvent, InputSource, KeyCode, Surface};
-    use rustix::event::{PollFd, PollFlags, poll};
 
     /// Where F12 writes. `/tmp` because a kiosk image is very often read-only
     /// everywhere else.
@@ -322,17 +320,9 @@ mod kiosk_backend {
         let mut app = App::new(size, scale, font, motion);
         eprintln!("\nTab moves, F2 theme, F12 screenshot, Escape quits\n");
 
-        let raw_fds = input.raw_fds();
-        let borrowed: Vec<BorrowedFd<'_>> = raw_fds
-            .iter()
-            // SAFETY: every descriptor belongs to `input`, which outlives this
-            // loop and holds each device open until the process exits.
-            .map(|&fd| unsafe { BorrowedFd::borrow_raw(fd) })
-            .collect();
-        let mut poll_fds: Vec<PollFd<'_>> = borrowed
-            .iter()
-            .map(|fd| PollFd::new(fd, PollFlags::IN))
-            .collect();
+        // Refreshed by `wait` whenever a device is opened or closed, which is
+        // why this is a `Waits` and not a list built once.
+        let mut waits = Waits::new(&input);
 
         // The first frame, before anything is allowed to block; see
         // table-editor for the bug this prevents.
@@ -358,7 +348,7 @@ mod kiosk_backend {
             // The app's clock, not a second one here: the tree's ticks come
             // from one place on every backend.
             let timeout = poll_timeout(app.ui.next_wake_ms(), app.elapsed_ms(), deadline);
-            poll(&mut poll_fds, timeout.as_ref())?;
+            waits.wait(&mut input, timeout.as_ref())?;
 
             events.clear();
             input.poll(&mut events);

@@ -33,10 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(target_os = "linux")]
 mod app {
-    use std::os::fd::BorrowedFd;
     use std::time::{Duration, Instant};
 
-    use bare_linux::{Display, capture, mute_console, open_input, poll_timeout};
+    use bare_linux::{Display, Waits, capture, mute_console, open_input, poll_timeout};
     use denise::{
         ElementState, InputEvent, InputSource, KeyCode, Radius, Rect, Role, Size, Surface, Theme,
     };
@@ -44,7 +43,6 @@ mod app {
     use denise_evdev::{InputBackend, layout};
     use denise_ui::widgets::{Align, Button, Label, Panel, TextInput};
     use denise_ui::{NodeId, Ui};
-    use rustix::event::{PollFd, PollFlags, poll};
 
     /// Resolves the tree's cursor sprite and hands it to the hardware plane.
     ///
@@ -383,19 +381,9 @@ mod app {
         }
         let mut cursor_theme = app.theme;
 
-        // Built once: the device set does not change, and `poll` updates each
-        // entry's revents in place.
-        let raw_fds = input.raw_fds();
-        let borrowed: Vec<BorrowedFd<'_>> = raw_fds
-            .iter()
-            // SAFETY: every descriptor belongs to `input`, which outlives this loop
-            // and holds each device open until the process exits.
-            .map(|&fd| unsafe { BorrowedFd::borrow_raw(fd) })
-            .collect();
-        let mut poll_fds: Vec<PollFd<'_>> = borrowed
-            .iter()
-            .map(|fd| PollFd::new(fd, PollFlags::IN))
-            .collect();
+        // Refreshed by `wait` whenever a device is opened or closed, which is
+        // why this is a `Waits` and not a list built once.
+        let mut waits = Waits::new(&input);
 
         // The first frame, before anything is allowed to block.
         //
@@ -445,7 +433,7 @@ mod app {
             // With nothing focused and nothing animating there is no timeout at
             // all and the process uses no CPU whatsoever.
             let timeout = poll_timeout(app.ui.next_wake_ms(), now(), deadline);
-            poll(&mut poll_fds, timeout.as_ref())?;
+            waits.wait(&mut input, timeout.as_ref())?;
             wakeups += 1;
 
             events.clear();

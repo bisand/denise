@@ -38,12 +38,11 @@ fn main() {
 #[cfg(target_os = "linux")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
-    use std::os::fd::BorrowedFd;
     use std::time::{Duration, Instant};
 
     use denise::{ElementState, InputEvent, InputSource, KeyCode, Size};
     use denise_evdev::InputBackend;
-    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    use rustix::event::{Timespec, poll};
 
     let seconds: u64 = std::env::args()
         .nth(1)
@@ -65,17 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Blocking on the descriptors is the whole point: a loop that sleeps a fixed
     // interval would add its own delay to every measurement and report it as the
     // kernel's.
-    let raw_fds = input.raw_fds();
-    let borrowed: Vec<BorrowedFd<'_>> = raw_fds
-        .iter()
-        // SAFETY: every descriptor belongs to `input`, which outlives this loop
-        // and holds each device open until the process exits.
-        .map(|&fd| unsafe { BorrowedFd::borrow_raw(fd) })
-        .collect();
-    let mut poll_fds: Vec<PollFd<'_>> = borrowed
-        .iter()
-        .map(|fd| PollFd::new(fd, PollFlags::IN))
-        .collect();
+    let mut poll_fds = wait_fds(&input);
 
     let started = Instant::now();
     let deadline = started + Duration::from_secs(seconds);
@@ -102,6 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tv_sec: 1,
             tv_nsec: 0,
         };
+        if input.devices_changed() {
+            poll_fds = wait_fds(&input);
+        }
         let ready = poll(&mut poll_fds, Some(&timeout)).unwrap_or(0);
         if ready > 0 {
             wakeups += 1;
@@ -218,4 +210,25 @@ fn percentile(values: &mut [f64], q: f64) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
     let index = ((values.len() as f64 - 1.0) * q).round() as usize;
     values[index.min(values.len() - 1)]
+}
+
+/// The descriptors to wait on, rebuilt when the device set changes.
+///
+/// Not built once: a device that appears after startup — a wireless mouse woken
+/// minutes into a run — is opened by the next `poll`, and a list made before that
+/// neither names it nor wakes for it.
+#[cfg(target_os = "linux")]
+fn wait_fds(input: &denise_evdev::InputBackend) -> Vec<rustix::event::PollFd<'static>> {
+    use rustix::event::{PollFd, PollFlags};
+    use std::os::fd::BorrowedFd;
+
+    input
+        .raw_fds()
+        .into_iter()
+        // SAFETY: `input` holds every one of these open, and closes one only in a
+        // rescan — which sets the flag that rebuilds this list before the next
+        // `poll`.
+        .map(|fd| unsafe { BorrowedFd::borrow_raw(fd) })
+        .map(|fd| PollFd::from_borrowed_fd(fd, PollFlags::IN))
+        .collect()
 }

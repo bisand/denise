@@ -1,14 +1,15 @@
 //! Opening a display, input and the console on a Linux machine with no desktop.
 //!
-//! Every bare-Linux example needs the same four things before it can draw a
+//! Every bare-Linux example needs the same five things before it can draw a
 //! pixel, and none of them is interesting:
 //!
 //! 1. A display — DRM/KMS if the machine has it, fbdev if it does not.
 //! 2. Input — every evdev device that looks like a keyboard, mouse or touchscreen.
 //! 3. The console muted, so keystrokes stop reaching the shell behind the panel.
 //! 4. A timeout for `poll`, so the loop sleeps rather than spins.
+//! 5. The descriptors to wait on, kept current as devices come and go.
 //!
-//! This is those four. It is an example support crate, not part of the library:
+//! This is those five. It is an example support crate, not part of the library:
 //! nothing here is published and nothing in `denise` depends on it.
 //!
 //! # What it deliberately does not do
@@ -30,7 +31,8 @@ use denise_drm::{DrmSurface, SurfaceConfig};
 use denise_evdev::layout::Layout;
 use denise_evdev::{Console, EvdevError, InputBackend};
 use denise_fbdev::FbdevSurface;
-use rustix::event::Timespec;
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use std::os::fd::{BorrowedFd, RawFd};
 
 /// The display, kept concrete so the hardware cursor plane stays reachable.
 ///
@@ -174,6 +176,65 @@ pub fn mute_console() -> Option<Console> {
             eprintln!("console none (over SSH, so nothing to mute)");
             None
         }
+    }
+}
+
+/// The descriptors a loop waits on, kept correct as devices come and go.
+///
+/// Every bare-Linux example used to build this list by hand, once, before its
+/// loop — three bindings and an `unsafe` block apiece. That was fine while the
+/// set never changed, and it stopped being fine the moment
+/// [`InputBackend`] learned to open a mouse that was asleep at startup: a list
+/// built once names devices that have since been closed and misses every device
+/// opened after it.
+///
+/// **This does not own the loop.** It owns one `poll` call. Where that call sits
+/// relative to `acquire` is still the application's decision, and still the one
+/// that costs milliseconds — see this crate's header, and `examples/panel`.
+pub struct Waits {
+    fds: Vec<RawFd>,
+    poll_fds: Vec<PollFd<'static>>,
+}
+
+impl Waits {
+    /// Takes the descriptors the backend has open now.
+    pub fn new(input: &InputBackend) -> Self {
+        let mut waits = Self {
+            fds: Vec::new(),
+            poll_fds: Vec::new(),
+        };
+        waits.refresh(input);
+        waits
+    }
+
+    /// Sleeps until a device has something to say, or `timeout` runs out.
+    ///
+    /// Ask [`InputBackend::devices_changed`] *before* this, not after: it reports
+    /// what the last [`poll`](denise::InputSource::poll) did, and this is where
+    /// acting on it belongs.
+    pub fn wait(
+        &mut self,
+        input: &mut InputBackend,
+        timeout: Option<&Timespec>,
+    ) -> rustix::io::Result<()> {
+        if input.devices_changed() {
+            self.refresh(input);
+        }
+        poll(&mut self.poll_fds, timeout)?;
+        Ok(())
+    }
+
+    fn refresh(&mut self, input: &InputBackend) {
+        self.fds = input.raw_fds();
+        self.poll_fds = self
+            .fds
+            .iter()
+            // SAFETY: `input` holds every one of these open, and the only way one
+            // is closed is a rescan — which sets the flag that sends us back
+            // through here before the next `poll`.
+            .map(|&fd| unsafe { BorrowedFd::borrow_raw(fd) })
+            .map(|fd| PollFd::from_borrowed_fd(fd, PollFlags::IN))
+            .collect();
     }
 }
 

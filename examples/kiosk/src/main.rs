@@ -322,19 +322,7 @@ mod app {
         );
         eprintln!("\npointer to move, click, T for theme, Escape or Q to quit\n");
 
-        // Built once: the device set does not change, and `poll` updates each
-        // entry's revents in place.
-        let raw_fds = input.raw_fds();
-        let borrowed: Vec<BorrowedFd<'_>> = raw_fds
-            .iter()
-            // SAFETY: every descriptor belongs to `input`, which outlives this loop
-            // and holds each device open until the process exits.
-            .map(|&fd| unsafe { BorrowedFd::borrow_raw(fd) })
-            .collect();
-        let mut poll_fds: Vec<PollFd<'_>> = borrowed
-            .iter()
-            .map(|fd| PollFd::new(fd, PollFlags::IN))
-            .collect();
+        let mut poll_fds = wait_fds(&input);
 
         let mut tracker = DamageTracker::new(size);
         let mut scene = Scene::new(size, input.pointer());
@@ -366,6 +354,9 @@ mod app {
                 tv_sec: timeout.as_secs() as _,
                 tv_nsec: timeout.subsec_nanos() as _,
             };
+            if input.devices_changed() {
+                poll_fds = wait_fds(&input);
+            }
             let _ = poll(&mut poll_fds, Some(&spec));
             woke += 1;
 
@@ -502,5 +493,22 @@ mod app {
             at(0.95),
             at(1.0)
         );
+    }
+
+    /// The descriptors to wait on, rebuilt when the device set changes.
+    ///
+    /// Not built once: a device that appears after startup — a wireless mouse woken
+    /// minutes into a run — is opened by the next `poll`, and a list made before that
+    /// neither names it nor wakes for it.
+    fn wait_fds(input: &InputBackend) -> Vec<PollFd<'static>> {
+        input
+            .raw_fds()
+            .into_iter()
+            // SAFETY: `input` holds every one of these open, and closes one only in a
+            // rescan — which sets the flag that rebuilds this list before the next
+            // `poll`.
+            .map(|fd| unsafe { BorrowedFd::borrow_raw(fd) })
+            .map(|fd| PollFd::from_borrowed_fd(fd, PollFlags::IN))
+            .collect()
     }
 }

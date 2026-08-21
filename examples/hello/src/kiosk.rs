@@ -10,12 +10,10 @@
 //!     --release --target aarch64-unknown-linux-musl
 //! ```
 
-use std::os::fd::BorrowedFd;
 use std::time::Duration;
 
-use bare_linux::{Display, PresentMode, capture, mute_console, open_input, poll_timeout};
+use bare_linux::{Display, PresentMode, Waits, capture, mute_console, open_input, poll_timeout};
 use denise::{ElementState, InputEvent, InputSource, KeyCode, Surface};
-use rustix::event::{PollFd, PollFlags, poll};
 
 use crate::{Hello, Message};
 
@@ -35,17 +33,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = Hello::new(size, 1.0);
     eprintln!("\ntype a name and press Enter, F12 screenshots, Escape quits\n");
 
-    let raw_fds = input.raw_fds();
-    let borrowed: Vec<BorrowedFd<'_>> = raw_fds
-        .iter()
-        // SAFETY: every descriptor belongs to `input`, which outlives this loop
-        // and holds each device open until the process exits.
-        .map(|&fd| unsafe { BorrowedFd::borrow_raw(fd) })
-        .collect();
-    let mut poll_fds: Vec<PollFd<'_>> = borrowed
-        .iter()
-        .map(|fd| PollFd::new(fd, PollFlags::IN))
-        .collect();
+    // Refreshed by `wait` whenever a device is opened or closed, which is
+    // why this is a `Waits` and not a list built once.
+    let mut waits = Waits::new(&input);
 
     // The first frame, before anything is allowed to block. `poll` waits on input
     // and on whatever the tree wants waking for, and a loop that waits before it
@@ -59,7 +49,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let now = app.started.elapsed().as_millis() as u64;
         let timeout = poll_timeout(app.ui.next_wake_ms(), now, deadline);
-        poll(&mut poll_fds, timeout.as_ref())?;
+        waits.wait(&mut input, timeout.as_ref())?;
 
         events.clear();
         input.poll(&mut events);

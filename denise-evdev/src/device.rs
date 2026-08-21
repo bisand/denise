@@ -1,8 +1,12 @@
 //! Finding and reading `/dev/input/event*`.
 
-use std::os::fd::{AsRawFd, RawFd};
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+
+use rustix::fs::inotify;
+use rustix::io::Errno;
 
 use denise::{InputEvent, InputSource, Point, Size};
 
@@ -100,6 +104,11 @@ impl AsRawFd for InputDevice {
     }
 }
 
+/// Where the device nodes are. Not configurable: this is the only place Linux
+/// puts them, and a backend that looked somewhere else would be looking at
+/// nothing.
+const DEV_INPUT: &str = "/dev/input";
+
 /// Every usable input device, read together.
 #[derive(Debug)]
 pub struct InputBackend {
@@ -109,6 +118,16 @@ pub struct InputBackend {
     pointer: Point,
     scratch: Vec<RawEvent>,
     last_event_age: Option<Duration>,
+    /// The surface size, kept so a device opened later is calibrated like the
+    /// ones opened at startup.
+    surface: Size,
+    /// An inotify descriptor on `/dev/input`, or `None` where one could not be
+    /// had — a container with no permission, mostly. Input still works; it just
+    /// stops being noticed after startup.
+    watch: Option<OwnedFd>,
+    /// Set when [`InputBackend::poll`] opened or dropped a device, cleared by
+    /// whoever asks. See [`InputBackend::devices_changed`].
+    changed: bool,
 }
 
 impl InputBackend {
@@ -117,45 +136,9 @@ impl InputBackend {
     /// Devices that cannot be opened are skipped rather than fatal: a machine with
     /// one unreadable node and one good keyboard should still take input.
     pub fn open_all(surface: Size) -> Result<Self, EvdevError> {
-        let mut devices = Vec::new();
-
-        for (path, device) in evdev::enumerate() {
-            let capabilities = classify(&device);
-            if capabilities.is_empty() {
-                continue;
-            }
-
-            let name = device.name().unwrap_or("<unnamed>").to_owned();
-            let mut translator = Translator::new(surface);
-
-            // An absolute device is unusable without knowing what its readings are
-            // out of, and every device has its own range.
-            if let Some(axes) = device.supported_absolute_axes() {
-                for axis in axes.iter() {
-                    let info = device.get_absinfo().ok().and_then(|mut all| {
-                        all.find(|(code, _)| *code == axis).map(|(_, info)| info)
-                    });
-                    if let Some(info) = info {
-                        translator
-                            .set_abs_range(axis.0, AbsAxis::new(info.minimum(), info.maximum()));
-                    }
-                }
-            }
-
-            // Polling must never stall the frame loop; the loop decides when to
-            // sleep, and it does that on the descriptors, not in here.
-            if device.set_nonblocking(true).is_err() {
-                continue;
-            }
-
-            devices.push(InputDevice {
-                device,
-                path,
-                name,
-                capabilities,
-                translator,
-            });
-        }
+        let devices: Vec<InputDevice> = evdev::enumerate()
+            .filter_map(|(path, device)| adopt(path, device, surface))
+            .collect();
 
         if devices.is_empty() {
             return Err(EvdevError::NoDevices);
@@ -166,7 +149,96 @@ impl InputBackend {
             pointer: Point::new(surface.width as i32 / 2, surface.height as i32 / 2),
             scratch: Vec::new(),
             last_event_age: None,
+            surface,
+            watch: watch_dev_input(),
+            changed: false,
         })
+    }
+
+    /// Whether the device set changed when [`poll`](InputSource::poll) last ran,
+    /// clearing the flag.
+    ///
+    /// A loop waiting on [`raw_fds`](Self::raw_fds) has to ask, because the
+    /// descriptors it is holding are stale the moment this returns `true` — one
+    /// of them may name a device that has been closed, and a device that has just
+    /// been opened is not in the set at all.
+    pub fn devices_changed(&mut self) -> bool {
+        core::mem::take(&mut self.changed)
+    }
+
+    /// Opens devices that have appeared and drops ones that have gone.
+    ///
+    /// Called from [`poll`](InputSource::poll); there is no reason to call it
+    /// directly, and doing so costs a directory read.
+    ///
+    /// **Why this exists at all.** A wireless mouse that is asleep when the panel
+    /// starts has no `/dev/input/event*` node — the receiver enumerates, the mouse
+    /// does not, and the node is created minutes later when somebody moves it. A
+    /// backend that scanned once at startup would never see that mouse, and the
+    /// only cure would be restarting the application. Measured on a Pi 3 with a
+    /// Logitech unifying receiver: the node appeared 775 seconds after boot.
+    fn rescan(&mut self) {
+        let Ok(entries) = std::fs::read_dir(DEV_INPUT) else {
+            return;
+        };
+
+        let mut present: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("event"))
+            })
+            .collect();
+        // Deterministic order, so a device that appears twice in one scan cannot
+        // land in a different slot than it would have at startup.
+        present.sort();
+
+        // Gone first: a descriptor for a removed device stays readable and always
+        // returns an error, which would otherwise be polled forever.
+        let before = self.devices.len();
+        self.devices.retain(|device| present.contains(&device.path));
+        self.changed |= self.devices.len() != before;
+
+        for path in present {
+            if self.devices.iter().any(|device| device.path == path) {
+                continue;
+            }
+            // A node that mdev has created but not yet chowned fails here with
+            // EACCES. That is not final: the chmod is an IN_ATTRIB of its own, so
+            // this runs again in a moment and succeeds the second time.
+            let Ok(device) = evdev::Device::open(&path) else {
+                continue;
+            };
+            if let Some(device) = adopt(path, device, self.surface) {
+                self.devices.push(device);
+                self.changed = true;
+            }
+        }
+    }
+
+    /// Drains the watch descriptor, reporting whether anything happened.
+    ///
+    /// The events themselves are thrown away. Which file changed is not worth
+    /// acting on individually: a full directory read costs microseconds and is
+    /// right in every case, including the ones inotify cannot report — a queue
+    /// overflow, or a device that was already there when the watch was set.
+    fn watch_fired(&mut self) -> bool {
+        let Some(watch) = self.watch.as_ref() else {
+            return false;
+        };
+        let mut buf = [MaybeUninit::uninit(); 512];
+        let mut reader = inotify::Reader::new(watch.as_fd(), &mut buf);
+        let mut fired = false;
+        loop {
+            match reader.next() {
+                Ok(_) => fired = true,
+                // The normal case, every frame in which nothing was plugged in.
+                Err(Errno::WOULDBLOCK) => return fired,
+                Err(_) => return fired,
+            }
+        }
     }
 
     /// The devices that were opened.
@@ -209,12 +281,23 @@ impl InputBackend {
     ///
     /// Hand these, plus the DRM device's, to `poll`/`epoll` so the process sleeps
     /// until either input arrives or the display retires a flip.
+    ///
+    /// The last of these is the `/dev/input` watch rather than a device, which is
+    /// what wakes a sleeping loop when a mouse is plugged in — without it the new
+    /// device would sit unread until something else happened to wake the process.
+    /// Re-read this list whenever [`devices_changed`](Self::devices_changed) says
+    /// to; the old one names descriptors that may since have been closed.
     pub fn raw_fds(&self) -> Vec<RawFd> {
-        self.devices.iter().map(AsRawFd::as_raw_fd).collect()
+        let mut fds: Vec<RawFd> = self.devices.iter().map(AsRawFd::as_raw_fd).collect();
+        if let Some(watch) = self.watch.as_ref() {
+            fds.push(watch.as_raw_fd());
+        }
+        fds
     }
 
     /// Tells every device the surface changed size.
     pub fn resize(&mut self, size: Size) {
+        self.surface = size;
         self.pointer = Point::new(size.width as i32 / 2, size.height as i32 / 2);
         for device in &mut self.devices {
             device.translator.resize(size);
@@ -243,6 +326,12 @@ impl InputBackend {
 
 impl InputSource for InputBackend {
     fn poll(&mut self, out: &mut Vec<InputEvent>) {
+        // Before reading, so a device that appeared during the wait is read in
+        // this frame rather than the next one.
+        if self.watch_fired() {
+            self.rescan();
+        }
+
         for device in &mut self.devices {
             let Ok(events) = device.device.fetch_events() else {
                 // WouldBlock is the normal case: nothing to read right now.
@@ -273,6 +362,67 @@ impl InputSource for InputBackend {
             self.pointer = device.translator.pointer();
         }
     }
+}
+
+/// Prepares one opened device, or `None` if it reports nothing usable.
+fn adopt(path: PathBuf, device: evdev::Device, surface: Size) -> Option<InputDevice> {
+    let capabilities = classify(&device);
+    if capabilities.is_empty() {
+        return None;
+    }
+
+    let name = device.name().unwrap_or("<unnamed>").to_owned();
+    let mut translator = Translator::new(surface);
+
+    // An absolute device is unusable without knowing what its readings are out
+    // of, and every device has its own range.
+    if let Some(axes) = device.supported_absolute_axes() {
+        for axis in axes.iter() {
+            let info = device
+                .get_absinfo()
+                .ok()
+                .and_then(|mut all| all.find(|(code, _)| *code == axis).map(|(_, info)| info));
+            if let Some(info) = info {
+                translator.set_abs_range(axis.0, AbsAxis::new(info.minimum(), info.maximum()));
+            }
+        }
+    }
+
+    // Polling must never stall the frame loop; the loop decides when to sleep,
+    // and it does that on the descriptors, not in here.
+    device.set_nonblocking(true).ok()?;
+
+    Some(InputDevice {
+        device,
+        path,
+        name,
+        capabilities,
+        translator,
+    })
+}
+
+/// Watches `/dev/input` for devices arriving and leaving.
+///
+/// `ATTRIB` is in the mask alongside `CREATE` because the node and its
+/// permissions are two separate events: udev and mdev both create the node as
+/// root-only and chmod it a moment later, so a backend that only listened for
+/// `CREATE` would try to open it exactly once, too early, and give up.
+///
+/// A failure here is not an error. Input works; it just stops being noticed.
+fn watch_dev_input() -> Option<OwnedFd> {
+    let watch =
+        inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK).ok()?;
+    inotify::add_watch(
+        &watch,
+        DEV_INPUT,
+        inotify::WatchFlags::CREATE
+            | inotify::WatchFlags::ATTRIB
+            | inotify::WatchFlags::DELETE
+            | inotify::WatchFlags::MOVED_TO
+            | inotify::WatchFlags::MOVED_FROM,
+    )
+    .ok()?;
+    Some(watch)
 }
 
 /// Works out what a device can report, from what it says it supports.

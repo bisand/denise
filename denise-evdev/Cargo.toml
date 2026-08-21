@@ -18,9 +18,11 @@ thiserror = { workspace = true, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = { workspace = true }
-# For the console ioctls only. KDSKBMODE is not in any safe wrapper anywhere,
-# because muting a shared kernel device is not a safe operation to expose.
-rustix = { workspace = true, features = ["std"] }
+# The console ioctls and the /dev/input watch. KDSKBMODE is not in any safe
+# wrapper anywhere, because muting a shared kernel device is not a safe operation
+# to expose; `fs` is there for inotify, which is how a device that appears after
+# startup gets noticed.
+rustix = { workspace = true, features = ["fs", "std"] }
 
 # The pointer diagnostic blocks on the input descriptors rather than sleeping,
 # because a fixed sleep would add its own delay to every measurement and then
