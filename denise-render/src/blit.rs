@@ -50,8 +50,8 @@ impl Canvas<'_> {
     /// Draws `src` with its top-left corner at `at`, one source pixel per
     /// destination pixel, composited with source-over alpha.
     ///
-    /// Source pixels are premultiplied `0xAARRGGBB` — see the
-    /// [module docs](self). Clipped to the canvas clip like every other
+    /// Source pixels are premultiplied `0xAARRGGBB` — the same convention
+    /// [`Paint`](crate::Paint) uses. Clipped to the canvas clip like every other
     /// operation; any part of the image outside it is simply not drawn.
     pub fn blit(&mut self, src: &PixelView<'_>, at: Point) {
         let Size { width, height } = src.size();
@@ -75,8 +75,8 @@ impl Canvas<'_> {
     /// Draws all of `src` into `dest`, nearest-neighbour resampled, composited
     /// with source-over alpha.
     ///
-    /// Source pixels are premultiplied `0xAARRGGBB` — see the
-    /// [module docs](self). When `dest` is exactly the source size this is
+    /// Source pixels are premultiplied `0xAARRGGBB` — the same convention
+    /// [`Paint`](crate::Paint) uses. When `dest` is exactly the source size this is
     /// [`Canvas::blit`]. Sampling is at pixel centres, so an integer upscale
     /// turns each source pixel into an even block, and a downscale picks
     /// representative pixels rather than always the top-left ones.

@@ -92,7 +92,7 @@ fn word_starts(line: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 impl TextEngine {
-    /// An engine with the built-in bitmap font registered as [`FontId(0)`], and a
+    /// An engine with the built-in bitmap font registered as [`FontId(0)`](FontId), and a
     /// 64 KB glyph cache.
     ///
     /// `FontId(0)` is always the built-in font, in every configuration, so a

@@ -98,7 +98,7 @@ struct Buffer {
 /// crate should take.
 ///
 /// So the buffer handed back by [`Surface::acquire`] is two frames old, not one,
-/// and [`BufferAge::Frames(2)`] is what says so — which is exactly the case
+/// and [`BufferAge::Frames(2)`](denise::BufferAge::Frames) is what says so — which is exactly the case
 /// `DamageTracker` exists to widen for.
 pub struct ViewSurface {
     buffers: [Buffer; 2],

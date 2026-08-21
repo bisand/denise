@@ -12,6 +12,12 @@ homepage.workspace = true
 
 # `keymap` is platform-independent so it can be tested without Windows; only the
 # window and the DIB section are gated. As in denise-drm and denise-evdev.
+# docs.rs builds on linux, where the target-gated half of this crate does not
+# compile and so is not documented. Point it at Windows, where all of it is.
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-pc-windows-msvc"
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 

@@ -1,6 +1,6 @@
 //! An embeddable Cocoa view backend for Denise.
 //!
-//! Not a way to ship Denise on a Mac — [`denise_winit`] already previews on one,
+//! Not a way to ship Denise on a Mac — `denise-winit` already previews on one,
 //! and a desktop application should use a desktop toolkit. This exists for the
 //! same reason the Win32 control does: an existing Cocoa application that wants a
 //! Denise panel *inside* it, next to its own views, with the host owning the

@@ -379,8 +379,8 @@ impl<M: 'static> Ui<M> {
     ///
     /// A drawer is modality plus motion, and both halves already exist: this
     /// composes [`Ui::push_scene`] with [`Ui::animate_layout`]. `size` is the
-    /// drawer's width for [`Side::Before`]/[`Side::After`] and its height for
-    /// [`Side::Above`]/[`Side::Below`]; the other dimension spans the screen.
+    /// drawer's width for [`Side::Before`](crate::Side::Before)/[`Side::After`](crate::Side::After) and its height for
+    /// [`Side::Above`](crate::Side::Above)/[`Side::Below`](crate::Side::Below); the other dimension spans the screen.
     ///
     /// Escape closes it, a press on the dim closes it, and
     /// [`Ui::close_drawer`] closes it from the application — all by sliding

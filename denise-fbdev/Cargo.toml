@@ -12,6 +12,12 @@ homepage.workspace = true
 
 # As elsewhere: geometry parsing is platform-independent and tested everywhere,
 # only the mapping is gated to Linux.
+# docs.rs builds one configuration and shows it to everybody, so ask for every
+# feature: an item behind a feature gate should be documented and badged, not
+# absent.
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }

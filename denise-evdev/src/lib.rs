@@ -19,7 +19,7 @@
 //!
 //! # Blocking
 //!
-//! [`InputBackend::poll`] never blocks: it drains whatever is ready and returns.
+//! [`InputSource::poll`](denise::InputSource::poll) never blocks: it drains whatever is ready and returns.
 //! A frame loop that wants to sleep should wait on [`InputBackend::raw_fds`]
 //! together with the DRM device's descriptor, so the process idles in the kernel
 //! until either input arrives or the display retires a flip — rather than spinning

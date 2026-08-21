@@ -12,6 +12,12 @@ homepage.workspace = true
 
 # `rlib` alongside `cdylib` so the integration tests can link the same code the
 # shared library exports, rather than a separate build of it.
+# docs.rs builds one configuration and shows it to everybody, so ask for every
+# feature: an item behind a feature gate should be documented and badged, not
+# absent.
+[package.metadata.docs.rs]
+all-features = true
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

@@ -5,7 +5,7 @@
 //! numbers rather than the sinks — a cookie of zero matching something, a reused
 //! cookie disconnecting the wrong host, a double unadvise silently succeeding —
 //! so the table is generic over what it holds and lives outside `cfg(windows)`,
-//! where it can be tested. [`crate::model`] fills it with `IDispatch`.
+//! where it can be tested. `crate::model` fills it with `IDispatch`.
 
 /// Sinks, each with the cookie that identifies it.
 pub struct Connections<T> {

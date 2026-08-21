@@ -10,7 +10,7 @@
 //! Every struct here is `#[repr(C)]` and must match the kernel's byte for
 //! byte on **both** `aarch64` and `armv7`. The hazards are the ones C hides:
 //! `unsigned long` and pointers change size (represented as `usize` here,
-//! which tracks them), and [`Buffer`]'s embedded `timeval` is two C `long`s —
+//! which tracks them), and [`Buffer`](crate::v4l2::Buffer)'s embedded `timeval` is two C `long`s —
 //! the ioctl *number* encodes the struct's size, so a struct built with the
 //! 32-bit layout automatically selects the kernel's matching handler. Nothing
 //! here uses `time64` variants; a video frame timestamp does not live long

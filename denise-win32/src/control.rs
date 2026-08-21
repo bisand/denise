@@ -52,7 +52,7 @@ static REGISTER: Once = Once::new();
 /// What the application implements to put something in the control.
 ///
 /// Deliberately not "here is a `Ui`": a signage application drawing its own scene
-/// with [`denise_render`](denise_render) has no tree at all, and this backend has
+/// with `denise-render` has no tree at all, and this backend has
 /// no business requiring one.
 pub trait ControlDelegate {
     /// Handles `events`, repaints `surface`, and appends what changed to `damage`.

@@ -19,7 +19,7 @@ use crate::Error;
 
 /// A pixel buffer a window blits from.
 ///
-/// Persistent and always current, so [`BufferAge::Frames(1)`] is honest on every
+/// Persistent and always current, so [`BufferAge::Frames(1)`](denise::BufferAge::Frames) is honest on every
 /// frame and incremental repaint works. Nothing here is double-buffered: `BitBlt`
 /// from a DIB is itself the present, and the window never sees a half-drawn one
 /// because GDI serialises it.

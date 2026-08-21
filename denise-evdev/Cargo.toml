@@ -12,6 +12,12 @@ homepage.workspace = true
 
 # As in denise-drm: the translation state machine is platform-independent so it
 # can be tested without a finger on a screen. Only device I/O is gated to Linux.
+# docs.rs builds one configuration and shows it to everybody, so ask for every
+# feature: an item behind a feature gate should be documented and badged, not
+# absent.
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }

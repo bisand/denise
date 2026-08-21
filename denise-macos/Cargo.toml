@@ -10,6 +10,13 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+# docs.rs builds on linux, and this crate is `#![cfg(target_os = "macos")]` from
+# its first line — the default build documents an empty crate. Point it at a Mac,
+# where there is something to read.
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-apple-darwin"
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }

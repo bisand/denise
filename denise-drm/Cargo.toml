@@ -13,6 +13,12 @@ homepage.workspace = true
 # The mode-selection and swapchain policy is deliberately platform-independent so
 # it can be unit-tested on a development machine that has no DRM device. Only the
 # ioctl layer is gated to Linux.
+# docs.rs builds one configuration and shows it to everybody, so ask for every
+# feature: an item behind a feature gate should be documented and badged, not
+# absent.
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 thiserror = { workspace = true, features = ["std"] }

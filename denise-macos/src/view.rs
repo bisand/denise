@@ -32,7 +32,7 @@ const LINE_HEIGHT_PX: f32 = 16.0;
 /// What the application implements to put something in the view.
 ///
 /// Deliberately not "here is a `Ui`": a signage application drawing its own scene
-/// with [`denise_render`](denise_render) has no tree at all, and this backend has
+/// with `denise-render` has no tree at all, and this backend has
 /// no business requiring one.
 pub trait ViewDelegate {
     /// Handles `events`, repaints `surface`, and appends what changed to `damage`.

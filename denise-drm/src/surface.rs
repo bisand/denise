@@ -46,7 +46,7 @@ pub enum PresentMode {
     /// promise about every frame: **a frame whose damage covers a quarter of the
     /// screen's rows or more flips at vblank anyway**, and this asks for async
     /// flips on the frames where the seam is short and the latency is felt. See
-    /// [`flip_flags_for`], including why it counts rows rather than pixels, and
+    /// `flip_flags_for`, including why it counts rows rather than pixels, and
     /// why it counts the rows covered rather than the rows spanned.
     ///
     /// Requires `DRM_CAP_ASYNC_PAGE_FLIP`; drivers without it fall back to
@@ -326,7 +326,7 @@ fn damaged_rows(damage: &[Rect], surface: Size) -> u32 {
 /// deadline of its own. `examples/kiosk` does both.
 ///
 /// This is not a flaw in async flips; it is what removing the wait means. It is
-/// also why a *large* frame gives the wait back: see [`flip_flags_for`], where
+/// also why a *large* frame gives the wait back: see `flip_flags_for`, where
 /// the same decision that keeps a seam off a scrolling viewport is what stops the
 /// loop repainting it a hundred times a second.
 #[derive(Debug)]
