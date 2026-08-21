@@ -93,18 +93,17 @@ mod app {
         Service,
     }
 
-    /// Read in order, not at random, and indexed by the bar rather than a clock —
-    /// so they march with the progress, never repeat, and the last one lands as
-    /// the bar fills. A timer would let a stalled boot look busy, which is a lie
-    /// this screen is in no position to tell.
-    ///
-    /// Half of these are things that actually went wrong bringing this board up.
     /// The first line and the last line, either side of a few from [`MIDDLE`].
     ///
     /// Fixed on purpose. The opener is what a cold screen says first and the
     /// closer has to arrive with the last of the bar — shuffling those away would
     /// trade the one thing this sequence does well for variety nobody asked the
     /// splash to have.
+    ///
+    /// The whole set is read in order and indexed by the bar rather than by a
+    /// clock, so the lines march with the progress and never repeat. A timer
+    /// would let a stalled boot look busy, which is a lie this screen is in no
+    /// position to tell.
     const OPENER: &str = "Asking the firmware for a framebuffer";
     const CLOSER: &str = "Almost certainly nearly ready";
 
@@ -145,9 +144,10 @@ mod app {
         // splash does not need a crate for this, and at the point it runs there
         // is not much else to ask: the clock has not been set, so seeding from
         // the time would give the same order every morning.
-        // Eight bytes, by `read_exact`. Not `fs::read`, which reads to end of
-        // file: /dev/urandom has no end, so that allocates until the kernel
-        // intervenes, and the splash dies before it draws anything.
+        //
+        // Eight bytes by `read_exact`, not `fs::read` — that reads to end of
+        // file, /dev/urandom has no end, and it allocates until the kernel
+        // intervenes. The splash then dies before drawing anything.
         let mut seed = [0u8; 8];
         let mut state = std::fs::File::open("/dev/urandom")
             .and_then(|mut file| file.read_exact(&mut seed))
