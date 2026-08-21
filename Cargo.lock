@@ -681,6 +681,7 @@ version = "0.13.0"
 dependencies = [
  "denise",
  "denise-drm",
+ "denise-evdev",
  "denise-render",
  "drm 0.15.0",
  "drm-fourcc",
@@ -1421,6 +1422,20 @@ dependencies = [
  "denise-fbdev",
  "denise-render",
  "rustix 1.1.4",
+]
+
+[[package]]
+name = "launcher"
+version = "0.13.0"
+dependencies = [
+ "bare-linux",
+ "denise",
+ "denise-drm",
+ "denise-evdev",
+ "denise-text",
+ "denise-ui",
+ "rustix 1.1.4",
+ "system-font",
 ]
 
 [[package]]

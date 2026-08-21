@@ -1,0 +1,30 @@
+[package]
+name = "launcher"
+description = "A menu of the other demos, each started and returned to on the same display."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# No `desktop` feature, and no cargo feature at all: unlike `gallery` or
+# `table-editor` there is no window version of this to choose between. Starting a
+# kiosk demo means owning the display and then giving it away, which is a thing
+# only the bare-Linux backend can do.
+#
+#   cargo build -p launcher --release --target aarch64-unknown-linux-musl
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-text = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype"] }
+system-font = { path = "../system-font" }
+
+# Linux-only, so the workspace still builds on a development machine.
+[target.'cfg(target_os = "linux")'.dependencies]
+bare-linux = { path = "../bare-linux" }
+denise-drm = { workspace = true }
+denise-evdev = { workspace = true }
+rustix = { workspace = true, features = ["event", "std"] }
