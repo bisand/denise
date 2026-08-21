@@ -716,8 +716,24 @@ impl App {
         self.show_welcome_at(url);
     }
 
+    /// The one page that arrives already focused. On a panel with no mouse
+    /// and nothing yet on screen to click, the first thing a visitor should
+    /// be able to do is type a search — so the welcome page's own field
+    /// takes the keyboard. `Ui::focus` refuses anything unfocusable, which
+    /// makes a welcome page without a field no kind of special case.
     fn show_welcome_at(&mut self, url: Url) {
         self.show_page(WELCOME.to_string(), url, Point::ZERO);
+        let field = self.page.as_ref().and_then(|page| {
+            let field = page
+                .forms
+                .forms
+                .first()?
+                .fields
+                .iter()
+                .find(|f| matches!(f.kind, crate::forms::FieldKind::Text))?;
+            page.controls.get(&field.dom).copied()
+        });
+        self.ui.focus(field);
     }
 
     fn on_resize(&mut self, size: Size, scale: f32) {
@@ -1136,6 +1152,12 @@ const WELCOME: &str = r#"<html><body>
 <p>This is a web page, rendered by a UI toolkit for embedded panels.
 Every heading, paragraph and list item on screen is a <b>Denise widget</b>;
 the text engine wrapping this sentence is the one the widgets share.</p>
+<form action="https://lite.duckduckgo.com/lite/" method="get">
+<input name="q" size="34"><input type="submit" value="Search the web">
+</form>
+<p><small>That field and that button are the toolkit's own <i>TextInput</i>
+and <i>Button</i>, submitting a real form over https &#8212; the page you are
+reading is the demonstration.</small></p>
 <h2>What works</h2>
 <ul>
 <li>Server-rendered pages, read the way <i>lynx</i> reads them, in proportional type</li>
@@ -1270,6 +1292,28 @@ mod tests {
         // The empty password still submits, as an empty value.
         assert!(html.contains("pw = "));
         assert!(app.history.can_back(), "the form is one Back away");
+    }
+
+    /// The welcome page is a page like any other, and now a form like any
+    /// other: bound to live widgets, focused, and resolving its action to
+    /// somewhere a request can actually go. `about:` is a base URL that
+    /// cannot be one, so the join is worth asserting rather than assuming.
+    #[test]
+    fn the_welcome_page_can_search() {
+        let mut app = App::new(Size::new(900, 700), 1.0, None, Motion::None, None);
+        pump(&mut app);
+        let page = app.page.as_ref().expect("a page");
+        let form = page.forms.forms.first().expect("the search form");
+        let target = page
+            .base
+            .join(form.action.as_deref().expect("an action"))
+            .expect("an absolute action resolves off an about: base");
+        assert_eq!(target.as_str(), "https://lite.duckduckgo.com/lite/");
+
+        let field = form.fields.first().expect("the query field");
+        assert_eq!(field.name.as_deref(), Some("q"));
+        let node = page.controls.get(&field.dom).copied().expect("a widget");
+        assert_eq!(app.ui.focused(), Some(node), "the field takes the keyboard");
     }
 
     /// The same flow against a real search engine, typing included: the
