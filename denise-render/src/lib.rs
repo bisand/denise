@@ -45,7 +45,11 @@ pub mod coverage;
 pub mod font;
 
 mod arc;
-mod blit;
+// Public for its documentation rather than its contents: the module holds only
+// `impl Canvas`, so its page carries no items -- but it is where the
+// premultiplied source format is explained, and a private module renders
+// nowhere at all.
+pub mod blit;
 mod line;
 mod polygon;
 mod rect;
