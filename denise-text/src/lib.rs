@@ -49,6 +49,10 @@
 //! else does. Those belong to whoever turns this into a document viewer.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+// Labels every feature-gated item on docs.rs with the feature it needs. Nightly
+// only, and `docsrs` is set by nothing but docs.rs — an ordinary build never
+// sees this line.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // `chunks_exact` over `as_chunks`, against clippy 1.98's advice: `as_chunks`
 // stabilised in 1.98 and this workspace supports 1.95, so taking the advice
 // would trade a style lint for a compile error on every older toolchain. Revisit

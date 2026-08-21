@@ -54,6 +54,10 @@
 // when the MSRV passes 1.98. `unknown_lints` because the lint does not exist
 // before 1.98 either, and naming an absent lint is itself a warning.
 #![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
+// Labels every feature-gated item on docs.rs with the feature it needs. Nightly
+// only, and `docsrs` is set by nothing but docs.rs — an ordinary build never
+// sees this line.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 use denise::Size;
 use denise_render::blend::premultiply;
