@@ -1,0 +1,55 @@
+#!/sbin/openrc-run
+# One Denise demo on the console framebuffer, from boot and with no login.
+# Which demo is `demo=` in /etc/conf.d/denise.
+
+: ${demo:=gallery}
+: ${demo_args:=}
+: ${exit_hint:=/etc/denise-exit-hint.txt}
+
+name="denise"
+description="Denise demo (${demo}) on the console"
+
+pidfile="/run/denise.pid"
+
+depend() {
+	# /dev/fb0 and /dev/dri come from hwdrivers in sysinit; /usr/local/bin needs
+	# the root filesystem mounted before there is a binary to run.
+	need localmount
+	after hwdrivers modules
+}
+
+# `denise-run` does the supervising, not supervise-daemon. A supervisor that
+# restarts on every exit cannot honour the demo's "give the operator the
+# console" exit, and that is the one exit worth honouring. Escape is still a
+# restart, so a stray keypress on the panel is a blink rather than a dark screen.
+start() {
+	ebegin "Starting the Denise panel (${demo})"
+	# Exported, not merely set. `/etc/conf.d/denise` is sourced into *this*
+	# script, and denise-run is a separate process: without this it sees none of
+	# them and quietly falls back to its own defaults -- which looked exactly
+	# like the launcher being broken, when the launcher was never started.
+	export demo demo_args exit_hint
+	# setsid, so the loop leads its own process group and the demo it runs joins
+	# it. Killing the group is then exact -- see stop().
+	setsid /usr/local/bin/denise-run >>/var/log/denise.log 2>&1 &
+	echo $! >"${pidfile}"
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping the Denise panel"
+	if [ -f "${pidfile}" ]; then
+		pid=$(cat "${pidfile}")
+		# The negative pid is the process group: the loop and whichever demo it
+		# is running, which is a grandchild of this service and would otherwise
+		# survive, keep DRM master, and send the next start to fbdev at 16bpp.
+		#
+		# This used to be `pkill -f /usr/local/bin/denise-`, which also killed
+		# every *other* process whose command line happened to mention that path
+		# -- an ssh session running an install, for instance. A pattern that
+		# matches by text will eventually match something it should not.
+		kill -TERM "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null
+		rm -f "${pidfile}"
+	fi
+	eend 0
+}

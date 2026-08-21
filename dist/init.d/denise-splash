@@ -1,0 +1,64 @@
+#!/sbin/openrc-run
+# Something on the screen between the kernel handing over and the panel painting.
+#
+# This runs in `sysinit`, not `boot`. In `boot` it landed behind networking and
+# wpa_supplicant and did not paint until 14 seconds in — by which time the wait
+# it exists to cover was almost over. `hwdrivers` registers the firmware's
+# framebuffer at about 2 seconds, and there is nothing between there and here.
+
+name="denise-splash"
+description="Boot splash on the console framebuffer"
+
+pidfile="/run/denise-splash.pid"
+
+depend() {
+	# `mdev` creates the device node; that is the only thing this waits on, and
+	# the script waits for the node itself as well.
+	#
+	# **Before `hwdrivers`, not after.** Measured: with `after hwdrivers` the
+	# splash first painted at 8 seconds, because coldplugging every driver on the
+	# board takes six of them — and by then it had missed the firmware
+	# framebuffer entirely and was painting on vc4's. The firmware's is up at 1.3
+	# seconds, which is most of the black screen this exists to fill.
+	after devfs mdev
+	before hwdrivers denise
+}
+
+# Deliberately not `command` plus `command_background`, and deliberately not
+# start-stop-daemon: this paints, watches for the framebuffer being replaced
+# under it, and exits once the panel is up. Anything that records a daemon has
+# OpenRC calling that orderly exit a crash — and then restarting it, which is how
+# three of these ended up painting over each other. What the service means is
+# "the splash has been put up", and that stays true after the process is gone.
+start() {
+	ebegin "Painting the boot splash"
+	# Load the display driver before `hwdrivers` gets to it. Left alone, the
+	# coldplug works through USB first -- a Logitech unifying receiver takes 1.6
+	# seconds all by itself -- and vc4 does not bind until nearly seven, so
+	# nothing can be drawn until then. Asking for it by name here moves the whole
+	# splash forward by about three seconds, and the modprobe is a no-op on a
+	# board that has no vc4.
+	modprobe vc4 2>/dev/null
+	# On tty1 and nowhere else. This is the VT the panel takes, so a blinking
+	# cursor here is the one thing on an otherwise black screen for the first few
+	# seconds; on tty2-6 it is what tells somebody the login prompt is alive.
+	printf '\033[?25l' >/dev/tty1 2>/dev/null || true
+	# /run, not /var/log: the root filesystem is still read-only this early --
+	# the `root` service remounts it much later -- so a log under /var silently
+	# loses every line written before then, which is the window worth logging.
+	/usr/local/bin/denise-splash \
+		--watch denise --until 90 \
+		--title "Denise Raspberry Pi Demo" \
+		--clock \
+		--after /dev/dri/card0 \
+		>>/run/denise-splash.log 2>&1 &
+	echo $! >"${pidfile}" 2>/dev/null || true
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping the boot splash"
+	[ -f "${pidfile}" ] && kill "$(cat "${pidfile}")" 2>/dev/null
+	rm -f "${pidfile}"
+	eend 0
+}

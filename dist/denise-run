@@ -1,0 +1,55 @@
+#!/bin/sh
+# Runs the boot demo, puts it back when it dies, and stops for good when it asks.
+#
+# This replaces supervise-daemon, which cannot tell those last two apart: it
+# restarts on any exit, so "exit to console" would look like a flicker and the
+# operator would never reach the console they asked for. The loop here is the
+# same supervision with one exception in it.
+set -u
+
+: "${demo:=gallery}"
+: "${demo_args:=}"
+: "${exit_hint:=/etc/denise-exit-hint.txt}"
+
+BIN="/usr/local/bin/denise-${demo}"
+# Agreed with the launcher, which documents it. Nothing enforces it; if the demo
+# does not know about it, this behaves exactly like a plain restart loop.
+TO_CONSOLE=3
+
+[ -x "$BIN" ] || { echo "denise-run: no such demo: $BIN" >&2; exit 1; }
+
+while :; do
+	echo "denise-run: starting ${demo} at $(cut -d" " -f1 /proc/uptime)s"
+	# shellcheck disable=SC2086 -- demo_args is a word list on purpose
+	"$BIN" $demo_args
+	code=$?
+	if [ "$code" = "$TO_CONSOLE" ]; then
+		# Give the cursor back on the VTs a person might land on. The splash
+		# hid it on tty1 and the panel left that VT in graphics mode; a login
+		# prompt with no cursor is what a hung machine looks like.
+		for vt in /dev/tty1 /dev/tty2 /dev/tty3 /dev/tty4 /dev/tty5 /dev/tty6; do
+			printf '\033[?25h' >"$vt" 2>/dev/null || true
+		done
+
+		# On the screen the operator is actually looking at, which is not
+		# /dev/console: that is tty8 here, so that boot chatter has somewhere to
+		# go that nobody is watching.
+		{
+			echo
+			echo "The Denise panel has stopped."
+			echo
+			[ -f "$exit_hint" ] && cat "$exit_hint"
+			echo
+		} >/dev/tty1 2>/dev/null
+
+		# OpenRC still has this marked started, because nothing told it
+		# otherwise -- the service was not stopped, the thing it supervises
+		# decided to finish. Left alone, `rc-service denise start` says it is
+		# already running and does nothing, and only `restart` works, which is
+		# a confusing thing to have to discover. This is what OpenRC's own
+		# `mark_service_stopped` does.
+		rm -f /run/openrc/started/denise /run/denise.pid
+		exit 0
+	fi
+	sleep 2
+done

@@ -1,0 +1,33 @@
+#!/bin/sh
+# A getty on the console, with the panel brought back when the session ends.
+#
+# `/etc/inittab` runs this instead of getty directly. The point is the line
+# *after* getty: a login session is a visit, not a one-way door, and somebody who
+# came here from the panel's "Exit to console" should not have to remember a
+# command to get back.
+#
+# Why not a logout script. `~/.bash_logout` only fires for bash, `~/.zlogout`
+# only for zsh, and neither fires at all if the shell is killed rather than
+# exited. Wrapping getty catches every one of those, because init is the thing
+# doing the waiting.
+#
+# Why getty is a child and not an exec: getty replaces itself with `login`, which
+# replaces itself with the shell, so an `exec` here would mean this script is
+# gone by the time there is anything to come back from. As a child, the whole
+# session is one process to wait on, and its exit is the logout.
+set -u
+
+TTY="${1:?usage: denise-console <tty>}"
+BAUD="${2:-38400}"
+
+# A login prompt without a cursor looks like a machine that has stopped. Done
+# here as well as on the way out of the panel, because this is the path somebody
+# reaches by pressing Alt+F2 directly without going through "Exit to console".
+printf '\033[?25h' >"/dev/${TTY}" 2>/dev/null || true
+
+/sbin/getty "$BAUD" "$TTY"
+
+# Back here means the session ended. Starting an already-started service is a
+# no-op that says so, which is the right behaviour for the ordinary case where
+# somebody logged in while the panel was running and never stopped it.
+rc-service denise start >/dev/null 2>&1 || true

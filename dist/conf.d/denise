@@ -1,0 +1,21 @@
+# Which demo runs at boot, and with what arguments.
+#
+# The name is whatever follows `denise-` in /usr/local/bin -- `denise-demo list`
+# prints them. Change it, then `doas rc-service denise restart`.
+#
+#   gallery         every widget live, with a theme editor
+#   table-editor    a scrolling grid, an edit form, validation, a modal
+#   browser         a small web browser, http only on this build
+#   panel           M3: a widget tree, a modal and a cursor sprite
+#   kiosk           M2: display and input driving one another
+#   hello           a field, a button and a label
+#   video-player    needs DRM and V4L2; takes a .h264/.h265 path in demo_args
+demo="launcher"
+
+# Arguments for it. Empty is each demo's own default.
+#
+#   --motion 33      half-rate animation, for a Pi with something else to do
+#   --motion off     no animation at all
+#   --present vsync  wait for scanout; costs ~17 ms, makes tearing impossible
+#   --font PATH      a specific face instead of the best one found
+demo_args="--start Gallery --exit-hint /etc/denise-exit-hint.txt Video-player=/usr/local/bin/denise-video-player /home/bisand/promo.h264"

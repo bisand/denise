@@ -1,0 +1,4 @@
+Press Alt+F2 for a login prompt.
+
+Log out and the panel comes back on its own, or start it by hand with:
+    doas rc-service denise start

@@ -1,0 +1,59 @@
+#!/bin/sh
+# Run one Denise demo on the console, with the boot kiosk out of the way.
+#
+# The boot service owns the framebuffer and is supervised, so quitting a demo
+# with Escape only gets it restarted two seconds later. This stops the service
+# first and starts it again when the demo exits -- including on Ctrl-C.
+set -e
+
+PREFIX=/usr/local/bin/denise-
+SERVICE=denise
+
+# The demos want /dev/tty0 to mute the console, and that is root's.
+[ "$(id -u)" = 0 ] || exec doas "$0" "$@"
+
+if [ -z "$1" ] || [ "$1" = list ] || [ "$1" = -h ] || [ "$1" = --help ]; then
+	echo "usage: denise-demo <name> [arguments...]"
+	echo
+	echo "demos:"
+	for f in ${PREFIX}*; do
+		[ -x "$f" ] || continue
+		# The prefix is shared with the machinery that runs the demos, because
+		# it is one product in one directory. `run` is the supervisor, `console`
+		# is a getty wrapper, `splash` is the boot screen and would never come
+		# down. None of them is a demo, and each would look like one here.
+		case "$f" in
+		*denise-demo | *denise-run | *denise-console | *denise-splash) continue ;;
+		esac
+		echo "  ${f#$PREFIX}"
+	done
+	echo
+	echo "the boot demo is 'demo=' in /etc/conf.d/${SERVICE}"
+	exit 0
+fi
+
+name=$1
+shift
+bin="${PREFIX}${name}"
+if [ ! -x "$bin" ]; then
+	echo "denise-demo: no demo called '${name}' -- try 'denise-demo list'" >&2
+	exit 2
+fi
+
+restart=no
+if rc-service "$SERVICE" status >/dev/null 2>&1; then
+	restart=yes
+	echo "denise-demo: stopping the ${SERVICE} service"
+	rc-service "$SERVICE" stop >/dev/null
+fi
+
+# Not `exec`: the trap has to survive the demo so the kiosk comes back.
+restore() {
+	if [ "$restart" = yes ]; then
+		echo "denise-demo: starting the ${SERVICE} service again"
+		rc-service "$SERVICE" start >/dev/null
+	fi
+}
+trap restore EXIT INT TERM
+
+"$bin" "$@"

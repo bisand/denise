@@ -1,0 +1,10 @@
+   This machine runs the Denise demo panel on the console.
+
+   The panel is back as soon as you log out of this session.
+   To bring it back without logging out:   doas rc-service denise start
+   To stop it and stay here:               doas rc-service denise stop
+
+   Which demo runs at boot is `demo=` in /etc/conf.d/denise.
+   The panel's own log is /var/log/denise.log; the splash writes to
+   /run/denise-splash.log, which is cleared on every boot.
+
