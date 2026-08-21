@@ -31,8 +31,25 @@ struct DrawerState {
     closing: bool,
 }
 
+/// A shelf's node and whether it is on its way out. The same two facts a drawer
+/// keeps, for the same reason: the slide has to finish before the node goes.
+#[derive(Clone, Copy)]
+struct ShelfState {
+    container: NodeId,
+    closing: bool,
+}
+
 /// How long a drawer takes to slide in or out.
 const DRAWER_MS: u64 = 200;
+
+/// How long a shelf takes to slide in or out. A drawer's, because they are
+/// the same motion and two numbers would only drift apart.
+const SHELF_MS: u64 = DRAWER_MS;
+
+/// A shelf sorts above ordinary content in its scene. Nothing else in the
+/// tree sets `z`, so any positive number would do; this one is far enough
+/// from zero to leave room underneath for an application that wants some.
+const SHELF_Z: i32 = 1_000;
 
 /// The dim behind a drawer: enough to say "modal", light enough to keep the
 /// page readable behind it.
@@ -139,6 +156,7 @@ pub struct Ui<M: 'static> {
     /// watching its own tween, rather than a public completion hook nobody
     /// has asked for yet.
     drawer: Option<DrawerState>,
+    shelf: Option<ShelfState>,
     /// Transient notifications. Not nodes, for the reasons in [`crate::toast`].
     toasts: Toasts,
     /// The hover-dwell bubble. Not a node and not a widget — see
@@ -183,6 +201,7 @@ impl<M: 'static> Ui<M> {
             motion: Motion::default(),
             tweens: Vec::new(),
             drawer: None,
+            shelf: None,
             cursor_auto: true,
         }
     }
@@ -388,30 +407,10 @@ impl<M: 'static> Ui<M> {
     /// where it was, [`Ui::push_popup`]'s conventions. One drawer at a time;
     /// pushing over an open one returns `None`.
     pub fn push_drawer(&mut self, side: crate::overlay::Side, size: i32) -> Option<NodeId> {
-        use crate::overlay::Side;
         if self.drawer.is_some() {
             return None;
         }
-        let screen = Rect::from_size(self.size);
-        let size = size.clamp(1, screen.width.max(screen.height));
-        let (resting, offstage) = match side {
-            Side::Before => (
-                Rect::new(0, 0, size, screen.height),
-                Rect::new(-size, 0, size, screen.height),
-            ),
-            Side::After => (
-                Rect::new(screen.width - size, 0, size, screen.height),
-                Rect::new(screen.width, 0, size, screen.height),
-            ),
-            Side::Above => (
-                Rect::new(0, 0, screen.width, size),
-                Rect::new(0, -size, screen.width, size),
-            ),
-            Side::Below => (
-                Rect::new(0, screen.height - size, screen.width, size),
-                Rect::new(0, screen.height, screen.width, size),
-            ),
-        };
+        let (resting, offstage) = self.edge_rects(side, size);
         let root = self.push_scene(DRAWER_DIM);
         let container = self
             .add(root, Void, offstage)
@@ -462,6 +461,121 @@ impl<M: 'static> Ui<M> {
     #[inline]
     pub fn drawer_open(&self) -> bool {
         self.drawer.is_some()
+    }
+
+    /// Where a panel of `size` rests against `side`, and where it waits offstage.
+    ///
+    /// The full width or height of the screen in the other dimension. Shared by
+    /// [`Ui::push_drawer`] and [`Ui::push_shelf`], which differ in everything
+    /// except the arithmetic.
+    fn edge_rects(&self, side: crate::overlay::Side, size: i32) -> (Rect, Rect) {
+        use crate::overlay::Side;
+        let screen = Rect::from_size(self.size);
+        let size = size.clamp(1, screen.width.max(screen.height));
+        match side {
+            Side::Before => (
+                Rect::new(0, 0, size, screen.height),
+                Rect::new(-size, 0, size, screen.height),
+            ),
+            Side::After => (
+                Rect::new(screen.width - size, 0, size, screen.height),
+                Rect::new(screen.width, 0, size, screen.height),
+            ),
+            Side::Above => (
+                Rect::new(0, 0, screen.width, size),
+                Rect::new(0, -size, screen.width, size),
+            ),
+            Side::Below => (
+                Rect::new(0, screen.height - size, screen.width, size),
+                Rect::new(0, screen.height, screen.width, size),
+            ),
+        }
+    }
+
+    /// Slides a panel in from an edge and leaves everything else alone.
+    ///
+    /// A drawer is modality plus motion; a shelf is the motion without the
+    /// modality. It pushes no scene, so **focus does not move**, input still
+    /// reaches what is underneath, and a press outside does not dismiss it.
+    /// The application closes it, because the application is the only thing
+    /// that knows when it is done.
+    ///
+    /// That is the whole difference, and it is what an on-screen keyboard
+    /// needs: it exists to type into a field that must stay focused while it
+    /// is up. A status strip, a notification shade and a media bar over a
+    /// video want the same thing.
+    ///
+    /// The container sits above ordinary content in the base scene, painting over
+    /// it — and *under* any scene pushed later, which is why a modal covers a
+    /// shelf rather than fighting it. One at a time; pushing over an open one
+    /// returns `None`.
+    ///
+    /// `size` is the width for [`Side::Before`](crate::Side::Before) and
+    /// [`Side::After`](crate::Side::After), the height for
+    /// [`Side::Above`](crate::Side::Above) and [`Side::Below`](crate::Side::Below).
+    ///
+    /// ```
+    /// # use denise::{Size, theme};
+    /// # use denise_ui::{Side, Ui};
+    /// # enum Msg { Noop }
+    /// # let mut ui: Ui<Msg> = Ui::new(Size::new(800, 480), theme::DARK);
+    /// let shelf = ui.push_shelf(Side::Below, 200).expect("nothing else is up");
+    /// assert!(ui.shelf_open());
+    /// ```
+    pub fn push_shelf(&mut self, side: crate::overlay::Side, size: i32) -> Option<NodeId> {
+        if self.shelf.is_some() {
+            return None;
+        }
+        let (resting, offstage) = self.edge_rects(side, size);
+        let base = self.root();
+        let container = self.add(base, Void, offstage)?;
+        self.set_z(container, SHELF_Z);
+        self.animate_layout(container, resting, SHELF_MS);
+        self.shelf = Some(ShelfState {
+            container,
+            closing: false,
+        });
+        Some(container)
+    }
+
+    /// Slides the shelf out; the node is removed when the slide lands.
+    ///
+    /// Returns `false` when none is up. Calling again while one is already
+    /// closing does nothing — the slide finishes on its own.
+    pub fn close_shelf(&mut self) -> bool {
+        let Some(state) = self.shelf else {
+            return false;
+        };
+        if state.closing {
+            return true;
+        }
+        let Some(layout) = self.layout(state.container) else {
+            self.shelf = None;
+            return false;
+        };
+        let screen = Rect::from_size(self.size);
+        // Back out the way it came in: whichever screen edge is nearest.
+        let offstage = if layout.x <= 0 && layout.width < screen.width {
+            Rect::new(-layout.width, layout.y, layout.width, layout.height)
+        } else if layout.right() >= screen.width && layout.width < screen.width {
+            Rect::new(screen.width, layout.y, layout.width, layout.height)
+        } else if layout.y <= 0 {
+            Rect::new(layout.x, -layout.height, layout.width, layout.height)
+        } else {
+            Rect::new(layout.x, screen.height, layout.width, layout.height)
+        };
+        self.animate_layout(state.container, offstage, SHELF_MS);
+        self.shelf = Some(ShelfState {
+            closing: true,
+            ..state
+        });
+        true
+    }
+
+    /// Whether a shelf is up, closing included.
+    #[inline]
+    pub fn shelf_open(&self) -> bool {
+        self.shelf.is_some()
     }
 
     /// Whether a popup — a dropdown's option list, a tooltip's anchor menu — is up.
@@ -1247,6 +1361,17 @@ impl<M: 'static> Ui<M> {
             } else if state.closing && !self.tweens.iter().any(|t| t.id == state.container) {
                 self.drawer = None;
                 self.pop_scene();
+            }
+        }
+
+        // The same landing, for a shelf. It has no scene to pop, so what goes
+        // is the node itself — and with it every key that was on it.
+        if let Some(state) = self.shelf {
+            if !self.nodes.contains_key(state.container) {
+                self.shelf = None;
+            } else if state.closing && !self.tweens.iter().any(|t| t.id == state.container) {
+                self.shelf = None;
+                self.remove(state.container);
             }
         }
 

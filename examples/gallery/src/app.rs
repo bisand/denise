@@ -85,6 +85,7 @@ pub enum Message {
     ShowDialog,
     CloseDialog,
     ShowDrawer,
+    ToggleShelf,
 }
 
 // `Slider` and `Collapse` take a plain `fn` constructor, so a message that
@@ -964,6 +965,13 @@ impl App {
                 .with_style(self.body),
             Rect::new(cw - 220 - PAD, 148, 220, 40),
         );
+        self.add(
+            s,
+            Button::new("Shelf", Message::ToggleShelf)
+                .with_role(Role::Neutral)
+                .with_style(self.body),
+            Rect::new(cw - 220 - PAD, 200, 220, 40),
+        );
     }
 
     /// `Ui::add` with the panic this application wants: the tree is built once
@@ -1225,6 +1233,7 @@ impl App {
                 self.ui.pop_scene();
             }
             Message::ShowDrawer => self.open_drawer(),
+            Message::ToggleShelf => self.toggle_shelf(),
         }
     }
 
@@ -1303,6 +1312,47 @@ impl App {
                 Rect::new(PAD, 108 + i as i32 * 50, 300 - 2 * PAD, 40),
             );
         }
+    }
+
+    /// The overlay that is *not* modal, and the whole demonstration is what
+    /// keeps working while it is up: the fields above stay focused and typable,
+    /// the buttons behind it still press, and nothing dims. A drawer offers the
+    /// opposite of each, which is why both are here to compare.
+    fn toggle_shelf(&mut self) {
+        if self.ui.shelf_open() {
+            self.ui.close_shelf();
+            return;
+        }
+        let Some(shelf) = self.ui.push_shelf(Side::Below, self.px(96)) else {
+            return;
+        };
+        // The tree places a shelf itself, so that height was physical; the
+        // contents below are logical and go through `add` like the rest.
+        let width = self.logical(self.ui.size()).width as i32;
+        self.add(
+            shelf,
+            denise_ui::widgets::Panel::default(),
+            Rect::new(0, 0, width, 96),
+        );
+        self.add(
+            shelf,
+            Label::new("A shelf").with_style(self.heading),
+            Rect::new(PAD, 14, 200, 26),
+        );
+        self.add(
+            shelf,
+            Label::new(
+                "Focus and input carry on underneath — type in the fields, press the buttons.",
+            )
+            .with_style(self.small)
+            .with_role(Role::Base300),
+            Rect::new(PAD, 46, 560, 20),
+        );
+        self.add(
+            shelf,
+            Button::new("Close", Message::ToggleShelf).with_style(self.body),
+            Rect::new(width - 120 - PAD, 28, 120, 40),
+        );
     }
 
     /// New seeds from a corner of the colour wheel nobody planned.
