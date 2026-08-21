@@ -1,13 +1,22 @@
 //! Key positions to characters: layouts, dead keys and composition.
 //!
-//! [`crate::keymap`] answers *where* a key is; this answers *what it types*. The
-//! split matters because a position is a fact about the hardware and a character
-//! is a fact about the user's layout, and conflating them is how a toolkit ends up
-//! unable to type `ø` on the machine it was written for.
+//! A backend answers *where* a key is — [`KeyCode`] is a position, and each
+//! platform maps its own scancodes onto it. This crate answers *what that
+//! position types*. The split matters because a position is a fact about the
+//! hardware and a character is a fact about the user's layout, and conflating
+//! them is how a toolkit ends up unable to type `ø` on the machine it was
+//! written for.
 //!
 //! Everything here is platform-independent and allocation-free, so it is unit
 //! tested rather than inferred from a keyboard someone happened to have plugged
 //! in.
+//!
+//! # Who asks
+//!
+//! `denise-evdev` feeds it the positions it read from `/dev/input`, and an
+//! on-screen keyboard feeds it the position of the key somebody tapped. Both
+//! want the same answer, and neither should own the tables — which is why this
+//! is a crate rather than a module inside the Linux backend it grew up in.
 //!
 //! # Using the system's layout
 //!
@@ -1181,3 +1190,9 @@ mod tests {
         assert_eq!(by_name("dvorak").map(|l| l.name), None);
     }
 }
+
+/// Compiles the examples in this crate's README, so they cannot drift from the API
+/// they claim to demonstrate. Never built except under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;

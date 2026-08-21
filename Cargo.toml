@@ -9,6 +9,7 @@ members = [
     "denise-fbdev",
     "denise-ffi",
     "denise-image",
+    "denise-layout",
     "denise-macos",
     "denise-render",
     "denise-text",
@@ -52,6 +53,7 @@ denise-evdev = { version = "0.15.1", path = "denise-evdev" }
 denise-fbdev = { version = "0.15.1", path = "denise-fbdev" }
 denise-ffi = { version = "0.15.1", path = "denise-ffi" }
 denise-image = { version = "0.15.1", path = "denise-image", default-features = false }
+denise-layout = { version = "0.15.1", path = "denise-layout" }
 denise-macos = { version = "0.15.1", path = "denise-macos" }
 denise-render = { version = "0.15.1", path = "denise-render", default-features = false }
 denise-text = { version = "0.15.1", path = "denise-text", default-features = false }

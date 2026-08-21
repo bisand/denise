@@ -40,8 +40,14 @@
 
 pub mod codes;
 pub mod keymap;
-pub mod layout;
 pub mod translate;
+
+/// Keyboard layouts, re-exported from [`denise_layout`].
+///
+/// They lived here until 0.16, and a position-to-character table is no more
+/// about evdev than it is about Cocoa — an on-screen keyboard wants the same
+/// tables and should not depend on a Linux input backend to get them.
+pub use denise_layout as layout;
 
 pub use keymap::key_code;
 pub use translate::{AbsAxis, MAX_SLOTS, RawEvent, Translator};
