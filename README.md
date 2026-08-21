@@ -304,6 +304,7 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 | [`hello-rect`](examples/hello-rect) | The damage proof: a bouncing rectangle that repaints two rectangles, not a window. |
 | [`panel`](examples/panel) | The widget tree, a modal and a cursor sprite, on bare Linux with no X. |
 | [`kiosk`](examples/kiosk) | The instrumented loop: input latency and frame-time percentiles. |
+| [`launcher`](examples/launcher) | A menu of the other demos. Shows how one bare-Linux application hands the display to another and takes it back. |
 
 Several examples take `--snapshot out.ppm`, which draws one frame and exits. No
 display needed — useful over SSH, for reviewing a layout, and for diffing a theme

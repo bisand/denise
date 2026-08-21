@@ -89,6 +89,34 @@ doas reboot
 On a 512 MB board that will not come up, try reserving CMA explicitly:
 `dtoverlay=vc4-kms-v3d,cma-64`.
 
+### The hardware decoder is a separate module
+
+KMS gets you `/dev/dri`. It does not get you `/dev/video*`, which is where
+`denise-video` looks for the V4L2 memory-to-memory decoder. Raspberry Pi OS binds
+`bcm2835-codec` from the device tree; **Alpine does not**, and the `probe` example
+reports nothing until the module is loaded by name:
+
+```bash
+doas modprobe bcm2835-codec                      # now
+echo bcm2835-codec | doas tee -a /etc/modules    # and at every boot
+```
+
+Then `probe` should name a decoder rather than ask you where one is:
+
+```console
+$ doas cargo run -p denise-video --example probe
+driver           kind               H.264  HEVC   path
+bcm2835-codec    stateful           yes    -      /dev/video10
+```
+
+`HEVC -` is correct on a Pi 3 and a Pi 4; only the Pi 5 has that, and by the
+stateless path this crate does not drive yet.
+
+The decoder's buffers come from GPU memory, not from CMA, so `gpu_mem` matters
+here in a way it does not for a UI-only panel. `gpu_mem=128` beside the overlay
+line is the usual headroom for 1080p H.264 — the 64 MB default is enough for the
+console and leaves little for a decoder.
+
 ## What changes when you enable it
 
 ### The resolution will change
@@ -204,6 +232,29 @@ rate rather than by the cap.
 
 Treat any cap as a runaway guard set far above every plausible input rate, not as
 a schedule. On DRM it is redundant anyway — vblank is the schedule.
+
+## A pointer that is missing entirely is a sleeping one
+
+A wireless mouse that was asleep when the panel started does not merely go
+unread — it has no `/dev/input/event*` node at all. The receiver enumerates at
+boot and the mouse does not, and the node is created whenever somebody first
+moves it. On this Pi, with a Logitech unifying receiver, that was **775 seconds
+after boot**:
+
+```text
+[   8.498] logitech-hidpp-device 0003:046D:402D.0007: hidraw3: ... [Logitech M560]
+[ 783.268] logitech-hidpp-device 0003:046D:402D.0007: HID++ 2.0 device connected.
+[ 783.501] input: Logitech Wireless Mouse M560 as .../input19
+```
+
+Note that the boot line gives it a `hidraw` node and no `input:` line — the
+devices that were awake say `input,hidraw4` instead.
+
+`InputBackend` watches `/dev/input` and opens the node when it appears, so the
+mouse starts working the moment it wakes. What it cannot do is repair a loop
+holding descriptors from startup: see [the crate's
+docs](../denise-evdev/src/lib.rs) on `devices_changed`, or just use
+`bare_linux::Waits`, which every kiosk example does.
 
 ## A laggy pointer is usually the mouse
 
@@ -396,8 +447,6 @@ believe the first method over either.
 
 ## Known gaps
 
-- **The VT keyboard is not muted** while Denise holds DRM master, so keystrokes
-  still reach the shell behind the UI. Real kiosks mute it with `KDSKBMODE`/`K_OFF`.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested but
   no physical touchscreen has driven it.
 

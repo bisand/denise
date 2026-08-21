@@ -32,6 +32,12 @@ should wait on `InputBackend::raw_fds` together with the DRM device's descriptor
 so the process idles in the kernel until either input arrives or the display
 retires a flip — rather than waking up to ask.
 
+That list changes under you. A wireless mouse that was asleep at startup has no
+device node until somebody moves it, and `poll` opens it when it appears — so ask
+`devices_changed()` each pass and take `raw_fds` again when it says yes. Holding
+the first list forever is how a panel ends up with a mouse it can see in
+`/dev/input` and cannot read.
+
 ## Keyboards
 
 Key positions are translated to `KeyCode`, then composed into text: dead keys,
