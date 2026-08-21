@@ -3,7 +3,7 @@
 //!
 //! A [`TextFlow`] owns a [`FlowLayout`] the layout pass already measured, so
 //! `paint` measures nothing: it walks lines and fragments calling
-//! [`TextEngine::draw_line`] at precomputed baselines. That is the whole
+//! [`TextEngine::draw_line`](denise_text::TextEngine::draw_line) at precomputed baselines. That is the whole
 //! division of labour — layout decides once, paint repeats it — and it is
 //! why scrolling a page costs blitting, not shaping.
 //!

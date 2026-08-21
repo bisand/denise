@@ -20,11 +20,11 @@
 //! before the child starts, and built again from nothing when the child exits.
 //! The process survives; none of its hardware does.
 //!
-//! That is why [`Menu`] is built inside [`show`] rather than held in [`run`]: the
+//! That is why `Menu` is built inside `show` rather than held in `run`: the
 //! borrow checker enforcing that the tree cannot outlive the display it was
 //! measured for is exactly the invariant we want.
 //!
-//! **The console guard is the exception.** It is taken once in [`run`] and held
+//! **The console guard is the exception.** It is taken once in `run` and held
 //! across everything, because dropping it puts the terminal back into text mode
 //! and the login prompt would flash between every menu and every demo.
 

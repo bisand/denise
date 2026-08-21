@@ -16,7 +16,7 @@ use crate::Error;
 /// softbuffer hands out a buffer whose contents are undefined or stale depending on
 /// the platform, which would force a full repaint every frame and make the damage
 /// path untestable on the desktop. Instead the application draws into a shadow
-/// buffer we own — always current, so always [`BufferAge::Frames(1)`] — and
+/// buffer we own — always current, so always [`BufferAge::Frames(1)`](denise::BufferAge::Frames) — and
 /// `present` blits from it into softbuffer's buffer, using softbuffer's own
 /// reported age to decide how much of the shadow to copy.
 ///

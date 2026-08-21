@@ -12,6 +12,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # RUSTFLAGS does not reach rustdoc, so the `cargo doc` step below was running
+  # with warnings that nobody saw: seventeen dead intra-doc links accumulated
+  # under a green tick before anyone thought to look.
+  RUSTDOCFLAGS: -D warnings
 
 jobs:
   check:
@@ -35,7 +39,12 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features
       - run: cargo test --workspace --all-features
-      - run: cargo doc --workspace --no-deps --all-features
+      # Everything except the two Windows crates, whose public API is behind
+      # `cfg(windows)` and so does not exist on this runner -- their own
+      # intra-doc links cannot resolve here, and the Windows job below documents
+      # them where they compile. Same reasoning as the `default-target` each one
+      # carries for docs.rs.
+      - run: cargo doc --workspace --no-deps --all-features --exclude denise-win32 --exclude denise-activex
 
       # The optional text tiers are off by default, so `--all-features` is the
       # only build that ever sees them together and the default build is the only
@@ -187,6 +196,9 @@ jobs:
         target:
           - aarch64-unknown-linux-gnu
           - armv7-unknown-linux-gnueabihf
+          # What the Pi panel is actually built as. It was covered only by
+          # somebody remembering to run scripts/deploy-pi.sh.
+          - aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v5
 
@@ -199,10 +211,16 @@ jobs:
           key: ${{ matrix.target }}
 
       # The core is a pure rlib with no C dependencies, so this needs no
-      # cross-linker. When the DRM and evdev backends land in M2 this job grows a
-      # `cross` or a gcc-aarch64-linux-gnu toolchain and starts linking examples.
+      # cross-linker.
       - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --no-default-features
       - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --features std
+
+      # The Linux backends, on the architectures they are actually run on. These
+      # landed in M2 and this job never grew to cover them: until now they were
+      # compiled for arm only on the laptop of whoever last deployed to a Pi, and
+      # never for arm-gnu at all. `check` rather than `build` because they are
+      # rlibs -- nothing here links, and the question is whether they compile.
+      - run: cargo check -p denise-drm -p denise-evdev -p denise-fbdev -p denise-video --target ${{ matrix.target }} --all-features
 
   isolation:
     name: core pulls in no platform code
@@ -359,6 +377,10 @@ jobs:
       # mocking a DIB section.
       - run: cargo clippy -p denise-win32 --all-targets -- -D warnings
       - run: cargo test -p denise-win32
+
+      # Where these two can actually be documented: RUSTDOCFLAGS is -D warnings
+      # for every job, so a dead link here fails the build like anywhere else.
+      - run: cargo doc -p denise-win32 -p denise-activex --no-deps --all-features
 
       # The COM server is the only crate here that produces a DLL Windows loads
       # by class id, and it compiles nowhere else. `tests/automation.rs` is the

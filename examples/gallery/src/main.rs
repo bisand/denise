@@ -30,7 +30,7 @@
 //! presentation belongs to whatever is compositing it.
 //!
 //! The proof-of-concept panel: everything the toolkit ships, on one screen,
-//! with a live theme editor driving [`Ui::set_theme`] the way an application
+//! with a live theme editor driving [`Ui::set_theme`](denise_ui::Ui::set_theme) the way an application
 //! would. The editing is the demonstration — nine seed colours go in, a
 //! derived, contrast-checked theme comes out, and every widget follows
 //! because widgets name roles, never colours.
