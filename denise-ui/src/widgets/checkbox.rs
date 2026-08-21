@@ -15,9 +15,10 @@ use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 /// an application matches on what the checkbox became rather than looking the
 /// widget up afterwards. An enum's tuple variant already is such a function:
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::Checkbox;
 /// enum Message { Muted(bool) }
-/// Checkbox::new("Mute", Message::Muted)
+/// Checkbox::new("Mute", Message::Muted);
 /// ```
 ///
 /// A plain `fn` pointer rather than a closure, so this needs no allocation, no

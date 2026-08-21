@@ -44,9 +44,17 @@ const SWEEP: i32 = TURN * 3 / 4;
 /// for frames from an event handler; the application asks, at the moment it
 /// decides something is loading:
 ///
-/// ```ignore
+/// ```
+/// # use denise::{Rect, Size, theme};
+/// # use denise_ui::{Ui, widgets::Panel};
+/// # #[derive(Clone, Debug)] enum Msg { Noop }
+/// # fn demo() -> Option<()> {
+/// # let mut ui: Ui<Msg> = Ui::new(Size::new(1920, 1080), theme::DARK);
+/// # let root = ui.root();
+/// # use denise_ui::Spinner;
 /// let id = ui.add(root, Spinner::new(), Rect::new(100, 80, 48, 48))?;
 /// ui.request_animation(id);
+/// # Some(()) }
 /// ```
 ///
 /// That is not an awkwardness to paper over with a constructor that does it

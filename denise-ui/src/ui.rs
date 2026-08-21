@@ -1349,7 +1349,11 @@ impl<M: 'static> Ui<M> {
     /// One decision covering spinners, knobs crossing, carousel slides, layout
     /// tweens and toast fades — see [`Motion`] for what it is and is not.
     ///
-    /// ```ignore
+    /// ```
+    /// # use denise::{Size, theme};
+    /// # use denise_ui::{Motion, Ui};
+    /// # enum Msg { Noop }
+    /// # let mut ui: Ui<Msg> = Ui::new(Size::new(1920, 1080), theme::DARK);
     /// ui.set_motion(Motion::Every(33));  // 30 fps: half the wakes
     /// ui.set_motion(Motion::None);       // reduced motion
     /// ```

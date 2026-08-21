@@ -30,9 +30,10 @@ const SCALE: i32 = 1000;
 /// what a wall panel is. Identical semantics otherwise, including the message
 /// being a function of the **new** value:
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::Toggle;
 /// enum Message { Muted(bool) }
-/// Toggle::new("Mute", Message::Muted)
+/// Toggle::new("Mute", Message::Muted);
 /// ```
 ///
 /// # The knob slides

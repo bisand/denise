@@ -14,10 +14,12 @@ use crate::widgets::style::{Align, draw_aligned, interactive_pair};
 /// Not interactive, not focusable, not a tab stop. It is a [`Label`] that
 /// carries a colour and a shape.
 ///
-/// ```ignore
-/// Badge::new("3")
-/// Badge::new("PÅ").with_role(Role::Success)
-/// Badge::new("FEIL").with_role(Role::Error)
+/// ```
+/// # use denise_ui::widgets::Badge;
+/// # use denise::theme::Role;
+/// Badge::new("3");
+/// Badge::new("PÅ").with_role(Role::Success);
+/// Badge::new("FEIL").with_role(Role::Error);
 /// ```
 ///
 /// # Sizing, and why this is not the start of a layout engine

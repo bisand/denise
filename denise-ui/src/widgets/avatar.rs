@@ -57,10 +57,13 @@ impl Presence {
 
 /// A person's picture, or their initials on a coloured disc.
 ///
-/// ```ignore
-/// Avatar::new(pixels, size)                       // a photo, circular
-/// Avatar::initials("Ola Nordmann")                // OL, on a derived colour
-/// Avatar::initials("Kari").with_presence(Presence::Online)
+/// ```
+/// # use denise_ui::widgets::{Avatar, Presence};
+/// # use denise::Size;
+/// # let (pixels, size) = (vec![0u32; 64 * 64], Size::new(64, 64));
+/// Avatar::new(pixels, size);                      // a photo, circular
+/// Avatar::initials("Ola Nordmann");               // OL, on a derived colour
+/// Avatar::initials("Kari").with_presence(Presence::Online);
 /// ```
 ///
 /// Not interactive and not focusable, like [`Label`](super::Label) and

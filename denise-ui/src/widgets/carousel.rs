@@ -47,12 +47,15 @@ enum Phase {
 
 /// Pictures shown one at a time in one rectangle, sliding between them.
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::widgets::Carousel;
+/// # use denise::Size;
+/// # let (sunset, harbour) = (vec![0u32; 4], vec![0u32; 4]);
 /// enum Message { Page(usize) }
 /// Carousel::new(Message::Page)
 ///     .with_picture(sunset, Size::new(640, 480))
 ///     .with_picture(harbour, Size::new(640, 480))
-///     .auto_advance(8_000)
+///     .auto_advance(8_000);
 /// ```
 ///
 /// The signage rotator: swipe or drag changes the page, arrow keys change it

@@ -15,7 +15,11 @@
 /// crosses in 120 ms and a carousel still advances after eight seconds,
 /// whatever this says.
 ///
-/// ```ignore
+/// ```
+/// # use denise::{Size, theme};
+/// # use denise_ui::{Motion, Ui};
+/// # enum Msg { Noop }
+/// # let mut ui: Ui<Msg> = Ui::new(Size::new(1920, 1080), theme::DARK);
 /// ui.set_motion(Motion::Every(33));  // 30 fps: half the wakes, half the cost
 /// ui.set_motion(Motion::None);       // reduced motion, or a tight power budget
 /// ```

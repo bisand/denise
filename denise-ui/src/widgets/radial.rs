@@ -17,9 +17,12 @@ use crate::widgets::style::{Align, draw_aligned, interactive_pair};
 /// reports whether the value actually moved — because the number is `done / total`
 /// here too, and `total` is eventually zero.
 ///
-/// ```ignore
-/// RadialProgress::new(0.7).with_label("70 %")
-/// RadialProgress::new(used / capacity).with_role(Role::Warning)
+/// ```
+/// # use denise_ui::RadialProgress;
+/// # use denise::theme::Role;
+/// # let (used, capacity) = (7.0f32, 10.0f32);
+/// RadialProgress::new(0.7).with_label("70 %");
+/// RadialProgress::new(used / capacity).with_role(Role::Warning);
 /// ```
 ///
 /// # It is a circle, so it inscribes rather than fills

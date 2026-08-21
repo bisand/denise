@@ -12,9 +12,11 @@ use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
 /// One event on a [`Timeline`].
 ///
-/// ```ignore
-/// TimelineItem::new("Pumpe startet").with_time("12:01").with_role(Role::Success)
-/// TimelineItem::new("Ventil åpnes").pending()
+/// ```
+/// # use denise_ui::widgets::TimelineItem;
+/// # use denise::theme::Role;
+/// TimelineItem::new("Pumpe startet").with_time("12:01").with_role(Role::Success);
+/// TimelineItem::new("Ventil åpnes").pending();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimelineItem {

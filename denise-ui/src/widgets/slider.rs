@@ -11,9 +11,10 @@ use crate::widgets::style::{focus_ring, interactive_pair};
 /// The message carries the value itself rather than a fraction, so a setpoint
 /// reads as one:
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::Slider;
 /// enum Message { Setpoint(f32) }
-/// Slider::new(16.0, 30.0, 21.5, Message::Setpoint).with_step(0.5)
+/// Slider::new(16.0, 30.0, 21.5, Message::Setpoint).with_step(0.5);
 /// ```
 ///
 /// # Dragging keeps the pointer even when it leaves

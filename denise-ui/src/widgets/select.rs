@@ -12,9 +12,10 @@ use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair, m
 
 /// A control showing one chosen option, which asks to be opened.
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::Select;
 /// enum Message { Open, Chose(usize) }
-/// Select::new(["Auto", "Manuell", "Av"], Message::Open).with_placeholder("Velg modus")
+/// Select::new(["Auto", "Manuell", "Av"], Message::Open).with_placeholder("Velg modus");
 /// ```
 ///
 /// # It does not open its own list, and nothing here can
@@ -34,7 +35,12 @@ use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair, m
 /// So this widget emits an *open* message and the application opens the list —
 /// which [`open_select`] does in one call:
 ///
-/// ```ignore
+/// ```
+/// # use denise::{Size, theme};
+/// # use denise_ui::{Select, Ui, widgets};
+/// # #[derive(Clone, Debug)] enum Message { Open, Chose(usize) }
+/// # fn demo(message: Message, select: denise_ui::NodeId) {
+/// # let mut ui: Ui<Message> = Ui::new(Size::new(1920, 1080), theme::DARK);
 /// match message {
 ///     Message::Open => { widgets::open_select(&mut ui, select, Message::Chose); }
 ///     Message::Chose(index) => {
@@ -42,6 +48,7 @@ use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair, m
 ///         ui.widget_mut::<Select<Message>>(select).unwrap().set_selected(Some(index));
 ///     }
 /// }
+/// # }
 /// ```
 ///
 /// Everything the open list needs is already there: the popup flips near a

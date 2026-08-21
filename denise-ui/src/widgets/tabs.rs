@@ -12,9 +12,10 @@ use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
 /// A tab strip: a row of labels, one of them selected, with a rule underneath.
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::Tabs;
 /// enum Message { Page(usize) }
-/// Tabs::new(["Oversikt", "Alarmer", "Innstillinger"], Message::Page)
+/// Tabs::new(["Oversikt", "Alarmer", "Innstillinger"], Message::Page);
 /// ```
 ///
 /// # What it owns, and what it does not

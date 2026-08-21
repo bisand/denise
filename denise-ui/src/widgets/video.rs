@@ -12,10 +12,21 @@ use crate::widget::{PaintCtx, Widget};
 ///
 /// The widget's whole job is to be a rectangle the layout owns:
 ///
-/// ```ignore
+/// ```
+/// # use denise::{Rect, Size, theme};
+/// # use denise_ui::{Ui, widgets::Panel};
+/// # #[derive(Clone, Debug)] enum Msg { Noop }
+/// # fn demo() -> Option<()> {
+/// # let mut ui: Ui<Msg> = Ui::new(Size::new(1920, 1080), theme::DARK);
+/// # let root = ui.root();
+/// # use denise_ui::widgets::Video;
+/// # struct Player;                       // `denise-video`'s, in a real application
+/// # impl Player { fn set_dst(&self, _: Rect) {} }
+/// # let player = Player;
 /// let video = ui.add(root, Video::new(), Rect::new(40, 40, 640, 360))?;
 /// // hand the rectangle to the plane, and again whenever layout changes:
 /// player.set_dst(ui.bounds(video).unwrap_or(Rect::ZERO));
+/// # Some(()) }
 /// ```
 ///
 /// `denise-video`'s `Player` does the rest, against the same DRM card the

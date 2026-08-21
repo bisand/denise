@@ -23,11 +23,21 @@ pub const FOLD_MS: u64 = 200;
 /// animating between the header alone and the full section; the body needs no
 /// hiding, because the node's own clip crops it, mid-animation included.
 ///
-/// ```ignore
+/// ```
+/// # use denise::{Rect, Size, theme};
+/// # use denise_ui::{Ui, widgets::{self, Collapse, FOLD_MS}};
+/// # #[derive(Clone, Debug)] enum Msg { Network(bool) }
+/// # fn demo(message: Msg) -> Option<()> {
+/// # let mut ui: Ui<Msg> = Ui::new(Size::new(1920, 1080), theme::DARK);
+/// # let stack = ui.root();
+/// # let rect = Rect::new(0, 0, 320, 48);
 /// let section = ui.add(stack, Collapse::new("Nettverk", Msg::Network), rect)?;
 /// // body children of `section`, placed below Collapse::header_height
 /// // ...
-/// Msg::Network(open) => widgets::set_open(&mut ui, section, open, FOLD_MS),
+/// match message {
+///     Msg::Network(open) => widgets::set_open(&mut ui, section, open, FOLD_MS),
+/// }
+/// # Some(()) }
 /// ```
 ///
 /// The widget cannot animate its own node — `EventCtx` deliberately has no
@@ -170,10 +180,19 @@ pub fn set_open<M: 'static>(ui: &mut Ui<M>, id: NodeId, open: bool, duration_ms:
 /// other nodes, and which sections belong together is application policy.
 /// Like [`set_open`], it emits nothing: it *is* the answer to the messages.
 ///
-/// ```ignore
-/// let accordion = Accordion::new([network, screen, about]);
+/// ```
+/// # use denise::{Size, theme};
+/// # use denise_ui::{Ui, widgets::Accordion};
+/// # #[derive(Clone, Debug)] enum Msg { Section(usize, bool) }
+/// # fn demo(message: Msg, network: denise_ui::NodeId, screen: denise_ui::NodeId,
+/// #         about: denise_ui::NodeId) {
+/// # let mut ui: Ui<Msg> = Ui::new(Size::new(1920, 1080), theme::DARK);
+/// let mut accordion = Accordion::new([network, screen, about]);
 /// // ...
-/// Msg::Section(index, _) => accordion.toggle(&mut ui, index),
+/// match message {
+///     Msg::Section(index, _) => accordion.toggle(&mut ui, index),
+/// }
+/// # }
 /// ```
 #[derive(Clone, Debug)]
 pub struct Accordion {

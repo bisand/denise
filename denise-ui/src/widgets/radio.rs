@@ -27,9 +27,10 @@ use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 /// Options are laid out vertically, dividing the bounds evenly. The message is a
 /// function of the newly chosen index:
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::RadioGroup;
 /// enum Message { Mode(usize) }
-/// RadioGroup::new(["Auto", "Manual", "Off"], Message::Mode)
+/// RadioGroup::new(["Auto", "Manual", "Off"], Message::Mode);
 /// ```
 #[derive(Clone, Debug)]
 pub struct RadioGroup<M> {

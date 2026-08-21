@@ -14,9 +14,11 @@ use crate::widgets::style::interactive_pair;
 /// Not interactive, not focusable, not a tab stop. It sits *in* the layout, in
 /// the place the thing it is about would be.
 ///
-/// ```ignore
-/// Alert::new(Role::Success, "Lagret").with_icon('✓')
-/// Alert::new(Role::Error, "Kunne ikke lagre: disken er full")
+/// ```
+/// # use denise_ui::Alert;
+/// # use denise::theme::Role;
+/// Alert::new(Role::Success, "Lagret").with_icon('✓');
+/// Alert::new(Role::Error, "Kunne ikke lagre: disken er full");
 /// ```
 ///
 /// # This is a banner, not a dialog

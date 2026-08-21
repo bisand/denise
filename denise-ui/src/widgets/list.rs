@@ -14,9 +14,10 @@ use crate::widgets::style::{
 
 /// One row: a label, and optionally something before and after it.
 ///
-/// ```ignore
-/// ListItem::new("Kjøletemperatur").with_trailing("4 °C")
-/// ListItem::new("Avriming").with_leading(">").disabled()
+/// ```
+/// # use denise_ui::ListItem;
+/// ListItem::new("Kjøletemperatur").with_trailing("4 °C");
+/// ListItem::new("Avriming").with_leading(">").disabled();
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListItem {
@@ -123,9 +124,10 @@ impl From<String> for ListItem {
 ///
 /// The backbone of a settings screen and of a menu.
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::List;
 /// enum Message { Row(usize), Open(usize) }
-/// List::new(["Nettverk", "Skjerm", "Om"], Message::Row).on_activate(Message::Open)
+/// List::new(["Nettverk", "Skjerm", "Om"], Message::Row).on_activate(Message::Open);
 /// ```
 ///
 /// # Scrolling belongs to the tree, and this widget cooperates with it
@@ -137,11 +139,19 @@ impl From<String> for ListItem {
 /// the rest — wheel, page keys, touch-drag on the background, clipping and hit
 /// testing all agree because one reflow computes them.
 ///
-/// ```ignore
+/// ```
+/// # use denise::{Rect, Size, theme};
+/// # use denise_ui::{Ui, widgets::Panel};
+/// # #[derive(Clone, Debug)] enum Msg { Noop }
+/// # fn demo() -> Option<()> {
+/// # let mut ui: Ui<Msg> = Ui::new(Size::new(1920, 1080), theme::DARK);
+/// # let root = ui.root();
+/// # let list = denise_ui::List::new(["Nettverk", "Skjerm"], |_| Msg::Noop);
 /// let viewport = ui.add(root, Panel::default(), Rect::new(20, 20, 240, 160))?;
 /// ui.set_scrollable(viewport, true);
 /// let height = list.preferred_height(ui.theme());
 /// let list = ui.add(viewport, list, Rect::new(0, 0, 240, height))?;
+/// # Some(()) }
 /// ```
 ///
 /// The one thing the widget contributes: **a keyboard selection below the fold

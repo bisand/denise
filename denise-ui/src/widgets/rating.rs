@@ -18,9 +18,12 @@ const GAP_DIVISOR: i32 = 8;
 
 /// A row of stars filled to a value, as an input or as a read-out.
 ///
-/// ```ignore
-/// Rating::new(3.0, Msg::Rated)          // interactive, five stars
-/// Rating::display(4.3).with_max(5)      // an average, read-only
+/// ```
+/// # use denise_ui::widgets::Rating;
+/// # enum Msg { Rated(f32) }
+/// Rating::new(3.0, Msg::Rated);         // interactive, five stars
+/// Rating::<Msg>::display(4.3).with_max(5); // an average, read-only, so the
+///                                        // message type has nothing to infer from
 /// ```
 ///
 /// # The value is continuous and the gesture is not

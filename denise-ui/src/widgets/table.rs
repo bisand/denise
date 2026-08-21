@@ -18,10 +18,11 @@ const THUMB: i32 = 3;
 
 /// One column: a title, a width, and how its cells align.
 ///
-/// ```ignore
-/// Column::new("Navn", 190)
-/// Column::flex("Rolle")
-/// Column::new("Alder", 60).align_end()   // numbers align on their ends
+/// ```
+/// # use denise_ui::widgets::Column;
+/// Column::new("Navn", 190);
+/// Column::flex("Rolle");
+/// Column::new("Alder", 60).align_end();  // numbers align on their ends
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Column {
@@ -79,11 +80,14 @@ impl From<&str> for Column {
 
 /// Rows of cells under a pinned header, at most one row selected.
 ///
-/// ```ignore
+/// ```
+/// # use denise_ui::widgets::{Column, Table};
+/// # struct Record { name: String, role: String }
+/// # let records: Vec<Record> = Vec::new();
 /// enum Message { Pick(usize), Open(usize) }
 /// Table::new([Column::new("Navn", 190), Column::flex("Rolle")], Message::Pick)
 ///     .with_rows(records.iter().map(|r| [r.name.clone(), r.role.clone()]))
-///     .on_activate(Message::Open)
+///     .on_activate(Message::Open);
 /// ```
 ///
 /// # This widget scrolls itself, and that is the whole design
