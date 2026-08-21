@@ -3,7 +3,13 @@
 //! ```text
 //! /usr/local/bin/denise-splash                  # until the `denise` service is up
 //! /usr/local/bin/denise-splash --watch kiosk --until 90
+//! /usr/local/bin/denise-splash --title "Denise Raspberry Pi Demo" --say service
 //! ```
+//!
+//! `--say service` names whatever OpenRC started last, which is the line you want
+//! the day a boot hangs: it stops on the thing it is stuck on. The default is
+//! `quips`, for a panel people stand in front of, where "Starting dbus" means
+//! nothing to anybody.
 //!
 //! A panel that boots to black for ten seconds looks broken, and the machine
 //! cannot say otherwise because nothing owns the screen yet. This owns it, says
@@ -73,6 +79,39 @@ mod app {
     /// No message type: nothing here can be pressed.
     type Msg = ();
 
+    /// What the line under the title says while the bar fills.
+    ///
+    /// Naming the service is the useful one the day a boot hangs, because the
+    /// line stops on whatever it is stuck on. The other one is for a panel people
+    /// stand in front of, where "Starting dbus" means nothing to anybody and the
+    /// twelve seconds may as well be entertaining.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Say {
+        Quips,
+        Service,
+    }
+
+    /// Read in order, not at random, and indexed by the bar rather than a clock —
+    /// so they march with the progress, never repeat, and the last one lands as
+    /// the bar fills. A timer would let a stalled boot look busy, which is a lie
+    /// this screen is in no position to tell.
+    ///
+    /// Half of these are things that actually went wrong bringing this board up.
+    const QUIPS: &[&str] = &[
+        "Asking the firmware for a framebuffer",
+        "Counting bitplanes",
+        "Negotiating with HDMI",
+        "Convincing the GPU it has a monitor",
+        "Waking the mouse, which was asleep",
+        "Rounding the corners",
+        "Blaming the power supply",
+        "Teaching pixels to agree on a colour",
+        "Persuading 900 MHz of ARM to hurry",
+        "Looking for a font that is not eight by eight",
+        "Politely evicting the console",
+        "Almost certainly nearly ready",
+    ];
+
     /// Seconds since boot, for putting these messages beside `dmesg`.
     ///
     /// The wall clock is worse than useless this early: `swclock` has not run, so
@@ -88,6 +127,8 @@ mod app {
         let mut watch = String::from("denise");
         let mut until = 60u64;
         let mut linger = 4u64;
+        let mut say = Say::Quips;
+        let mut title = String::from("Denise");
         let mut font: Option<String> = None;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -95,6 +136,17 @@ mod app {
                 "--watch" => watch = args.next().unwrap_or(watch),
                 "--until" => until = args.next().and_then(|s| s.parse().ok()).unwrap_or(until),
                 "--linger" => linger = args.next().and_then(|s| s.parse().ok()).unwrap_or(linger),
+                "--title" => title = args.next().unwrap_or(title),
+                "--say" => {
+                    say = match args.next().as_deref() {
+                        Some("service") => Say::Service,
+                        Some("quips") | None => Say::Quips,
+                        Some(other) => {
+                            eprintln!("--say takes quips or service, not {other}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
                 "--font" => font = args.next(),
                 other => {
                     eprintln!("unknown argument {other}");
@@ -114,11 +166,11 @@ mod app {
             // Rebuilt rather than resized: a framebuffer being replaced is a new
             // device with a new format, not the same one with different bounds.
             if screen.as_ref().is_none_or(|s| s.stale()) {
-                screen = Screen::open(face.as_ref().map(|(name, _)| name.as_str()));
+                screen = Screen::open(face.as_ref().map(|(name, _)| name.as_str()), &title);
             }
 
             if let Some(screen) = screen.as_mut() {
-                screen.update(&boot);
+                screen.update(&boot, say);
                 if let Err(e) = screen.present() {
                     eprintln!("splash: {e}; giving up the screen");
                     return ExitCode::SUCCESS;
@@ -140,7 +192,7 @@ mod app {
                 let stop = Instant::now() + Duration::from_secs(linger);
                 while Instant::now() < stop {
                     if let Some(screen) = screen.as_mut() {
-                        screen.update(&boot);
+                        screen.update(&boot, say);
                         let _ = screen.present();
                     }
                     std::thread::sleep(TICK);
@@ -219,7 +271,7 @@ mod app {
     }
 
     impl Screen {
-        fn open(font: Option<&str>) -> Option<Self> {
+        fn open(font: Option<&str>, title: &str) -> Option<Self> {
             let surface = FbdevSurface::open_first().ok()?;
             let size = surface.size();
             let geometry = (size, surface.info().bits_per_pixel);
@@ -281,7 +333,7 @@ mod app {
 
             ui.add(
                 root,
-                Label::new("Denise")
+                Label::new(title.to_string())
                     .with_style(heading)
                     .with_align(Align::Center, Align::Center),
                 Rect::new(text_x, y, text_w, 34),
@@ -334,13 +386,22 @@ mod app {
             }
         }
 
-        fn update(&mut self, boot: &Boot) {
+        fn update(&mut self, boot: &Boot, say: Say) {
             let (fraction, name) = boot.progress();
-            if let Some(label) = self.ui.widget_mut::<Label>(self.status) {
-                let text = match name {
+            let text = match say {
+                Say::Service => match name {
                     Some(name) => format!("Starting {name}"),
                     None => "Starting up".to_string(),
-                };
+                },
+                // Indexed by the bar, so the last line arrives with the last of
+                // the fill. Without a fraction there is nothing to index by, and
+                // the first line is as good as any.
+                Say::Quips => {
+                    let at = fraction.unwrap_or(0.0) * QUIPS.len() as f32;
+                    QUIPS[(at as usize).min(QUIPS.len() - 1)].to_string()
+                }
+            };
+            if let Some(label) = self.ui.widget_mut::<Label>(self.status) {
                 label.update(&text);
             }
             if let (Some(bar), Some(fraction)) = (self.bar, fraction)
