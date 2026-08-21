@@ -5653,6 +5653,113 @@ fn an_accordion_keeps_at_most_one_section_open() {
     assert_eq!(ui.bounds(sections[2]).expect("b").height, header);
 }
 
+/// The two ordinary answers are both wrong for a keyboard key, and this pins
+/// each of them against the one `no_focus` gives.
+#[test]
+fn a_no_focus_button_neither_takes_focus_nor_drops_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 200, 40))
+        .expect("field");
+    ui.add(
+        root,
+        Button::new("q", Msg::Cancel).no_focus(),
+        Rect::new(20, 120, 60, 40),
+    )
+    .expect("key");
+    ui.focus(Some(field));
+    ui.tick(1_000);
+
+    ui.handle(&click(40, 140));
+    assert!(
+        ui.drain_messages().any(|m| m == Msg::Cancel),
+        "the key did not emit"
+    );
+    assert_eq!(
+        ui.focused(),
+        Some(field),
+        "the key moved focus off the field"
+    );
+}
+
+/// The same press with an ordinary button, so the difference is measured rather
+/// than believed: a plain button takes the focus for itself.
+#[test]
+fn an_ordinary_button_takes_the_focus_instead() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 200, 40))
+        .expect("field");
+    let key = ui
+        .add(
+            root,
+            Button::new("q", Msg::Cancel),
+            Rect::new(20, 120, 60, 40),
+        )
+        .expect("key");
+    ui.focus(Some(field));
+    ui.tick(1_000);
+
+    ui.handle(&click(40, 140));
+    assert_eq!(ui.focused(), Some(key), "a plain button should take focus");
+}
+
+/// And the other wrong answer: merely unfocusable is not enough, because
+/// pressing an unfocusable node is exactly what drops focus and commits a field.
+#[test]
+fn pressing_a_plain_unfocusable_node_still_drops_focus() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 200, 40))
+        .expect("field");
+    ui.add(root, Panel::default(), Rect::new(20, 120, 200, 60))
+        .expect("panel");
+    ui.focus(Some(field));
+    ui.tick(1_000);
+
+    ui.handle(&click(60, 150));
+    assert_eq!(
+        ui.focused(),
+        None,
+        "clicking away should still commit the field"
+    );
+}
+
+/// Tab must not walk forty keyboard keys.
+#[test]
+fn tab_skips_a_no_focus_button() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let first = ui
+        .add(
+            root,
+            Button::new("One", Msg::Save),
+            Rect::new(20, 20, 80, 40),
+        )
+        .expect("first");
+    ui.add(
+        root,
+        Button::new("q", Msg::Cancel).no_focus(),
+        Rect::new(20, 70, 80, 40),
+    )
+    .expect("key");
+    let last = ui
+        .add(
+            root,
+            Button::new("Two", Msg::Submitted),
+            Rect::new(20, 120, 80, 40),
+        )
+        .expect("last");
+    ui.tick(1_000);
+
+    ui.focus(Some(first));
+    ui.handle(&[key(KeyCode::Tab)]);
+    assert_eq!(ui.focused(), Some(last), "Tab stopped on the no_focus key");
+}
+
 /// The property a shelf exists for, and the one a drawer cannot offer: the
 /// field being typed into keeps the keyboard while the thing typing into it is
 /// on screen.
@@ -5713,11 +5820,11 @@ fn a_shelf_neither_swallows_input_nor_dismisses_itself() {
     assert!(ui.shelf_open(), "a press outside dismissed the shelf");
 }
 
-/// A key on a keyboard is pressed constantly and must never be the reason the
-/// field loses focus. The shelf does not clear focus; #49 keeps its children
-/// from taking it.
+/// The two halves together, which is what an on-screen keyboard actually
+/// stands on: a shelf that does not clear focus, holding keys that do not take
+/// it. Either half alone still blurs the field.
 #[test]
-fn pressing_a_shelf_child_reaches_it() {
+fn pressing_a_no_focus_key_on_a_shelf_leaves_the_field_focused() {
     let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
     let root = ui.root();
     let field = ui
@@ -5729,10 +5836,10 @@ fn pressing_a_shelf_child_reaches_it() {
         .expect("shelf");
     ui.tick(1_250); // landed
 
-    // A child of the shelf, in the shelf's own coordinates.
+    // A key on the shelf, in the shelf's own coordinates.
     ui.add(
         shelf,
-        Button::new("q", Msg::Cancel),
+        Button::new("q", Msg::Cancel).no_focus(),
         Rect::new(0, 0, 40, 40),
     )
     .expect("key");
@@ -5741,7 +5848,12 @@ fn pressing_a_shelf_child_reaches_it() {
     ui.handle(&click(20, SIZE.height as i32 - 100));
     assert!(
         ui.drain_messages().any(|m| m == Msg::Cancel),
-        "the press did not reach the shelf's child"
+        "the press did not reach the shelf's key"
+    );
+    assert_eq!(
+        ui.focused(),
+        Some(field),
+        "the key took the caret off the field it types into"
     );
 }
 

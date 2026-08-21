@@ -323,6 +323,25 @@ pub trait Widget<M>: AsAny {
         false
     }
 
+    /// Returns `true` if a press on this widget should leave focus exactly where
+    /// it is.
+    ///
+    /// Not the same as being unfocusable, and the difference is the whole point.
+    /// Pressing an ordinary non-focusable node — a [`Label`], a [`Panel`] — drops
+    /// focus, which is what makes a text field commit and stop blinking when the
+    /// user clicks away. A widget answering `true` here is asking for neither: it
+    /// takes no focus *and* costs none.
+    ///
+    /// An on-screen keyboard's keys are the reason this exists. A key is pressed
+    /// while a field is being typed into, and both the ordinary answers are wrong
+    /// — taking focus blurs the field, and dropping focus blurs it too.
+    ///
+    /// [`Label`]: crate::widgets::Label
+    /// [`Panel`]: crate::widgets::Panel
+    fn preserves_focus(&self) -> bool {
+        false
+    }
+
     /// Advances time-based state. Called only while this widget has asked to
     /// animate — see [`EventCtx::request_animation`] — and stops being called
     /// the moment it answers [`Wake::Never`].
