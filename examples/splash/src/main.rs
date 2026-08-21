@@ -73,15 +73,28 @@ mod app {
     /// No message type: nothing here can be pressed.
     type Msg = ();
 
+    /// Seconds since boot, for putting these messages beside `dmesg`.
+    ///
+    /// The wall clock is worse than useless this early: `swclock` has not run, so
+    /// the first frames are stamped 1 January.
+    fn uptime() -> f32 {
+        std::fs::read_to_string("/proc/uptime")
+            .ok()
+            .and_then(|s| s.split_whitespace().next()?.parse().ok())
+            .unwrap_or(0.0)
+    }
+
     pub fn run() -> ExitCode {
         let mut watch = String::from("denise");
         let mut until = 60u64;
+        let mut linger = 4u64;
         let mut font: Option<String> = None;
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--watch" => watch = args.next().unwrap_or(watch),
                 "--until" => until = args.next().and_then(|s| s.parse().ok()).unwrap_or(until),
+                "--linger" => linger = args.next().and_then(|s| s.parse().ok()).unwrap_or(linger),
                 "--font" => font = args.next(),
                 other => {
                     eprintln!("unknown argument {other}");
@@ -90,6 +103,7 @@ mod app {
             }
         }
 
+        eprintln!("splash: up at {:.1}s", uptime());
         let face = system_font::load(font.as_deref());
         let boot = Boot::survey();
         let done = PathBuf::from(STARTED).join(&watch);
@@ -114,7 +128,24 @@ mod app {
             // The panel is up: it owns the screen now, and anything painted here
             // would be either invisible or a fight.
             if done.exists() {
-                eprintln!("splash: {watch} has the screen");
+                eprintln!("splash: {watch} started at {:.1}s", uptime());
+                // Not "exit now". The service being *marked* started is the
+                // moment its supervisor was launched, not the moment its first
+                // frame reaches the display — the panel still has to start, open
+                // DRM, find a font and lay a tree out. Leaving before then hands
+                // the viewer a black screen for exactly that long.
+                //
+                // Staying is free: once the panel has DRM master these writes go
+                // into the fbdev emulation's own buffer and never reach scanout.
+                let stop = Instant::now() + Duration::from_secs(linger);
+                while Instant::now() < stop {
+                    if let Some(screen) = screen.as_mut() {
+                        screen.update(&boot);
+                        let _ = screen.present();
+                    }
+                    std::thread::sleep(TICK);
+                }
+                eprintln!("splash: done at {:.1}s", uptime());
                 return ExitCode::SUCCESS;
             }
             if Instant::now() >= deadline {
