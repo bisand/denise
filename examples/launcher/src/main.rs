@@ -76,11 +76,23 @@ mod app {
 
     /// Executables beside us that are not demos, or are not worth a button.
     ///
-    /// `denise-demo` is the shell runner that may well have started this one, and
-    /// the two probes print a line and exit — a button that blanks the screen for
-    /// a tenth of a second is worse than no button.
+    /// The prefix this scans for is shared with the machinery that *runs* the
+    /// demos, because it is one product installed into one directory. So the
+    /// list is not incidental tidying: `denise-run` is the supervisor that
+    /// started this process and would recurse, `denise-console` is a getty
+    /// wrapper expecting a tty argument, and `denise-splash` would put the boot
+    /// screen up and never take it down. Each of those is a button that looks
+    /// like a demo and is a trap.
+    ///
+    /// The rest are merely not worth a button: `denise-demo` is the shell runner
+    /// that may well have started this one, and the probes print a line and exit
+    /// — a button that blanks the screen for a tenth of a second is worse than no
+    /// button at all.
     const NOT_DEMOS: &[&str] = &[
         "denise-launcher",
+        "denise-run",
+        "denise-console",
+        "denise-splash",
         "denise-demo",
         "denise-video-probe",
         "denise-video-rawprobe",
@@ -847,6 +859,20 @@ mod app {
         fn the_blocklist_names_files_that_exist() {
             for name in NOT_DEMOS {
                 assert!(name.starts_with("denise-"), "{name} would never be scanned");
+            }
+        }
+
+        /// The machinery that runs the demos is installed beside them and shares
+        /// their prefix, so every piece of it has to be named here. Getting this
+        /// wrong puts a button on the panel that starts the supervisor, or the
+        /// boot splash, and there is no way back from either.
+        #[test]
+        fn the_things_that_run_demos_are_not_demos() {
+            for helper in ["denise-run", "denise-console", "denise-splash"] {
+                assert!(
+                    NOT_DEMOS.contains(&helper),
+                    "{helper} would appear as a demo"
+                );
             }
         }
     }
