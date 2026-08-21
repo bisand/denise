@@ -72,7 +72,7 @@ jobs:
       # wrote — `png`, `zune-jpeg` and `gif` behind `denise-image`, `fontdue`
       # behind `denise-text` — and all four are on by default. An advisory
       # against any of them used to ship in the next release with nothing
-      # watching, fourteen crates at a time.
+      # watching, fifteen crates at a time.
       #
       # The policy is in `deny.toml`, next to the reasoning for each line.
       - uses: EmbarkStudios/cargo-deny-action@v2

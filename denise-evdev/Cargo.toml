@@ -20,6 +20,7 @@ all-features = true
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
+denise-layout = { workspace = true }
 thiserror = { workspace = true, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

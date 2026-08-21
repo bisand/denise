@@ -276,10 +276,11 @@ framebuffer.
 | [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout, word wrapping | `no_std + alloc` |
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
 | [`denise-image`](https://crates.io/crates/denise-image) | PNG/JPEG/GIF/BMP decoding into premultiplied pixels | `std` |
+| [`denise-layout`](https://crates.io/crates/denise-layout) | Keyboard layouts, dead keys, the system's configured layout | `std` |
 | [`denise-video`](https://crates.io/crates/denise-video) | V4L2 hardware decode onto a DRM plane, zero-copy | Linux |
 | [`denise-drm`](https://crates.io/crates/denise-drm) | Linux DRM/KMS — the primary target | Linux |
 | [`denise-fbdev`](https://crates.io/crates/denise-fbdev) | Linux fbdev fallback | Linux |
-| [`denise-evdev`](https://crates.io/crates/denise-evdev) | Input, keyboard layouts, dead keys, console muting | Linux |
+| [`denise-evdev`](https://crates.io/crates/denise-evdev) | Input devices, console muting | Linux |
 | [`denise-winit`](https://crates.io/crates/denise-winit) | Desktop development and preview | any |
 | [`denise-macos`](https://crates.io/crates/denise-macos) | Embeddable `NSView` | macOS |
 | [`denise-win32`](https://crates.io/crates/denise-win32) | Child-`HWND` control | Windows |
@@ -411,7 +412,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/design.md](docs/design.md) | How it is built and why — architecture, rasteriser, text, keyboards, theming, and the milestone history |
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
-| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all fourteen share one number, and what each guard is for |
+| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all fifteen share one number, and what each guard is for |
 
 ## Constraints
 
