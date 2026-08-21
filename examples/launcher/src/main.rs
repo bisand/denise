@@ -53,9 +53,14 @@ mod app {
     };
     use denise_text::{GlyphSource, TrueTypeSource};
     use denise_ui::widgets::{Align, Button, Label, Panel};
-    use denise_ui::{TextStyle, Ui};
+    use denise_ui::{NodeId, TextStyle, Ui};
 
     const SHOT_PATH: &str = "/tmp/denise-launcher.ppm";
+
+    /// Card padding, button height and the gap between buttons, in pixels.
+    const PAD: i32 = 28;
+    const ROW: i32 = 52;
+    const GAP: i32 = 10;
 
     /// Executables beside us that are not demos, or are not worth a button.
     ///
@@ -106,6 +111,63 @@ mod app {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Msg {
         Launch(usize),
+        /// Swap the menu for the "are you sure" screen.
+        AskExit,
+        /// Yes: give the console back and stop.
+        ConfirmExit,
+        /// No: back to the menu.
+        Cancel,
+    }
+
+    /// How a screen ended.
+    enum Choice {
+        Launch(usize),
+        /// Escape. Under a supervisor this means "restart me", which is a way of
+        /// starting over rather than a way out.
+        Quit,
+        /// Give the screen back and stay gone. See [`EXIT_TO_CONSOLE`].
+        Console,
+    }
+
+    /// The exit status that means "the operator asked for the console".
+    ///
+    /// Whatever starts this has to agree: a supervisor that restarts on any exit
+    /// would put the panel straight back up, and the request would look like a
+    /// flicker. Nothing in this crate can enforce that, which is why it is a
+    /// documented number rather than a clever mechanism.
+    const EXIT_TO_CONSOLE: u8 = 3;
+
+    /// What to tell the operator about getting the panel back.
+    ///
+    /// Read from a file rather than taken as text, for two reasons. The words
+    /// belong to whoever installed this — only they know whether it is
+    /// `rc-service`, `systemctl` or a power cycle — and `/etc/conf.d` cannot pass
+    /// a sentence as one argument anyway.
+    struct Hint(Vec<String>);
+
+    impl Hint {
+        fn read(path: Option<&str>) -> Self {
+            let Some(path) = path else {
+                return Self(Vec::new());
+            };
+            match std::fs::read_to_string(path) {
+                Ok(text) => Self(text.lines().map(str::to_string).collect()),
+                Err(e) => {
+                    eprintln!("{path}: {e}");
+                    Self(Vec::new())
+                }
+            }
+        }
+
+        /// The lines to show, never empty — a confirmation that cannot say how to
+        /// undo itself is worse than no confirmation.
+        fn lines(&self) -> Vec<&str> {
+            if self.0.is_empty() {
+                vec!["Nobody left instructions for starting it again."]
+            } else {
+                self.0.iter().map(String::as_str).collect()
+            }
+        }
     }
 
     /// The face, kept as bytes rather than as a parsed source.
@@ -148,12 +210,14 @@ mod app {
     pub fn run() -> ExitCode {
         let mut font: Option<String> = None;
         let mut start: Option<String> = None;
+        let mut hint: Option<String> = None;
         let mut listed: Vec<Demo> = Vec::new();
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--font" => font = args.next(),
                 "--start" => start = args.next(),
+                "--exit-hint" => hint = args.next(),
                 // An argument with an `=` starts an entry; bare ones after it are
                 // that entry's arguments. Quoting the whole thing works too, but
                 // this is the form that survives `/etc/conf.d`, where the value is
@@ -211,10 +275,18 @@ mod app {
             },
             None => Status::good(format!("{} demos found", demos.len())),
         };
+        let hint = Hint::read(hint.as_deref());
         loop {
-            match show(&demos, face.as_ref(), &status) {
-                Ok(None) => return ExitCode::SUCCESS,
-                Ok(Some(chosen)) => status = launch(&demos[chosen]),
+            match show(&demos, face.as_ref(), &status, &hint) {
+                Ok(Choice::Quit) => return ExitCode::SUCCESS,
+                Ok(Choice::Launch(chosen)) => status = launch(&demos[chosen]),
+                // The console guard is dropped by returning, which is what puts
+                // the terminal back into text mode — the operator is looking at a
+                // console again before this process is finished exiting.
+                Ok(Choice::Console) => {
+                    eprintln!("launcher: the operator asked for the console");
+                    return ExitCode::from(EXIT_TO_CONSOLE);
+                }
                 Err(e) => {
                     eprintln!("launcher: {e}");
                     return ExitCode::FAILURE;
@@ -351,12 +423,13 @@ mod app {
         demos: &[Demo],
         face: Option<&Face>,
         status: &Status,
-    ) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+        hint: &Hint,
+    ) -> Result<Choice, Box<dyn std::error::Error>> {
         let mut surface = open_display()?;
         let size = surface.size();
         let (mut input, _keymap) = open_input(size)?;
 
-        let mut menu = Menu::new(size, demos, face, status);
+        let mut menu = Menu::list(size, demos, face, status);
         eprintln!("Tab moves, Enter starts, Escape quits");
 
         // Refreshed by `wait` whenever a device is opened or closed, which is
@@ -386,7 +459,7 @@ mod app {
                 } = event
                 {
                     match code {
-                        KeyCode::Escape => return Ok(None),
+                        KeyCode::Escape => return Ok(Choice::Quit),
                         KeyCode::F12 => shoot = true,
                         _ => {}
                     }
@@ -395,8 +468,17 @@ mod app {
 
             menu.ui.handle(&events);
             menu.ui.tick(now);
-            if let Some(Msg::Launch(chosen)) = menu.ui.drain_messages().next() {
-                return Ok(Some(chosen));
+            // The two screens swap in place rather than through another trip
+            // round `show`: reopening the display to ask one question would blank
+            // the panel and set a mode again, for a screen the operator is meant
+            // to be able to back out of.
+            let message = menu.ui.drain_messages().next();
+            match message {
+                Some(Msg::Launch(chosen)) => return Ok(Choice::Launch(chosen)),
+                Some(Msg::ConfirmExit) => return Ok(Choice::Console),
+                Some(Msg::AskExit) => menu = Menu::confirm(size, face, hint),
+                Some(Msg::Cancel) => menu = Menu::list(size, demos, face, status),
+                None => {}
             }
 
             if menu.ui.needs_paint() || shoot {
@@ -452,53 +534,54 @@ mod app {
         Ok(())
     }
 
+    /// The three sizes a screen draws in, registered in its own tree.
+    struct Styles {
+        body: TextStyle,
+        heading: TextStyle,
+        small: TextStyle,
+    }
+
     impl Menu {
-        /// One card, one button per demo, a status line under them.
+        /// A tree with the fonts registered and one centred card of the height
+        /// asked for, ready to have rows put into it.
         ///
-        /// Laid out by arithmetic in pixels, as `panel` is and for the same
-        /// reason: there is no layout engine, and a display whose size is known
-        /// before the first node exists does not need one.
-        fn new(size: Size, demos: &[Demo], face: Option<&Face>, status: &Status) -> Self {
+        /// Both screens want exactly this and differ only in what goes inside, so
+        /// the card being centred by arithmetic — there is no layout engine, and a
+        /// display whose size is known before the first node exists does not need
+        /// one — is written once here rather than twice below.
+        fn card(size: Size, face: Option<&Face>, card_h: i32) -> (Ui<Msg>, NodeId, Styles, i32) {
             let mut ui: Ui<Msg> = Ui::new(size, Theme::BUILT_IN[1]);
 
             // Registered before the first node, so every widget is built with its
             // final style and nothing needs restyling afterwards.
-            let (body, heading, small) = match face.and_then(Face::source) {
+            let styles = match face.and_then(Face::source) {
                 Some(source) => {
                     let id = ui.add_font(source);
-                    (
-                        TextStyle {
+                    Styles {
+                        body: TextStyle {
                             font: id,
                             size_px: 16,
                         },
-                        TextStyle {
+                        heading: TextStyle {
                             font: id,
                             size_px: 24,
                         },
-                        TextStyle {
+                        small: TextStyle {
                             font: id,
                             size_px: 13,
                         },
-                    )
+                    }
                 }
-                None => (
-                    TextStyle::built_in(16),
-                    TextStyle::built_in(24),
-                    TextStyle::built_in(8),
-                ),
+                None => Styles {
+                    body: TextStyle::built_in(16),
+                    heading: TextStyle::built_in(24),
+                    small: TextStyle::built_in(8),
+                },
             };
 
             let root = ui.root();
-            let pad = 28;
-            let row = 52;
-            let gap = 10;
-
-            // The card is as tall as its contents, then centred — the other way
-            // round from `panel`, because here the contents are a list whose
-            // length is not known when the file is written.
             let card_w = (size.width as i32 * 2 / 5).clamp(360, 620);
-            let list_h = demos.len() as i32 * row + (demos.len() as i32 - 1).max(0) * gap;
-            let card_h = (pad + 34 + 18 + list_h + 22 + 26 + pad).min(size.height as i32 - 2 * pad);
+            let card_h = card_h.min(size.height as i32 - 2 * PAD);
             let card = ui
                 .add(
                     root,
@@ -511,14 +594,27 @@ mod app {
                     ),
                 )
                 .expect("card");
+            (ui, card, styles, card_w - PAD * 2)
+        }
 
-            let inner = card_w - pad * 2;
-            let mut y = pad;
+        /// One button per demo, a status line, and the way out.
+        fn list(size: Size, demos: &[Demo], face: Option<&Face>, status: &Status) -> Self {
+            let list_h = demos.len() as i32 * ROW + (demos.len() as i32 - 1).max(0) * GAP;
+            // Title, list, the exit row, the status line, and the padding around
+            // all of it. The card is as tall as its contents — the other way round
+            // from `panel`, because here the contents are a list whose length is
+            // not known when the file is written.
+            let (mut ui, card, styles, inner) = Self::card(
+                size,
+                face,
+                PAD + 34 + 18 + list_h + 24 + ROW + 14 + 22 + PAD,
+            );
 
+            let mut y = PAD;
             ui.add(
                 card,
-                Label::new("Denise demos").with_style(heading),
-                Rect::new(pad, y, inner, 30),
+                Label::new("Denise demos").with_style(styles.heading),
+                Rect::new(PAD, y, inner, 30),
             )
             .expect("title");
             y += 34 + 18;
@@ -526,23 +622,107 @@ mod app {
             for (index, demo) in demos.iter().enumerate() {
                 ui.add(
                     card,
-                    Button::new(demo.label.clone(), Msg::Launch(index)).with_style(body),
-                    Rect::new(pad, y, inner, row),
+                    Button::new(demo.label.clone(), Msg::Launch(index)).with_style(styles.body),
+                    Rect::new(PAD, y, inner, ROW),
                 )
                 .expect("demo button");
-                y += row + gap;
+                y += ROW + GAP;
             }
-            y += 12;
+
+            // Set apart from the demos and in the warning role, because it is the
+            // one button here that does not come back on its own.
+            y += 14;
+            ui.add(
+                card,
+                Button::new("Exit to console", Msg::AskExit)
+                    .with_style(styles.body)
+                    .with_role(Role::Warning),
+                Rect::new(PAD, y, inner, ROW),
+            )
+            .expect("exit button");
+            y += ROW + 14;
 
             ui.add(
                 card,
                 Label::new(status.text.clone())
-                    .with_style(small)
+                    .with_style(styles.small)
                     .with_role(status.role)
                     .with_align(Align::Center, Align::Center),
-                Rect::new(pad, y, inner, 22),
+                Rect::new(PAD, y, inner, 22),
             )
             .expect("status");
+
+            Self {
+                ui,
+                started: Instant::now(),
+            }
+        }
+
+        /// The screen that says what is about to happen and how to undo it.
+        ///
+        /// This exists because the button it guards is the only one on the panel
+        /// that a person cannot get back from by pressing something else. Telling
+        /// them how to return *before* they commit is the whole point; a message
+        /// printed on the way out would be advice given to somebody who has
+        /// already stopped looking at this screen.
+        fn confirm(size: Size, face: Option<&Face>, hint: &Hint) -> Self {
+            let lines = hint.lines();
+            let hint_h = lines.len() as i32 * 22;
+            let (mut ui, card, styles, inner) = Self::card(
+                size,
+                face,
+                PAD + 34 + 18 + 24 + 14 + hint_h + 24 + ROW + PAD,
+            );
+
+            let mut y = PAD;
+            ui.add(
+                card,
+                Label::new("Exit to console").with_style(styles.heading),
+                Rect::new(PAD, y, inner, 30),
+            )
+            .expect("title");
+            y += 34 + 18;
+
+            ui.add(
+                card,
+                Label::new("The panel stops and the screen goes back to text.")
+                    .with_style(styles.small)
+                    .with_role(Role::Neutral),
+                Rect::new(PAD, y, inner, 22),
+            )
+            .expect("explanation");
+            y += 24 + 14;
+
+            for line in lines {
+                ui.add(
+                    card,
+                    Label::new(line.to_string())
+                        .with_style(styles.small)
+                        .with_role(Role::Info),
+                    Rect::new(PAD, y, inner, 22),
+                )
+                .expect("hint line");
+                y += 22;
+            }
+            y += 24;
+
+            // Cancel first and wider: Tab starts on it, so the safe answer is the
+            // one a person gets by pressing Enter without reading carefully.
+            let cancel_w = inner * 3 / 5 - GAP;
+            ui.add(
+                card,
+                Button::new("Cancel", Msg::Cancel).with_style(styles.body),
+                Rect::new(PAD, y, cancel_w, ROW),
+            )
+            .expect("cancel");
+            ui.add(
+                card,
+                Button::new("Exit", Msg::ConfirmExit)
+                    .with_style(styles.body)
+                    .with_role(Role::Error),
+                Rect::new(PAD + cancel_w + GAP, y, inner - cancel_w - GAP, ROW),
+            )
+            .expect("confirm");
 
             Self {
                 ui,
