@@ -13,6 +13,8 @@
 
 use std::time::Instant;
 
+use crate::clock;
+
 use denise::theme::{AA, ColorScheme, Metrics, Radius, contrast_x100};
 use denise::{Color, Rect, Role, Size, Theme};
 use denise_render::Canvas;
@@ -21,7 +23,10 @@ use denise_ui::widgets::{
     Fit, Image, Label, List, ListItem, Presence, Progress, RadialProgress, RadioGroup, Rating,
     Select, Slider, Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, open_select,
 };
-use denise_ui::{Event, EventCtx, Handled, Motion, NodeId, PaintCtx, Side, TextStyle, Ui, Widget};
+use denise_ui::{
+    Animation, Event, EventCtx, Handled, Motion, NodeId, PaintCtx, Side, TextStyle, Ui, Wake,
+    Widget,
+};
 
 const HEADER_H: i32 = 52;
 const SIDEBAR_W: i32 = 300;
@@ -137,6 +142,60 @@ impl Widget<Message> for Swatch {
 }
 
 /// The nodes that get written to after startup.
+/// The date and time, ticking.
+///
+/// A widget rather than a label the application pokes, because only a widget can
+/// name its own deadline. [`Wake::At`] the next second boundary is not touched by
+/// [`Motion`], so this keeps time even when the tree is told not to animate — and
+/// it costs one wake a second rather than one a frame.
+struct Clock {
+    /// The drawing is a label's; only the knowing-when is this widget's.
+    face: Label,
+}
+
+impl Clock {
+    fn new(style: TextStyle) -> Self {
+        Self {
+            face: Label::new("")
+                .with_style(style)
+                .with_role(Role::Base300)
+                .with_align(Align::Center, Align::Center),
+        }
+    }
+
+    /// Reads the clock and asks to be woken when the second turns.
+    fn tick(&mut self, now_ms: u64) -> Animation {
+        let Some(now) = clock::now() else {
+            return Animation::NONE;
+        };
+        Animation {
+            repaint: self.face.update(&now.text),
+            // The remainder of *this* second, not a flat thousand: waking on the
+            // boundary keeps the displayed second honest, where a fixed interval
+            // would drift until the label lagged the world by most of a second.
+            next: Wake::At(now_ms.saturating_add(1000 - u64::from(now.sub_ms))),
+        }
+    }
+}
+
+impl Widget<Message> for Clock {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+        Widget::<Message>::paint(&self.face, ctx, canvas);
+    }
+
+    fn animate(&mut self, now_ms: u64) -> Animation {
+        self.tick(now_ms)
+    }
+
+    /// Under `Motion::None` a widget is asked to land and stop. A clock cannot:
+    /// its next deadline is a fact about the world rather than about animation,
+    /// and reduced motion is a request not to move things, not a request to stop
+    /// telling the time.
+    fn snap(&mut self, now_ms: u64) -> Animation {
+        self.tick(now_ms)
+    }
+}
+
 struct Nodes {
     theme_name: NodeId,
     contrast: NodeId,
@@ -309,6 +368,18 @@ impl App {
                 .with_role(Role::Base300),
             Rect::new(120, 20, 400, 16),
         );
+        // Centred, between the subtitle and the theme name, because a clock in a
+        // top bar is furniture: it should be findable without being the first
+        // thing the eye lands on.
+        let clock = self.add(
+            root,
+            Clock::new(self.body),
+            Rect::new(w / 2 - 90, 14, 180, 24),
+        );
+        // Nothing else will ask on its behalf: a widget joins the animating set
+        // by requesting it, and this one has no event to request it from.
+        self.ui.request_animation(clock);
+
         self.nodes.theme_name = self.add(
             root,
             Label::new("")
@@ -1438,11 +1509,12 @@ mod tests {
         assert_eq!(app.accordion.open(), Some(0));
         app.on_message(Message::Fold(1));
         assert_eq!(app.accordion.open(), Some(1));
-        // Land every tween; the clock only ever moves forward. The spinner
-        // is put to bed first so the count can reach zero.
+        // Land every tween; time only ever moves forward. The spinner is put to
+        // bed first, which leaves the wall clock — that one has no toggle and is
+        // not supposed to have one.
         app.on_message(Message::Spin(false));
         app.ui.tick(10_000);
-        assert_eq!(app.ui.animating(), 0, "nothing left mid-fold");
+        assert_eq!(app.ui.animating(), 1, "only the clock left mid-fold");
     }
 
     /// Flicker is a *property*, and this is it: **the buffer just presented
@@ -1894,15 +1966,31 @@ mod tests {
         }
     }
 
-    /// A tree at rest holds nobody awake — except the spinner, which is the
-    /// one legitimate insomniac, and its toggle puts it to bed.
+    /// A tree at rest holds two things awake, and they cost very different
+    /// amounts.
+    ///
+    /// The spinner is the frame-rate one, and its toggle puts it to bed. The
+    /// wall clock cannot be put to bed — a clock that stops is not a clock — but
+    /// it names its own deadline instead of asking for the animation rate, so
+    /// what it actually costs is one wake a second rather than sixty. That
+    /// difference is the whole reason `Wake::At` exists, and asserting the count
+    /// without asserting the interval would miss it entirely.
     #[test]
-    fn only_the_spinner_keeps_the_tree_awake() {
+    fn only_the_spinner_and_the_clock_keep_the_tree_awake() {
         let mut app = app();
         app.ui.tick(10_000);
-        assert_eq!(app.ui.animating(), 1, "the spinner");
+        assert_eq!(app.ui.animating(), 2, "the spinner and the clock");
+
         app.on_message(Message::Spin(false));
         app.ui.tick(10_001);
-        assert_eq!(app.ui.animating(), 0, "asleep on request");
+        assert_eq!(app.ui.animating(), 1, "the spinner sleeps on request");
+
+        // The clock alone now sets the deadline, and it is the turn of the
+        // second — never the frame interval.
+        let wake = app.ui.next_wake_ms().expect("the clock is still due");
+        assert!(
+            (10_002..=11_001).contains(&wake),
+            "the clock woke for a frame, not a second: {wake}"
+        );
     }
 }

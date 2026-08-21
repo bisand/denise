@@ -42,6 +42,7 @@
 //! the argument in full.
 
 mod app;
+mod clock;
 
 use app::{App, Message};
 use denise::Size;
