@@ -5,6 +5,57 @@ Linux** (kernel 6.18, aarch64), driving an HDMI display with no desktop
 environment. The numbers are measured, not estimated, and the mistakes described
 are ones that were actually made.
 
+## Installing the demo panel
+
+Everything below this line is the reasoning. If you just want the panel on a Pi
+running Alpine, there is a script:
+
+```bash
+scripts/deploy-pi.sh rpi3b
+```
+
+It cross-builds every demo for `aarch64-unknown-linux-musl`, copies them over
+with the files in `dist/`, and runs `dist/install.sh` on the far end. The Pi
+needs no toolchain — musl links statically with the linker rustc already ships,
+which is the whole reason a 900 MHz board never has to compile anything.
+
+The installer is safe to run twice, and it does four things beyond copying
+binaries:
+
+- **A splash and a panel service.** `denise-splash` in `sysinit`, `denise` in
+  `default`. Which demo runs at boot is `demo=` in `/etc/conf.d/denise`; the
+  default is the launcher, which offers the rest as a menu.
+- **The boot configuration.** The `vc4-kms-v3d` overlay, `gpu_mem=128`,
+  `disable_splash`, `disable_overscan`, `bcm2835-codec` in `/etc/modules`, and
+  `console=tty8` so kernel and OpenRC chatter goes to a VT nobody is looking at.
+  `/boot/cmdline.txt` is backed up first and rejected if the edit would produce
+  more than one line — a two-line `cmdline.txt` is a Pi that boots without half
+  its parameters, and the recovery is a card reader.
+- **tty1 freed for the panel**, so no login prompt prints over it.
+- **tty2-6 through `denise-console`**, a getty wrapper that brings the panel back
+  when the session ends.
+
+That last one is what makes the launcher's *Exit to console* button a visit
+rather than a one-way door: log out and the panel returns by itself. It wraps
+getty rather than using a logout script because `~/.bash_logout` only fires for
+bash and `~/.zlogout` only for zsh, and neither fires at all if the shell is
+killed rather than exited. init is the thing doing the waiting, so init is the
+right place to notice.
+
+Skip the boot half with `--no-boot-config`, or pick the boot demo with
+`--demo gallery`.
+
+### Uninstalling, or getting back to a plain console
+
+`/boot/cmdline.txt.before-denise` and `/etc/inittab.before-denise` are the
+originals. Putting both back and `rc-update del denise default` leaves a normal
+Alpine machine.
+
+Worth knowing before you need it: while the panel is running there is **no local
+console at all**. It mutes the console keyboard with `K_OFF`, and that mode
+discards keystrokes before the kernel looks for Alt+F-key combos, so VT switching
+is dead too. The way out is the *Exit to console* button, or ssh.
+
 ## The symptom: no `/dev/dri`
 
 A fresh Pi very often has no DRM device at all:

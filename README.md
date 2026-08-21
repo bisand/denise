@@ -307,6 +307,10 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 | [`launcher`](examples/launcher) | A menu of the other demos. Shows how one bare-Linux application hands the display to another and takes it back. |
 | [`splash`](examples/splash) | A boot splash: fbdev only, a real progress bar counted from the init system, and it survives the framebuffer being replaced underneath it. |
 
+On a Raspberry Pi running Alpine, `scripts/deploy-pi.sh <host>` cross-builds all
+of these, installs them, and sets the board up to boot into the launcher — see
+[docs/raspberry-pi.md](docs/raspberry-pi.md#installing-the-demo-panel).
+
 Several examples take `--snapshot out.ppm`, which draws one frame and exits. No
 display needed — useful over SSH, for reviewing a layout, and for diffing a theme
 change before and after. `panel` also writes its live scanout buffer on **F12**,
