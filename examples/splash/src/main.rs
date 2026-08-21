@@ -4,6 +4,7 @@
 //! /usr/local/bin/denise-splash                  # until the `denise` service is up
 //! /usr/local/bin/denise-splash --watch kiosk --until 90
 //! /usr/local/bin/denise-splash --title "Denise Raspberry Pi Demo" --say service
+//! /usr/local/bin/denise-splash --after /dev/dri/card0     # wait for KMS first
 //! ```
 //!
 //! `--say service` names whatever OpenRC started last, which is the line you want
@@ -56,6 +57,7 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(target_os = "linux")]
 mod app {
+    use std::io::Read;
     use std::path::{Path, PathBuf};
     use std::process::ExitCode;
     use std::time::{Duration, Instant};
@@ -97,8 +99,27 @@ mod app {
     /// this screen is in no position to tell.
     ///
     /// Half of these are things that actually went wrong bringing this board up.
-    const QUIPS: &[&str] = &[
-        "Asking the firmware for a framebuffer",
+    /// The first line and the last line, either side of a few from [`MIDDLE`].
+    ///
+    /// Fixed on purpose. The opener is what a cold screen says first and the
+    /// closer has to arrive with the last of the bar — shuffling those away would
+    /// trade the one thing this sequence does well for variety nobody asked the
+    /// splash to have.
+    const OPENER: &str = "Asking the firmware for a framebuffer";
+    const CLOSER: &str = "Almost certainly nearly ready";
+
+    /// How many of [`MIDDLE`] appear in one boot.
+    ///
+    /// Eight, plus the two fixed ones, over roughly twelve seconds: about a
+    /// second and a bit each, which is long enough to read and short enough that
+    /// the line is clearly keeping up with the bar.
+    const MIDDLE_SHOWN: usize = 8;
+
+    /// Drawn from at random each boot, so the panel does not recite the same
+    /// twelve lines to the same person every morning.
+    ///
+    /// Half of these are things that actually went wrong bringing this board up.
+    const MIDDLE: &[&str] = &[
         "Counting bitplanes",
         "Negotiating with HDMI",
         "Convincing the GPU it has a monitor",
@@ -109,8 +130,45 @@ mod app {
         "Persuading 900 MHz of ARM to hurry",
         "Looking for a font that is not eight by eight",
         "Politely evicting the console",
-        "Almost certainly nearly ready",
+        "Reticulating scanlines",
+        "Checking whether the cable is in",
+        "Explaining overscan to a television",
+        "Deciding which framebuffer is in charge",
+        "Waiting for something called a vblank",
+        "Dividing by the refresh rate",
     ];
+
+    /// This boot's lines: the opener, a shuffled few, the closer.
+    fn quips() -> Vec<&'static str> {
+        let mut middle: Vec<&'static str> = MIDDLE.to_vec();
+        // Fisher-Yates with eight bytes of urandom behind an xorshift. A boot
+        // splash does not need a crate for this, and at the point it runs there
+        // is not much else to ask: the clock has not been set, so seeding from
+        // the time would give the same order every morning.
+        // Eight bytes, by `read_exact`. Not `fs::read`, which reads to end of
+        // file: /dev/urandom has no end, so that allocates until the kernel
+        // intervenes, and the splash dies before it draws anything.
+        let mut seed = [0u8; 8];
+        let mut state = std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut seed))
+            .ok()
+            .map(|()| u64::from_le_bytes(seed))
+            .filter(|seed| *seed != 0)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15);
+        for i in (1..middle.len()).rev() {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            middle.swap(i, (state % (i as u64 + 1)) as usize);
+        }
+        middle.truncate(MIDDLE_SHOWN);
+
+        let mut lines = Vec::with_capacity(MIDDLE_SHOWN + 2);
+        lines.push(OPENER);
+        lines.extend(middle);
+        lines.push(CLOSER);
+        lines
+    }
 
     /// Seconds since boot, for putting these messages beside `dmesg`.
     ///
@@ -128,6 +186,8 @@ mod app {
         let mut until = 60u64;
         let mut linger = 4u64;
         let mut say = Say::Quips;
+        let mut clock = false;
+        let mut after: Option<String> = None;
         let mut title = String::from("Denise");
         let mut font: Option<String> = None;
         let mut args = std::env::args().skip(1);
@@ -137,6 +197,8 @@ mod app {
                 "--until" => until = args.next().and_then(|s| s.parse().ok()).unwrap_or(until),
                 "--linger" => linger = args.next().and_then(|s| s.parse().ok()).unwrap_or(linger),
                 "--title" => title = args.next().unwrap_or(title),
+                "--clock" => clock = true,
+                "--after" => after = args.next(),
                 "--say" => {
                     say = match args.next().as_deref() {
                         Some("service") => Say::Service,
@@ -161,12 +223,66 @@ mod app {
         let done = PathBuf::from(STARTED).join(&watch);
         let deadline = Instant::now() + Duration::from_secs(until);
 
+        // Nothing is drawn until this exists. On a Pi the firmware puts up a
+        // framebuffer within two seconds and vc4 replaces it around seven, and
+        // the replacement reprograms the HDMI pipeline — the sink drops its lock
+        // and takes a second or two to find it again. Painting before that means
+        // a glimpse of splash, a blank, and then the splash again, which reads as
+        // a fault. Waiting means it appears once and stays.
+        //
+        // A machine with no KMS coming never sees the path appear, so this gives
+        // up and paints on whatever there is.
+        if let Some(path) = after.as_deref() {
+            let path = Path::new(path);
+            let give_up = Instant::now() + Duration::from_secs(until);
+            while !path.exists() && Instant::now() < give_up {
+                std::thread::sleep(TICK);
+            }
+            eprintln!(
+                "splash: waited for {} until {:.1}s ({})",
+                path.display(),
+                uptime(),
+                if path.exists() { "there" } else { "gave up" }
+            );
+        }
+
+        let lines = quips();
         let mut screen: Option<Screen> = None;
+        let mut complained = false;
         loop {
             // Rebuilt rather than resized: a framebuffer being replaced is a new
             // device with a new format, not the same one with different bounds.
             if screen.as_ref().is_none_or(|s| s.stale()) {
-                screen = Screen::open(face.as_ref().map(|(name, _)| name.as_str()), &title);
+                if let Some(old) = screen.as_ref() {
+                    eprintln!(
+                        "splash: framebuffer changed from {}x{} at {}bpp, at {:.1}s",
+                        old.geometry.0.width,
+                        old.geometry.0.height,
+                        old.geometry.1,
+                        uptime()
+                    );
+                }
+                screen = Screen::open(
+                    face.as_ref().map(|(name, _)| name.as_str()),
+                    &title,
+                    lines.clone(),
+                    clock,
+                );
+                match screen.as_ref() {
+                    Some(new) => eprintln!(
+                        "splash: drawing on {}x{} at {}bpp, at {:.1}s",
+                        new.geometry.0.width,
+                        new.geometry.0.height,
+                        new.geometry.1,
+                        uptime()
+                    ),
+                    None => {
+                        if !complained {
+                            eprintln!("splash: no framebuffer to open, at {:.1}s", uptime());
+                            complained = true;
+                        }
+                    }
+                }
             }
 
             if let Some(screen) = screen.as_mut() {
@@ -261,6 +377,13 @@ mod app {
 
     /// One framebuffer, and the tree measured for it.
     struct Screen {
+        /// Seconds since boot, drawn in the corner. Off by default; on when
+        /// somebody is pointing a camera at the screen, because a frame that says
+        /// what time it is turns a film into a measurement.
+        clock: Option<NodeId>,
+        /// This boot's lines. Chosen once and carried across a framebuffer
+        /// change, so the sequence does not restart when vc4 takes over.
+        quips: Vec<&'static str>,
         surface: FbdevSurface,
         ui: Ui<Msg>,
         started: Instant,
@@ -271,7 +394,12 @@ mod app {
     }
 
     impl Screen {
-        fn open(font: Option<&str>, title: &str) -> Option<Self> {
+        fn open(
+            font: Option<&str>,
+            title: &str,
+            quips: Vec<&'static str>,
+            clock: bool,
+        ) -> Option<Self> {
             let surface = FbdevSurface::open_first().ok()?;
             let size = surface.size();
             let geometry = (size, surface.info().bits_per_pixel);
@@ -366,7 +494,21 @@ mod app {
                 None
             };
 
+            let clock_node = clock.then(|| {
+                ui.add(
+                    root,
+                    Label::new("0.0 s")
+                        .with_style(body)
+                        .with_role(Role::Warning)
+                        .with_align(Align::Center, Align::Center),
+                    Rect::new(w - 220, h - 60, 180, 26),
+                )
+                .expect("clock")
+            });
+
             Some(Self {
+                clock: clock_node,
+                quips,
                 surface,
                 ui,
                 started: Instant::now(),
@@ -397,12 +539,18 @@ mod app {
                 // the fill. Without a fraction there is nothing to index by, and
                 // the first line is as good as any.
                 Say::Quips => {
-                    let at = fraction.unwrap_or(0.0) * QUIPS.len() as f32;
-                    QUIPS[(at as usize).min(QUIPS.len() - 1)].to_string()
+                    let at = fraction.unwrap_or(0.0) * self.quips.len() as f32;
+                    self.quips[(at as usize).min(self.quips.len() - 1)].to_string()
                 }
             };
             if let Some(label) = self.ui.widget_mut::<Label>(self.status) {
                 label.update(&text);
+            }
+            if let Some(node) = self.clock {
+                let now = format!("{:.1} s", uptime());
+                if let Some(label) = self.ui.widget_mut::<Label>(node) {
+                    label.update(&now);
+                }
             }
             if let (Some(bar), Some(fraction)) = (self.bar, fraction)
                 && let Some(widget) = self.ui.widget_mut::<Progress>(bar)
