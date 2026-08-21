@@ -396,3 +396,26 @@ jobs:
       # the export list differs from the ELF one enough to be worth proving.
       - run: cargo build -p denise-ffi --release
       - run: cargo test -p denise-ffi
+
+  macos:
+    name: the Cocoa view builds and its tests run
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # The counterpart to the Windows job, and the same argument. `denise-macos`
+      # is `#![cfg(target_os = "macos")]` from its first line, so on every other
+      # runner it compiles to nothing at all — until this job existed the crate
+      # went to crates.io having been built by nobody but its author. Its surface
+      # tests want a real CGBitmapContext and a real IOSurface, which is the
+      # point of running them on a Mac rather than asserting about strides.
+      - run: cargo clippy -p denise-macos --all-targets -- -D warnings
+      - run: cargo test -p denise-macos
+
+      # Where this one can actually be documented, for the reason the manifest's
+      # `default-target` gives: linux documents an empty crate.
+      - run: cargo doc -p denise-macos --no-deps --all-features
