@@ -57,6 +57,18 @@ mod app {
 
     const SHOT_PATH: &str = "/tmp/denise-launcher.ppm";
 
+    /// How long a freshly opened menu ignores the keyboard.
+    ///
+    /// The keystroke that quit a demo is still happening when the menu takes the
+    /// devices back: the key is held, the kernel is repeating it, and the release
+    /// has not come yet. Without this, one press of Escape quits the demo *and*
+    /// the menu behind it — which under a supervisor started the demo again, so
+    /// the menu appeared to be unreachable.
+    ///
+    /// Long enough to outlast a normal press and the first repeat, short enough
+    /// that nobody deliberately pressing a key notices it was dropped.
+    const SETTLE: Duration = Duration::from_millis(400);
+
     /// Card padding, button height and the gap between buttons, in pixels.
     const PAD: i32 = 28;
     const ROW: i32 = 52;
@@ -441,6 +453,7 @@ mod app {
         present(&mut surface, &mut menu, false)?;
 
         let deadline = Instant::now() + Duration::from_secs(60 * 60 * 24);
+        let opened = Instant::now();
         let mut events = Vec::new();
         let mut shoot = false;
 
@@ -451,6 +464,14 @@ mod app {
 
             events.clear();
             input.poll(&mut events);
+
+            // Read and thrown away, not left unread: the descriptors have to be
+            // drained or `poll` returns immediately for as long as they hold
+            // anything, and the loop spins instead of sleeping.
+            if opened.elapsed() < SETTLE {
+                continue;
+            }
+
             for event in &events {
                 if let InputEvent::Key {
                     code,
