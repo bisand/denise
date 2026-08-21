@@ -49,12 +49,14 @@ holds up Hacker News; GET and POST forms serialised
 the click; redirects, an in-memory cookie jar, gzip, and charset
 transcoding via ureq with rustls.
 
-TLS is the `tls` feature, on by default and separable on purpose: rustls's
-`ring` contains C, the one thing the workspace's toolchain-free cross story
-cannot link. So `--no-default-features --features kiosk` cross-compiles to
-one static `aarch64-musl` binary from any machine and speaks `http:` and
-`file:`; add `tls` — and a musl cross toolchain — for `https:` on the
-panel. A desktop build always has it.
+TLS is the `tls` feature, on by default. It is separable because rustls's
+`ring` contains C, and the workspace's toolchain-free cross story ships a
+linker, not a compiler — so a kiosk cross-build has to find one somewhere.
+It does not need a cross toolchain, though: ring compiles its C with
+`-nostdlibinc` and reads no libc headers, so any clang aimed at the target
+plus rustup's `llvm-ar` produces the same one static `aarch64-musl` binary,
+`https:` included. `scripts/deploy-pi.sh` sets that up by itself, and
+`docs/raspberry-pi.md` writes it out for building by hand.
 
 `file:` URLs work, and a `file:` form submits into a preview page showing
 exactly what would have been sent — the fixtures in `fixtures/` exercise

@@ -16,11 +16,14 @@ homepage.workspace = true
 #   cargo run -p browser -- https://example.com                    # a window
 #   cargo run -p browser --no-default-features --features kiosk    # the display
 #
-# `tls` is default and separable on purpose: rustls's `ring` has C in it,
-# which is the one thing this workspace's toolchain-free cross story (see
-# .cargo/config.toml) cannot link. So a kiosk cross-build from a Mac works
-# out of the box for `http:` and `file:`, and `--features kiosk,tls` buys
-# `https:` at the price of a musl cross toolchain.
+# `tls` is default and separable on purpose: rustls's `ring` has C in it, and
+# this workspace's toolchain-free cross story (see .cargo/config.toml) ships a
+# linker, not a compiler. A cross build therefore has to be handed a C compiler
+# from somewhere — but not a whole cross toolchain, because ring compiles its
+# C with `-nostdlibinc` and needs no libc headers at all. Any clang, aimed at
+# the target, plus rustup's `llvm-ar`, is enough; `scripts/deploy-pi.sh` finds
+# both and builds the panel browser with `kiosk,tls`. `docs/raspberry-pi.md`
+# has the three variables for doing it by hand.
 [features]
 default = ["desktop", "tls"]
 desktop = ["dep:denise-winit"]

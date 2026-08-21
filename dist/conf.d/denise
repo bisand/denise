@@ -5,7 +5,7 @@
 #
 #   gallery         every widget live, with a theme editor
 #   table-editor    a scrolling grid, an edit form, validation, a modal
-#   browser         a small web browser, http only on this build
+#   browser         a small web browser, https included
 #   panel           M3: a widget tree, a modal and a cursor sprite
 #   kiosk           M2: display and input driving one another
 #   hello           a field, a button and a label

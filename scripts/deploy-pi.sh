@@ -3,6 +3,7 @@
 #
 #   scripts/deploy-pi.sh rpi3b
 #   scripts/deploy-pi.sh rpi3b --no-boot-config
+#   DENISE_TLS=0 scripts/deploy-pi.sh rpi3b        # browser without https
 #
 # The host is anything ssh understands: a name from `~/.ssh/config`, `user@host`,
 # an address. Everything after it is passed to `dist/install.sh` on the far end.
@@ -22,8 +23,75 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
 say() { printf '\n== %s\n' "$*"; }
+note() { printf '   %s\n' "$*"; }
+
+# ------------------------------------------------------------ https on the Pi
+#
+# The browser's `tls` feature pulls rustls, rustls pulls ring, and ring's build
+# compiles C — the one thing a toolchain-free cross story has no compiler for.
+# It very nearly does, though. ring builds its C with `-nostdlibinc` and wants
+# no libc headers at all, so any clang can aim at aarch64-musl, and the archiver
+# it needs ships with rustup. Three variables, and the panel speaks https with
+# nothing installed that a Rust developer did not already have.
+#
+# This matters more than a feature flag suggests: without it the browser demo is
+# barely a demo. Its own welcome page links to https, the URL bar assumes https
+# for anything typed bare, and so does every site worth opening.
+#
+# `DENISE_TLS=0 scripts/deploy-pi.sh ...` opts out.
+tls_env() {
+	if [ "${DENISE_TLS-1}" = 0 ]; then
+		note "DENISE_TLS=0: the browser is built without https"
+		return 1
+	fi
+
+	# A real cross toolchain, where somebody has installed one, needs no help.
+	if command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+		CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc
+		AR_aarch64_unknown_linux_musl=aarch64-linux-musl-ar
+		export CC_aarch64_unknown_linux_musl AR_aarch64_unknown_linux_musl
+		return 0
+	fi
+
+	if ! command -v clang >/dev/null 2>&1; then
+		note "no clang and no aarch64-linux-musl-gcc: the browser loses https"
+		return 1
+	fi
+
+	# The system `ar` on a Mac writes an archive shape rust-lld reads as empty,
+	# and the link then fails on every symbol ring's C provides. rustup has a
+	# working one, one component away.
+	LLVM_AR="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-ar"
+	if [ ! -x "$LLVM_AR" ] && command -v rustup >/dev/null 2>&1; then
+		note "adding the llvm-tools component, for its archiver"
+		rustup component add llvm-tools >/dev/null 2>&1 || true
+	fi
+	if [ ! -x "$LLVM_AR" ]; then
+		note "no llvm-ar: run \`rustup component add llvm-tools\` for https"
+		return 1
+	fi
+
+	CC_aarch64_unknown_linux_musl=clang
+	# `-nostdlibinc` is ring's own doing. `-U__musl__` is ours: Apple's clang
+	# hands <stddef.h> to a musl system header when it sees a musl target, and a
+	# cross build is precisely the case with no copy of that header. Undefining
+	# the macro puts clang back on its own. Everywhere else it is not set, and
+	# undefining it costs nothing.
+	CFLAGS_aarch64_unknown_linux_musl="--target=$TARGET -U__musl__"
+	AR_aarch64_unknown_linux_musl="$LLVM_AR"
+	export CC_aarch64_unknown_linux_musl CFLAGS_aarch64_unknown_linux_musl
+	export AR_aarch64_unknown_linux_musl
+	return 0
+}
+
+if tls_env; then
+	BROWSER_FEATURES=kiosk,tls
+else
+	BROWSER_FEATURES=kiosk
+fi
 
 say "building for $TARGET"
+note "browser: $BROWSER_FEATURES"
 # Two shapes of demo. `panel`, `kiosk`, `launcher` and `splash` are Linux-only
 # and build as they are; the rest choose a backend at compile time and have to be
 # asked for the kiosk one, because no runtime probe can tell a kiosk Pi from a
@@ -31,10 +99,12 @@ say "building for $TARGET"
 for crate in launcher splash panel kiosk; do
 	cargo build --release --target "$TARGET" -p "$crate" --manifest-path "$ROOT/Cargo.toml"
 done
-for crate in gallery hello table-editor browser; do
+for crate in gallery hello table-editor; do
 	cargo build --release --target "$TARGET" -p "$crate" \
 		--no-default-features --features kiosk --manifest-path "$ROOT/Cargo.toml"
 done
+cargo build --release --target "$TARGET" -p browser \
+	--no-default-features --features "$BROWSER_FEATURES" --manifest-path "$ROOT/Cargo.toml"
 cargo build --release --target "$TARGET" -p denise-video --example player \
 	--manifest-path "$ROOT/Cargo.toml"
 cargo build --release --target "$TARGET" -p denise-video --example probe \

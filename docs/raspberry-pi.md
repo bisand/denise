@@ -560,3 +560,52 @@ Raspberry Pi OS as well; nothing on the target needs installing.
 
 Note that `/tmp` is usually tmpfs, so binaries copied there do not survive a
 reboot.
+
+### The one crate that wants a C compiler
+
+Exactly one thing in the demo set breaks that rule: the browser's `tls` feature,
+which pulls rustls, which pulls ring, whose build compiles C. rustc ships a
+linker, not a compiler, so this is the one build a bare `cargo build --target`
+cannot finish.
+
+It stops short of needing a cross toolchain, though. ring compiles its C with
+`-nostdlibinc` and reads no libc headers at all, so a compiler that can *emit*
+aarch64-linux code is the whole requirement — and clang is a cross compiler by
+construction. Two more details and it links:
+
+```bash
+rustup component add llvm-tools
+LLVM_BIN="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
+
+CC_aarch64_unknown_linux_musl=clang \
+CFLAGS_aarch64_unknown_linux_musl="--target=aarch64-unknown-linux-musl -U__musl__" \
+AR_aarch64_unknown_linux_musl="$LLVM_BIN/llvm-ar" \
+cargo build --release --target aarch64-unknown-linux-musl -p browser \
+    --no-default-features --features kiosk,tls
+```
+
+The result is the same 6.5 MB static binary as every other demo, `https:`
+included, built on macOS with nothing installed beyond the Xcode command line
+tools that a Rust developer on a Mac already has.
+
+The two details are each one small surprise:
+
+- **`-U__musl__`.** Apple's `clang` hands `<stddef.h>` straight to the system
+  header whenever it sees a musl target — and a cross build is exactly the case
+  with no musl headers on disk. Undefining the macro puts clang back on its own
+  copy. Elsewhere the macro is not set and undefining it does nothing.
+- **`llvm-ar`.** The `ar` on macOS writes an archive that rust-lld reads as
+  containing no symbols, so the link fails on every function ring's C provides,
+  with nothing to suggest the archiver is at fault. rustup's `llvm-tools`
+  component has one that works.
+
+`scripts/deploy-pi.sh` does all of this by itself: it prefers a real
+`aarch64-linux-musl-gcc` if one is installed, falls back to the clang route,
+adds the `llvm-tools` component if it is missing, and only if none of that is
+available builds the browser without `tls` — saying so rather than shipping a
+quietly crippled demo. `DENISE_TLS=0` asks for that build deliberately.
+
+Why it matters for the panel rather than being a footnote: the browser's welcome
+page links to `https://example.com`, its search box posts to DuckDuckGo over
+https, and the URL bar puts `https://` in front of anything typed bare. Without
+TLS almost nothing in the demo reaches a page.
