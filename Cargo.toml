@@ -24,6 +24,7 @@ members = [
     "examples/kiosk",
     "examples/launcher",
     "examples/panel",
+    "examples/splash",
     "examples/system-font",
     "examples/table-editor",
 ]

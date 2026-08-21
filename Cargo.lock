@@ -2627,6 +2627,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "splash"
+version = "0.13.0"
+dependencies = [
+ "denise",
+ "denise-fbdev",
+ "denise-text",
+ "denise-ui",
+ "system-font",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

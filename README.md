@@ -305,6 +305,7 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 | [`panel`](examples/panel) | The widget tree, a modal and a cursor sprite, on bare Linux with no X. |
 | [`kiosk`](examples/kiosk) | The instrumented loop: input latency and frame-time percentiles. |
 | [`launcher`](examples/launcher) | A menu of the other demos. Shows how one bare-Linux application hands the display to another and takes it back. |
+| [`splash`](examples/splash) | A boot splash: fbdev only, a real progress bar counted from the init system, and it survives the framebuffer being replaced underneath it. |
 
 Several examples take `--snapshot out.ppm`, which draws one frame and exits. No
 display needed — useful over SSH, for reviewing a layout, and for diffing a theme

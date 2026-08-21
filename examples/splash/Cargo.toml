@@ -1,0 +1,23 @@
+[package]
+name = "splash"
+description = "The screen between the kernel handing over and the panel painting."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# No backend feature to choose. This one is fbdev and only fbdev, which is a
+# decision rather than a limitation — see the header.
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-text = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype"] }
+system-font = { path = "../system-font" }
+
+# Linux-only, so the workspace still builds on a development machine.
+[target.'cfg(target_os = "linux")'.dependencies]
+denise-fbdev = { workspace = true }
