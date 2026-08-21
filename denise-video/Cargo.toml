@@ -15,6 +15,9 @@ denise = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+# The player reads a keyboard for one reason: to stop. A panel demo with no way
+# out but SIGTERM is not a demo anybody can put on a wall.
+denise-evdev = { workspace = true }
 denise-render = { workspace = true, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

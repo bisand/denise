@@ -8,13 +8,20 @@
 //! cargo run -p denise-video --example player -- promo.h264
 //! ```
 //!
-//! Ctrl-C exits; the surface restores the console on drop, as `denise-drm`
-//! always does.
+//! Escape exits, and so does Ctrl-C from a shell; the surface restores the
+//! console on drop, as `denise-drm` always does.
+//!
+//! The keyboard is here for exactly that. Nothing in this file is driven by
+//! input — the plane is fed by the decoder and composed by the display — but a
+//! demo started from a menu on a machine with no terminal has to have a way out,
+//! and on a bare-Linux panel the only thing that can offer one is the program
+//! holding the screen.
 
 #[cfg(target_os = "linux")]
 fn main() {
-    use denise::{Color, Rect, Surface as _};
+    use denise::{Color, ElementState, InputEvent, InputSource as _, KeyCode, Rect, Surface as _};
     use denise_drm::{DrmSurface, SurfaceConfig};
+    use denise_evdev::InputBackend;
     use denise_render::Canvas;
     use denise_video::{Asset, Player, annexb::Codec};
 
@@ -56,8 +63,39 @@ fn main() {
     let mut player =
         Player::open(&[asset], surface.card(), surface.crtc(), dst).expect("open the player");
 
-    println!("playing; Ctrl-C to stop");
+    // Not fatal: a board with no keyboard still plays, it just has to be stopped
+    // from somewhere else. Saying which it is beats discovering it later.
+    let mut input = match InputBackend::open_all(size) {
+        Ok(input) => Some(input),
+        Err(e) => {
+            eprintln!("no keyboard ({e}); Ctrl-C or a signal is the way out");
+            None
+        }
+    };
+    println!("playing; Escape to stop");
+
+    let mut events = Vec::new();
     loop {
+        // Drained every pass rather than waited on: the loop is paced by the
+        // decoder below, and blocking here would stall the pipeline to listen for
+        // a key that is almost never pressed.
+        if let Some(input) = input.as_mut() {
+            events.clear();
+            input.poll(&mut events);
+            if events.iter().any(|event| {
+                matches!(
+                    event,
+                    InputEvent::Key {
+                        code: KeyCode::Escape,
+                        state: ElementState::Down,
+                        ..
+                    }
+                )
+            }) {
+                break;
+            }
+        }
+
         match player.pump(surface.card()) {
             Ok(flipped) => {
                 // A heartbeat every second of video, so a remote shell can see
@@ -72,7 +110,8 @@ fn main() {
             }
         }
         // A promo loop needs no better pacing than the decoder's own: pump
-        // rests briefly so a Pi Zero is not spun at 100%.
+        // rests briefly so a Pi Zero is not spun at 100%. It also bounds how long
+        // Escape takes to be noticed, at 4 ms.
         std::thread::sleep(std::time::Duration::from_millis(4));
     }
     let _ = player.stop(surface.card());
