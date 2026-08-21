@@ -5653,6 +5653,111 @@ fn an_accordion_keeps_at_most_one_section_open() {
     assert_eq!(ui.bounds(sections[2]).expect("b").height, header);
 }
 
+/// The property a shelf exists for, and the one a drawer cannot offer: the
+/// field being typed into keeps the keyboard while the thing typing into it is
+/// on screen.
+#[test]
+fn a_shelf_leaves_focus_where_it_found_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 200, 40))
+        .expect("field");
+    ui.focus(Some(field));
+    ui.tick(1_000);
+    assert_eq!(ui.focused(), Some(field));
+
+    let shelf = ui
+        .push_shelf(denise_ui::overlay::Side::Below, 120)
+        .expect("shelf");
+    assert!(ui.shelf_open());
+    assert_eq!(ui.focused(), Some(field), "pushing a shelf moved focus");
+
+    ui.tick(1_250); // landed
+    assert_eq!(
+        ui.bounds(shelf).expect("b").y,
+        SIZE.height as i32 - 120,
+        "the slide landed at rest"
+    );
+    assert_eq!(ui.focused(), Some(field), "the slide moved focus");
+
+    ui.close_shelf();
+    ui.tick(1_500); // slid out and gone
+    assert!(!ui.shelf_open());
+    assert_eq!(ui.focused(), Some(field), "closing moved focus");
+}
+
+/// A drawer swallows what is under it. A shelf must not: the whole point is
+/// that the application above it stays usable while it is up.
+#[test]
+fn a_shelf_neither_swallows_input_nor_dismisses_itself() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("Under", Msg::Save),
+        Rect::new(20, 20, 100, 40),
+    )
+    .expect("button");
+    ui.tick(1_000);
+    ui.push_shelf(denise_ui::overlay::Side::Below, 120)
+        .expect("shelf");
+    ui.tick(1_250); // landed
+
+    // A press outside the shelf reaches what it hit — and does not dismiss.
+    ui.handle(&click(70, 40));
+    assert!(
+        ui.drain_messages().any(|m| m == Msg::Save),
+        "the shelf swallowed input meant for the application"
+    );
+    assert!(ui.shelf_open(), "a press outside dismissed the shelf");
+}
+
+/// A key on a keyboard is pressed constantly and must never be the reason the
+/// field loses focus. The shelf does not clear focus; #49 keeps its children
+/// from taking it.
+#[test]
+fn pressing_a_shelf_child_reaches_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 200, 40))
+        .expect("field");
+    ui.focus(Some(field));
+    let shelf = ui
+        .push_shelf(denise_ui::overlay::Side::Below, 120)
+        .expect("shelf");
+    ui.tick(1_250); // landed
+
+    // A child of the shelf, in the shelf's own coordinates.
+    ui.add(
+        shelf,
+        Button::new("q", Msg::Cancel),
+        Rect::new(0, 0, 40, 40),
+    )
+    .expect("key");
+    ui.tick(1_300);
+
+    ui.handle(&click(20, SIZE.height as i32 - 100));
+    assert!(
+        ui.drain_messages().any(|m| m == Msg::Cancel),
+        "the press did not reach the shelf's child"
+    );
+}
+
+/// One at a time, like a drawer.
+#[test]
+fn a_second_shelf_is_refused() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    ui.push_shelf(denise_ui::overlay::Side::Below, 120)
+        .expect("shelf");
+    assert!(
+        ui.push_shelf(denise_ui::overlay::Side::Below, 120)
+            .is_none(),
+        "a second shelf was allowed over the first"
+    );
+}
+
 #[test]
 fn a_drawer_slides_in_and_takes_the_input() {
     let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
