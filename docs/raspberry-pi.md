@@ -117,6 +117,48 @@ here in a way it does not for a UI-only panel. `gpu_mem=128` beside the overlay
 line is the usual headroom for 1080p H.264 — the 64 MB default is enough for the
 console and leaves little for a decoder.
 
+### The handover blanks the screen, and that part is not yours to fix
+
+The firmware puts a framebuffer up within about 1.3 seconds. vc4 replaces it
+around seven, and the replacement reprograms the HDMI pipeline: the sink drops
+its TMDS lock and takes a second or two to find it again. Filmed on a Pi 3 with
+an NEC panel and read back frame by frame, that is **two seconds of black**, and
+the picture was there the whole time — the splash logged itself painting 1.5
+seconds before anything appeared on the glass.
+
+Nothing in userspace shortens it. What you can do is not straddle it: hold the
+first paint until `/dev/dri/card0` exists, so the handover happens over a black
+screen and whatever you are showing appears once. `examples/splash` takes
+`--after` for exactly this.
+
+You can also make the handover happen sooner. Left alone, `hwdrivers` coldplugs
+USB first — a Logitech unifying receiver takes 1.6 seconds by itself — and vc4
+does not bind until 6.8s. Loading it by name before that runs:
+
+```bash
+modprobe vc4
+```
+
+Measured on the test board: vc4 bound at **5.3s** instead of 6.8s, and the first
+paint moved from 7.1s to 6.0s.
+
+### Putting vc4 in the initramfs does not help
+
+It is the obvious next idea and it does not work, so here is the measurement
+rather than the theory.
+
+Adding a `vc4` feature to `/etc/mkinitfs/features.d` and rebuilding gets the
+module and its DRM dependencies into the image, and Alpine's initramfs then does
+not load it: `nlplug-findfs` loads what it needs to find root and stops caring.
+Naming it in the kernel command line's `modules=` list does not do it either.
+Both were tried; vc4 bound at 6.3s and 5.9s respectively — **worse than the plain
+`modprobe`**, because the larger image costs about 0.6s to unpack.
+
+If you try it anyway, keep the working image: `cp /boot/initramfs-rpi
+/boot/initramfs-rpi.backup` before rebuilding. `/boot` is FAT, so that backup can
+be put back from any machine with a card reader, which is the difference between
+a five-minute recovery and a reinstall.
+
 ## What changes when you enable it
 
 ### The resolution will change
