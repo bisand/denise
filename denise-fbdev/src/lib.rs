@@ -28,6 +28,13 @@
 //!
 //! Writing to `/dev/fb*` needs the `video` group, or root.
 
+// `chunks_exact` over `as_chunks`, against clippy 1.98's advice: `as_chunks`
+// stabilised in 1.98 and this workspace supports 1.95, so taking the advice
+// would trade a style lint for a compile error on every older toolchain. Revisit
+// when the MSRV passes 1.98. `unknown_lints` because the lint does not exist
+// before 1.98 either, and naming an absent lint is itself a warning.
+#![allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
+
 pub mod info;
 
 pub use info::{FbInfo, FbInfoError, PixelLayout};
