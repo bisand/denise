@@ -4,7 +4,7 @@
 //! deliberately using raw pointers and `char *` throughout: the point is to
 //! exercise the crossing, not the widgets, which `denise-ui` already tests.
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
 use denise_ffi::keys::{DENISE_KEY_A, DENISE_KEY_O};
@@ -83,7 +83,7 @@ unsafe fn text_of(ui: *mut DeniseUi, node: u64) -> String {
     // SAFETY: forwarding the caller's promise.
     let needed = unsafe { denise_ui_get_text(ui, node, ptr::null_mut(), 0) };
     assert!(needed >= 0, "measuring failed with {needed}");
-    let mut buffer = vec![0i8; needed as usize + 1];
+    let mut buffer = vec![0 as c_char; needed as usize + 1];
     // SAFETY: `buffer` is writable for exactly the length being passed.
     let written = unsafe { denise_ui_get_text(ui, node, buffer.as_mut_ptr().cast(), buffer.len()) };
     assert_eq!(written, needed, "the two calls disagreed about the length");
@@ -182,7 +182,7 @@ fn typing_reaches_a_focused_field_and_comes_back_as_utf8() {
         // counting characters would be one short of the NUL, and this is where
         // it finds out.
         assert_eq!(denise_ui_get_text(host.ptr(), field, ptr::null_mut(), 0), 6);
-        let mut small = [0i8; 6];
+        let mut small = [0 as c_char; 6];
         assert_eq!(
             denise_ui_get_text(host.ptr(), field, small.as_mut_ptr(), small.len()),
             DENISE_ERR_BUFFER_TOO_SMALL as isize,
