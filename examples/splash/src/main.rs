@@ -262,10 +262,12 @@ mod app {
                         uptime()
                     );
                 }
+                let began = screen.as_ref().and_then(|old| old.began);
                 screen = Screen::open(
                     face.as_ref().map(|(name, _)| name.as_str()),
                     &title,
                     lines.clone(),
+                    began,
                     clock,
                 );
                 match screen.as_ref() {
@@ -384,6 +386,9 @@ mod app {
         /// This boot's lines. Chosen once and carried across a framebuffer
         /// change, so the sequence does not restart when vc4 takes over.
         quips: Vec<&'static str>,
+        /// How far along the boot was when the first line was shown. Carried
+        /// across a framebuffer change for the same reason as the lines.
+        began: Option<f32>,
         surface: FbdevSurface,
         ui: Ui<Msg>,
         started: Instant,
@@ -398,6 +403,7 @@ mod app {
             font: Option<&str>,
             title: &str,
             quips: Vec<&'static str>,
+            began: Option<f32>,
             clock: bool,
         ) -> Option<Self> {
             let surface = FbdevSurface::open_first().ok()?;
@@ -509,6 +515,7 @@ mod app {
             Some(Self {
                 clock: clock_node,
                 quips,
+                began,
                 surface,
                 ui,
                 started: Instant::now(),
@@ -536,10 +543,16 @@ mod app {
                     None => "Starting up".to_string(),
                 },
                 // Indexed by the bar, so the last line arrives with the last of
-                // the fill. Without a fraction there is nothing to index by, and
-                // the first line is as good as any.
+                // the fill — but measured from wherever the bar *was* when this
+                // screen first painted, not from zero. Waiting for KMS costs the
+                // first fifth of a boot, and indexing from zero spends that fifth
+                // on lines nobody is there to read: the opener was never once
+                // seen on the test board.
                 Say::Quips => {
-                    let at = fraction.unwrap_or(0.0) * self.quips.len() as f32;
+                    let now = fraction.unwrap_or(0.0);
+                    let from = *self.began.get_or_insert(now);
+                    let span = (1.0 - from).max(f32::EPSILON);
+                    let at = ((now - from) / span).clamp(0.0, 1.0) * self.quips.len() as f32;
                     self.quips[(at as usize).min(self.quips.len() - 1)].to_string()
                 }
             };
