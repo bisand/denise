@@ -18,4 +18,4 @@ demo="launcher"
 #   --motion off     no animation at all
 #   --present vsync  wait for scanout; costs ~17 ms, makes tearing impossible
 #   --font PATH      a specific face instead of the best one found
-demo_args="--start Gallery --exit-hint /etc/denise-exit-hint.txt Video-player=/usr/local/bin/denise-video-player /home/bisand/promo.h264"
+demo_args="--start Gallery --exit-hint /etc/denise-exit-hint.txt Video-player=/usr/local/bin/denise-video-player /media/promo.h264"

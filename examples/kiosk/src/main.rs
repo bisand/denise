@@ -264,11 +264,13 @@ mod app {
         let frame = Duration::from_micros(1_000_000 / hz);
 
         // "immediate" asks for async page flips: no wait for vblank, at the cost
-        // of a tear. Which way this should go depends on the product, so it is a
-        // choice rather than a default.
+        // of a tear. Which way this should go depends on the product — but the
+        // default is measured rather than assumed: on a Pi 3 the vc4's async
+        // flips tear visibly enough to read as flicker, and a panel is read
+        // rather than aimed at, so 17 ms is invisible and a tear is not.
         let requested = match std::env::args().nth(3).as_deref() {
-            Some("vsync") | Some("tearfree") => PresentMode::Vsync,
-            _ => PresentMode::Immediate,
+            Some("immediate") | Some("tearing") => PresentMode::Immediate,
+            _ => PresentMode::Vsync,
         };
 
         // DRM first, because it page-flips and knows about vblank. fbdev is not a

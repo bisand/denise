@@ -334,7 +334,7 @@ mod kiosk_backend {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Immediate rather than vsync: this panel is driven by a keypad and a
         // pointer, so latency matters more to it than tearing does.
-        let mut surface = Display::open(bare_linux::PresentMode::Immediate)?;
+        let mut surface = Display::open(bare_linux::PresentMode::Vsync)?;
         let size = surface.size();
         let (mut input, _keymap) = open_input(size)?;
         // Held for the whole run: dropping it puts the console back as it was.

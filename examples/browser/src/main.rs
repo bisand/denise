@@ -302,7 +302,7 @@ mod kiosk_backend {
         start: Option<String>,
         keyboard: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut surface = Display::open(bare_linux::PresentMode::Immediate)?;
+        let mut surface = Display::open(bare_linux::PresentMode::Vsync)?;
         let size = surface.size();
         let (mut input, _keymap) = open_input(size)?;
         let _console = mute_console();

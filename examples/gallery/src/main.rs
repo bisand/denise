@@ -21,14 +21,20 @@
 //! It costs what a spinner costs: this gallery keeps one turning, and halving
 //! the rate halves what an otherwise idle window spends.
 //!
-//! `--present vsync` gives up the async page flip and waits for the scanout,
-//! which costs about 17 ms of latency and makes tearing impossible. It is here
-//! to answer one question on hardware, because the two things it separates look
-//! alike to a person watching the panel: a **tear** is one frame torn across a
-//! seam, and a **stale buffer** is two frames alternating. Both read as flicker.
-//! If `--present vsync` removes it, it was the flip; if it does not, the flip
-//! was never involved and the damage is wrong somewhere. Kiosk only — a window's
-//! presentation belongs to whatever is compositing it.
+//! `--present` chooses how a frame reaches the screen. **Vsync is the default**,
+//! measured rather than assumed: on a Pi 3 the vc4's async flips tear visibly
+//! enough to read as flicker, and a panel is read rather than aimed at — the
+//! 17 ms a paced flip costs is invisible where a tear is not.
+//! `--present immediate` asks for the latency back.
+//!
+//! It stays a flag because it answers a question on hardware that nothing else
+//! can: the two faults it separates look alike to a person watching the panel.
+//! A **tear** is one frame torn across a seam; a **stale buffer** is two frames
+//! alternating. Both read as flicker. If `vsync` removes it, it was the flip;
+//! if it does not, the flip was never involved and the damage is wrong
+//! somewhere. That is how the keyboard's flicker was diagnosed, and the answer
+//! was both — a repaint bug did most of it and the flip did the rest. Kiosk
+//! only: a window's presentation belongs to whatever is compositing it.
 //!
 //! The proof-of-concept panel: everything the toolkit ships, on one screen,
 //! with a live theme editor driving [`Ui::set_theme`](denise_ui::Ui::set_theme) the way an application
@@ -63,9 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A window gets the real one from the backend; see `window_backend`.
     let mut scale: f32 = 1.0;
     let mut motion = Motion::default();
-    // Immediate is the kiosk default; see the header for what asking for the
-    // other one is worth.
-    let mut vsync = false;
+    // Vsync is the default, measured on a Pi 3 rather than assumed: the vc4's
+    // async flips tear visibly enough to read as flicker. See the header for
+    // what asking for the other one is worth.
+    let mut vsync = true;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
