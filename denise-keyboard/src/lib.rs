@@ -29,11 +29,29 @@
 //! so the field keeps focus while the keyboard is up. Neither of those is a
 //! keyboard feature; they are toolkit features this is the first user of.
 //!
+//! # Modifiers
+//!
+//! Shift cycles rather than latching on a double tap: off, once, locked. There
+//! is no clock in the press path and threading a timestamp through every key to
+//! serve one of them is a poor trade, so the key says which state it is in and
+//! a tap moves to the next.
+//!
+//! `Locked` is Caps Lock and not a held Shift — it applies to letters and
+//! leaves the digit row alone, which is the difference between a locked
+//! keyboard typing `1` and typing `!`. The [`Composer`] models that already, so
+//! it is latched with a `CapsLock` key rather than reimplemented here.
+//!
+//! The third level is the layout's own `AltGr` rather than a page of symbols
+//! chosen here, because there is no such page to choose: `@` is `AltGr`+`2` on a
+//! Norwegian keyboard and `Shift`+`2` on a US one, and a fixed grid would be
+//! wrong on one of them. It latches, since a finger cannot hold one key and
+//! press another.
+//!
 //! # What is not here yet
 //!
-//! Shift, caps lock, a symbol page and key repeat are the next issue; layout
-//! switching the one after. This crate types letters, digits, space, backspace
-//! and enter, in whatever layout it was given.
+//! Key repeat — holding Backspace to keep deleting — needs a press-and-hold
+//! signal the toolkit does not have; `Button` emits on release. Layout
+//! switching from a key on the keyboard is the next issue.
 //!
 //! [`InputEvent::Key`]: denise::InputEvent::Key
 //! [`InputEvent::Text`]: denise::InputEvent::Text
@@ -50,7 +68,10 @@ use denise_ui::{NodeId, Side, Ui};
 
 mod grid;
 
-pub use grid::{ROWS, Row};
+pub use grid::{Key, ROWS, Row};
+
+/// What the third-level key says.
+const LEVEL3_LEGEND: &str = "alt";
 
 /// Height of one key, in logical pixels.
 ///
@@ -60,6 +81,58 @@ pub const KEY_HEIGHT: i32 = 48;
 
 /// Space between keys, and around the edge of the shelf.
 pub const KEY_GAP: i32 = 6;
+
+/// What the Shift key is currently doing.
+///
+/// Three states rather than a shift that latches on a double tap, and the
+/// reason is that [`Keyboard::press`] is not given a clock. A double-tap window
+/// needs one, and threading a timestamp through every key press to serve one key
+/// is a poor trade against a cycle a user can see: the key says which state it
+/// is in, and tapping it moves to the next.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shift {
+    /// Lower case, and the next character is not shifted.
+    #[default]
+    Off,
+    /// The next character is shifted, and then this releases.
+    Once,
+    /// Every letter is shifted until this is turned off. Caps Lock, and like
+    /// Caps Lock it leaves the digit row alone.
+    Locked,
+}
+
+impl Shift {
+    /// What the key says.
+    #[inline]
+    pub const fn legend(self) -> &'static str {
+        match self {
+            Shift::Off => "shift",
+            Shift::Once => "SHIFT",
+            Shift::Locked => "CAPS",
+        }
+    }
+
+    /// The state after a tap.
+    #[inline]
+    const fn next(self) -> Self {
+        match self {
+            Shift::Off => Shift::Once,
+            Shift::Once => Shift::Locked,
+            Shift::Locked => Shift::Off,
+        }
+    }
+
+    /// Whether Shift itself is held for the next press.
+    ///
+    /// `Locked` is **not** included: Caps Lock is not a held Shift, and treating
+    /// it as one is the bug that makes a locked keyboard type `!` for `1`. The
+    /// composer models it properly, latched by a `CapsLock` key, and applies it
+    /// to letters only.
+    #[inline]
+    const fn holds_shift(self) -> bool {
+        matches!(self, Shift::Once)
+    }
+}
 
 /// An on-screen keyboard, and the composition state that goes with it.
 ///
@@ -71,6 +144,8 @@ pub struct Keyboard {
     layout: &'static Layout,
     composer: Composer,
     modifiers: Modifiers,
+    shift: Shift,
+    level3: bool,
     shelf: Option<NodeId>,
     keys: Vec<(KeyCode, NodeId)>,
 }
@@ -85,6 +160,8 @@ impl Keyboard {
             layout,
             composer: Composer::new(layout),
             modifiers: Modifiers::NONE,
+            shift: Shift::Off,
+            level3: false,
             shelf: None,
             keys: Vec::new(),
         }
@@ -184,6 +261,44 @@ impl Keyboard {
         }
     }
 
+    /// One key from the grid, tapped — modifier keys included.
+    ///
+    /// The call an application makes when a key's message arrives, and the one
+    /// that does the right thing whichever key it was: Shift and the third-level
+    /// key change state and relabel the keyboard, everything else types.
+    ///
+    /// Returns the events to hand to [`Ui::handle`](denise_ui::Ui::handle);
+    /// empty for a modifier key, which changes what the *next* press means and
+    /// sends nothing itself.
+    pub fn press_key<M: Clone + 'static>(
+        &mut self,
+        ui: &mut Ui<M>,
+        code: KeyCode,
+    ) -> Vec<InputEvent> {
+        match code {
+            KeyCode::ShiftLeft => {
+                self.tap_shift();
+                self.relabel(ui);
+                Vec::new()
+            }
+            KeyCode::AltRight => {
+                self.tap_level3();
+                self.relabel(ui);
+                Vec::new()
+            }
+            _ => {
+                let was_once = self.shift == Shift::Once;
+                let events = self.press(code);
+                // A one-shot shift has just been spent, so the keys have to stop
+                // claiming they are still shifted.
+                if was_once {
+                    self.relabel(ui);
+                }
+                events
+            }
+        }
+    }
+
     /// One key, tapped: the events a real keyboard would have sent.
     ///
     /// [`InputEvent::Key`] down, then whatever that typed as
@@ -199,29 +314,123 @@ impl Keyboard {
     /// [`InputEvent::Text`]: denise::InputEvent::Text
     pub fn press(&mut self, code: KeyCode) -> Vec<InputEvent> {
         let mut out = Vec::with_capacity(3);
+        let modifiers = self.modifiers();
         for state in [ElementState::Down, ElementState::Up] {
             out.push(InputEvent::Key {
                 code,
                 state,
                 repeat: false,
-                modifiers: self.modifiers,
+                modifiers,
             });
-            let composed = self.composer.feed(code, state, self.modifiers);
+            let composed = self.composer.feed(code, state, modifiers);
             for &ch in composed.as_slice() {
                 out.push(InputEvent::Text { ch });
             }
         }
+        // A one-shot shift is spent on the character it shifted. Doing this
+        // after the feed rather than before is what makes it apply to exactly
+        // one key.
+        if self.shift == Shift::Once {
+            self.shift = Shift::Off;
+        }
         out
+    }
+
+    /// Taps the Shift key: off, then once, then locked, then off again.
+    ///
+    /// Returns the state it moved to. The caller relabels with
+    /// [`Keyboard::relabel`] — or lets [`Keyboard::press_key`] do both.
+    pub fn tap_shift(&mut self) -> Shift {
+        let was_locked = self.shift == Shift::Locked;
+        self.shift = self.shift.next();
+        let locked = self.shift == Shift::Locked;
+        if locked != was_locked {
+            // The composer latches Caps Lock from the key stream, exactly as it
+            // does for a real one, so it is told the same way.
+            self.composer
+                .feed(KeyCode::CapsLock, ElementState::Down, self.modifiers());
+            self.composer
+                .feed(KeyCode::CapsLock, ElementState::Up, self.modifiers());
+        }
+        self.shift
+    }
+
+    /// Taps the third-level key, the one a physical keyboard spells `AltGr`.
+    ///
+    /// This is the symbol page, and it is the layout's own third level rather
+    /// than a grid of symbols chosen here: `@` is `AltGr`+`2` on a Norwegian
+    /// keyboard and `Shift`+`2` on a US one, and a fixed grid would be wrong on
+    /// one of them. It latches rather than being held, because a finger cannot
+    /// hold one key and press another.
+    ///
+    /// Returns whether the third level is now on.
+    pub fn tap_level3(&mut self) -> bool {
+        self.level3 = !self.level3;
+        // The composer tracks this from the key stream exactly as it does for a
+        // real AltGr, so it is told the same way.
+        let state = if self.level3 {
+            ElementState::Down
+        } else {
+            ElementState::Up
+        };
+        self.composer
+            .feed(KeyCode::AltRight, state, self.modifiers());
+        self.level3
+    }
+
+    /// The state of the Shift key.
+    #[inline]
+    pub const fn shift(&self) -> Shift {
+        self.shift
+    }
+
+    /// Whether the third level — the layout's `AltGr` — is showing.
+    #[inline]
+    pub const fn level3(&self) -> bool {
+        self.level3
+    }
+
+    /// The modifiers a key press reports right now.
+    fn modifiers(&self) -> Modifiers {
+        if self.shift.holds_shift() {
+            self.modifiers | Modifiers::SHIFT
+        } else {
+            self.modifiers
+        }
     }
 
     /// What to print on a key, at the level the keyboard is currently showing.
     ///
     /// A dead key shows its mark, which is what the user is about to be holding.
+    /// What to print on a key: exactly what pressing it would produce.
+    ///
+    /// Asked of the composer rather than worked out here, so Caps Lock sparing
+    /// the digit row and the third level are right by construction instead of by
+    /// a rule repeated in two places.
     fn legend(&self, code: KeyCode) -> Option<char> {
-        let entry = self.layout.entry(code)?;
-        match entry.base {
+        match self.composer.output_for(code, self.shift.holds_shift()) {
             Output::Char(ch) | Output::Dead(ch) => Some(ch),
             Output::None => None,
+        }
+    }
+
+    /// Rewrites every key's legend for the current shift and level.
+    ///
+    /// A position does not move when a modifier changes — only what it types —
+    /// so this replaces labels on the keys that are already there.
+    pub fn relabel<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) {
+        for &(code, node) in &self.keys {
+            let label = match code {
+                KeyCode::ShiftLeft => self.shift.legend().to_string(),
+                KeyCode::AltRight => LEVEL3_LEGEND.to_string(),
+                _ => grid::legend_of(code)
+                    .map(str::to_string)
+                    .or_else(|| self.legend(code).map(|ch| ch.to_string()))
+                    .unwrap_or_default(),
+            };
+            if let Some(button) = ui.widget_mut::<Button<M>>(node) {
+                button.set_label(label);
+            }
         }
     }
 
