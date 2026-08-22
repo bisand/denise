@@ -441,6 +441,12 @@ impl App {
 
     /// Handles everything the tree emitted this frame.
     pub fn handle(&mut self, now_ms: u64) {
+        // A held key first, so a repeat and whatever it causes land in the same
+        // pass. Empty on every frame nobody is touching a key.
+        let repeats = self.keyboard.tick(&mut self.ui, now_ms);
+        if !repeats.is_empty() {
+            self.ui.handle(&repeats);
+        }
         // Drained until it stops rather than once: a key press is answered by
         // feeding events straight back into the tree, and whatever those produce
         // belongs to the same frame as the tap. Bounded, so a message that
@@ -463,7 +469,6 @@ impl App {
         // the application never sees, and the keyboard follows focus.
         self.keyboard.follow_focus(&mut self.ui, Message::Key);
         self.fit_form_to_keyboard();
-        let _ = now_ms;
     }
 
     /// Puts the caret in the first form field, which brings the keyboard up.

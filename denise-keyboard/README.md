@@ -150,6 +150,38 @@ and the two demos in this repository need different answers:
 Either way, tell the tree afterwards: `Ui::reveal_focused()` re-runs the reveal
 when the geometry around the focus changed rather than the focus itself.
 
+## Holding a key
+
+Backspace repeats while it is held, and nothing else does — which is what a
+phone does, and what stops a slow finger typing `aaaaaa`. Clearing a URL bar
+used to be forty taps.
+
+The repeats are the events a real keyboard sends for an auto-repeat:
+`InputEvent::Key` with `repeat: true`, and whatever that types. A `TextInput`
+inserts both; anything that must not act twice on one gesture can tell them
+apart.
+
+Call `Keyboard::tick` once a frame beside `follow_focus` and hand the result to
+`Ui::handle`. It returns nothing on almost every frame:
+
+```rust,ignore
+let repeats = keyboard.tick(&mut ui, now_ms);
+ui.handle(&repeats);
+```
+
+**Nothing polls.** A repeating key is a `Button::with_repeat`, which asks the
+tree to wake it only between a press and its release and answers `Wake::Never`
+the moment the finger goes — so a panel nobody is touching schedules nothing,
+and `tick` simply finds a tally of nought. That is asserted rather than assumed:
+`ui.animating()` is 0 with a keyboard on screen and 1 while a key is held.
+
+A stalled loop does not empty the field when it comes back. Counting repeats
+from the press is truthful about how much time passed, and would hand over every
+repeat a ten-second stall covered — so the catch-up is bounded, and the ones a
+stall swallowed are dropped rather than owed.
+
 ## What is not here yet
 
-Key repeat, which needs a press-and-hold signal the toolkit does not have.
+Holding a letter to reach its alternates, the way a phone offers `é è ê ë` for
+`e`. The layout's dead keys and third level already reach those characters, so
+this is about discoverability rather than capability.

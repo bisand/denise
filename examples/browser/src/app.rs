@@ -213,7 +213,13 @@ impl App {
     /// Once a frame: what the network delivered, then what the tree said.
     /// Image arrivals that move text are batched into one relayout at the
     /// end, however many came in together.
-    pub fn handle(&mut self, _now_ms: u64) {
+    pub fn handle(&mut self, now_ms: u64) {
+        // A held key first, so a repeat is drained in the same pass as anything
+        // it causes. Empty on every frame nobody is touching a key.
+        let repeats = self.keyboard.tick(&mut self.ui, now_ms);
+        if !repeats.is_empty() {
+            self.ui.handle(&repeats);
+        }
         for done in self.net.done() {
             self.on_fetch(done);
         }

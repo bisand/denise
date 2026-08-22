@@ -20,6 +20,13 @@ pub struct Key {
     pub legend: Option<&'static str>,
     /// Width, in units of the narrowest key in the row.
     pub units: i32,
+    /// Whether holding it keeps sending it.
+    ///
+    /// True for Backspace and nothing else, which is what a phone does and what
+    /// stops a slow finger typing `aaaaaa`. Holding a *letter* is a gesture with
+    /// a different meaning — the alternates a layout offers for it — and is not
+    /// this.
+    pub repeats: bool,
 }
 
 impl Key {
@@ -29,6 +36,7 @@ impl Key {
             code,
             legend: None,
             units: 1,
+            repeats: false,
         }
     }
 
@@ -38,7 +46,14 @@ impl Key {
             code,
             legend: Some(legend),
             units,
+            repeats: false,
         }
+    }
+
+    /// The same key, repeating while it is held.
+    const fn repeating(mut self) -> Self {
+        self.repeats = true;
+        self
     }
 }
 
@@ -120,13 +135,14 @@ const MOD_ROW: [Key; 4] = [
     // layout: the key says what it will do next, not what it types.
     Key::wide(KeyCode::ShiftLeft, "shift", 2),
     Key::wide(KeyCode::AltRight, "alt", 2),
-    Key::wide(KeyCode::Backspace, "back", 2),
+    Key::wide(KeyCode::Backspace, "back", 2).repeating(),
     // The layout key. Its legend is the layout's name and comes from the
     // keyboard's state, so it is `None` here like the other two.
     Key {
         code: KeyCode::Unidentified(u32::MAX),
         legend: None,
         units: 2,
+        repeats: false,
     },
 ];
 

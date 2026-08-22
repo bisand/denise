@@ -528,6 +528,10 @@ Three things worth knowing before it is on a wall:
 - **Escape is the application's.** A shelf pushes no scene — which is what lets
   the field underneath keep its caret — so nothing in the tree closes the
   keyboard for you.
+- **Holding Backspace keeps deleting**, and no other key repeats. It costs
+  nothing when nobody is touching it: the key asks to be woken only between its
+  press and its release, so an idle panel with the keyboard on screen schedules
+  no wakes at all.
 
 ## Taking a screenshot with no desktop
 

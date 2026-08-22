@@ -117,6 +117,18 @@ pub const KEY_GAP: i32 = 6;
 /// Legend size, in logical pixels, when the application names no style.
 const KEY_TEXT: u16 = 16;
 
+/// How long Backspace waits before it starts deleting on its own.
+///
+/// Long enough that no ordinary tap reaches it, short enough that somebody who
+/// meant to hold does not first wonder whether it is broken.
+pub const REPEAT_DELAY_MS: u64 = 450;
+
+/// How often it deletes after that.
+///
+/// Roughly fifteen a second: fast enough to clear a URL bar in a moment, slow
+/// enough to stop where you meant to.
+pub const REPEAT_INTERVAL_MS: u64 = 65;
+
 /// What the Shift key is currently doing.
 ///
 /// Three states rather than a shift that latches on a double tap, and the
@@ -458,6 +470,70 @@ impl Keyboard {
         }
     }
 
+    /// Collects whatever a held key has earned, once a frame.
+    ///
+    /// Call it beside [`follow_focus`](Self::follow_focus), and hand the result
+    /// to [`Ui::handle`](denise_ui::Ui::handle) the way a key press is handed
+    /// over. Empty on nearly every frame: only Backspace repeats, and only while
+    /// a finger is actually on it.
+    ///
+    /// The events are the ones a real keyboard sends for an auto-repeat —
+    /// [`InputEvent::Key`] with `repeat: true`, and whatever that types — which
+    /// is what lets a widget tell a repeat from a deliberate second press. A
+    /// `TextInput` inserts both; something that must not act twice on one
+    /// gesture can look.
+    ///
+    /// **Nothing is polled.** A repeating key asks the tree to wake it while it
+    /// is held and stops asking the moment it is released, so a panel with
+    /// nobody touching it schedules nothing — this call simply finds a tally of
+    /// nought and returns.
+    ///
+    /// [`InputEvent::Key`]: denise::InputEvent::Key
+    pub fn tick<M: Clone + 'static>(&mut self, ui: &mut Ui<M>, now_ms: u64) -> Vec<InputEvent> {
+        let _ = now_ms;
+        let mut out = Vec::new();
+        // Collected by position rather than from one remembered key, because
+        // "which key is held" is the tree's fact and not this crate's.
+        let held: Vec<(KeyCode, u32)> = self
+            .keys
+            .iter()
+            .filter_map(|&(code, node)| {
+                let button = ui.widget_mut::<Button<M>>(node)?;
+                let repeats = button.take_repeats();
+                (repeats > 0).then_some((code, repeats))
+            })
+            .collect();
+        for (code, repeats) in held {
+            for _ in 0..repeats {
+                out.extend(self.press_repeat(code));
+            }
+        }
+        out
+    }
+
+    /// One auto-repeat of a key already down.
+    ///
+    /// [`press`](Self::press) with `repeat: true`, and without the one-shot
+    /// Shift bookkeeping: a repeat is the *same* press arriving again, so it
+    /// cannot spend a shift that the first press already spent.
+    pub fn press_repeat(&mut self, code: KeyCode) -> Vec<InputEvent> {
+        let mut out = Vec::with_capacity(3);
+        let modifiers = self.modifiers();
+        for state in [ElementState::Down, ElementState::Up] {
+            out.push(InputEvent::Key {
+                code,
+                state,
+                repeat: true,
+                modifiers,
+            });
+            let composed = self.composer.feed(code, state, modifiers);
+            for &ch in composed.as_slice() {
+                out.push(InputEvent::Text { ch });
+            }
+        }
+        out
+    }
+
     /// One key, tapped: the events a real keyboard would have sent.
     ///
     /// [`InputEvent::Key`] down, then whatever that typed as
@@ -672,12 +748,16 @@ impl Keyboard {
                 let x = gaps + leftover * done / units;
                 done += key.units;
                 let w = gaps + leftover * done / units - x;
+                let mut button = Button::new(self.label_for(key.code), on_key(key.code))
+                    .no_focus()
+                    .with_role(role_of(key.code))
+                    .with_style(self.style);
+                if key.repeats {
+                    button = button.with_repeat(REPEAT_DELAY_MS, REPEAT_INTERVAL_MS);
+                }
                 if let Some(node) = ui.add(
                     shelf,
-                    Button::new(self.label_for(key.code), on_key(key.code))
-                        .no_focus()
-                        .with_role(role_of(key.code))
-                        .with_style(self.style),
+                    button,
                     Rect::new(x, y, w, KEY_HEIGHT).scaled(self.scale),
                 ) {
                     self.keys.push((key.code, node));
