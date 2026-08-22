@@ -373,6 +373,11 @@ impl App {
                 self.ui.close_popup();
             }
             Message::Noop => {}
+            // Escape on the on-screen keyboard is the one key the application
+            // has to answer itself. The backends bind Escape against the events
+            // the *input device* delivered, and these never went near a device
+            // — so feeding it to the tree would put it precisely nowhere.
+            Message::Key(KeyCode::Escape) => self.dismiss_keyboard(),
             Message::Key(code) => {
                 // Straight back into the tree, as though the events had come off
                 // a keyboard plugged into the machine — which as far as

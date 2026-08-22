@@ -100,6 +100,20 @@ Keys are laid out by *position*, not by character. `KeyCode::Semicolon` carries
 `ø` on a Norwegian layout and `;` on a US one, and the key does not move —
 which is why switching layouts relabels the keyboard rather than rebuilding it.
 
+The grid is a compact physical keyboard — a Chromebook, near enough: fourteen
+columns, Backspace top right, Tab opening the second row, Enter closing the
+home row, Shift at both ends of the bottom one, and the layout key in the slot
+Caps Lock would have. Escape and the arrows are on the last row, so a panel with
+no other keyboard can put this one away and correct the middle of an address.
+
+The width is not decoration. `Minus`, `Equal`, `Backquote`, `BracketLeft`,
+`BracketRight` and `Backslash` are where a Norwegian layout keeps `+`, `?`, the
+acute and grave dead keys, **å**, the diaeresis, and `'`. The first version of
+this grid was "the positions ISO and ANSI have in common", which sounds careful
+and quietly meant it could not type one of the three letters the Norwegian
+layout exists for. A test now walks every layout and asserts every letter it
+has is on a key.
+
 ## Modifiers
 
 Shift cycles — off, once, locked — because there is no clock in the press path
@@ -143,9 +157,9 @@ and the two demos in this repository need different answers:
   up, so a field in the last screenful has somewhere to scroll into. Every phone
   browser does this.
 - The **table editor** cannot: its form is 300 tall on a 470-tall panel and does
-  not fit above a 330-tall keyboard at any offset. So it cuts the form to what is
-  above the keyboard, which turns it into a viewport with more content than room
-  — and *that* the tree already knows how to scroll.
+  not fit above a 276-tall keyboard at any offset. So the whole view scrolls
+  instead: everything hangs off one viewport, and the room the keyboard borrows
+  is added below all of it.
 
 Either way, tell the tree afterwards: `Ui::reveal_focused()` re-runs the reveal
 when the geometry around the focus changed rather than the focus itself.

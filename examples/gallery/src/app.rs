@@ -1410,6 +1410,13 @@ impl App {
             }
             Message::ShowDrawer => self.open_drawer(),
             Message::ToggleKeyboard => self.toggle_keyboard(),
+            // Escape puts the keyboard away, by taking the focus that summoned
+            // it: the backends bind Escape against what the input device
+            // delivered, and these events never went near one.
+            Message::Key(denise::KeyCode::Escape) => {
+                self.ui.focus(None);
+                self.wants_keyboard = false;
+            }
             Message::Key(code) => {
                 let events = self.keyboard.press_key(&mut self.ui, code);
                 self.ui.handle(&events);

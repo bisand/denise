@@ -929,3 +929,59 @@ fn a_stalled_loop_does_not_delete_everything_at_once() {
         "it kept bursting after the stall: {steady} more in 60 ms"
     );
 }
+
+/// Every letter a layout has is reachable from the grid.
+///
+/// The grid used to be "the positions ISO and ANSI have in common", which
+/// sounds careful and quietly dropped `KeyCode::BracketLeft` — where a
+/// Norwegian layout keeps **å**. A keyboard for a Norwegian panel that cannot
+/// type one of the three Norwegian letters is not a layout question, it is a
+/// missing key, and no test asked.
+#[test]
+fn the_grid_can_reach_every_letter_of_every_layout() {
+    use denise_layout::{BUILT_IN, Output};
+
+    let positions: Vec<KeyCode> = denise_keyboard::ROWS
+        .iter()
+        .flat_map(|row| row.keys)
+        .map(|key| key.code)
+        .collect();
+
+    for layout in BUILT_IN {
+        let mut missing: Vec<char> = Vec::new();
+        for entry in layout.entries {
+            // Only what a key *types*: a dead key produces nothing on its own
+            // and is checked by the composition tests instead.
+            let Output::Char(ch) = entry.at(false, false) else {
+                continue;
+            };
+            if ch.is_alphabetic() && !positions.contains(&entry.code) {
+                missing.push(ch);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "{} has letters no key can type: {missing:?}",
+            layout.name
+        );
+    }
+}
+
+/// The three Norwegian letters, typed on the keys that carry them.
+///
+/// Named explicitly rather than left to the sweep above, because these are the
+/// ones somebody will notice missing and the panel this was built for is
+/// Norwegian.
+#[test]
+fn a_norwegian_panel_can_type_all_three_of_its_letters() {
+    let (mut ui, mut keyboard, field) = set_up(&NORWEGIAN);
+    for code in [KeyCode::Semicolon, KeyCode::Quote, KeyCode::BracketLeft] {
+        let events = keyboard.press(code);
+        ui.handle(&events);
+    }
+    assert_eq!(
+        text_of(&ui, field),
+        "\u{f8}\u{e6}\u{e5}",
+        "ø, æ and å are what a Norwegian keyboard is for"
+    );
+}

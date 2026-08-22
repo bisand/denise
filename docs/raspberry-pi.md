@@ -519,9 +519,9 @@ browser, the gallery and the table editor all take it.
 
 Three things worth knowing before it is on a wall:
 
-- **It is 330 logical pixels tall**, six rows of 48. That is a third of a 1080p
-  panel and two thirds of an 800×480 one, so on a short display expect it to be
-  the larger half of the screen.
+- **It is 276 logical pixels tall**, five rows of 48. That is a quarter of a
+  1080p panel and rather over half of an 800×480 one, so on a short display
+  expect it to take a real bite out of the screen.
 - **`--scale` applies to it.** The grid is written in logical pixels like every
   other layout in these examples, so a 2× panel gets fingertip-sized keys rather
   than 48 device pixels of them.

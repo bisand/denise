@@ -67,6 +67,17 @@
 //! `InputBackend::set_layout` as well; the toolkit does not couple them,
 //! because it does not know the two are meant to agree.
 //!
+//! # The shape of it
+//!
+//! A compact physical keyboard rather than a phone one: fourteen columns,
+//! Backspace top right, Tab opening the second row, Enter closing the home row,
+//! Shift at both ends of the bottom one. A panel is something somebody stands
+//! in front of and types an address into, so the digits stay on screen instead
+//! of going behind a `123` page, and Tab is how a form gets crossed.
+//!
+//! The width is what makes the layouts complete — see [`ROWS`] for which
+//! positions carry what, and why a narrower grid could not type `å`.
+//!
 //! # Holding a key
 //!
 //! Backspace repeats while it is held and nothing else does, which is what a
@@ -113,7 +124,7 @@ const LEVEL3_LEGEND: &str = "alt";
 /// layout". `Unidentified` is what the tree already uses for a key it cannot
 /// name, and no layout table letters it — so nothing can be pressed by accident
 /// and nothing else will ever claim it.
-const LAYOUT_KEY: KeyCode = KeyCode::Unidentified(u32::MAX);
+pub(crate) const LAYOUT_KEY: KeyCode = KeyCode::Unidentified(u32::MAX);
 
 /// Height of one key, in logical pixels.
 ///

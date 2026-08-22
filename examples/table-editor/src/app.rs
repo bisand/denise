@@ -580,6 +580,10 @@ impl App {
 
     fn on(&mut self, message: Message) {
         match message {
+            // Escape is the one key the application answers itself: the
+            // backends bind it against what the input device delivered, and
+            // these events never went near one.
+            Message::Key(denise::KeyCode::Escape) => self.dismiss_keyboard(),
             Message::Key(code) => {
                 // Straight back into the tree, as though the events had come off
                 // a keyboard plugged into the machine.
@@ -838,7 +842,7 @@ mod tests {
     /// The last field ends up somewhere it can be read, on a panel where it
     /// cannot simply be moved.
     ///
-    /// `City` is the bottom row of a 300-tall form, and the keyboard claims 330
+    /// `City` is the bottom row of a 300-tall form, and the keyboard claims 276
     /// of a 470-tall screen: no offset puts the whole form above the keys. So
     /// the form is cut to what is left and scrolled inside it, which is the one
     /// answer that exists — and the assertion is the one that matters either
