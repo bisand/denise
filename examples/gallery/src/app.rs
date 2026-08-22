@@ -1792,6 +1792,70 @@ mod tests {
         );
     }
 
+    /// Nothing repaints the keyboard while nobody is touching it.
+    ///
+    /// The crate-level guard is in `denise-keyboard`; this is the same claim
+    /// about the wiring around it, because the flicker on the panel came from
+    /// an application calling something once a frame and not from the keys
+    /// themselves. A caret is allowed to blink — it is the only thing on this
+    /// screen that should be moving with the keyboard up and a finger nowhere
+    /// near it.
+    #[test]
+    fn an_idle_keyboard_does_not_repaint_itself() {
+        const SIZE: Size = Size::new(1280, 800);
+        let mut app = App::new(SIZE, 1.0, None, Motion::default());
+        app.ui.focus(Some(app.nodes.keyboard_field));
+        let mut now = 0;
+        for _ in 0..8 {
+            now += 200;
+            app.ui.tick(now);
+            app.handle(now);
+        }
+        assert!(app.keyboard.is_open());
+
+        let mut pixels = vec![0u32; (SIZE.width * SIZE.height) as usize];
+        let mut paint = |ui: &mut Ui<Message>| {
+            let mut frame = denise::Frame::new(
+                &mut pixels,
+                SIZE,
+                SIZE.width,
+                denise::PixelFormat::Xrgb8888,
+                denise::BufferAge::Frames(2),
+            )
+            .expect("frame");
+            ui.paint(&mut frame);
+            drop(frame);
+            ui.presented();
+        };
+        paint(&mut app.ui);
+
+        let keys: Vec<Rect> = app
+            .keyboard
+            .keys()
+            .iter()
+            .filter_map(|&(_, node)| app.ui.bounds(node))
+            .collect();
+        assert!(!keys.is_empty(), "the keyboard should have keys");
+
+        for step in 0..40 {
+            now += 16;
+            app.ui.tick(now);
+            app.handle(now);
+            for rect in app.ui.pending_damage() {
+                let hit = keys.iter().find(|k| k.intersects(rect));
+                assert!(
+                    hit.is_none(),
+                    "frame +{} ms repainted a key nobody pressed: {rect:?} covers {:?}",
+                    step * 16,
+                    hit.unwrap(),
+                );
+            }
+            if app.ui.needs_paint() {
+                paint(&mut app.ui);
+            }
+        }
+    }
+
     /// The keyboard does not flicker over a scrolled page.
     ///
     /// Reported from a Pi: steady at the top of the gallery, violent flicker a
