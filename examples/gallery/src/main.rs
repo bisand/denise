@@ -7,6 +7,7 @@
 //! cargo run -p gallery -- --motion off         # reduced motion
 //! cargo run -p gallery -- --snapshot shot.ppm
 //! cargo run -p gallery -- --snapshot 2x.ppm --size 2560x1600 --scale 2
+//! cargo run -p gallery -- --keyboard          # the on-screen keyboard, up
 //! cargo run -p gallery --no-default-features --features kiosk     # the display
 //! cargo run -p gallery --no-default-features --features kiosk -- --present vsync
 //! ```
@@ -53,6 +54,7 @@ const WINDOW: Size = Size::new(1280, 800);
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut font: Option<String> = None;
     let mut snapshot: Option<String> = None;
+    let mut keyboard = false;
     // Kiosk builds have no window to close, so a run length is the way out.
     // Zero means "until Escape".
     let mut seconds: u64 = 0;
@@ -81,6 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "gallery.ppm".into())),
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            "--keyboard" => keyboard = true,
             "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
             "--motion" => {
                 motion = match args.next().as_deref() {
@@ -109,10 +112,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let font = system_font::load(font.as_deref());
 
     if let Some(out) = snapshot {
-        return write_snapshot(&mut App::new(size, scale, font, motion), size, &out)
-            .map_err(Into::into);
+        let mut app = App::new(size, scale, font, motion);
+        if keyboard {
+            app.on_message(Message::ToggleKeyboard);
+            // A shelf slides, and a snapshot has no frames to slide over.
+            app.ui.tick(10_000);
+        }
+        return write_snapshot(&mut app, size, &out).map_err(Into::into);
     }
-    backend::run(font, size, seconds, motion, vsync)
+    backend::run(font, size, seconds, motion, vsync, keyboard)
 }
 
 /// Draws one frame into a PPM, with no window and no event loop.
@@ -167,6 +175,8 @@ mod window_backend {
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
     use denise_winit::{DeniseApp, WindowConfig, run_with};
 
+    use super::Message;
+
     pub fn run(
         font: Font,
         size: denise::Size,
@@ -175,6 +185,7 @@ mod window_backend {
         // A window does not choose: the compositor owns the flip, and softbuffer
         // has nowhere to put the preference even if it did.
         _vsync: bool,
+        keyboard: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // `run_with`, not `run`: the tree is built after the window exists, which
         // is the first moment the display's scale factor is knowable. On a Retina
@@ -189,6 +200,9 @@ mod window_backend {
             },
             move |surface, scale| {
                 let mut app = App::new(surface, scale, font, motion);
+                if keyboard {
+                    app.on_message(Message::ToggleKeyboard);
+                }
                 // The window system already draws a pointer; the tree must not
                 // draw a second one over it.
                 app.ui.show_cursor(false);
@@ -303,6 +317,7 @@ mod kiosk_backend {
         seconds: u64,
         motion: denise_ui::Motion,
         vsync: bool,
+        keyboard: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // A display's size is the one it has; `--size` is a window thing.
         let mode = if vsync {
@@ -319,6 +334,9 @@ mod kiosk_backend {
         // a panel wired straight to a framebuffer reports as 1.
         let scale = surface.scale_factor();
         let mut app = App::new(size, scale, font, motion);
+        if keyboard {
+            app.on_message(Message::ToggleKeyboard);
+        }
         eprintln!("\nTab moves, F2 theme, F12 screenshot, Escape quits\n");
 
         // Refreshed by `wait` whenever a device is opened or closed, which is

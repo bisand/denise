@@ -188,6 +188,8 @@ dependencies = [
  "denise",
  "denise-evdev",
  "denise-image",
+ "denise-keyboard",
+ "denise-layout",
  "denise-render",
  "denise-text",
  "denise-ui",
@@ -639,6 +641,7 @@ dependencies = [
  "denise",
  "denise-layout",
  "denise-render",
+ "denise-text",
  "denise-ui",
 ]
 
@@ -1068,6 +1071,8 @@ dependencies = [
  "bare-linux",
  "denise",
  "denise-evdev",
+ "denise-keyboard",
+ "denise-layout",
  "denise-render",
  "denise-text",
  "denise-ui",
@@ -2764,6 +2769,7 @@ dependencies = [
  "bare-linux",
  "denise",
  "denise-evdev",
+ "denise-keyboard",
  "denise-text",
  "denise-ui",
  "denise-winit",

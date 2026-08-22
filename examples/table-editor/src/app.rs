@@ -55,6 +55,8 @@ pub enum Message {
     Save,
     Reload,
     NextTheme,
+    /// A key tapped on the on-screen keyboard.
+    Key(denise::KeyCode),
 }
 
 /// The nodes that get written to after startup.
@@ -64,6 +66,9 @@ struct Nodes {
     rows: Vec<NodeId>,
     cells: Vec<[Option<NodeId>; 4]>,
     fields: [Option<NodeId>; 4],
+    /// The form panel, and where it sits with no keyboard in the way.
+    form: Option<NodeId>,
+    form_home: Rect,
     status: Option<NodeId>,
     position: Option<NodeId>,
     /// Every node drawn at body size, and every node drawn at heading size.
@@ -91,6 +96,9 @@ pub struct App {
     body: TextStyle,
     heading: TextStyle,
     pub exit: bool,
+    /// The on-screen keyboard: the only one a panel has, and the whole reason
+    /// the form has to get out of its way.
+    keyboard: denise_keyboard::Keyboard,
 }
 
 impl App {
@@ -216,18 +224,21 @@ impl App {
         // ------------------------------------------------------------ the form
 
         let form_x = GRID_LEFT + GRID_WIDTH + 16;
-        let form = ui
-            .add(
-                root,
-                Panel::default(),
-                s(Rect::new(
-                    form_x,
-                    GRID_TOP - 34,
-                    logical_w - form_x - 16,
-                    300,
-                )),
-            )
-            .expect("form");
+        let form_home = s(Rect::new(
+            form_x,
+            GRID_TOP - 34,
+            logical_w - form_x - 16,
+            300,
+        ));
+        let form = ui.add(root, Panel::default(), form_home).expect("form");
+        // Scrollable so the keyboard has an answer. A form of four rows never
+        // overflows on its own and this changes nothing while the keyboard is
+        // down — but with the keyboard up the form is cut to the space above it
+        // (see `fit_form_to_keyboard`), and a viewport that may be scrolled is
+        // what lets the tree bring the focused row into what is left.
+        ui.set_scrollable(form, true);
+        nodes.form = Some(form);
+        nodes.form_home = form_home;
         nodes.heading.extend(ui.add(
             form,
             Label::new("Record").with_style(heading),
@@ -292,6 +303,14 @@ impl App {
             body,
             heading,
             exit: false,
+            // Whatever the machine is configured for, at the display's scale
+            // and in the form's own font — a `Button` given no style falls back
+            // to the built-in bitmap face, which on a panel is the one widget
+            // somebody touches drawn in the one typeface that is not the rest.
+            keyboard: denise_keyboard::Keyboard::from_system()
+                .0
+                .with_scale(scale)
+                .with_style(body),
         };
         app.select(if app.table.is_empty() { None } else { Some(0) });
         app.refresh();
@@ -422,15 +441,108 @@ impl App {
 
     /// Handles everything the tree emitted this frame.
     pub fn handle(&mut self, now_ms: u64) {
-        let messages: Vec<Message> = self.ui.drain_messages().collect();
-        if messages.is_empty() {
+        // Drained until it stops rather than once: a key press is answered by
+        // feeding events straight back into the tree, and whatever those produce
+        // belongs to the same frame as the tap. Bounded, so a message that
+        // produced itself costs a frame rather than the application.
+        let mut acted = false;
+        for _ in 0..8 {
+            let messages: Vec<Message> = self.ui.drain_messages().collect();
+            if messages.is_empty() {
+                break;
+            }
+            acted = true;
+            for message in messages {
+                self.on(message);
+            }
+        }
+        if acted {
+            self.refresh();
+        }
+        // Every frame, not only the ones with messages: focus moves on a Tab
+        // the application never sees, and the keyboard follows focus.
+        self.keyboard.follow_focus(&mut self.ui, Message::Key);
+        self.fit_form_to_keyboard();
+        let _ = now_ms;
+    }
+
+    /// Puts the caret in the first form field, which brings the keyboard up.
+    ///
+    /// Through focus rather than by opening the keyboard, because that is the
+    /// path a tap takes. What `--keyboard` does.
+    pub fn focus_first_field(&mut self) {
+        if let Some(field) = self.nodes.fields[0] {
+            self.ui.focus(Some(field));
+        }
+    }
+
+    /// Puts the caret in the last form field: the one the keyboard covers.
+    ///
+    /// What a snapshot of the keyboard should show, because the first field is
+    /// the case where nothing has to happen.
+    pub fn focus_last_field(&mut self) {
+        if let Some(field) = self.nodes.fields.iter().rev().find_map(|f| *f) {
+            self.ui.focus(Some(field));
+        }
+    }
+
+    /// Whether the on-screen keyboard is up.
+    pub const fn keyboard_open(&self) -> bool {
+        self.keyboard.is_open()
+    }
+
+    /// Puts the keyboard away, taking the focus that summoned it.
+    ///
+    /// Clearing focus is what makes it stay shut: the keyboard follows focus, so
+    /// closing it with the caret still in a field would bring it back.
+    pub fn dismiss_keyboard(&mut self) {
+        self.ui.focus(None);
+        self.keyboard.close(&mut self.ui);
+        self.fit_form_to_keyboard();
+    }
+
+    /// Cuts the form to the screen the keyboard has left it, and restores it.
+    ///
+    /// The form is a fixed panel of four rows: it never overflows by itself, so
+    /// there is nothing to scroll and the tree's reveal correctly makes no move
+    /// — leaving `City` under the keys being pressed. Lifting the whole panel
+    /// instead does not work either, and the reason is arithmetic rather than
+    /// taste: on a panel this short a 300-tall form does not fit above a
+    /// 330-tall keyboard at any offset.
+    ///
+    /// So the form is shortened to what is above the keyboard, which makes it a
+    /// viewport with more content than room — and *that* the tree knows what to
+    /// do with. [`Keyboard::occluded`] is the only part the application has to
+    /// supply, because only the application knows which of its panels may be cut
+    /// short.
+    fn fit_form_to_keyboard(&mut self) {
+        let Some(form) = self.nodes.form else {
+            return;
+        };
+        let home = self.nodes.form_home;
+        let want = match self.keyboard.occluded(&self.ui) {
+            // A minimum, so a keyboard on a truly tiny display leaves a form
+            // that is cramped rather than one that is gone.
+            Some(covered) => Rect::new(
+                home.x,
+                home.y,
+                home.width,
+                (covered.y - home.y).max(self.px(64)).min(home.height),
+            ),
+            None => home,
+        };
+        if self.ui.layout(form) == Some(want) {
             return;
         }
-        for message in messages {
-            self.on(message);
-        }
-        self.refresh();
-        let _ = now_ms;
+        self.ui.set_layout(form, want);
+        // The reveal that came with the focus ran against the form's old height;
+        // nothing about the focus has changed since, so nothing re-runs it.
+        self.ui.reveal_focused();
+    }
+
+    /// A logical measurement in physical pixels.
+    fn px(&self, v: i32) -> i32 {
+        ((v as f32) * self.scale + 0.5) as i32
     }
 
     /// Handles one message. Public so a backend can synthesise one from a key.
@@ -441,6 +553,12 @@ impl App {
 
     fn on(&mut self, message: Message) {
         match message {
+            Message::Key(code) => {
+                // Straight back into the tree, as though the events had come off
+                // a keyboard plugged into the machine.
+                let events = self.keyboard.press_key(&mut self.ui, code);
+                self.ui.handle(&events);
+            }
             Message::Select(visible) => {
                 let index = self.scroll + visible;
                 if index < self.table.len() {
@@ -598,6 +716,11 @@ impl App {
                 self.restyle(id, style);
             }
         }
+        // The keyboard is not in `nodes.body` because its keys do not exist
+        // until it opens; it carries the style itself and hands it to each key
+        // as that key is built.
+        let body = self.body;
+        self.keyboard.set_style(&mut self.ui, body);
         self.ui.invalidate_all();
     }
 
@@ -630,5 +753,120 @@ impl App {
         let current = self.selected.unwrap_or(0) as i32;
         self.select(Some((current + delta).clamp(0, last) as usize));
         self.refresh();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use denise::KeyCode;
+
+    /// The panel's own shape: short enough that the keyboard covers the form,
+    /// which is the whole situation being tested.
+    fn app() -> App {
+        App::new(
+            Size::new(1000, 470),
+            1.0,
+            "test.csv".into(),
+            Table::parse(crate::table::SAMPLE),
+            TextStyle::built_in(15),
+            TextStyle::built_in(22),
+        )
+    }
+
+    /// Tapping a field brings the keyboard, and typing on it reaches the field.
+    ///
+    /// The caret has to survive the tap on a key: a keyboard that types one
+    /// character and then loses the field it was typing into is not a keyboard.
+    #[test]
+    fn a_field_summons_the_keyboard_and_the_keys_reach_it() {
+        let mut app = app();
+        let name = app.nodes.fields[0].expect("the name field");
+        app.ui.focus(Some(name));
+        app.handle(0);
+        assert!(app.keyboard_open(), "focusing a field summoned nothing");
+
+        app.ui
+            .widget_mut::<TextInput<Message>>(name)
+            .expect("the name field")
+            .clear();
+        for code in [KeyCode::A, KeyCode::D, KeyCode::A] {
+            app.on_message(Message::Key(code));
+        }
+        app.handle(0);
+        let field = app
+            .ui
+            .widget::<TextInput<Message>>(name)
+            .expect("the name field");
+        assert_eq!(field.text(), "ada");
+        assert_eq!(app.ui.focused(), Some(name), "a key press stole the caret");
+
+        // Escape puts it away, and it stays away — closing with the caret still
+        // in the field would summon it again on the next frame.
+        app.dismiss_keyboard();
+        app.handle(0);
+        assert!(!app.keyboard_open(), "it came straight back");
+    }
+
+    /// The last field ends up somewhere it can be read, on a panel where it
+    /// cannot simply be moved.
+    ///
+    /// `City` is the bottom row of a 300-tall form, and the keyboard claims 330
+    /// of a 470-tall screen: no offset puts the whole form above the keys. So
+    /// the form is cut to what is left and scrolled inside it, which is the one
+    /// answer that exists — and the assertion is the one that matters either
+    /// way: the field somebody is typing into is not under the keyboard.
+    #[test]
+    fn the_last_field_is_readable_with_the_keyboard_up() {
+        let mut app = app();
+        let form = app.nodes.form.expect("the form");
+        let city = app.nodes.fields[3].expect("the city field");
+        let home = app.ui.layout(form).expect("laid out");
+
+        app.ui.focus(Some(city));
+        app.handle(0);
+        let covered = app.keyboard.occluded(&app.ui).expect("the keyboard is up");
+        let cut = app.ui.layout(form).expect("laid out");
+        assert!(
+            cut.bottom() <= covered.y,
+            "the form still runs under the keyboard: {cut:?} against {covered:?}"
+        );
+
+        let bounds = app.ui.bounds(city).expect("the field is placed");
+        assert!(
+            bounds.bottom() <= covered.y && bounds.y >= cut.y,
+            "the field is not in what is left of the form: {bounds:?} in {cut:?}"
+        );
+
+        // And the form gets its full height back when the keyboard leaves.
+        app.dismiss_keyboard();
+        app.handle(0);
+        assert_eq!(
+            app.ui.layout(form),
+            Some(home),
+            "the form stayed cut short with nothing covering it"
+        );
+    }
+
+    /// The first field is already clear, so nothing scrolls it.
+    ///
+    /// A form that jumped whenever the keyboard appeared would be worse than one
+    /// that never moved: the movement is only justified where it buys something.
+    #[test]
+    fn a_field_already_clear_of_the_keyboard_is_left_where_it_is() {
+        let mut app = app();
+        let form = app.nodes.form.expect("the form");
+        let name = app.nodes.fields[0].expect("the name field");
+        let before = app.ui.bounds(name).expect("the field is placed");
+
+        app.ui.focus(Some(name));
+        app.handle(0);
+        assert!(app.keyboard_open());
+        assert_eq!(
+            app.ui.scroll(form),
+            denise::Point::ZERO,
+            "the form scrolled for a field that was already visible"
+        );
+        assert_eq!(app.ui.bounds(name), Some(before));
     }
 }

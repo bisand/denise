@@ -84,9 +84,10 @@
 //! [`Button::no_focus`]: denise_ui::widgets::Button::no_focus
 //! [`TextInput`]: denise_ui::widgets::TextInput
 
-use denise::{ElementState, InputEvent, KeyCode, Modifiers, Rect};
+use denise::{ElementState, InputEvent, KeyCode, Modifiers, Rect, Role};
 use denise_layout::{Composer, Layout, LayoutSource, Output};
-use denise_ui::widgets::{Button, TextInput};
+use denise_text::TextStyle;
+use denise_ui::widgets::{Button, Panel, TextInput};
 use denise_ui::{NodeId, Side, Ui};
 
 mod grid;
@@ -112,6 +113,9 @@ pub const KEY_HEIGHT: i32 = 48;
 
 /// Space between keys, and around the edge of the shelf.
 pub const KEY_GAP: i32 = 6;
+
+/// Legend size, in logical pixels, when the application names no style.
+const KEY_TEXT: u16 = 16;
 
 /// What the Shift key is currently doing.
 ///
@@ -179,6 +183,8 @@ pub struct Keyboard {
     level3: bool,
     shelf: Option<NodeId>,
     keys: Vec<(KeyCode, NodeId)>,
+    scale: f32,
+    style: TextStyle,
 }
 
 impl Keyboard {
@@ -195,7 +201,56 @@ impl Keyboard {
             level3: false,
             shelf: None,
             keys: Vec::new(),
+            scale: 1.0,
+            style: TextStyle::built_in(KEY_TEXT),
         }
+    }
+
+    /// The same keyboard at a display scale.
+    ///
+    /// The grid is written in logical pixels — [`KEY_HEIGHT`] is a fingertip,
+    /// not a count of device pixels — and this is what turns them into the ones
+    /// the surface has. The same `scale` the application scales its own layout
+    /// by, and the same one [`Theme::scaled`](denise::Theme::scaled) takes.
+    ///
+    /// Set it before opening. A keyboard already on screen is not relaid out,
+    /// because the surface it is sitting on has not changed size either.
+    #[must_use]
+    pub fn with_scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
+        self
+    }
+
+    /// Changes the face the legends are drawn in, keys already up included.
+    ///
+    /// [`with_style`](Self::with_style) is the one to reach for; this is for the
+    /// application that cannot yet know its own font — the table editor builds
+    /// its tree with the built-in face so that it has *a* face whether or not a
+    /// font file turned up, and restyles everything once one has.
+    pub fn set_style<M: Clone + 'static>(&mut self, ui: &mut Ui<M>, style: TextStyle) {
+        self.style = style;
+        for &(_, node) in &self.keys {
+            if let Some(button) = ui.widget_mut::<Button<M>>(node) {
+                button.set_style(style);
+            }
+        }
+    }
+
+    /// The face and size the legends are drawn in.
+    ///
+    /// Worth setting, and the reason is what the default has to be: a widget
+    /// cannot know which fonts the application loaded, so [`Button`] falls back
+    /// to the built-in 8x8 bitmap face and so does this. On a panel that has a
+    /// real font that fallback is visible — the one widget somebody is touching
+    /// is the one drawn in a different typeface — and on a layout with `ß` or a
+    /// composed `ü` on it, the built-in face has no such glyph to draw.
+    ///
+    /// Already scaled, like every other style an application builds: this does
+    /// not multiply `size_px` by [`with_scale`](Self::with_scale).
+    #[must_use]
+    pub fn with_style(mut self, style: TextStyle) -> Self {
+        self.style = style;
+        self
     }
 
     /// A keyboard in whatever layout the machine is configured for.
@@ -269,9 +324,29 @@ impl Keyboard {
     }
 
     /// The height a shelf needs for the whole keyboard, in logical pixels.
+    ///
+    /// [`Keyboard::height`] is this at the keyboard's scale, and is the one an
+    /// application wants; this is the constant it is derived from.
+    pub const LOGICAL_HEIGHT: i32 = ROWS.len() as i32 * (KEY_HEIGHT + KEY_GAP) + KEY_GAP;
+
+    /// The height the whole keyboard occupies, in the surface's own pixels.
+    ///
+    /// [`Self::LOGICAL_HEIGHT`] through [`with_scale`](Self::with_scale). What
+    /// the shelf is pushed at, and what an application subtracts when it wants
+    /// to know how much screen it has left.
     #[inline]
-    pub const fn height() -> i32 {
-        ROWS.len() as i32 * (KEY_HEIGHT + KEY_GAP) + KEY_GAP
+    pub fn height(&self) -> i32 {
+        self.scaled(Self::LOGICAL_HEIGHT)
+    }
+
+    /// One logical length in surface pixels.
+    ///
+    /// Through [`Rect::scaled`] rather than a multiplication written again here,
+    /// so a key's edges and the shelf's height round the same way and the bottom
+    /// row does not end a pixel short of the shelf it sits in.
+    #[inline]
+    fn scaled(&self, logical: i32) -> i32 {
+        Rect::new(0, 0, 0, logical).scaled(self.scale).height
     }
 
     /// Slides the keyboard up and letters its keys from the current layout.
@@ -291,7 +366,7 @@ impl Keyboard {
         if self.shelf.is_some() {
             return None;
         }
-        let shelf = ui.push_shelf(Side::Below, Self::height())?;
+        let shelf = ui.push_shelf(Side::Below, self.height())?;
         let width = ui.size().width as i32;
         self.build(ui, shelf, width, on_key);
         self.shelf = Some(shelf);
@@ -515,21 +590,32 @@ impl Keyboard {
         }
     }
 
+    /// What a key says right now.
+    ///
+    /// The three keys whose legends come from the keyboard's own state rather
+    /// than from the layout, then the layout's answer. One function because
+    /// [`build`](Self::build) and [`relabel`](Self::relabel) must agree: when
+    /// they did not, the layout key came up blank and only found its name after
+    /// something else had caused a relabel.
+    fn label_for(&self, code: KeyCode) -> String {
+        match code {
+            KeyCode::ShiftLeft => self.shift.legend().to_string(),
+            KeyCode::AltRight => LEVEL3_LEGEND.to_string(),
+            LAYOUT_KEY => self.layout.name.to_string(),
+            _ => grid::legend_of(code)
+                .map(str::to_string)
+                .or_else(|| self.legend(code).map(|ch| ch.to_string()))
+                .unwrap_or_default(),
+        }
+    }
+
     /// Rewrites every key's legend for the current shift and level.
     ///
     /// A position does not move when a modifier changes — only what it types —
     /// so this replaces labels on the keys that are already there.
     pub fn relabel<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) {
         for &(code, node) in &self.keys {
-            let label = match code {
-                KeyCode::ShiftLeft => self.shift.legend().to_string(),
-                KeyCode::AltRight => LEVEL3_LEGEND.to_string(),
-                LAYOUT_KEY => self.layout.name.to_string(),
-                _ => grid::legend_of(code)
-                    .map(str::to_string)
-                    .or_else(|| self.legend(code).map(|ch| ch.to_string()))
-                    .unwrap_or_default(),
-            };
+            let label = self.label_for(code);
             if let Some(button) = ui.widget_mut::<Button<M>>(node) {
                 button.set_label(label);
             }
@@ -547,31 +633,75 @@ impl Keyboard {
         width: i32,
         on_key: fn(KeyCode) -> M,
     ) {
+        // A backdrop first, and it is not decoration: a shelf is a bare
+        // container, so without one the page underneath shows through the gaps
+        // between the keys — which on a browser is a paragraph of text running
+        // between the rows. Added before the keys so it paints behind them.
+        ui.add(
+            shelf,
+            Panel::filled(Role::Base200),
+            Rect::new(0, 0, width, self.height()),
+        );
+
+        // The surface's width, back in the units the grid below is written in.
+        // Laying out logically and scaling each rectangle at the end is what
+        // keeps a row reaching both edges at 1.5x: `Rect::scaled` scales
+        // *edges*, so keys that were a gap apart still are.
+        let width = if self.scale > 0.0 {
+            Rect::new(0, 0, width, 0).scaled(1.0 / self.scale).width
+        } else {
+            width
+        };
         for (r, row) in ROWS.iter().enumerate() {
             let y = KEY_GAP + r as i32 * (KEY_HEIGHT + KEY_GAP);
             // Every key in a row shares the leftover width, so a row of ten and
             // a row of three both reach both edges.
-            let units: i32 = row.keys.iter().map(|k| k.units).sum();
-            let gaps = KEY_GAP * (row.keys.len() as i32 + 1);
-            let unit = (width - gaps).max(row.keys.len() as i32) / units.max(1);
-            let mut x = KEY_GAP;
-            for key in row.keys {
-                let w = unit * key.units;
-                let label = key
-                    .legend
-                    .map(str::to_string)
-                    .or_else(|| self.legend(key.code).map(String::from))
-                    .unwrap_or_default();
+            //
+            // Each key's edges are placed from its running share of the row
+            // rather than from a rounded width per unit, and the difference is
+            // the whole point: a width of `leftover / units` throws away the
+            // remainder once per key, and eleven keys of it leaves the row
+            // visibly short of the edge it was supposed to reach. Placing edges
+            // spends the remainder across the row instead, a pixel at a time.
+            let count = row.keys.len() as i32;
+            let units: i32 = row.keys.iter().map(|k| k.units).sum::<i32>().max(1);
+            let leftover = (width - KEY_GAP * (count + 1)).max(count);
+            let mut done = 0;
+            for (i, key) in row.keys.iter().enumerate() {
+                let gaps = KEY_GAP * (i as i32 + 1);
+                let x = gaps + leftover * done / units;
+                done += key.units;
+                let w = gaps + leftover * done / units - x;
                 if let Some(node) = ui.add(
                     shelf,
-                    Button::new(label, on_key(key.code)).no_focus(),
-                    Rect::new(x, y, w, KEY_HEIGHT),
+                    Button::new(self.label_for(key.code), on_key(key.code))
+                        .no_focus()
+                        .with_role(role_of(key.code))
+                        .with_style(self.style),
+                    Rect::new(x, y, w, KEY_HEIGHT).scaled(self.scale),
                 ) {
                     self.keys.push((key.code, node));
                 }
-                x += w + KEY_GAP;
             }
         }
+    }
+}
+
+/// What colour a key wears.
+///
+/// Two kinds, and the split is what the key does rather than what it looks
+/// like: keys that type a character are the neutral field the eye skims over,
+/// and keys that change what the *next* press means stand out from them,
+/// because those are the ones a user has to find deliberately. Enter is with
+/// the second group for the same reason — it is the key with a consequence.
+///
+/// [`Role::Primary`] is the toolkit's default for a button and is wrong for
+/// every key here: forty of them shouting at once is not emphasis.
+fn role_of(code: KeyCode) -> Role {
+    match code {
+        KeyCode::ShiftLeft | KeyCode::AltRight | KeyCode::Backspace | LAYOUT_KEY => Role::Neutral,
+        KeyCode::Enter => Role::Primary,
+        _ => Role::Base100,
     }
 }
 

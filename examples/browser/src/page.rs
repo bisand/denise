@@ -37,6 +37,8 @@ pub struct Page {
     pub base: Url,
     /// Element ids to their content-relative y, for `#fragment` scrolling.
     pub anchors: Vec<(String, i32)>,
+    /// Where the page ends, before any room added under it for a keyboard.
+    pub height: i32,
 }
 
 fn checkbox_toggled(_: bool) -> Message {
@@ -73,6 +75,7 @@ pub fn build(
         .add(viewport, Void, Rect::new(0, 0, width, layout.height))
         .expect("the viewport exists");
     let anchors = layout.anchors;
+    let height = layout.height;
     let mut images = Vec::new();
     let mut controls = HashMap::new();
     let mut selects = Vec::new();
@@ -195,5 +198,6 @@ pub fn build(
         selects,
         base,
         anchors,
+        height,
     }
 }

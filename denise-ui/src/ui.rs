@@ -1265,6 +1265,26 @@ impl<M: 'static> Ui<M> {
     /// Walks inside-out, so a scrollable inside a scrollable brings the target
     /// into its own viewport first and the outer one then brings *that* into
     /// view.
+    /// Scrolls whatever has the focus back into view.
+    ///
+    /// Focus reveals itself the moment it moves, which is the only moment the
+    /// tree can act on unprompted. When what is *around* the focus changes
+    /// instead — a keyboard slides up over it, an application gives a page more
+    /// room to scroll into — nothing about the focus has changed, so nothing
+    /// re-runs the reveal and the caret stays where it was left. This is how an
+    /// application says the geometry moved underneath it.
+    ///
+    /// Nothing focused, or nowhere left to scroll, and it does nothing.
+    pub fn reveal_focused(&mut self) {
+        let Some(id) = self.focused else {
+            return;
+        };
+        let Some(bounds) = self.nodes.get(id).map(|node| node.bounds) else {
+            return;
+        };
+        self.reveal_rect(id, bounds);
+    }
+
     /// `view` with any occluded band taken off it.
     ///
     /// A shelf lies against one screen edge and spans it, so removing it from a

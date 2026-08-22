@@ -12,11 +12,13 @@ cargo run -p browser                                    # the welcome page
 cargo run -p browser -- https://news.ycombinator.com
 cargo run -p browser -- examples/browser/fixtures/form.html
 cargo run -p browser -- --snapshot shot.ppm https://example.com
+cargo run -p browser -- --keyboard                      # with the keyboard up
 cargo run -p browser --no-default-features --features kiosk    # the display itself
 ```
 
-Alt with an arrow is history. Escape quits, unless something is open to
-dismiss first. On a kiosk, F12 writes a screenshot to `/tmp`.
+Alt with an arrow is history. Escape puts the on-screen keyboard away, and
+then quits when there is nothing left to dismiss. On a kiosk, F12 writes a
+screenshot to `/tmp`.
 
 ## What it is for
 
@@ -37,6 +39,31 @@ browser needs all three. Each gap closed with public API, from the outside:
   by another thread, so while a fetch is in flight the loop polls at 40 ms —
   and when nothing is in flight, nothing polls, which keeps the toolkit's
   idle-costs-nothing rule intact with a network attached.
+
+## Typing on a panel
+
+A Pi wired to a display has no keyboard, and until it had one this demo was
+a browser you could look at and not use: the URL bar is the only way to
+anywhere, and the welcome page's search box is the first thing on screen.
+
+Tapping either brings `denise-keyboard` up from the bottom — no wiring, the
+keyboard follows focus and asks the tree whether what took the caret is a
+`TextInput`. It types what a keyboard plugged into the machine would type,
+in the layout the machine is configured for: verified on an Alpine Pi whose
+`/etc/conf.d/loadkmap` says `no`, where the home row comes up `ø æ` and the
+layout key says so.
+
+Two things this example has to do itself, because they are policy rather
+than mechanism:
+
+- **The page grows by the keyboard's height while it is up.** A page ends
+  where its last line ends, so a field in that final screenful has nothing
+  below it to scroll into and cannot be brought clear of the keys. Adding
+  exactly what the keyboard covers gives it somewhere to go; the room leaves
+  with the keyboard. Every phone browser does this, and the toolkit cannot,
+  because only the application knows its content may grow.
+- **Escape.** A shelf pushes no scene — that is what lets the field keep its
+  caret — so nothing in the tree claims the key on the keyboard's behalf.
 
 ## What it does
 

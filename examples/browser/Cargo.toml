@@ -34,6 +34,9 @@ tls = ["ureq/rustls"]
 denise = { workspace = true, features = ["std"] }
 # The workspace pin keeps default features off; a browser wants the decoders.
 denise-image = { workspace = true, features = ["png", "jpeg", "gif"] }
+# The panel has no keyboard plugged into it; this is the one it browses with.
+denise-keyboard = { workspace = true }
+denise-layout = { workspace = true }
 denise-render = { workspace = true, features = ["std"] }
 denise-text = { workspace = true, features = ["truetype"] }
 denise-ui = { workspace = true, features = ["truetype"] }

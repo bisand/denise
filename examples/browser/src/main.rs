@@ -5,6 +5,7 @@
 //! cargo run -p browser -- https://example.com
 //! cargo run -p browser -- examples/browser/fixtures/basic.html
 //! cargo run -p browser -- --snapshot shot.ppm https://example.com
+//! cargo run -p browser -- --keyboard          # the on-screen keyboard, up
 //! cargo run -p browser --no-default-features --features kiosk   # the display
 //! ```
 //!
@@ -44,11 +45,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scale: f32 = 1.0;
     let mut motion = Motion::default();
     let mut start: Option<String> = None;
+    let mut keyboard = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--font" => font = args.next(),
+            "--keyboard" => keyboard = true,
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "browser.ppm".into())),
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
@@ -79,9 +82,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(out) = snapshot {
         let mut app = App::new(size, scale, font, motion, start);
+        if keyboard {
+            app.focus_url_bar();
+        }
         return write_snapshot(&mut app, size, &out).map_err(Into::into);
     }
-    backend::run(font, size, seconds, motion, start)
+    backend::run(font, size, seconds, motion, start, keyboard)
 }
 
 /// One frame into a PPM — after the page has actually arrived, which for a
@@ -103,6 +109,17 @@ fn write_snapshot(app: &mut App, size: Size, path: &str) -> std::io::Result<()> 
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+
+    // A shelf slides, and a snapshot has no frames to slide over. `handle` is
+    // what notices the focus and opens the keyboard; the tick after it is what
+    // puts the keyboard where it comes to rest rather than an inch into its
+    // entrance. Far enough forward to be past any animation, and never
+    // backwards, which a tree is entitled to assume of a clock.
+    let settled = app.elapsed_ms() + 10_000;
+    app.handle(app.elapsed_ms());
+    app.ui.tick(settled);
+    app.handle(settled);
+    app.ui.tick(settled + 1);
 
     let mut pixels = vec![0u32; (size.width * size.height) as usize];
     {
@@ -163,6 +180,7 @@ mod window_backend {
         _seconds: u64,
         motion: denise_ui::Motion,
         start: Option<String>,
+        keyboard: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         run_with(
             WindowConfig {
@@ -173,6 +191,9 @@ mod window_backend {
             move |surface, scale| {
                 let mut app = App::new(surface, scale, font, motion, start);
                 app.ui.show_cursor(false);
+                if keyboard {
+                    app.focus_url_bar();
+                }
                 Browser { app, exit: false }
             },
         )?;
@@ -187,9 +208,15 @@ mod window_backend {
     impl Browser {
         /// Escape quits only when there is nothing on screen to dismiss;
         /// the tree gets it first for popups and drawers, as everywhere.
+        ///
+        /// The on-screen keyboard is in that list and is the one the tree will
+        /// *not* dismiss for us: a shelf pushes no scene, precisely so the field
+        /// underneath keeps its caret, so nothing claims Escape on its behalf
+        /// and the application has to.
         fn escape_is_mine(&self) -> bool {
             !self.app.ui.popup_open()
                 && !self.app.ui.drawer_open()
+                && !self.app.keyboard_open()
                 && self.app.ui.scene_count() == 1
         }
     }
@@ -202,9 +229,12 @@ mod window_backend {
                     state: ElementState::Down,
                     ..
                 } = event
-                    && self.escape_is_mine()
                 {
-                    self.exit = true;
+                    if self.escape_is_mine() {
+                        self.exit = true;
+                    } else if self.app.keyboard_open() {
+                        self.app.dismiss_keyboard();
+                    }
                 }
             }
             self.app.claim(events);
@@ -270,6 +300,7 @@ mod kiosk_backend {
         seconds: u64,
         motion: denise_ui::Motion,
         start: Option<String>,
+        keyboard: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut surface = Display::open(bare_linux::PresentMode::Immediate)?;
         let size = surface.size();
@@ -278,7 +309,13 @@ mod kiosk_backend {
 
         let scale = surface.scale_factor();
         let mut app = App::new(size, scale, font, motion, start);
-        eprintln!("\nTab moves, Alt+arrows go back and forward, F12 screenshot, Escape quits\n");
+        if keyboard {
+            app.focus_url_bar();
+        }
+        eprintln!(
+            "\nTap the URL bar for the on-screen keyboard. Tab moves, Alt+arrows go back\n\
+             and forward, F12 screenshot, Escape puts the keyboard away and then quits\n"
+        );
 
         // Refreshed by `wait` whenever a device is opened or closed, which is
         // why this is a `Waits` and not a list built once.
@@ -357,6 +394,10 @@ mod kiosk_backend {
                 continue;
             };
             match code {
+                // The keyboard is one of the things Escape dismisses, and the
+                // one the tree will not dismiss for us: a shelf pushes no scene,
+                // so nothing claims the key on its behalf.
+                KeyCode::Escape if app.keyboard_open() => app.dismiss_keyboard(),
                 KeyCode::Escape
                     if !app.ui.popup_open()
                         && !app.ui.drawer_open()

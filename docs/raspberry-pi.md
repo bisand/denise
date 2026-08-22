@@ -496,6 +496,39 @@ text at all until the next key resolves it. And **the labels on the keys are not
 consulted**: with a Norwegian layout on a physically English keyboard, `ø` is on
 the key printed `;`, `æ` on `'`, and `å` on `[`.
 
+## The on-screen keyboard
+
+A panel with nothing plugged into it still has to be typed on: the browser's URL
+bar is the only way to a page, and the table editor is a form. `denise-keyboard`
+slides a keyboard up from the bottom and emits exactly what evdev would have —
+`Key` down, the composed `Text`, `Key` up — so nothing downstream can tell the
+difference.
+
+It reads the same layout the hardware path reads, from the same files, so a board
+configured Norwegian comes up Norwegian without being told. Verified on a Pi 3 A+
+running Alpine, whose `/etc/conf.d/loadkmap` names `/etc/keymap/no.bmap.gz`: the
+home row came up `ø æ`, and the layout key said `no`.
+
+```console
+$ /tmp/denise-browser --keyboard --size 1920x1080 --snapshot /tmp/kbd.ppm
+```
+
+`--keyboard` puts the caret in a field at startup, which is what brings the
+keyboard up — there is no separate switch, because focus is the trigger. The
+browser, the gallery and the table editor all take it.
+
+Three things worth knowing before it is on a wall:
+
+- **It is 330 logical pixels tall**, six rows of 48. That is a third of a 1080p
+  panel and two thirds of an 800×480 one, so on a short display expect it to be
+  the larger half of the screen.
+- **`--scale` applies to it.** The grid is written in logical pixels like every
+  other layout in these examples, so a 2× panel gets fingertip-sized keys rather
+  than 48 device pixels of them.
+- **Escape is the application's.** A shelf pushes no scene — which is what lets
+  the field underneath keep its caret — so nothing in the tree closes the
+  keyboard for you.
+
 ## Taking a screenshot with no desktop
 
 There is no screenshot tool, because there is no compositor to ask and no window
@@ -540,8 +573,17 @@ believe the first method over either.
 
 ## Known gaps
 
-- **Touch is unverified on hardware.** The multitouch slot path is unit tested but
-  no physical touchscreen has driven it.
+- **Touch is still unverified on hardware, and now there is something to verify
+  it with.** The multitouch slot path is unit tested, and every key of the
+  on-screen keyboard is a `Button`, which handles `TouchDown`/`TouchUp` through
+  the same path as pointer buttons — so there is nothing left to *write*, only
+  something to try. What remains, precisely: attach a touchscreen, check it
+  appears in `/proc/bus/input/devices` with `ABS_MT_SLOT`, run
+  `denise-browser --keyboard`, and confirm that a tap on a key types one
+  character rather than none or two, and that a tap on the URL bar summons the
+  keyboard the way a click does. Neither test board has a touchscreen attached;
+  the Pi 3 A+ used for the layout check above had a keyboard and a mouse and
+  nothing else.
 
 ## Cross-compiling to the Pi from another machine
 
