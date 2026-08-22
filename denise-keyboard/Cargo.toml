@@ -23,6 +23,9 @@ denise-layout = { workspace = true }
 denise-text = { workspace = true }
 denise-ui = { workspace = true, features = ["std"] }
 
+# The keys' pictures: filled polygons rather than glyphs the font may not have.
+denise-render = { workspace = true }
+
 [dev-dependencies]
 # Painting, for the test that asserts the keys land where the shelf is: a
 # geometry bug draws nothing and every text assertion still passes.

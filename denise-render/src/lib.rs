@@ -50,6 +50,9 @@ mod arc;
 // premultiplied source format is explained, and a private module renders
 // nowhere at all.
 pub mod blit;
+pub mod icon;
+
+pub use polygon::MAX_ICON_VERTICES;
 mod line;
 mod polygon;
 mod rect;

@@ -4,6 +4,7 @@ use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Radius, Rect, Role};
 use denise_render::Canvas;
+use denise_render::icon::Icon;
 use denise_text::TextStyle;
 
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
@@ -35,6 +36,8 @@ pub struct Button<M> {
     pending: u32,
     /// A small second label in the top-right corner. Empty for most buttons.
     corner: String,
+    /// A drawn shape in place of the label. `None` for most buttons.
+    icon: Option<&'static Icon>,
 }
 
 /// A button's press-and-hold schedule.
@@ -59,6 +62,13 @@ struct Repeat {
 /// stutter is invisible, little enough that a real stall is obvious.
 const MAX_CATCH_UP: u32 = 4;
 
+/// How much of a button's shorter side an icon takes, as a percentage.
+///
+/// Slightly over half. A glyph in a 48-pixel key occupies about this much once
+/// its own side bearings are counted, so an icon at the same share sits in a row
+/// of lettered keys without looking like a different size of thing.
+const ICON_SHARE: i32 = 55;
+
 impl<M> Button<M> {
     /// A primary button carrying `message`.
     pub fn new(label: impl Into<String>, message: M) -> Self {
@@ -74,6 +84,7 @@ impl<M> Button<M> {
             counted: 0,
             pending: 0,
             corner: String::new(),
+            icon: None,
         }
     }
 
@@ -92,6 +103,7 @@ impl<M> Button<M> {
             counted: 0,
             pending: 0,
             corner: String::new(),
+            icon: None,
         }
     }
 
@@ -149,6 +161,40 @@ impl<M> Button<M> {
             interval_ms: interval_ms.max(1),
         });
         self
+    }
+
+    /// A shape drawn in place of the label.
+    ///
+    /// For the button whose meaning is a picture — a Backspace key, a
+    /// scrollbar's arrow — and specifically for the case where that picture is
+    /// not reliably in the font. An [`Icon`] is filled polygons this crate
+    /// draws itself, so it is the same on a machine with no fonts installed at
+    /// all as it is on one with DejaVu.
+    ///
+    /// It takes the label's place rather than sitting beside it, and it is
+    /// drawn in the same content colour the label would have used, so it
+    /// follows the theme and the button's state without being told. Keep the
+    /// label anyway: it is what [`label`](Self::label) still reports, which is
+    /// what a test and an accessibility pass read.
+    ///
+    /// Sized from the button rather than fixed, and kept square — the shortest
+    /// side decides, so a wide key gets a centred square icon rather than a
+    /// stretched one.
+    #[must_use]
+    pub fn with_icon(mut self, icon: &'static Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// Removes or replaces the icon.
+    pub fn set_icon(&mut self, icon: Option<&'static Icon>) {
+        self.icon = icon;
+    }
+
+    /// The shape drawn in place of the label, if any.
+    #[inline]
+    pub const fn icon(&self) -> Option<&'static Icon> {
+        self.icon
     }
 
     /// A small second label in the top-right corner.
@@ -318,6 +364,21 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
                 content,
             );
         }
+        // An icon takes the label's place. Square and centred, from the shorter
+        // side, so a wide key gets a centred picture rather than a stretched
+        // one; the corner legend above is untouched, since a key can have both.
+        if let Some(icon) = self.icon {
+            let side = (ctx.bounds.width.min(ctx.bounds.height) * ICON_SHARE / 100).max(1);
+            let box_ = Rect::new(
+                ctx.bounds.x + (ctx.bounds.width - side) / 2,
+                ctx.bounds.y + (ctx.bounds.height - side) / 2,
+                side,
+                side,
+            );
+            canvas.draw_icon(icon, box_, content, background);
+            return;
+        }
+
         // The label sits low when something shares the key with it, so the two
         // do not collide and the row of characters still reads as a row.
         let vertical = if self.corner.is_empty() {

@@ -102,9 +102,10 @@ which is why switching layouts relabels the keyboard rather than rebuilding it.
 
 The grid is a compact physical keyboard — a Chromebook, near enough: fourteen
 columns, Backspace top right, Tab opening the second row, Enter closing the
-home row, Shift at both ends of the bottom one, and the layout key in the slot
-Caps Lock would have. Escape and the arrows are on the last row, so a panel with
-no other keyboard can put this one away and correct the middle of an address.
+home row, Shift at both ends of the bottom one, Caps in its own slot, and Ctrl,
+Alt, the layout key, space, the cursor keys and Escape along the last — so a
+panel with no other keyboard can put this one away and correct the middle of an
+address.
 
 The width is not decoration. `Minus`, `Equal`, `Backquote`, `BracketLeft`,
 `BracketRight` and `Backslash` are where a Norwegian layout keeps `+`, `?`, the
@@ -131,6 +132,36 @@ Ctrl+something fires from this keyboard as it would from a real one.
 
 Every key that changes what the *next* press means says which state it is in:
 `shift` becomes `SHIFT`, `caps` becomes `CAPS`, `ctrl` becomes `CTRL`.
+
+## Pictures, not glyphs
+
+The keys whose meaning is a *name* — Backspace, Tab, Enter and the two cursor
+keys — are **drawn** rather than lettered. A `denise_render::icon::Icon` is a
+short list of filled polygons on a hundred-square box, scaled into the key, so
+it looks the same on every machine and stays crisp at 2×.
+
+That replaced asking the font, which had a ceiling worth stating because it is
+not obvious how badly fonts disagree here:
+
+| face | `⌫` | `⇥` | `⏎` | `◀ ▶` | `← →` | `⎋` |
+|---|---|---|---|---|---|---|
+| DejaVu, what `font-dejavu` puts on a Pi | yes | yes | yes | yes | yes | **no** |
+| Arial, on a Mac | no | no | no | **no** | yes | no |
+| `denise-render`'s built-in face | no | no | no | no | no | no |
+
+No font, no symbol — and `⎋` was unreachable everywhere. A drawn shape does not
+care.
+
+The keys whose legend carries **state** keep their words, and that is not a gap
+left to fill. `shift` becomes `SHIFT`, `caps` becomes `CAPS`, `ctrl` becomes
+`CTRL`: one glyph cannot say which of two states it is in, and a Shift key that
+looks identical armed and unarmed is worse than one that spells it out. Escape
+keeps its word for a different reason — `⎋` is the correct symbol and almost
+nobody knows it.
+
+Each key keeps its word as its `Button` label regardless of what is drawn over
+it. That is what the key still *reports*, which is what a test and an
+accessibility pass read.
 
 ## Two legends on a key
 
