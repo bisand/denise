@@ -85,8 +85,12 @@ plus rustup's `llvm-ar` produces the same one static `aarch64-musl` binary,
 `https:` included. `scripts/deploy-pi.sh` sets that up by itself, and
 `docs/raspberry-pi.md` writes it out for building by hand.
 
-`file:` URLs work, and a `file:` form submits into a preview page showing
-exactly what would have been sent — the fixtures in `fixtures/` exercise
+`file:` URLs work, and so does a bare path — typed into the URL bar, one is
+read as a path whether or not the file is there, so a mistyped filename says
+"no such file" instead of going looking for a host by that name. Anything that
+is not plainly a path and has no scheme gets `https://` guessed at it. A
+`file:` form submits into a preview page showing exactly what would have been
+sent — the fixtures in `fixtures/` exercise
 the whole pipeline with no network at all, and `--snapshot` renders any
 page headlessly into a PPM for eyes or tests.
 
