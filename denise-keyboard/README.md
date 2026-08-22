@@ -79,8 +79,20 @@ Keys are laid out by *position*, not by character. `KeyCode::Semicolon` carries
 `ø` on a Norwegian layout and `;` on a US one, and the key does not move —
 which is why switching layouts relabels the keyboard rather than rebuilding it.
 
+## Modifiers
+
+Shift cycles — off, once, locked — because there is no clock in the press path
+and a double-tap window needs one. The key says which state it is in.
+
+`Locked` is Caps Lock rather than a held Shift: it applies to letters and
+spares the digit row, which is the difference between a locked keyboard typing
+`1` and typing `!`.
+
+The third level is the layout's own `AltGr`, not a page of symbols chosen here
+— `@` is `AltGr`+`2` on Norwegian and `Shift`+`2` on US, so a fixed grid would
+be wrong on one of them.
+
 ## What is not here yet
 
-Shift, caps lock, a symbol page and key repeat; layout switching from a key on
-the keyboard itself. This types letters, digits, space, backspace and enter, in
-whatever layout it was given.
+Key repeat, which needs a press-and-hold signal the toolkit does not have;
+layout switching from a key on the keyboard itself.

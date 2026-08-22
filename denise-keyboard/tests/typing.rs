@@ -291,3 +291,153 @@ fn following_focus_between_two_fields_keeps_it_up() {
     assert_eq!(text_of(&ui, second), "x", "typing went to the wrong field");
     assert_eq!(text_of(&ui, first), "");
 }
+
+/// A one-shot shift capitalises exactly one letter and then lets go.
+#[test]
+fn shift_once_capitalises_one_letter() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    assert_eq!(keyboard.shift(), denise_keyboard::Shift::Off);
+
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft);
+    assert_eq!(keyboard.shift(), denise_keyboard::Shift::Once);
+
+    let events = keyboard.press_key(&mut ui, KeyCode::O);
+    ui.handle(&events);
+    let events = keyboard.press_key(&mut ui, KeyCode::L);
+    ui.handle(&events);
+    let events = keyboard.press_key(&mut ui, KeyCode::A);
+    ui.handle(&events);
+
+    assert_eq!(
+        text_of(&ui, field),
+        "Ola",
+        "shift did not release after one"
+    );
+    assert_eq!(keyboard.shift(), denise_keyboard::Shift::Off);
+}
+
+/// Locked shift holds until it is turned off, and leaves the digit row alone —
+/// the bug that makes a locked keyboard type `!` for `1`.
+#[test]
+fn locked_shift_holds_and_spares_the_digits() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Once
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Locked
+    assert_eq!(keyboard.shift(), denise_keyboard::Shift::Locked);
+
+    for code in [KeyCode::A, KeyCode::B, KeyCode::Digit1] {
+        let events = keyboard.press_key(&mut ui, code);
+        ui.handle(&events);
+    }
+    assert_eq!(
+        text_of(&ui, field),
+        "AB1",
+        "caps lock reached the digit row"
+    );
+
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Off
+    let events = keyboard.press_key(&mut ui, KeyCode::C);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "AB1c");
+}
+
+/// Shifted keys report the modifier, so a binding on Shift+Enter fires from the
+/// on-screen keyboard exactly as it would from a real one.
+#[test]
+fn a_shifted_key_reports_the_modifier() {
+    use denise::{ElementState, InputEvent, Modifiers};
+
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft);
+    let events = keyboard.press_key(&mut ui, KeyCode::Enter);
+
+    let down = events
+        .iter()
+        .find(|e| {
+            matches!(
+                e,
+                InputEvent::Key {
+                    state: ElementState::Down,
+                    ..
+                }
+            )
+        })
+        .expect("a key down");
+    match down {
+        InputEvent::Key { modifiers, .. } => {
+            assert!(
+                modifiers.contains(Modifiers::SHIFT),
+                "the shift was not reported"
+            );
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// The third level is the layout's own, which is the whole reason it is not a
+/// grid of symbols chosen here: `@` is AltGr+2 on Norwegian.
+#[test]
+fn the_third_level_types_the_layouts_own_symbols() {
+    let (mut ui, mut keyboard, field) = set_up(&NORWEGIAN);
+
+    keyboard.press_key(&mut ui, KeyCode::AltRight);
+    assert!(keyboard.level3());
+    let events = keyboard.press_key(&mut ui, KeyCode::Digit2);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "@", "AltGr+2 is @ on Norwegian");
+
+    keyboard.press_key(&mut ui, KeyCode::AltRight);
+    assert!(!keyboard.level3());
+    let events = keyboard.press_key(&mut ui, KeyCode::Digit2);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "@2", "the level did not let go");
+}
+
+/// A modifier key sends nothing itself: it changes what the next press means.
+#[test]
+fn a_modifier_key_emits_no_events() {
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+    assert!(keyboard.press_key(&mut ui, KeyCode::ShiftLeft).is_empty());
+    assert!(keyboard.press_key(&mut ui, KeyCode::AltRight).is_empty());
+}
+
+/// The keys say what pressing them would produce, at whatever level is showing.
+#[test]
+fn the_legends_follow_the_level() {
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+
+    let label_of = |ui: &Ui<Msg>, keyboard: &Keyboard, want: KeyCode| -> String {
+        let (_, node) = keyboard
+            .keys()
+            .iter()
+            .find(|(code, _)| *code == want)
+            .copied()
+            .expect("the key is in the grid");
+        ui.widget::<denise_ui::widgets::Button<Msg>>(node)
+            .expect("a button")
+            .label()
+            .to_string()
+    };
+
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::A), "a");
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::ShiftLeft), "shift");
+
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft);
+    assert_eq!(
+        label_of(&ui, &keyboard, KeyCode::A),
+        "A",
+        "legend not shifted"
+    );
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::ShiftLeft), "SHIFT");
+    assert_eq!(
+        label_of(&ui, &keyboard, KeyCode::Digit1),
+        "!",
+        "shift does reach the digit row"
+    );
+
+    // Spending the one-shot puts the legends back.
+    let events = keyboard.press_key(&mut ui, KeyCode::A);
+    ui.handle(&events);
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::A), "a", "legend stuck");
+}

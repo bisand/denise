@@ -121,8 +121,14 @@ impl Entry {
         Self::pair(code, lower, upper)
     }
 
+    /// What this position types at one combination of levels.
+    ///
+    /// The same choice [`Composer`] makes internally, exposed so that an
+    /// on-screen keyboard can letter its keys with what pressing them would
+    /// actually produce — rather than reimplementing the rule and drifting from
+    /// it.
     #[inline]
-    const fn at(&self, shift: bool, level3: bool) -> Output {
+    pub const fn at(&self, shift: bool, level3: bool) -> Output {
         match (shift, level3) {
             (false, false) => self.base,
             (true, false) => self.shift,
@@ -344,7 +350,13 @@ impl Composer {
         }
     }
 
-    fn output_for(&self, code: KeyCode, shift: bool) -> Output {
+    /// What one position types right now, given whether Shift is held.
+    ///
+    /// The composer's own answer, including Caps Lock and the third level from
+    /// its state — so an on-screen keyboard can letter a key with exactly what
+    /// pressing it would produce. Caps Lock inverts shift for letters only, and
+    /// asking here is how a keyboard gets that right without repeating the rule.
+    pub fn output_for(&self, code: KeyCode, shift: bool) -> Output {
         if let Some(output) = self.numpad(code) {
             return output;
         }

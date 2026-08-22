@@ -115,17 +115,36 @@ const BOTTOM: [Key; 11] = [
 // letters, and a stock Alpine root has no fonts installed at all — so the
 // symbols draw as tofu on precisely the machine least able to spare a key
 // nobody can read. ASCII renders in every face there is.
-const SPACE_ROW: [Key; 3] = [
+const MOD_ROW: [Key; 3] = [
+    // Legends for these two come from the keyboard's state rather than the
+    // layout: the key says what it will do next, not what it types.
+    Key::wide(KeyCode::ShiftLeft, "shift", 2),
+    Key::wide(KeyCode::AltRight, "alt", 2),
     Key::wide(KeyCode::Backspace, "back", 2),
-    Key::wide(KeyCode::Space, " ", 6),
+];
+
+const SPACE_ROW: [Key; 2] = [
+    Key::wide(KeyCode::Space, " ", 8),
     Key::wide(KeyCode::Enter, "enter", 2),
 ];
 
 /// The grid, top row first.
-pub static ROWS: [Row; 5] = [
+pub static ROWS: [Row; 6] = [
     Row { keys: &DIGITS },
     Row { keys: &TOP },
     Row { keys: &HOME },
     Row { keys: &BOTTOM },
+    Row { keys: &MOD_ROW },
     Row { keys: &SPACE_ROW },
 ];
+
+/// The fixed legend for a position, if it has one.
+///
+/// Keys that type nothing carry their own words; everything else asks the
+/// layout, and the answer changes with the shift level.
+pub(crate) fn legend_of(code: KeyCode) -> Option<&'static str> {
+    ROWS.iter()
+        .flat_map(|row| row.keys)
+        .find(|key| key.code == code)
+        .and_then(|key| key.legend)
+}
