@@ -46,12 +46,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut motion = Motion::default();
     let mut start: Option<String> = None;
     let mut keyboard = false;
+    let mut alternates = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--font" => font = args.next(),
             "--keyboard" => keyboard = true,
+            "--alternates" => alternates = true,
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "browser.ppm".into())),
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
@@ -84,6 +86,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(size, scale, font, motion, start);
         if keyboard {
             app.focus_url_bar();
+        }
+        if alternates {
+            app.handle(app.elapsed_ms());
+            app.hold_a_letter(denise::KeyCode::O);
         }
         return write_snapshot(&mut app, size, &out).map_err(Into::into);
     }
@@ -238,6 +244,7 @@ mod window_backend {
                 }
             }
             self.app.claim(events);
+            self.app.keyboard_input(events);
             self.app.ui.handle(events);
             let now = self.app.elapsed_ms();
             self.app.ui.tick(now);
@@ -358,6 +365,7 @@ mod kiosk_backend {
                 break;
             }
             app.claim(&events);
+            app.keyboard_input(&events);
             app.ui.handle(&events);
             app.ui.tick(app.elapsed_ms());
             let now = app.elapsed_ms();

@@ -38,6 +38,10 @@ pub struct Button<M> {
     corner: String,
     /// A drawn shape in place of the label. `None` for most buttons.
     icon: Option<&'static Icon>,
+    /// Whether this button reports how long it has been held.
+    watches_hold: bool,
+    /// How long the current press has lasted, as of the last `animate`.
+    held_ms: u64,
 }
 
 /// A button's press-and-hold schedule.
@@ -85,6 +89,8 @@ impl<M> Button<M> {
             pending: 0,
             corner: String::new(),
             icon: None,
+            watches_hold: false,
+            held_ms: 0,
         }
     }
 
@@ -104,6 +110,8 @@ impl<M> Button<M> {
             pending: 0,
             corner: String::new(),
             icon: None,
+            watches_hold: false,
+            held_ms: 0,
         }
     }
 
@@ -237,6 +245,38 @@ impl<M> Button<M> {
         core::mem::take(&mut self.pending)
     }
 
+    /// Reports how long a finger has been resting on it.
+    ///
+    /// The other half of press-and-hold. [`with_repeat`](Self::with_repeat)
+    /// answers "again, and again"; this answers "how long", which is what a
+    /// gesture that fires *once* after a delay needs — a key offering its
+    /// alternates, a button revealing a menu.
+    ///
+    /// Costs the same as repeating and no more: the button asks the tree to
+    /// wake it only between a press and its release, so a screen nobody is
+    /// touching schedules nothing. Read it with [`held_ms`](Self::held_ms).
+    #[must_use]
+    pub const fn watching_hold(mut self) -> Self {
+        self.watches_hold = true;
+        self
+    }
+
+    /// How long the current press has lasted, in milliseconds.
+    ///
+    /// `None` when nothing is on it. Updated on each tick while held, so it is
+    /// as fresh as the last one — which for a wake-driven tree means as fresh
+    /// as whatever asked to be woken.
+    ///
+    /// A free read: unlike `Ui::widget_mut`, looking does not repaint.
+    #[inline]
+    pub const fn held_ms(&self) -> Option<u64> {
+        if self.held_since.is_some() {
+            Some(self.held_ms)
+        } else {
+            None
+        }
+    }
+
     /// Repeats owed, without taking them.
     ///
     /// The read that costs nothing. `Ui::widget_mut` damages the node it hands
@@ -300,6 +340,16 @@ impl<M> Button<M> {
     /// Replaces the message emitted on activation.
     pub fn set_message(&mut self, message: Option<M>) {
         self.message = message;
+    }
+
+    /// The colour role it is drawn in.
+    ///
+    /// Worth reading before writing: `Ui::widget_mut` repaints whatever it
+    /// hands out, so a caller restyling a row of buttons at once should skip
+    /// the ones already right.
+    #[inline]
+    pub const fn role(&self) -> Role {
+        self.role
     }
 
     /// Replaces the colour role.
@@ -411,7 +461,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
         // A repeating button lives on the down edge instead of the up one, and
         // has to, since the repeats begin while the finger is still there.
-        if self.repeat.is_some() {
+        if self.repeat.is_some() || self.watches_hold {
             match event {
                 Event::Input(
                     InputEvent::PointerButton {
@@ -423,14 +473,25 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
                 ) if ctx.bounds.contains(*position) => {
                     self.held_since = Some(ctx.now_ms);
                     self.counted = 0;
+                    self.held_ms = 0;
                     // The wake that carries the hold. Asked for here and given
                     // back by `animate` the moment the finger leaves, so a tree
                     // nobody is touching schedules nothing.
                     ctx.request_animation();
-                    if let Some(message) = self.message.clone() {
+                    // A repeating button acts on the press; one that merely
+                    // watches the hold does not, so that it still emits on
+                    // release the way every other button does — the gesture is
+                    // "hold for something else", not "act sooner".
+                    if self.repeat.is_some()
+                        && let Some(message) = self.message.clone()
+                    {
                         ctx.emit(message);
                     }
-                    return Handled::Yes;
+                    return if self.repeat.is_some() {
+                        Handled::Yes
+                    } else {
+                        Handled::No
+                    };
                 }
                 // Every way a press can end. The tree dispatches the release to
                 // whichever node was pressed even when the finger has wandered
@@ -443,11 +504,16 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
                 | Event::Input(InputEvent::TouchUp { .. })
                 | Event::PressCancelled => {
                     self.held_since = None;
+                    self.held_ms = 0;
                     // Whatever was owed is dropped with the press: a repeat
                     // nobody collected before the finger lifted is one the user
                     // did not wait for.
                     self.pending = 0;
-                    return Handled::Yes;
+                    // A repeating button has already acted; one that only
+                    // watches must fall through, or it would never emit at all.
+                    if self.repeat.is_some() {
+                        return Handled::Yes;
+                    }
                 }
                 _ => {}
             }
@@ -487,10 +553,20 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     /// clock that jumped — a loop that blocked, a snapshot ticking straight past
     /// a second — yields the repeats that time actually covered and no more.
     fn animate(&mut self, now_ms: u64) -> Animation {
-        let (Some(repeat), Some(since)) = (self.repeat, self.held_since) else {
+        let Some(since) = self.held_since else {
             return Animation::NONE;
         };
-        let held = now_ms.saturating_sub(since);
+        self.held_ms = now_ms.saturating_sub(since);
+        let Some(repeat) = self.repeat else {
+            // Watching the hold and nothing else: come back at the rate the
+            // tree animates at, which is what makes `held_ms` current without
+            // this widget inventing a cadence of its own.
+            return Animation {
+                repaint: false,
+                next: crate::Wake::Animating,
+            };
+        };
+        let held = self.held_ms;
         let Some(after_delay) = held.checked_sub(repeat.delay_ms) else {
             // Still inside the initial pause: nothing owed, come back when it
             // is over.

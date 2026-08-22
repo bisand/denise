@@ -224,7 +224,8 @@ when the geometry around the focus changed rather than the focus itself.
 
 Backspace repeats while it is held, and nothing else does — which is what a
 phone does, and what stops a slow finger typing `aaaaaa`. Clearing a URL bar
-used to be forty taps.
+used to be forty taps. A letter held that long offers its alternates instead;
+see below.
 
 The repeats are the events a real keyboard sends for an auto-repeat:
 `InputEvent::Key` with `repeat: true`, and whatever that types. A `TextInput`
@@ -250,8 +251,61 @@ from the press is truthful about how much time passed, and would hand over every
 repeat a ten-second stall covered — so the catch-up is bounded, and the ones a
 stall swallowed are dropped rather than owed.
 
-## What is not here yet
+## Holding a letter
 
-Holding a letter to reach its alternates, the way a phone offers `é è ê ë` for
-`e`. The layout's dead keys and third level already reach those characters, so
-this is about discoverability rather than capability.
+Holding a letter offers its alternates, the way a phone does: `é è ê ë` over the
+`e`, and the finger slides onto one and lifts. The dead keys and the third level
+already *reached* those characters, so what this adds is the discoverability —
+nobody finds `¨` then `o` by looking at a keyboard.
+
+The characters are the layout's own, in `Layout::alternates`, because which ones
+an `o` should offer is a fact about the language and not about this widget. It
+follows from that that Norwegian does **not** offer `ø` from `o`: `ø` has a key,
+and a slower way to reach a letter you already have is noise. US does offer it,
+having no such key. German offers `ß` from `s`, which is where a writer reaches
+for it.
+
+The strip is drawn as ordinary nodes at the top of the shelf, **not** as a
+popup. That is not a shortcut. A popup pushes a scene, a pushed scene cancels
+whatever press it covers, and the press it would cancel here is the very one
+holding the key that opened it.
+
+It wears a frame, in the accent colour, with a margin around the choices and a
+gap above the row it floats over. Drawn flush and in the keys' own colours it
+read as *another row of the keyboard* — so the one thing the gesture exists to
+say, that these five are the choice right now, was the one thing it did not.
+
+### The one call it needs from the application
+
+The choice is made by where the finger **lifts**, and the press that opened the
+strip is still down on the key — so the tree goes on routing to the key, quite
+correctly, and the keyboard has to do its own hit test. Give `Keyboard::handle`
+the same events, just before `Ui::handle` gets them:
+
+```rust,ignore
+let typed = keyboard.handle(&mut ui, &events);
+ui.handle(&typed);
+ui.handle(&events);
+```
+
+It returns nothing on nearly every call — there is no strip open on nearly every
+call. What it does return is `InputEvent::Text` alone, with no `InputEvent::Key`
+around it, which is the honest shape: `é` is not at a position on this keyboard,
+nothing pressed a key to get it, and a binding watching for keys should not
+think one was pressed.
+
+Lifting anywhere else ends the gesture and types nothing — except on the key
+itself, which types what it always types. That is why the strip does not repeat
+the base character among its choices: the key is still there underneath it,
+still where the finger already is, so a hold opened by accident is undone by not
+moving.
+
+Holding a key with nothing to offer does nothing at all, and goes on typing
+normally when it is released. Only the keys that type a character are asked how
+long they have been held; a key with a word on it stays free.
+
+### What it costs when nobody is holding anything
+
+Nothing, by the same rule the repeat is held to. `Button::watching_hold` asks
+the tree to wake it only between a press and its release, so a panel nobody is
+touching schedules no wake, and `Keyboard::tick` finds nothing to open.

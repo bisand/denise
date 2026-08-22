@@ -1256,6 +1256,19 @@ impl App {
 
     // ------------------------------------------------------------- messages
 
+    /// The alternates gesture, which the keyboard answers for itself.
+    ///
+    /// Its choice is made by where a finger lifts, and the press that opened it
+    /// is still down on the key — so the tree goes on routing to the key, quite
+    /// correctly, and the keyboard does its own hit test instead. Give it the
+    /// same events the tree is about to get, and give it them first.
+    pub fn keyboard_input(&mut self, events: &[denise::InputEvent]) {
+        let typed = self.keyboard.handle(&mut self.ui, events);
+        if !typed.is_empty() {
+            self.ui.handle(&typed);
+        }
+    }
+
     pub fn handle(&mut self, now_ms: u64) {
         // A held key first, so a repeat and whatever it causes land in the same
         // pass. Empty on every frame nobody is touching a key — holding
@@ -2007,6 +2020,88 @@ mod tests {
         assert!(
             !app.keyboard.is_open(),
             "the plain shelf demo did not get the bottom edge"
+        );
+    }
+
+    /// Holding a letter in the demo offers its alternates, and the lift types
+    /// one into the demo's own field.
+    ///
+    /// The gesture is the keyboard's, but the *routing* is the application's:
+    /// the press that opened the strip is still down on the key, so the tree
+    /// keeps sending everything there and `keyboard_input` has to see the
+    /// events before `Ui::handle` does. Wiring it in the wrong order or leaving
+    /// it out entirely leaves a strip that opens and never chooses anything,
+    /// which is exactly the failure this test would catch.
+    #[test]
+    fn holding_a_letter_in_the_demo_types_an_accented_one() {
+        let mut app = app();
+        app.ui.focus(Some(app.nodes.keyboard_field));
+        pump(&mut app);
+        assert!(app.keyboard.is_open(), "the keyboard never came up");
+
+        let key = app
+            .keyboard
+            .keys()
+            .iter()
+            .find(|(code, _)| *code == KeyCode::E)
+            .map(|(_, node)| *node)
+            .expect("no e in the grid");
+        let bounds = app.ui.bounds(key).expect("the key is placed");
+        let at = Point::new(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+
+        let mut now = 10_000;
+        app.ui.tick(now);
+        let down = [
+            InputEvent::PointerMoved { position: at },
+            InputEvent::PointerButton {
+                button: PointerButton::Left,
+                state: ElementState::Down,
+                position: at,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        app.keyboard_input(&down);
+        app.ui.handle(&down);
+
+        now += denise_keyboard::HOLD_MS + 20;
+        app.ui.tick(now);
+        app.handle(now);
+        assert!(app.keyboard.offering(), "holding e offered nothing");
+
+        // Slide onto the first choice and lift there.
+        let (wanted, choice) = app.keyboard.choices()[0];
+        let over = {
+            let b = app.ui.bounds(choice).expect("the choice is placed");
+            Point::new(b.x + b.width / 2, b.y + b.height / 2)
+        };
+        let moved = [InputEvent::PointerMoved { position: over }];
+        app.keyboard_input(&moved);
+        app.ui.handle(&moved);
+
+        let up = [InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state: ElementState::Up,
+            position: over,
+            modifiers: Modifiers::NONE,
+        }];
+        app.keyboard_input(&up);
+        app.ui.handle(&up);
+        app.handle(now);
+
+        assert!(
+            !app.keyboard.offering(),
+            "the strip stayed up after the lift"
+        );
+        let typed = app
+            .ui
+            .widget::<TextInput<Message>>(app.nodes.keyboard_field)
+            .expect("a text input")
+            .text()
+            .to_string();
+        assert_eq!(
+            typed,
+            wanted.to_string(),
+            "the lift did not type what it was over"
         );
     }
 

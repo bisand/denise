@@ -517,7 +517,7 @@ $ /tmp/denise-browser --keyboard --size 1920x1080 --snapshot /tmp/kbd.ppm
 keyboard up — there is no separate switch, because focus is the trigger. The
 browser, the gallery and the table editor all take it.
 
-Three things worth knowing before it is on a wall:
+Things worth knowing before it is on a wall:
 
 - **It is 276 logical pixels tall**, five rows of 48. That is a quarter of a
   1080p panel and rather over half of an 800×480 one, so on a short display
@@ -532,6 +532,13 @@ Three things worth knowing before it is on a wall:
   nothing when nobody is touching it: the key asks to be woken only between its
   press and its release, so an idle panel with the keyboard on screen schedules
   no wakes at all.
+- **Holding a letter offers its alternates** — `é è ê ë` over the `e`, in a
+  framed strip above the key, chosen by sliding onto one and lifting. The
+  characters are the layout's own, so a board configured Norwegian offers what a
+  Norwegian writer reaches for and not what a US one does. It costs nothing when
+  idle for the same reason Backspace does. The application must hand
+  `Keyboard::handle` the pointer and touch events before `Ui::handle` sees them;
+  all three demos here do.
 - **The named keys are drawn, not lettered.** Backspace, Tab, Enter and the
   cursor keys are filled polygons rather than font glyphs, so they look the same
   whether or not `font-dejavu` is installed — which matters here, because a
@@ -618,6 +625,13 @@ believe the first method over either.
   keyboard the way a click does. Neither test board has a touchscreen attached;
   the Pi 3 A+ used for the layout check above had a keyboard and a mouse and
   nothing else.
+- **The alternates gesture is the part of that most worth trying on glass.**
+  Hold a letter, slide, lift. It is written against `TouchMoved` and `TouchUp`
+  alongside the pointer events and is tested through both in the unit tests, but
+  a slide across a real digitiser is the one thing a mouse drag cannot stand in
+  for: a finger that wobbles off the strip and back, or one whose lift reports a
+  position a few pixels from where it was last seen moving, is a case no test
+  here invents.
 
 ## Cross-compiling to the Pi from another machine
 

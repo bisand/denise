@@ -158,9 +158,51 @@ pub struct Layout {
     /// What the numpad's decimal key types. `.` in most of the world, `,` in most
     /// of Europe.
     pub decimal_separator: char,
+    /// Accented characters a position can offer when held, by base character.
+    ///
+    /// A fact about the layout rather than about any keyboard: which letters an
+    /// `o` should offer depends on what the writer of *this* language reaches
+    /// for, and a keyboard reading them from here switches its offers when it
+    /// switches layout, for free.
+    ///
+    /// Keyed by the lower-case base character rather than by position, because
+    /// that is what makes the table readable and what makes `KeyCode::Semicolon`
+    /// offer `ø`'s relatives on Norwegian and `;`'s nothing on US, without the
+    /// table having to know where the layout put anything.
+    ///
+    /// The base character is *not* repeated in its own list — a keyboard shows
+    /// the key itself alongside these.
+    pub alternates: &'static [(char, &'static str)],
 }
 
 impl Layout {
+    /// What holding a position offers, if anything.
+    ///
+    /// Asked with the character the key currently *types* rather than its
+    /// position, so a shifted key offers the shifted forms: hold `O` and the
+    /// answer is `ÖØÓ`, not `öøó`. Empty for a position with nothing to offer,
+    /// which is most of them.
+    ///
+    /// The case follows the base: a table written in lower case answers in
+    /// upper for an upper-case base, so one table serves both.
+    pub fn alternates_for(&self, base: char) -> impl Iterator<Item = char> + use<'_> {
+        let upper = base.is_uppercase();
+        let lower = base.to_lowercase().next().unwrap_or(base);
+        self.alternates
+            .iter()
+            .find(|(key, _)| *key == lower)
+            .map(|(_, list)| *list)
+            .unwrap_or("")
+            .chars()
+            .map(move |ch| {
+                if upper {
+                    ch.to_uppercase().next().unwrap_or(ch)
+                } else {
+                    ch
+                }
+            })
+    }
+
     /// What this layout puts on one position, at each of its four levels.
     ///
     /// `None` for a position no layout describes. Positions the layout does not
@@ -486,11 +528,61 @@ const US_ENTRIES: [Entry; 22] = {
     ]
 };
 
+/// What holding a letter offers on a US layout.
+///
+/// English borrows its accents rather than owning them, so this is the set a
+/// writer of English actually reaches for — café, naïve, résumé, piñata — and
+/// not every accented form that exists.
+const US_ALTERNATES: [(char, &str); 7] = [
+    ('a', "àáâäãåæ"),
+    ('c', "ç"),
+    ('e', "èéêë"),
+    ('i', "ìíîï"),
+    ('n', "ñ"),
+    ('o', "òóôöõø"),
+    ('u', "ùúûü"),
+];
+
+/// What holding a letter offers on a Norwegian layout.
+///
+/// `æ`, `ø` and `å` have keys of their own here, so they are **not** repeated as
+/// alternates of `a` and `o` — offering somebody a slower way to reach a letter
+/// their keyboard already has is noise. What is left is what Norwegian borrows:
+/// the Danish and Swedish neighbours, and the accents that turn up in loan words
+/// and in names.
+const NORWEGIAN_ALTERNATES: [(char, &str); 8] = [
+    ('a', "äàáâã"),
+    ('c', "ç"),
+    ('e', "éèêë"),
+    ('i', "íìîï"),
+    ('n', "ñ"),
+    ('o', "öòóôõ"),
+    ('u', "üùúû"),
+    ('s', "š"),
+];
+
+/// What holding a letter offers on a German layout.
+///
+/// The umlauts have keys of their own and are left off for the same reason
+/// Norwegian's are. `ß` is the one that earns its place: it is on the layout at
+/// `Minus`, and a writer reaching for it from `s` is reaching the way they
+/// would on a phone.
+const GERMAN_ALTERNATES: [(char, &str); 7] = [
+    ('a', "àáâã"),
+    ('c', "ç"),
+    ('e', "éèêë"),
+    ('i', "íìîï"),
+    ('n', "ñ"),
+    ('o', "òóôõ"),
+    ('s', "ß"),
+];
+
 /// US QWERTY. No dead keys, no third level.
 pub static US: Layout = Layout {
     name: "us",
     entries: &US_ENTRIES,
     decimal_separator: '.',
+    alternates: &US_ALTERNATES,
 };
 
 const NORWEGIAN_ENTRIES: [Entry; 24] = {
@@ -597,6 +689,7 @@ pub static GERMAN: Layout = Layout {
     name: "de",
     entries: &GERMAN_ENTRIES,
     decimal_separator: ',',
+    alternates: &GERMAN_ALTERNATES,
 };
 
 /// Norwegian (Bokmål) QWERTY.
@@ -607,6 +700,7 @@ pub static NORWEGIAN: Layout = Layout {
     name: "no",
     entries: &NORWEGIAN_ENTRIES,
     decimal_separator: ',',
+    alternates: &NORWEGIAN_ALTERNATES,
 };
 
 /// Every layout that ships, for a runtime lookup by name.
@@ -1398,5 +1492,69 @@ mod german_tests {
             assert_eq!(by_name(name).map(|l| l.name), Some(name), "{name}");
         }
         assert!(by_name("fr").is_none(), "a layout there is no table for");
+    }
+}
+
+#[cfg(test)]
+mod alternate_tests {
+    use super::*;
+
+    /// Each layout carries its own offers, and the one thing a positional edit
+    /// gets wrong is attaching them to the wrong layout — which is exactly what
+    /// happened once, because `GERMAN` is declared above `NORWEGIAN`.
+    #[test]
+    fn every_layout_has_its_own_alternates() {
+        for layout in BUILT_IN {
+            assert!(
+                !layout.alternates.is_empty(),
+                "{} has no alternates at all",
+                layout.name
+            );
+        }
+        assert!(
+            GERMAN.alternates_for('s').any(|c| c == '\u{df}'),
+            "German should offer ß from s"
+        );
+        assert!(
+            !US.alternates_for('s').any(|c| c == '\u{df}'),
+            "US should not"
+        );
+        assert!(
+            US.alternates_for('o').any(|c| c == '\u{f8}'),
+            "US has no ø key, so it offers one"
+        );
+        assert!(
+            !NORWEGIAN.alternates_for('o').any(|c| c == '\u{f8}'),
+            "Norwegian has a ø key; offering it again is noise"
+        );
+    }
+
+    /// A letter never offers itself: the key is already there beside the strip.
+    #[test]
+    fn no_layout_offers_the_letter_you_are_already_holding() {
+        for layout in BUILT_IN {
+            for &(base, list) in layout.alternates {
+                assert!(
+                    !list.contains(base),
+                    "{} offers {base:?} as an alternate of itself",
+                    layout.name
+                );
+            }
+        }
+    }
+
+    /// The tables are keyed in lower case, which is what makes one table serve
+    /// both cases.
+    #[test]
+    fn the_tables_are_keyed_in_lower_case() {
+        for layout in BUILT_IN {
+            for &(base, _) in layout.alternates {
+                assert!(
+                    base.is_lowercase(),
+                    "{} keys its alternates on {base:?}, which is not lower case",
+                    layout.name
+                );
+            }
+        }
     }
 }

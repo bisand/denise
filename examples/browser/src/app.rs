@@ -186,6 +186,27 @@ impl App {
         self.pending.is_some() || !self.inflight.is_empty() || !self.css_inflight.is_empty()
     }
 
+    /// Puts a letter's alternates up, as though it had been held.
+    ///
+    /// What `--keyboard --alternates` shows, and what a snapshot of the gesture
+    /// is a snapshot of: a headless run has no finger to hold anything with.
+    pub fn hold_a_letter(&mut self, code: denise::KeyCode) {
+        self.keyboard.offer_for_test(&mut self.ui, code);
+    }
+
+    /// The alternates gesture, which the keyboard answers itself.
+    ///
+    /// Its choice is made by where a finger lifts, and the press that opened it
+    /// is still down on the key — so the tree keeps routing to the key, quite
+    /// correctly, and the keyboard does its own hit test. Hand it the same
+    /// events the tree gets, before the tree gets them.
+    pub fn keyboard_input(&mut self, events: &[InputEvent]) {
+        let typed = self.keyboard.handle(&mut self.ui, events);
+        if !typed.is_empty() {
+            self.ui.handle(&typed);
+        }
+    }
+
     /// Keys and events the application claims before or beside the tree:
     /// Alt with an arrow is history, a resize is a relayout.
     pub fn claim(&mut self, events: &[InputEvent]) {
