@@ -96,16 +96,14 @@
 //! nobody is touching one, because a repeating key asks the tree to wake it
 //! only between its press and its release.
 //!
-//! # What is not here yet
+//! Holding a *letter* offers its alternates instead — `é è ê ë` over the `e`,
+//! in a framed strip above the key, chosen by where the finger lifts. The
+//! characters come from the layout, so they change when it does. That gesture
+//! needs the application's help for one call: see [`Keyboard::handle`].
 //!
-//! Holding a *letter* to reach its alternates, the way a phone offers `é è ê ë`
-//! for `e`. The layout's dead keys and third level already reach those
-//! characters, so what is missing is the discoverability rather than the
-//! capability.
-//!
-//! Nothing else. A field focused under the keyboard is scrolled clear of it
-//! where it sits in something that scrolls; where it does not,
-//! [`Keyboard::occluded`] says what to move it clear of.
+//! A field focused under the keyboard is scrolled clear of it where it sits in
+//! something that scrolls; where it does not, [`Keyboard::occluded`] says what
+//! to move it clear of.
 //!
 //! [`InputEvent::Key`]: denise::InputEvent::Key
 //! [`InputEvent::Text`]: denise::InputEvent::Text
@@ -115,7 +113,7 @@
 //! [`Button::no_focus`]: denise_ui::widgets::Button::no_focus
 //! [`TextInput`]: denise_ui::widgets::TextInput
 
-use denise::{ElementState, InputEvent, KeyCode, Modifiers, Rect, Role};
+use denise::{ElementState, InputEvent, KeyCode, Modifiers, Point, Rect, Role};
 use denise_layout::{Composer, Layout, LayoutSource, Output};
 use denise_text::TextStyle;
 use denise_ui::widgets::{Button, Panel, TextInput};
@@ -154,6 +152,22 @@ const KEY_TEXT: u16 = 16;
 /// Long enough that no ordinary tap reaches it, short enough that somebody who
 /// meant to hold does not first wonder whether it is broken.
 pub const REPEAT_DELAY_MS: u64 = 450;
+
+/// The margin of frame showing around a strip of alternates, in logical pixels.
+///
+/// Wide enough that the border reads as the edge of something floating rather
+/// than as a seam between keys.
+const STRIP_PAD: i32 = 8;
+
+/// How thick that frame is drawn.
+const STRIP_BORDER: i32 = 2;
+
+/// How long a letter is held before it offers its alternates.
+///
+/// Longer than the pause before Backspace starts repeating, and deliberately:
+/// a repeat that starts a shade early costs one character, and a strip of
+/// letters that opens under a finger that meant to type `e` costs the gesture.
+pub const HOLD_MS: u64 = 500;
 
 /// How often it deletes after that.
 ///
@@ -222,6 +236,9 @@ pub struct Keyboard {
     level3: bool,
     /// Ctrl armed for the next key. One-shot, like Shift.
     ctrl: bool,
+    /// The alternates on screen, if a key is being held: the key they came
+    /// from, and one node per character offered.
+    offering: Option<Offering>,
     shelf: Option<NodeId>,
     keys: Vec<(KeyCode, NodeId)>,
     scale: f32,
@@ -241,6 +258,7 @@ impl Keyboard {
             shift: Shift::Off,
             level3: false,
             ctrl: false,
+            offering: None,
             shelf: None,
             keys: Vec::new(),
             scale: 1.0,
@@ -561,7 +579,259 @@ impl Keyboard {
                 out.extend(self.press_repeat(code));
             }
         }
+        self.offer_alternates(ui);
         out
+    }
+
+    /// Opens a held key's alternates, once it has been held long enough.
+    ///
+    /// A strip of characters above the key, drawn as ordinary nodes at the top
+    /// of the shelf rather than as a popup. That is not a shortcut: a popup
+    /// pushes a scene, a pushed scene cancels whatever press it covers, and the
+    /// press it would cancel here is the one holding the key that opened it.
+    fn offer_alternates<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) {
+        if self.offering.is_some() || self.shelf.is_none() {
+            return;
+        }
+        // The one key held past the threshold, read without writing.
+        let ready = self.keys.iter().copied().find(|&(_, node)| {
+            ui.widget::<Button<M>>(node)
+                .and_then(Button::held_ms)
+                .is_some_and(|held| held >= HOLD_MS)
+        });
+        let Some((code, key)) = ready else {
+            return;
+        };
+        self.open_alternates(ui, code, key);
+    }
+
+    /// Builds the strip for a key, wherever the decision to came from.
+    fn open_alternates<M: Clone + 'static>(&mut self, ui: &mut Ui<M>, code: KeyCode, key: NodeId) {
+        if self.offering.is_some() {
+            return;
+        }
+        let Some(shelf) = self.shelf else {
+            return;
+        };
+        let Some(base) = self.legend(code) else {
+            return;
+        };
+        let choices: Vec<char> = self.layout.alternates_for(base).collect();
+        if choices.is_empty() {
+            return;
+        }
+        let Some(bounds) = ui.layout(key) else {
+            return;
+        };
+
+        // Centred over the key, and kept on screen: a strip that ran off the
+        // edge would put half its choices where no finger can reach them.
+        //
+        // The frame is not decoration. Drawn flush and in the keys' own colours
+        // this landed as *another row of the keyboard* — five accented letters
+        // sitting on the digits, indistinguishable from them, so the one thing
+        // the gesture has to say (these five, right now, and not the sixty
+        // behind them) was the one thing it did not. So: a border in the accent
+        // colour, a margin wide enough to read as an edge rather than a seam,
+        // and a clear gap between the strip and the row it floats over.
+        let cell = bounds.height;
+        let pad = self.scaled(STRIP_PAD);
+        let width = cell * choices.len() as i32 + pad * 2;
+        let height = cell + pad * 2;
+        let x = (bounds.x + bounds.width / 2 - width / 2)
+            .max(0)
+            .min((ui.size().width as i32 - width).max(0));
+        let y = (bounds.y - height - self.scaled(KEY_GAP) * 2).max(0);
+
+        let Some(strip) = ui.add(
+            shelf,
+            Panel::filled(Role::Base300)
+                .backdrop()
+                .with_radius(denise::theme::Radius::Box)
+                .with_border(Role::Primary, self.scaled(STRIP_BORDER).max(1)),
+            Rect::new(x, y, width, height),
+        ) else {
+            return;
+        };
+        let mut nodes = Vec::with_capacity(choices.len());
+        for (i, ch) in choices.iter().enumerate() {
+            // Under the strip rather than beside it, so that taking the strip
+            // away takes the choices with it: `Ui::remove` drops a subtree, and
+            // a choice parented to the shelf would outlive the gesture that
+            // made it and sit there being pressable.
+            let at = Rect::new(pad + cell * i as i32, pad, cell, cell);
+            if let Some(node) = ui.add(
+                strip,
+                // Inert, and that is the design rather than an omission: the
+                // press that opened this strip is still down on the key, so the
+                // tree never presses one of these and they would never emit.
+                // The choice is made by where the finger lifts, which
+                // `Keyboard::handle` answers.
+                Button::<M>::inert(ch.to_string())
+                    .no_focus()
+                    .with_role(Role::Base100)
+                    .with_style(self.style),
+                at,
+            ) {
+                nodes.push((*ch, node));
+            }
+        }
+        self.offering = Some(Offering {
+            strip,
+            choices: nodes,
+            over: None,
+        });
+    }
+
+    /// Input the keyboard answers itself, before the tree sees it.
+    ///
+    /// Only the alternates gesture needs this, and it needs it because the
+    /// gesture has no precedent in the tree: the press that opened the strip is
+    /// still down on the *key*, so the tree quite correctly keeps sending
+    /// everything there, and the choice is made by where the finger lifts
+    /// instead. The keyboard therefore does its own hit test against the strip
+    /// it drew.
+    ///
+    /// Call it beside [`Ui::handle`](denise_ui::Ui::handle), with the same
+    /// events. Returns what to type, which is empty on nearly every call —
+    /// nothing happens here unless a strip is open.
+    ///
+    /// A character chosen this way arrives as [`InputEvent::Text`] alone, with
+    /// no [`InputEvent::Key`] around it. That is the honest shape: `é` is not at
+    /// a position on this keyboard, nothing pressed a key to get it, and a
+    /// binding watching for keys should not think one was pressed.
+    ///
+    /// Lifting anywhere else ends the gesture and types nothing — except on
+    /// the key itself, which types what it always types. That is why the strip
+    /// does not repeat the base character among its choices: the key is still
+    /// there underneath it, still where the finger already is, so a hold opened
+    /// by accident is undone by not moving.
+    ///
+    /// [`InputEvent::Text`]: denise::InputEvent::Text
+    /// [`InputEvent::Key`]: denise::InputEvent::Key
+    pub fn handle<M: Clone + 'static>(
+        &mut self,
+        ui: &mut Ui<M>,
+        events: &[InputEvent],
+    ) -> Vec<InputEvent> {
+        let mut out = Vec::new();
+        for event in events {
+            let Some(offering) = self.offering.as_ref() else {
+                return out;
+            };
+            match event {
+                InputEvent::PointerMoved { position } | InputEvent::TouchMoved { position, .. } => {
+                    let at = self.choice_at(ui, *position);
+                    if let Some(offering) = self.offering.as_mut()
+                        && offering.over != at
+                    {
+                        offering.over = at;
+                        self.highlight(ui);
+                    }
+                }
+                InputEvent::PointerButton {
+                    state: ElementState::Up,
+                    position,
+                    ..
+                }
+                | InputEvent::TouchUp {
+                    position,
+                    cancelled: false,
+                    ..
+                } => {
+                    let chosen = self
+                        .choice_at(ui, *position)
+                        .and_then(|i| offering.choices.get(i))
+                        .map(|(ch, _)| *ch);
+                    self.close_offering(ui);
+                    if let Some(ch) = chosen {
+                        out.push(InputEvent::Text { ch });
+                    }
+                }
+                // A sequence the system took away is not a choice, wherever the
+                // last position happened to land. The strip goes, and nothing
+                // is typed — the same answer as lifting off it, because that is
+                // what a cancelled gesture is.
+                InputEvent::TouchUp {
+                    cancelled: true, ..
+                } => self.close_offering(ui),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Which choice a point is over, if any.
+    fn choice_at<M: Clone + 'static>(&self, ui: &Ui<M>, at: Point) -> Option<usize> {
+        let offering = self.offering.as_ref()?;
+        offering
+            .choices
+            .iter()
+            .position(|&(_, node)| ui.bounds(node).is_some_and(|b| b.contains(at)))
+    }
+
+    /// Paints the choice under the finger differently from the rest.
+    fn highlight<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) {
+        let Some(offering) = self.offering.as_ref() else {
+            return;
+        };
+        let over = offering.over;
+        let nodes: Vec<(usize, NodeId)> = offering
+            .choices
+            .iter()
+            .enumerate()
+            .map(|(i, &(_, node))| (i, node))
+            .collect();
+        for (i, node) in nodes {
+            let role = if Some(i) == over {
+                Role::Primary
+            } else {
+                Role::Base100
+            };
+            // Read before writing: `widget_mut` repaints whatever it hands out,
+            // and a strip that repainted every key on every pointer move is the
+            // flicker bug in miniature.
+            let same = ui
+                .widget::<Button<M>>(node)
+                .is_some_and(|button| button.role() == role);
+            if !same && let Some(button) = ui.widget_mut::<Button<M>>(node) {
+                button.set_role(role);
+            }
+        }
+    }
+
+    /// Takes the strip away, leaving the key it came from alone.
+    fn close_offering<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) {
+        if let Some(offering) = self.offering.take() {
+            ui.remove(offering.strip);
+        }
+    }
+
+    /// Opens a key's alternates without waiting for a finger.
+    ///
+    /// For a headless run — a snapshot, a test — which has no finger to hold
+    /// anything with and no clock running while it does. The gesture itself
+    /// goes through [`tick`](Self::tick) and a real press.
+    pub fn offer_for_test<M: Clone + 'static>(&mut self, ui: &mut Ui<M>, code: KeyCode) {
+        let Some(&(_, key)) = self.keys.iter().find(|&&(c, _)| c == code) else {
+            return;
+        };
+        self.open_alternates(ui, code, key);
+    }
+
+    /// The characters currently on offer, and the nodes showing them.
+    ///
+    /// Empty unless a key is being held past [`HOLD_MS`]. Given out so a test
+    /// can aim at one, and so an application that wants to drive the gesture
+    /// some other way can.
+    pub fn choices(&self) -> &[(char, NodeId)] {
+        self.offering.as_ref().map_or(&[], |o| &o.choices)
+    }
+
+    /// Whether a held key is offering its alternates.
+    #[inline]
+    pub const fn offering(&self) -> bool {
+        self.offering.is_some()
     }
 
     /// One auto-repeat of a key already down.
@@ -895,6 +1165,12 @@ impl Keyboard {
                 }
                 if key.repeats {
                     button = button.with_repeat(REPEAT_DELAY_MS, REPEAT_INTERVAL_MS);
+                } else if grid::legend_of(key.code).is_none() {
+                    // Only the keys that type a character can offer alternates,
+                    // so only they need to be asked how long they have been
+                    // held. A key with a word on it has nothing to offer and
+                    // stays free.
+                    button = button.watching_hold();
                 }
                 if let Some(node) = ui.add(
                     shelf,
@@ -940,3 +1216,13 @@ fn role_of(code: KeyCode) -> Role {
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct Readme;
+
+/// The alternates a held key is offering, while it offers them.
+struct Offering {
+    /// The strip's backdrop, removed with the rest.
+    strip: NodeId,
+    /// One node per character, in the order they are shown.
+    choices: Vec<(char, NodeId)>,
+    /// Which one the finger is over, if any.
+    over: Option<usize>,
+}

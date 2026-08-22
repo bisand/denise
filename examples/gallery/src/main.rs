@@ -265,6 +265,7 @@ mod window_backend {
                 }
             }
 
+            self.app.keyboard_input(events);
             self.app.ui.handle(events);
             let now = self.app.elapsed_ms();
             self.app.ui.tick(now);
@@ -386,6 +387,7 @@ mod kiosk_backend {
             if !shortcuts(&mut app, &events, &mut shoot) {
                 break;
             }
+            app.keyboard_input(&events);
             app.ui.handle(&events);
             app.ui.tick(app.elapsed_ms());
             let now = app.elapsed_ms();

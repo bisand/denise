@@ -1249,3 +1249,315 @@ fn a_press_in_the_gap_between_keys_changes_nothing() {
     ui.handle(&events);
     assert_eq!(text_of(&ui, field), "a");
 }
+
+/// Holding a letter offers its alternates; releasing over one types it.
+///
+/// The gesture with no precedent in this toolkit. Every other selection here is
+/// press-then-release on one node; this one presses a key, opens a strip that
+/// was not there when the press began, and is decided by where the finger lifts.
+#[test]
+fn holding_a_letter_offers_its_alternates_and_the_lift_chooses() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(1_000);
+
+    let o = key_node(&keyboard, KeyCode::O);
+    let at = middle_of(&ui, o);
+    press_at(&mut ui, at, 1_000);
+
+    // Not yet: an ordinary tap must never open it.
+    ui.tick(1_000 + denise_keyboard::HOLD_MS - 50);
+    keyboard.tick(&mut ui, 1_000 + denise_keyboard::HOLD_MS - 50);
+    assert!(!keyboard.offering(), "it opened before the hold was up");
+
+    let now = 1_000 + denise_keyboard::HOLD_MS + 20;
+    ui.tick(now);
+    keyboard.tick(&mut ui, now);
+    assert!(keyboard.offering(), "holding offered nothing");
+
+    // Slide onto the second choice and lift there.
+    let choice = keyboard.choices()[1];
+    let over = middle_of(&ui, choice.1);
+    ui.handle(&[denise::InputEvent::PointerMoved { position: over }]);
+    let typed = keyboard.handle(
+        &mut ui,
+        &[denise::InputEvent::PointerMoved { position: over }],
+    );
+    assert!(typed.is_empty(), "moving typed something");
+
+    let up = [denise::InputEvent::PointerButton {
+        button: denise::PointerButton::Left,
+        state: denise::ElementState::Up,
+        position: over,
+        modifiers: denise::Modifiers::NONE,
+    }];
+    let typed = keyboard.handle(&mut ui, &up);
+    ui.handle(&up);
+    ui.handle(&typed);
+
+    assert!(!keyboard.offering(), "the strip stayed up after the lift");
+    assert_eq!(
+        text_of(&ui, field),
+        choice.0.to_string(),
+        "the lift did not choose what it was over"
+    );
+}
+
+/// Lifting off the strip types nothing at all — not even the key that was held.
+#[test]
+fn lifting_away_from_the_alternates_types_nothing() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(1_000);
+    let o = key_node(&keyboard, KeyCode::O);
+    let at = middle_of(&ui, o);
+    press_at(&mut ui, at, 1_000);
+    let now = 1_000 + denise_keyboard::HOLD_MS + 20;
+    ui.tick(now);
+    keyboard.tick(&mut ui, now);
+    assert!(keyboard.offering());
+
+    // Somewhere that is neither the strip nor the key.
+    let away = denise::Point::new(4, 4);
+    let up = [denise::InputEvent::PointerButton {
+        button: denise::PointerButton::Left,
+        state: denise::ElementState::Up,
+        position: away,
+        modifiers: denise::Modifiers::NONE,
+    }];
+    let typed = keyboard.handle(&mut ui, &up);
+    ui.handle(&up);
+    ui.handle(&typed);
+
+    assert!(!keyboard.offering());
+    assert_eq!(
+        text_of(&ui, field),
+        "",
+        "an abandoned gesture typed something"
+    );
+    // And left nothing behind for the application to type later: the key was
+    // released outside its own bounds, so it never emitted either.
+    assert_eq!(
+        ui.drain_messages().count(),
+        0,
+        "the held key emitted anyway"
+    );
+}
+
+/// Lifting back onto the key you were holding types that key.
+///
+/// The escape hatch, and the reason the strip does not repeat the base
+/// character among its choices: the key itself is still there under the strip,
+/// still where the finger already is, and lifting on it means what lifting on a
+/// key has always meant. A finger that opened the strip by accident undoes it by
+/// not moving.
+#[test]
+fn lifting_back_on_the_key_types_the_key() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(1_000);
+    let o = key_node(&keyboard, KeyCode::O);
+    let at = middle_of(&ui, o);
+    press_at(&mut ui, at, 1_000);
+    let now = 1_000 + denise_keyboard::HOLD_MS + 20;
+    ui.tick(now);
+    keyboard.tick(&mut ui, now);
+    assert!(keyboard.offering());
+
+    let up = [denise::InputEvent::PointerButton {
+        button: denise::PointerButton::Left,
+        state: denise::ElementState::Up,
+        position: at,
+        modifiers: denise::Modifiers::NONE,
+    }];
+    let typed = keyboard.handle(&mut ui, &up);
+    assert!(
+        typed.is_empty(),
+        "the strip claimed a lift that was not on it"
+    );
+    ui.handle(&up);
+    ui.handle(&typed);
+
+    assert!(!keyboard.offering(), "the strip stayed up");
+    let codes: Vec<KeyCode> = ui.drain_messages().map(|Msg::Key(c)| c).collect();
+    for code in codes {
+        let events = keyboard.press_key(&mut ui, code);
+        ui.handle(&events);
+    }
+    assert_eq!(
+        text_of(&ui, field),
+        "o",
+        "lifting on the key did not type it"
+    );
+}
+
+/// The whole gesture on glass: touch down, slide, lift.
+///
+/// The pointer path and the touch path are separate arms, and the panels this
+/// keyboard exists for have no mouse — so the arm that will actually carry the
+/// gesture in the field is this one. Neither test board has a touchscreen, which
+/// makes the unit test the only place it is exercised at all.
+#[test]
+fn a_finger_can_do_the_whole_gesture() {
+    use denise::InputEvent;
+
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(1_000);
+    let e = key_node(&keyboard, KeyCode::E);
+    let at = middle_of(&ui, e);
+    let id = 1;
+
+    ui.handle(&[InputEvent::TouchDown { id, position: at }]);
+    let now = 1_000 + denise_keyboard::HOLD_MS + 20;
+    ui.tick(now);
+    keyboard.tick(&mut ui, now);
+    assert!(keyboard.offering(), "a finger holding e offered nothing");
+
+    let (wanted, choice) = keyboard.choices()[2];
+    let over = middle_of(&ui, choice);
+    let moved = [InputEvent::TouchMoved { id, position: over }];
+    keyboard.handle(&mut ui, &moved);
+    ui.handle(&moved);
+
+    let up = [InputEvent::TouchUp {
+        id,
+        position: over,
+        cancelled: false,
+    }];
+    let typed = keyboard.handle(&mut ui, &up);
+    ui.handle(&up);
+    ui.handle(&typed);
+
+    assert!(!keyboard.offering());
+    assert_eq!(text_of(&ui, field), wanted.to_string());
+}
+
+/// A sequence the system cancels is not a choice, wherever the finger was.
+///
+/// The distinction the pointer path does not have to make: a palm landing, a
+/// gesture claimed by the window system, a digitiser giving up mid-slide. The
+/// last reported position can be squarely over a choice and it still must not
+/// type one — a character the user did not ask for is worse than none.
+#[test]
+fn a_cancelled_touch_chooses_nothing() {
+    use denise::InputEvent;
+
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(1_000);
+    let e = key_node(&keyboard, KeyCode::E);
+    let at = middle_of(&ui, e);
+    let id = 1;
+
+    ui.handle(&[InputEvent::TouchDown { id, position: at }]);
+    let now = 1_000 + denise_keyboard::HOLD_MS + 20;
+    ui.tick(now);
+    keyboard.tick(&mut ui, now);
+    assert!(keyboard.offering());
+
+    // Squarely over a choice, and cancelled anyway.
+    let over = middle_of(&ui, keyboard.choices()[0].1);
+    let up = [InputEvent::TouchUp {
+        id,
+        position: over,
+        cancelled: true,
+    }];
+    let typed = keyboard.handle(&mut ui, &up);
+    ui.handle(&up);
+    ui.handle(&typed);
+
+    assert!(!keyboard.offering(), "the strip survived a cancelled touch");
+    assert_eq!(
+        text_of(&ui, field),
+        "",
+        "a cancelled gesture typed a character"
+    );
+    assert_eq!(ui.drain_messages().count(), 0, "and it emitted one too");
+}
+
+/// The strip takes its choices with it when it goes.
+///
+/// They hang off the strip rather than off the shelf precisely so that one
+/// `Ui::remove` clears the lot. Parented to the shelf instead they would outlive
+/// the gesture and sit there being pressable, which is a bug that looks like
+/// nothing until the second time somebody holds a key.
+#[test]
+fn closing_the_strip_leaves_no_nodes_behind() {
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+    ui.tick(1_000);
+    keyboard.offer_for_test(&mut ui, KeyCode::O);
+    let nodes: Vec<NodeId> = keyboard.choices().iter().map(|&(_, n)| n).collect();
+    assert!(nodes.len() > 1, "nothing was offered to begin with");
+    assert!(nodes.iter().all(|&n| ui.contains(n)));
+
+    let away = denise::Point::new(4, 4);
+    let up = [denise::InputEvent::PointerButton {
+        button: denise::PointerButton::Left,
+        state: denise::ElementState::Up,
+        position: away,
+        modifiers: denise::Modifiers::NONE,
+    }];
+    keyboard.handle(&mut ui, &up);
+
+    assert!(!keyboard.offering());
+    for node in nodes {
+        assert!(
+            !ui.contains(node),
+            "a choice outlived the strip that made it"
+        );
+    }
+}
+
+/// A key with nothing to offer offers nothing, however long it is held.
+#[test]
+fn holding_a_key_with_no_alternates_does_nothing() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(1_000);
+    // `k` has no accented relatives anybody reaches for.
+    let k = key_node(&keyboard, KeyCode::K);
+    let at = middle_of(&ui, k);
+    press_at(&mut ui, at, 1_000);
+    for step in 1..=6 {
+        let now = 1_000 + step * denise_keyboard::HOLD_MS;
+        ui.tick(now);
+        keyboard.tick(&mut ui, now);
+    }
+    assert!(!keyboard.offering(), "k offered something");
+
+    // And it still types normally when released on.
+    release_at(&mut ui, at, 5_000);
+    let codes: Vec<KeyCode> = ui.drain_messages().map(|Msg::Key(c)| c).collect();
+    for code in codes {
+        let events = keyboard.press_key(&mut ui, code);
+        ui.handle(&events);
+    }
+    assert_eq!(text_of(&ui, field), "k", "a held key stopped typing");
+}
+
+/// The alternates come from the layout, so switching layout switches them.
+#[test]
+fn the_alternates_are_the_layouts_own() {
+    use denise_layout::{GERMAN, NORWEGIAN, US};
+
+    // Norwegian has æ, ø and å on keys of their own, so it does not offer them
+    // again as alternates — a slower way to reach a letter you already have is
+    // noise.
+    let no: String = NORWEGIAN.alternates_for('o').collect();
+    assert!(!no.contains('ø'), "ø has a key; it should not be an offer");
+    assert!(no.contains('ö'), "but its neighbours are worth offering");
+
+    let us: String = US.alternates_for('o').collect();
+    assert!(us.contains('ø'), "US has no ø key, so it offers one");
+
+    // German offers ß from s, which is where a writer reaches for it.
+    let de: String = GERMAN.alternates_for('s').collect();
+    assert!(de.contains('ß'));
+    assert!(!US.alternates_for('s').any(|c| c == 'ß'));
+}
+
+/// Shifted keys offer shifted alternates: hold `O` and you get `Ö`, not `ö`.
+#[test]
+fn the_offers_follow_the_case_of_the_key() {
+    use denise_layout::US;
+    let lower: String = US.alternates_for('o').collect();
+    let upper: String = US.alternates_for('O').collect();
+    assert!(lower.contains('ö') && !lower.contains('Ö'));
+    assert!(upper.contains('Ö') && !upper.contains('ö'));
+    assert_eq!(lower.chars().count(), upper.chars().count());
+}

@@ -467,6 +467,19 @@ impl App {
 
     // ------------------------------------------------------------ the messages
 
+    /// The alternates gesture, which the keyboard answers for itself.
+    ///
+    /// Its choice is made by where a finger lifts, and the press that opened it
+    /// is still down on the key — so the tree goes on routing to the key, quite
+    /// correctly, and the keyboard does its own hit test instead. Give it the
+    /// same events the tree is about to get, and give it them first.
+    pub fn keyboard_input(&mut self, events: &[denise::InputEvent]) {
+        let typed = self.keyboard.handle(&mut self.ui, events);
+        if !typed.is_empty() {
+            self.ui.handle(&typed);
+        }
+    }
+
     /// Handles everything the tree emitted this frame.
     pub fn handle(&mut self, now_ms: u64) {
         // A held key first, so a repeat and whatever it causes land in the same
