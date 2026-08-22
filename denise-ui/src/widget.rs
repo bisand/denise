@@ -120,6 +120,18 @@ pub enum Event<'a> {
     FocusGained,
     /// This widget just lost keyboard focus.
     FocusLost,
+    /// A press this widget was holding ended without a release.
+    ///
+    /// The tree drops a held press whenever the thing being pressed stops being
+    /// reachable — a scene pushed over it, the scene it lives in popped, its
+    /// node removed or disabled — and no pointer event describes that. A widget
+    /// that only tracks Down and Up would go on believing a finger is still
+    /// resting on it, which for anything driving a timer from that belief means
+    /// waking a panel that nobody is touching.
+    ///
+    /// Ordinary widgets need not handle it: the visual pressed state is cleared
+    /// by the tree either way.
+    PressCancelled,
 }
 
 /// What a widget needs in order to draw itself.

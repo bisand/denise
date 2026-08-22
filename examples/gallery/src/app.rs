@@ -1187,7 +1187,14 @@ impl App {
 
     // ------------------------------------------------------------- messages
 
-    pub fn handle(&mut self, _now_ms: u64) {
+    pub fn handle(&mut self, now_ms: u64) {
+        // A held key first, so a repeat and whatever it causes land in the same
+        // pass. Empty on every frame nobody is touching a key — holding
+        // Backspace in the keyboard demo is the only thing that fills it.
+        let repeats = self.keyboard.tick(&mut self.ui, now_ms);
+        if !repeats.is_empty() {
+            self.ui.handle(&repeats);
+        }
         // Drained until it stops rather than once: a key press is answered by
         // feeding events straight back into the tree, and whatever *those*
         // produce belongs to the same frame as the tap. Bounded, so a message

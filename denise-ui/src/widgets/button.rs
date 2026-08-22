@@ -6,7 +6,7 @@ use denise::{ElementState, InputEvent, KeyCode, Radius, Role};
 use denise_render::Canvas;
 use denise_text::TextStyle;
 
-use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
 /// A button that emits a message when it is activated.
@@ -23,7 +23,39 @@ pub struct Button<M> {
     radius: Radius,
     style: TextStyle,
     no_focus: bool,
+    /// How long a hold waits, and how fast it goes after that. `None` is a
+    /// button that does not repeat, which is nearly all of them.
+    repeat: Option<Repeat>,
+    /// When the finger went down, while it is still down.
+    held_since: Option<u64>,
+    /// The last repeat already counted, as a count rather than a time so that
+    /// arithmetic on a clock that jumped cannot produce a burst.
+    counted: u32,
+    /// Repeats owed to whoever asks next.
+    pending: u32,
 }
+
+/// A button's press-and-hold schedule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Repeat {
+    delay_ms: u64,
+    interval_ms: u64,
+}
+
+/// The most repeats one frame may hand over.
+///
+/// A loop that blocked — a page arriving over a slow link, a display waking,
+/// a snapshot ticking straight past a second — comes back with a clock that has
+/// jumped, and counting from the press would then report every repeat that gap
+/// covered. Truthfully, and uselessly: nobody watching a frozen screen meant to
+/// delete two hundred characters, and a keyboard that empties a field because
+/// the network hiccuped is worse than one that does not repeat at all.
+///
+/// Past this the missed repeats are dropped rather than queued, so a stall
+/// costs the repeats it swallowed and nothing more. Four is about a quarter of
+/// a second at the on-screen keyboard's interval: enough that an ordinary
+/// stutter is invisible, little enough that a real stall is obvious.
+const MAX_CATCH_UP: u32 = 4;
 
 impl<M> Button<M> {
     /// A primary button carrying `message`.
@@ -35,6 +67,10 @@ impl<M> Button<M> {
             radius: Radius::Field,
             style: TextStyle::built_in(16),
             no_focus: false,
+            repeat: None,
+            held_since: None,
+            counted: 0,
+            pending: 0,
         }
     }
 
@@ -48,6 +84,10 @@ impl<M> Button<M> {
             radius: Radius::Field,
             style: TextStyle::built_in(16),
             no_focus: false,
+            repeat: None,
+            held_since: None,
+            counted: 0,
+            pending: 0,
         }
     }
 
@@ -76,6 +116,49 @@ impl<M> Button<M> {
     pub fn no_focus(mut self) -> Self {
         self.no_focus = true;
         self
+    }
+
+    /// Emits again, and again, while a finger stays on it.
+    ///
+    /// A repeating button **acts on press rather than on release**, which is the
+    /// only way it could work: repeats have to start while the finger is still
+    /// down. That is a real change in feel and the reason this is opt-in — an
+    /// ordinary button emits on release precisely so that sliding off it before
+    /// letting go cancels the press, and a repeating one gives that up.
+    ///
+    /// Reach for it where holding means *more of the same*: Backspace on an
+    /// on-screen keyboard, a stepper's arrows, a scrollbar's ends. Not for
+    /// anything whose second press means something different from its first.
+    ///
+    /// `delay_ms` is the pause before the first repeat — long enough that an
+    /// ordinary tap never triggers one — and `interval_ms` the gap between the
+    /// rest. The repeats are counted, not emitted: the button has no message
+    /// channel while it is animating, so whoever owns it collects them with
+    /// [`take_repeats`](Self::take_repeats) once a frame.
+    ///
+    /// Costs nothing when nothing is held. The button asks the tree to wake it
+    /// only between a press and its release, and answers
+    /// [`Wake::Never`](crate::Wake::Never) the moment the finger goes.
+    pub fn with_repeat(mut self, delay_ms: u64, interval_ms: u64) -> Self {
+        self.repeat = Some(Repeat {
+            delay_ms,
+            interval_ms: interval_ms.max(1),
+        });
+        self
+    }
+
+    /// Repeats owed since this was last called, and clears the tally.
+    ///
+    /// Zero unless [`with_repeat`](Self::with_repeat) was asked for and a finger
+    /// has been resting on the button for longer than its delay.
+    pub fn take_repeats(&mut self) -> u32 {
+        core::mem::take(&mut self.pending)
+    }
+
+    /// Whether a finger is on it now.
+    #[inline]
+    pub const fn is_held(&self) -> bool {
+        self.held_since.is_some()
     }
 
     /// Sets the colour role. The content colour comes from the theme's pairing, so
@@ -173,6 +256,50 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     }
 
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
+        // A repeating button lives on the down edge instead of the up one, and
+        // has to, since the repeats begin while the finger is still there.
+        if self.repeat.is_some() {
+            match event {
+                Event::Input(
+                    InputEvent::PointerButton {
+                        state: ElementState::Down,
+                        position,
+                        ..
+                    }
+                    | InputEvent::TouchDown { position, .. },
+                ) if ctx.bounds.contains(*position) => {
+                    self.held_since = Some(ctx.now_ms);
+                    self.counted = 0;
+                    // The wake that carries the hold. Asked for here and given
+                    // back by `animate` the moment the finger leaves, so a tree
+                    // nobody is touching schedules nothing.
+                    ctx.request_animation();
+                    if let Some(message) = self.message.clone() {
+                        ctx.emit(message);
+                    }
+                    return Handled::Yes;
+                }
+                // Every way a press can end. The tree dispatches the release to
+                // whichever node was pressed even when the finger has wandered
+                // off it, and `PressCancelled` covers the ends that no pointer
+                // event describes.
+                Event::Input(InputEvent::PointerButton {
+                    state: ElementState::Up,
+                    ..
+                })
+                | Event::Input(InputEvent::TouchUp { .. })
+                | Event::PressCancelled => {
+                    self.held_since = None;
+                    // Whatever was owed is dropped with the press: a repeat
+                    // nobody collected before the finger lifted is one the user
+                    // did not wait for.
+                    self.pending = 0;
+                    return Handled::Yes;
+                }
+                _ => {}
+            }
+        }
+
         let activated = match event {
             Event::Input(InputEvent::PointerButton {
                 state: ElementState::Up,
@@ -199,6 +326,46 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
             ctx.emit(message);
         }
         Handled::Yes
+    }
+
+    /// Counts the repeats a held finger has earned, and asks for the next wake.
+    ///
+    /// Counted from the press rather than accumulated from the last tick, so a
+    /// clock that jumped — a loop that blocked, a snapshot ticking straight past
+    /// a second — yields the repeats that time actually covered and no more.
+    fn animate(&mut self, now_ms: u64) -> Animation {
+        let (Some(repeat), Some(since)) = (self.repeat, self.held_since) else {
+            return Animation::NONE;
+        };
+        let held = now_ms.saturating_sub(since);
+        let Some(after_delay) = held.checked_sub(repeat.delay_ms) else {
+            // Still inside the initial pause: nothing owed, come back when it
+            // is over.
+            return Animation::due_at(since + repeat.delay_ms);
+        };
+        // The first repeat lands *at* the delay, so a hold of exactly the delay
+        // owes one.
+        let due = u32::try_from(after_delay / repeat.interval_ms + 1).unwrap_or(u32::MAX);
+        let owed = due.saturating_sub(self.counted).min(MAX_CATCH_UP);
+        self.pending = self.pending.saturating_add(owed);
+        // Counted up to `due` rather than to what was handed over, so the
+        // repeats a stall swallowed are gone rather than owed.
+        self.counted = due;
+        Animation::due_at(
+            since
+                .saturating_add(repeat.delay_ms)
+                .saturating_add(u64::from(due).saturating_mul(repeat.interval_ms)),
+        )
+    }
+
+    /// A held key under reduced motion still repeats.
+    ///
+    /// `Motion::None` is about movement, not about clocks — the same rule the
+    /// carousel's auto-advance follows. Backspace that stopped deleting because
+    /// somebody turned animations off would be a bug wearing a setting's
+    /// clothes.
+    fn snap(&mut self, now_ms: u64) -> Animation {
+        self.animate(now_ms)
     }
 
     fn accepts_pointer(&self) -> bool {

@@ -19,6 +19,49 @@ enum Msg {
 
 const SIZE: Size = Size::new(800, 480);
 
+/// The middle of a node, where a finger would land.
+fn middle_of(ui: &Ui<Msg>, node: NodeId) -> denise::Point {
+    let b = ui.bounds(node).expect("bounds");
+    denise::Point::new(b.x + b.width / 2, b.y + b.height / 2)
+}
+
+/// A finger going down at a point.
+fn press_at(ui: &mut Ui<Msg>, at: denise::Point, now_ms: u64) {
+    use denise::{ElementState, InputEvent, Modifiers, PointerButton};
+    ui.tick(now_ms);
+    ui.handle(&[
+        InputEvent::PointerMoved { position: at },
+        InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state: ElementState::Down,
+            position: at,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+}
+
+/// And coming back up again.
+fn release_at(ui: &mut Ui<Msg>, at: denise::Point, now_ms: u64) {
+    use denise::{ElementState, InputEvent, Modifiers, PointerButton};
+    ui.tick(now_ms);
+    ui.handle(&[InputEvent::PointerButton {
+        button: PointerButton::Left,
+        state: ElementState::Up,
+        position: at,
+        modifiers: Modifiers::NONE,
+    }]);
+}
+
+/// The node a position sits on, by the code its key carries.
+fn key_node(keyboard: &Keyboard, code: KeyCode) -> NodeId {
+    keyboard
+        .keys()
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, node)| *node)
+        .expect("no such key in the grid")
+}
+
 /// A field, focused, with a keyboard over it.
 fn set_up(layout: &'static denise_layout::Layout) -> (Ui<Msg>, Keyboard, NodeId) {
     let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
@@ -666,4 +709,223 @@ fn the_keys_are_lettered_in_the_style_they_were_given() {
     let (_, node) = keyboard.keys()[0];
     let button = ui.widget::<Button<Msg>>(node).expect("a key is a button");
     assert_eq!(button.style().size_px, 28, "relabelling reset the style");
+}
+
+/// Holding Backspace keeps deleting.
+///
+/// The point of the whole feature: clearing a URL bar on a panel was forty
+/// taps. The clock is stepped by hand, so this is a claim about time rather
+/// than about how fast the machine running the test happens to be.
+#[test]
+fn holding_backspace_keeps_deleting() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.widget_mut::<TextInput<Msg>>(field)
+        .expect("field")
+        .set_text("abcdefgh");
+    ui.tick(1_000);
+
+    // A finger goes down on Backspace and stays there.
+    let back = key_node(&keyboard, KeyCode::Backspace);
+    let at = middle_of(&ui, back);
+    press_at(&mut ui, at, 1_000);
+
+    // The press itself deletes one, the way every keyboard does.
+    let codes: Vec<KeyCode> = ui.drain_messages().map(|Msg::Key(c)| c).collect();
+    assert!(!codes.is_empty(), "a repeating key did not emit on press");
+    for code in codes {
+        let events = keyboard.press_key(&mut ui, code);
+        ui.handle(&events);
+    }
+    assert_eq!(text_of(&ui, field), "abcdefg", "the press did not delete");
+
+    // Nothing yet: still inside the initial pause.
+    let early = 1_000 + denise_keyboard::REPEAT_DELAY_MS - 10;
+    ui.tick(early);
+    let events = keyboard.tick(&mut ui, early);
+    assert!(events.is_empty(), "it repeated before the delay was up");
+
+    // Now hold it for 600 ms, in frames, and watch the field empty.
+    let mut now = 1_000;
+    for _ in 0..40 {
+        now += 15;
+        ui.tick(now);
+        let events = keyboard.tick(&mut ui, now);
+        ui.handle(&events);
+    }
+    assert!(
+        text_of(&ui, field).len() < 5,
+        "holding Backspace deleted almost nothing: {:?}",
+        text_of(&ui, field)
+    );
+
+    // And it stops when the finger does.
+    release_at(&mut ui, at, now);
+    let settled = text_of(&ui, field);
+    for _ in 0..20 {
+        now += 15;
+        ui.tick(now);
+        let events = keyboard.tick(&mut ui, now);
+        ui.handle(&events);
+    }
+    assert_eq!(
+        text_of(&ui, field),
+        settled,
+        "it kept deleting after release"
+    );
+}
+
+/// A repeat says it is one.
+///
+/// `InputEvent::Key` carries `repeat` so that a widget can tell an auto-repeat
+/// from a deliberate second press. A field inserts both; something that must
+/// not act twice on one gesture needs the difference.
+#[test]
+fn a_repeat_is_marked_as_one_and_a_press_is_not() {
+    use denise::{ElementState, InputEvent};
+
+    let (_ui, mut keyboard, _field) = set_up(&US);
+    let first = keyboard.press(KeyCode::Backspace);
+    assert!(
+        first.iter().any(|e| matches!(
+            e,
+            InputEvent::Key {
+                state: ElementState::Down,
+                repeat: false,
+                ..
+            }
+        )),
+        "the first press claimed to be a repeat"
+    );
+
+    let repeat = keyboard.press_repeat(KeyCode::Backspace);
+    assert!(
+        repeat
+            .iter()
+            .all(|e| !matches!(e, InputEvent::Key { repeat: false, .. })),
+        "a repeat did not say so"
+    );
+}
+
+/// Letters do not repeat, which is what stops a slow finger typing `aaaaaa`.
+#[test]
+fn holding_a_letter_types_it_once() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(1_000);
+
+    let a = key_node(&keyboard, KeyCode::A);
+    let at = middle_of(&ui, a);
+    press_at(&mut ui, at, 1_000);
+
+    // Held for a good long while.
+    let mut now = 1_000;
+    for _ in 0..80 {
+        now += 15;
+        ui.tick(now);
+        let events = keyboard.tick(&mut ui, now);
+        ui.handle(&events);
+    }
+    assert_eq!(text_of(&ui, field), "", "an ordinary key acts on release");
+
+    // And on release it types exactly one.
+    release_at(&mut ui, at, now);
+    let codes: Vec<KeyCode> = ui.drain_messages().map(|Msg::Key(c)| c).collect();
+    for code in codes {
+        let events = keyboard.press_key(&mut ui, code);
+        ui.handle(&events);
+    }
+    assert_eq!(text_of(&ui, field), "a", "a held letter did not type once");
+}
+
+/// A tree with nothing held asks to be woken for nothing.
+///
+/// The rule the whole feature had to be built around: a panel that spends its
+/// day idle must not pay for a keyboard being on screen.
+#[test]
+fn a_keyboard_nobody_is_touching_keeps_nobody_awake() {
+    // No focused field: a caret blinks, legitimately, and would be the thing
+    // keeping the tree awake rather than anything this test is about.
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut keyboard = Keyboard::new(&US);
+    keyboard.open(&mut ui, Msg::Key).expect("shelf");
+    ui.tick(5_000); // past the slide-in
+    assert_eq!(
+        ui.animating(),
+        0,
+        "an untouched keyboard is holding the tree awake"
+    );
+    assert_eq!(ui.next_wake_ms(), None, "and asking to be woken");
+
+    // A finger on Backspace is the one thing that changes that.
+    let back = key_node(&keyboard, KeyCode::Backspace);
+    let at = middle_of(&ui, back);
+    press_at(&mut ui, at, 5_000);
+    ui.tick(5_000);
+    assert_eq!(ui.animating(), 1, "a held key asked for nothing");
+    assert!(ui.next_wake_ms().is_some());
+
+    // And letting go gives it straight back.
+    release_at(&mut ui, at, 5_100);
+    ui.tick(5_100);
+    assert_eq!(ui.animating(), 0, "the tree stayed awake after the release");
+    assert_eq!(ui.next_wake_ms(), None);
+}
+
+/// A loop that stalled does not empty the field when it comes back.
+///
+/// The clock is the application's, and applications block: a page arrives over
+/// a slow link, a display wakes, a snapshot ticks straight past a second.
+/// Counting repeats from the press is truthful about how much time passed and
+/// would hand over every one of them at once — which on Backspace means the
+/// whole field, because the loop hiccuped.
+#[test]
+fn a_stalled_loop_does_not_delete_everything_at_once() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    let long = "abcdefghijklmnopqrstuvwxyz".repeat(4);
+    ui.widget_mut::<TextInput<Msg>>(field)
+        .expect("field")
+        .set_text(long.clone());
+    ui.tick(1_000);
+
+    let back = key_node(&keyboard, KeyCode::Backspace);
+    let at = middle_of(&ui, back);
+    press_at(&mut ui, at, 1_000);
+    // The press itself deletes one; drop the message, this test is about what
+    // comes after it.
+    let codes: Vec<KeyCode> = ui.drain_messages().map(|Msg::Key(c)| c).collect();
+    for code in codes {
+        let events = keyboard.press_key(&mut ui, code);
+        ui.handle(&events);
+    }
+    let before = text_of(&ui, field).chars().count();
+
+    // Ten seconds pass in one frame. At the keyboard's interval that is over a
+    // hundred repeats' worth of time.
+    let stalled = 11_000;
+    ui.tick(stalled);
+    let events = keyboard.tick(&mut ui, stalled);
+    ui.handle(&events);
+    let after = text_of(&ui, field).chars().count();
+    let deleted = before - after;
+    assert!(
+        deleted > 0,
+        "the stall swallowed the repeat entirely; it should still be held"
+    );
+    assert!(
+        deleted <= 4,
+        "a ten-second stall deleted {deleted} characters in one frame"
+    );
+
+    // And it carries on normally from there rather than owing a backlog.
+    let mut now = stalled;
+    for _ in 0..4 {
+        now += 15;
+        ui.tick(now);
+        let events = keyboard.tick(&mut ui, now);
+        ui.handle(&events);
+    }
+    let steady = after - text_of(&ui, field).chars().count();
+    assert!(
+        steady <= 2,
+        "it kept bursting after the stall: {steady} more in 60 ms"
+    );
 }

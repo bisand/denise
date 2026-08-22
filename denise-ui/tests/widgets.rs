@@ -5899,6 +5899,188 @@ fn reveal_focused_with_no_focus_does_nothing() {
     assert_eq!(ui.scroll(viewport), before);
 }
 
+/// A repeating button acts on press, not on release.
+///
+/// It has to: the repeats begin while the finger is still down, so waiting for
+/// the release would leave nothing to repeat. That is a real change in feel and
+/// the reason it is opt-in — an ordinary button emits on release precisely so
+/// that sliding off it cancels, and this gives that up.
+#[test]
+fn a_repeating_button_emits_on_the_press_and_not_again_on_release() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Button::new("more", Msg::Save).with_repeat(300, 50),
+            Rect::new(20, 20, 120, 40),
+        )
+        .expect("button");
+    ui.tick(0);
+
+    ui.handle(&[moved(60, 40), down(60, 40)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Save],
+        "a repeating button waited for the release"
+    );
+    assert!(
+        ui.widget::<Button<Msg>>(id).expect("button").is_held(),
+        "it did not notice the finger"
+    );
+
+    ui.handle(&[up(60, 40)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![],
+        "the release emitted a second time"
+    );
+    assert!(!ui.widget::<Button<Msg>>(id).expect("button").is_held());
+}
+
+/// Held past the delay, it earns repeats; released, it stops earning them.
+///
+/// The repeats are counted rather than emitted, because a widget has no message
+/// channel while it is animating — whoever owns the button collects them.
+#[test]
+fn a_held_button_earns_repeats_after_its_delay_and_stops_at_the_release() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Button::new("more", Msg::Save).with_repeat(300, 50),
+            Rect::new(20, 20, 120, 40),
+        )
+        .expect("button");
+    ui.tick(1_000);
+    ui.handle(&[moved(60, 40), down(60, 40)]);
+
+    // Inside the initial pause: nothing owed.
+    ui.tick(1_290);
+    assert_eq!(
+        ui.widget_mut::<Button<Msg>>(id)
+            .expect("button")
+            .take_repeats(),
+        0,
+        "it repeated before the delay was up"
+    );
+
+    // Past it, and one interval on.
+    ui.tick(1_355);
+    assert!(
+        ui.widget_mut::<Button<Msg>>(id)
+            .expect("button")
+            .take_repeats()
+            >= 2,
+        "the delay and one interval should have earned two"
+    );
+
+    ui.handle(&[up(60, 40)]);
+    ui.tick(2_000);
+    assert_eq!(
+        ui.widget_mut::<Button<Msg>>(id)
+            .expect("button")
+            .take_repeats(),
+        0,
+        "it kept earning repeats after the finger left"
+    );
+}
+
+/// A button nobody is holding keeps nobody awake.
+///
+/// The rule the whole feature had to be built around: a panel that spends its
+/// day idle must not pay for a repeating button existing.
+#[test]
+fn a_repeating_button_asks_for_wakes_only_while_it_is_held() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    ui.add(
+        root,
+        Button::new("more", Msg::Save).with_repeat(300, 50),
+        Rect::new(20, 20, 120, 40),
+    )
+    .expect("button");
+    ui.tick(1_000);
+    assert_eq!(
+        ui.animating(),
+        0,
+        "an untouched button is holding the tree awake"
+    );
+    assert_eq!(ui.next_wake_ms(), None);
+
+    ui.handle(&[moved(60, 40), down(60, 40)]);
+    ui.tick(1_000);
+    assert_eq!(ui.animating(), 1, "a held button asked for nothing");
+
+    ui.handle(&[up(60, 40)]);
+    ui.tick(1_010);
+    assert_eq!(ui.animating(), 0, "it stayed awake after the release");
+    assert_eq!(ui.next_wake_ms(), None);
+}
+
+/// A press dropped without a release stops the hold.
+///
+/// The tree drops a held press whenever what is being pressed stops being
+/// reachable — a scene pushed over it, its node removed — and no pointer event
+/// describes that. Without being told, a repeating button would believe a
+/// finger were still resting on it and keep a panel awake that nobody is
+/// touching.
+#[test]
+fn a_scene_pushed_over_a_held_button_ends_the_hold() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Button::new("more", Msg::Save).with_repeat(300, 50),
+            Rect::new(20, 20, 120, 40),
+        )
+        .expect("button");
+    ui.tick(1_000);
+    ui.handle(&[moved(60, 40), down(60, 40)]);
+    let _ = ui.drain_messages().count();
+    assert!(ui.widget::<Button<Msg>>(id).expect("button").is_held());
+    assert_eq!(ui.animating(), 1);
+
+    // A dialog opens over it. No release will ever arrive.
+    ui.push_scene(160);
+    assert!(
+        !ui.widget::<Button<Msg>>(id).expect("button").is_held(),
+        "the button still believes a finger is on it"
+    );
+    ui.tick(1_500);
+    assert_eq!(
+        ui.animating(),
+        0,
+        "a button nobody can reach is keeping the tree awake"
+    );
+    assert_eq!(
+        ui.widget_mut::<Button<Msg>>(id)
+            .expect("button")
+            .take_repeats(),
+        0,
+        "it went on earning repeats behind a dialog"
+    );
+}
+
+/// An ordinary button is untouched by any of it.
+#[test]
+fn a_plain_button_still_emits_on_release_and_never_animates() {
+    let (mut ui, _, save, _) = form();
+    ui.tick(1_000);
+    ui.handle(&[moved(100, 180), down(100, 180)]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![],
+        "a plain button emitted on the press"
+    );
+    assert_eq!(ui.animating(), 0, "a plain button asked to animate");
+    ui.handle(&[up(100, 180)]);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Save]);
+    assert!(!ui.widget::<Button<Msg>>(save).expect("button").is_held());
+}
+
 /// Gain, move and loss are three different answers, and "did not move" is a
 /// fourth. An application deciding whether to show a keyboard needs all four
 /// told apart.

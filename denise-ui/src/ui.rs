@@ -332,7 +332,7 @@ impl<M: 'static> Ui<M> {
         });
         self.order_dirty = true;
         self.set_focus(None);
-        self.pressed = None;
+        self.cancel_press();
         self.set_hovered(None);
         if dim > 0 {
             self.damage.add_full();
@@ -677,7 +677,7 @@ impl<M: 'static> Ui<M> {
         self.drop_subtree(scene.root);
         self.order_dirty = true;
         self.set_focus(None);
-        self.pressed = None;
+        self.cancel_press();
         self.set_hovered(None);
         if let Some(popup) = scene.popup {
             // Focus goes back where the popup came from, not to nothing: a
@@ -2021,6 +2021,24 @@ impl<M: 'static> Ui<M> {
         }
     }
 
+    /// Drops a held press that no release will ever arrive for.
+    ///
+    /// A scene pushed over the pressed node, the scene it lives in popped, its
+    /// node removed or disabled: the press is over and nothing in the pointer
+    /// stream says so. Clearing the flag alone left the widget looking pressed
+    /// and — for one that drives a timer from being held — believing a finger
+    /// was still there.
+    fn cancel_press(&mut self) {
+        let Some(id) = self.pressed.take() else {
+            return;
+        };
+        if !self.nodes.contains_key(id) {
+            return;
+        }
+        self.set_state(id, VisualState::PRESSED, false);
+        self.dispatch(id, &Event::PressCancelled);
+    }
+
     fn release(&mut self, event: &InputEvent) {
         if let Some(id) = self.pressed {
             self.set_state(id, VisualState::PRESSED, false);
@@ -2150,7 +2168,7 @@ impl<M: 'static> Ui<M> {
             self.set_hovered(None);
         }
         if self.subtree_contains(id, self.pressed) {
-            self.pressed = None;
+            self.cancel_press();
         }
         if self.subtree_contains(id, self.focused) {
             self.set_focus(None);
