@@ -1447,7 +1447,10 @@ mod tests {
     fn the_welcome_page_brings_the_keyboard_up_by_itself() {
         let mut app = App::new(Size::new(900, 700), 1.0, None, Motion::None, None);
         pump(&mut app);
-        assert!(app.keyboard_open(), "a panel with no keyboard has no way in");
+        assert!(
+            app.keyboard_open(),
+            "a panel with no keyboard has no way in"
+        );
 
         // And Escape puts it away for good: closing while the field still had
         // the caret would open it again on the next frame.
@@ -1476,7 +1479,10 @@ mod tests {
         // A tap on the URL bar. The keyboard arrives because focus did.
         app.focus_url_bar();
         pump(&mut app);
-        assert!(app.keyboard_open(), "the URL bar did not summon the keyboard");
+        assert!(
+            app.keyboard_open(),
+            "the URL bar did not summon the keyboard"
+        );
 
         // Trim the bar back to the directory. Not part of what is being tested
         // — a finger would hold Backspace, and holding a key is exactly what

@@ -1676,7 +1676,11 @@ mod tests {
             .ui
             .widget::<TextInput<Message>>(app.nodes.keyboard_field)
             .expect("the field");
-        assert_eq!(field.text(), "\u{f8}", "the semicolon position is not Norwegian");
+        assert_eq!(
+            field.text(),
+            "\u{f8}",
+            "the semicolon position is not Norwegian"
+        );
     }
 
     /// One shelf at a time, and the section says so by letting either one

@@ -653,7 +653,11 @@ fn the_keys_are_lettered_in_the_style_they_were_given() {
 
     for &(code, node) in keyboard.keys() {
         let button = ui.widget::<Button<Msg>>(node).expect("a key is a button");
-        assert_eq!(button.style().size_px, 28, "{code:?} kept the default style");
+        assert_eq!(
+            button.style().size_px,
+            28,
+            "{code:?} kept the default style"
+        );
     }
 
     // And a relabel does not quietly put the default back.
