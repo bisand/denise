@@ -1397,12 +1397,18 @@ mod tests {
     /// through the same pipeline.
     #[test]
     fn an_unreachable_page_becomes_an_error_page() {
+        // A `file:` URL, spelled out, rather than a bare path. A bare path to
+        // something that does not exist falls past the `path.exists()` arm of
+        // `to_url` and is guessed at as `https:///that/path` — an https URL
+        // with an empty host — so this test made a real resolver call on every
+        // run and failed whenever the answer took longer than `pump` waits.
+        // It is meant to test the error page, not the network.
         let mut app = App::new(
             Size::new(800, 600),
             1.0,
             None,
             Motion::None,
-            Some(fixture("does-not-exist.html")),
+            Some(format!("file://{}", fixture("does-not-exist.html"))),
         );
         pump(&mut app);
         let (html, _) = app.source.as_ref().expect("a source");
