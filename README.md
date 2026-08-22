@@ -252,30 +252,43 @@ no X, no Wayland, no compositor, no desktop. Same binaries, rebuilt with
 
 <table>
 <tr>
-<td width="50%"><img src="assets/screenshots/pi-table-editor.jpg"
-    alt="The record editor filling a monitor attached to a Raspberry Pi, drawn in DejaVu Sans"></td>
-<td width="50%"><img src="assets/screenshots/pi-hello.jpg"
+<td width="50%"><img src="assets/screenshots/pi-gallery-keyboard.jpg"
+    alt="The gallery filling a monitor attached to a Raspberry Pi, in the dark theme, with the on-screen keyboard up"></td>
+<td width="50%"><img src="assets/screenshots/pi-table-editor-keyboard.jpg"
+    alt="The record editor on the same monitor, in the light theme, with the on-screen keyboard up"></td>
+</tr>
+<tr>
+<td align="center"><code>gallery</code> — the dark theme, and the theme editor that built it</td>
+<td align="center"><code>table-editor</code> — the light one, same binary, same keyboard</td>
+</tr>
+<tr>
+<td><img src="assets/screenshots/pi-hello.jpg"
     alt="The hello example centred on the same monitor, drawn in the built-in bitmap font"></td>
-</tr>
-<tr>
-<td align="center"><code>table-editor</code> — DejaVu Sans, found by searching</td>
-<td align="center"><code>hello</code> — the built-in 8×8 bitmap font</td>
-</tr>
-<tr>
-<td><img src="assets/screenshots/pi-table-editor-theme.jpg"
-    alt="The same editor after pressing F2, in a different theme"></td>
 <td valign="top">
 
 The moiré is the camera against the panel, not the renderer.
 
-On the left is the same tree after **F2**. Every colour comes from a semantic role
-rather than a literal value, so a theme swap is one call and the contrast between
-text and its background is derived rather than hoped for.
+The keyboard along the bottom is [`denise-keyboard`](denise-keyboard) — what a
+panel with nothing plugged into it types on. It emits exactly what evdev would
+have emitted, so nothing above it can tell the difference, and it reads the
+layout off the board rather than assuming one: this Pi's
+`/etc/conf.d/loadkmap` says `no`, so the home row ends `ø æ`, `å` is on the top
+row, and the layout key says which.
+
+(There is a mouse attached to the test board, which is why there is a pointer in
+the photographs. The keyboard is what a panel would be driven by; the mouse is
+how it was driven for these.)
+
+Two themes, two photographs, one binary each. Every colour comes from a semantic
+role rather than a literal value, so a theme swap is one call and the contrast
+between text and its background is derived rather than hoped for — the sliders on
+the left of the gallery are driving exactly that.
 
 `hello` is in the bitmap font because it never asks for another — that is what
-keeps it eighty lines. `table-editor` searches the font directories and found
-`/usr/share/fonts/dejavu/DejaVuSans.ttf` by itself. Same toolkit, two tiers, one
-machine.
+keeps it eighty lines. The other two search the font directories and find
+`/usr/share/fonts/dejavu/DejaVuSans.ttf` by themselves, which is also why their
+keyboards draw `⌫` and `⏎` where `hello` would have drawn a box. Same toolkit,
+two tiers, one machine.
 
 </td>
 </tr>
