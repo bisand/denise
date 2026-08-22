@@ -273,7 +273,7 @@ panel with nothing plugged into it types on. It emits exactly what evdev would
 have emitted, so nothing above it can tell the difference, and it reads the
 layout off the board rather than assuming one: this Pi's
 `/etc/conf.d/loadkmap` says `no`, so the home row ends `ø æ`, `å` is on the top
-row, and the layout key says which.
+row, and the keyboard says which layout it is on.
 
 (There is a mouse attached to the test board, which is why there is a pointer in
 the photographs. The keyboard is what a panel would be driven by; the mouse is

@@ -1056,6 +1056,15 @@ impl Keyboard {
     /// Empty while Shift is held, because the main legend has already become
     /// the shifted character and printing it twice on one key says nothing.
     fn corner_for(&self, code: KeyCode) -> String {
+        if code == LAYOUT_KEY {
+            // The one corner that is not a shifted character. The key wears a
+            // globe, which says what it is for and cannot say which layout is
+            // live — so the name it used to carry as its legend moves here
+            // rather than being dropped. On a panel with no other keyboard,
+            // "am I typing Norwegian?" is a question the keyboard itself has to
+            // answer.
+            return self.layout.name.to_string();
+        }
         if grid::legend_of(code).is_some() {
             // A key with a fixed word on it — back, enter, tab — types nothing
             // and has no other state to advertise.

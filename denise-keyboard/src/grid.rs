@@ -229,14 +229,18 @@ const SPACE_ROW: [Key; 7] = [
     Key {
         code: LAYOUT,
         legend: None,
-        icon: None,
+        // A globe says "language" without being in one. The layout's own name
+        // does not go away with it — it moves to the corner, because which
+        // layout is live is the one thing this key has to answer and a globe
+        // alone cannot.
+        icon: Some(&icons::GLOBE),
         units: LETTER * 2,
         repeats: false,
     },
     Key::wide(KeyCode::Space, " ", LETTER * 6),
     Key::wide(KeyCode::ArrowLeft, "<-", LETTER).drawn(&icons::ARROW_LEFT),
     Key::wide(KeyCode::ArrowRight, "->", LETTER).drawn(&icons::ARROW_RIGHT),
-    Key::wide(KeyCode::Escape, "esc", LETTER * 2),
+    Key::wide(KeyCode::Escape, "esc", LETTER * 2).drawn(&icons::DISMISS),
 ];
 
 /// The grid, top row first.

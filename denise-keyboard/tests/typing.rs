@@ -598,6 +598,50 @@ fn the_layout_key_cycles_and_says_which() {
     }
 }
 
+/// The globe key still says which layout is live, in its corner.
+///
+/// It used to say so as its legend. A globe says what the key is *for* and
+/// cannot say which of three layouts is current — and on a panel with no other
+/// keyboard, "am I typing Norwegian?" is a question only this key can answer.
+/// So the name moved to the corner rather than being dropped, and it has to
+/// follow the layout the way the legend did.
+#[test]
+fn the_globe_keeps_the_layout_name_in_its_corner() {
+    use denise_ui::widgets::Button;
+
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+    let (code, node) = *keyboard
+        .keys()
+        .iter()
+        .find(|(code, _)| matches!(code, KeyCode::Unidentified(_)))
+        .expect("a layout key in the grid");
+
+    let corner = |ui: &Ui<Msg>| {
+        ui.widget::<Button<Msg>>(node)
+            .expect("the layout key is a button")
+            .corner()
+            .to_string()
+    };
+
+    assert_eq!(corner(&ui), "us");
+    for expected in ["no", "de", "us"] {
+        keyboard.press_key(&mut ui, code);
+        assert_eq!(
+            corner(&ui),
+            expected,
+            "the corner did not follow the layout"
+        );
+    }
+
+    // And the key still reports its name as its label, which is what a test and
+    // an accessibility pass read — the globe is drawn over it, not instead.
+    assert_eq!(
+        ui.widget::<Button<Msg>>(node).unwrap().label(),
+        "us",
+        "the globe took the key's name away from it"
+    );
+}
+
 /// A half-typed dead key does not survive a layout change: the mark was waiting
 /// for a base character from a layout that has gone.
 #[test]

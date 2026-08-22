@@ -135,8 +135,8 @@ Every key that changes what the *next* press means says which state it is in:
 
 ## Pictures, not glyphs
 
-The keys whose meaning is a *name* — Backspace, Tab, Enter and the two cursor
-keys — are **drawn** rather than lettered. A `denise_render::icon::Icon` is a
+The keys whose meaning is a *name* — Backspace, Tab, Enter, the two cursor keys,
+the layout key and Escape — are **drawn** rather than lettered. A `denise_render::icon::Icon` is a
 short list of filled polygons on a hundred-square box, scaled into the key, so
 it looks the same on every machine and stays crisp at 2×.
 
@@ -155,9 +155,20 @@ care.
 The keys whose legend carries **state** keep their words, and that is not a gap
 left to fill. `shift` becomes `SHIFT`, `caps` becomes `CAPS`, `ctrl` becomes
 `CTRL`: one glyph cannot say which of two states it is in, and a Shift key that
-looks identical armed and unarmed is worse than one that spells it out. Escape
-keeps its word for a different reason — `⎋` is the correct symbol and almost
-nobody knows it.
+looks identical armed and unarmed is worse than one that spells it out.
+
+The **layout key is both**, and gets both. A globe says what the key is for and
+cannot say which of three layouts is live — which on a panel with no other
+keyboard is the question only this key can answer. So it wears the globe and
+keeps the name, `us` or `no` or `de`, small in its corner. `Button` draws an
+icon and a corner legend together, and this is what that is for.
+
+**Escape** earns a picture here that it would not earn anywhere else. On this
+keyboard the key's job is to put the keyboard away, and a keyboard going
+downwards is what every phone draws for that — no one has to be told what it
+means. `⎋` is the correct symbol for Escape and almost nobody reads it, which is
+the argument it loses; that no font here has the glyph either is a fair sign of
+how often it is wanted.
 
 Each key keeps its word as its `Button` label regardless of what is drawn over
 it. That is what the key still *reports*, which is what a test and an
