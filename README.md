@@ -129,6 +129,12 @@ Three things it is showing, none of which is obvious from the outside:
   [`table.rs`](examples/table-editor/src/table.rs) knows no widget exists — what a
   valid row is, what to select after a delete, whether re-selecting a row counts
   as an edit — and every rule in it is unit tested without a display.
+- **The form gets out of the keyboard's way, by shrinking.** Tapping a field on a
+  panel brings the on-screen keyboard up over the lower two thirds of the screen,
+  and this form is too tall to fit above it at any offset — so it is cut to what
+  is left, which makes it a viewport with more content than room, and the tree
+  scrolls the focused row into view the way it scrolls anything else. Moving the
+  panel would have been the obvious answer and does not arithmetically work.
 
 `--font` loads any TrueType or OpenType file. Without one it falls back to the
 built-in 8×8 bitmap font and says so, which is the tiered font story
@@ -147,8 +153,16 @@ not your job: the derivation aims at WCAG AA by construction.
 
 ```bash
 cargo run -p gallery                                          # a window
+cargo run -p gallery -- --keyboard                            # with the keyboard up
 cargo run -p gallery --no-default-features --features kiosk   # the display itself
 ```
+
+Its overlays section is where the three kinds are compared side by side: a
+modal takes the focus, a drawer dims what is behind it, and a **shelf** does
+neither — which is what lets the on-screen keyboard type into the field above
+it without the field ever losing its caret. Both shelves share the one bottom
+edge, so either closes the other; that is the demonstration, not a limitation
+being hidden.
 
 <img src="assets/screenshots/gallery.png" width="860"
      alt="The gallery: a theme editor sidebar beside live widgets — role buttons, form controls, sliders driving a progress ring, ratings and a spinner">
