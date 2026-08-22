@@ -92,7 +92,23 @@ The third level is the layout's own `AltGr`, not a page of symbols chosen here
 — `@` is `AltGr`+`2` on Norwegian and `Shift`+`2` on US, so a fixed grid would
 be wrong on one of them.
 
+## Layouts, and switching them
+
+`Keyboard::from_system()` starts from whatever the machine is configured for —
+the same answer the hardware path starts from — and hands back a
+`LayoutSource` saying where it came from. `LayoutSource::Unknown` means the
+system asked for a layout there is no table for and got US, which is worth
+putting in front of somebody rather than leaving them to wonder.
+
+The layout key walks the built-ins: `us`, `no`, `de`. Switching **reletters the
+keys where they stand**, because a position does not move when the layout
+changes. German is the layout that proves it — QWERTZ, so `KeyCode::Y` types
+`z`, and a keyboard lettered from key *names* would be wrong on two rows.
+
+Switching this keyboard does not switch a physical one attached to the same
+machine; call `InputBackend::set_layout` too if you want them in step.
+
 ## What is not here yet
 
-Key repeat, which needs a press-and-hold signal the toolkit does not have;
-layout switching from a key on the keyboard itself.
+Key repeat, which needs a press-and-hold signal the toolkit does not have. And
+a field underneath the keyboard is not yet got out from under it.

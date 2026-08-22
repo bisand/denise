@@ -441,3 +441,101 @@ fn the_legends_follow_the_level() {
     ui.handle(&events);
     assert_eq!(label_of(&ui, &keyboard, KeyCode::A), "a", "legend stuck");
 }
+
+/// Switching relabels the keys where they stand: the position does not move,
+/// only what it types.
+#[test]
+fn switching_layout_reletters_the_same_positions() {
+    use denise_layout::{GERMAN, NORWEGIAN};
+
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    let label_of = |ui: &Ui<Msg>, keyboard: &Keyboard, want: KeyCode| -> String {
+        let (_, node) = keyboard
+            .keys()
+            .iter()
+            .find(|(code, _)| *code == want)
+            .copied()
+            .expect("in the grid");
+        ui.widget::<denise_ui::widgets::Button<Msg>>(node)
+            .expect("a button")
+            .label()
+            .to_string()
+    };
+    let nodes: Vec<_> = keyboard.keys().to_vec();
+
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::Semicolon), ";");
+
+    keyboard.set_layout(&mut ui, &NORWEGIAN);
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::Semicolon), "\u{f8}");
+    assert_eq!(
+        keyboard.keys(),
+        nodes.as_slice(),
+        "the grid was rebuilt rather than relettered"
+    );
+
+    keyboard.set_layout(&mut ui, &GERMAN);
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::Semicolon), "\u{f6}");
+    // QWERTZ: the position named Y types z.
+    assert_eq!(label_of(&ui, &keyboard, KeyCode::Y), "z");
+
+    // And typing follows the legend.
+    let events = keyboard.press_key(&mut ui, KeyCode::Y);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "z");
+}
+
+/// The layout key walks the built-ins and says where it is.
+#[test]
+fn the_layout_key_cycles_and_says_which() {
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+    let layout_key = keyboard
+        .keys()
+        .iter()
+        .map(|(code, _)| *code)
+        .find(|code| matches!(code, KeyCode::Unidentified(_)))
+        .expect("a layout key in the grid");
+
+    let names: Vec<&str> = denise_layout::BUILT_IN.iter().map(|l| l.name).collect();
+    assert_eq!(names, ["us", "no", "de"]);
+
+    assert_eq!(keyboard.layout().name, "us");
+    for expected in ["no", "de", "us"] {
+        assert!(
+            keyboard.press_key(&mut ui, layout_key).is_empty(),
+            "the layout key typed something"
+        );
+        assert_eq!(keyboard.layout().name, expected);
+    }
+}
+
+/// A half-typed dead key does not survive a layout change: the mark was waiting
+/// for a base character from a layout that has gone.
+#[test]
+fn switching_layout_drops_a_pending_dead_key() {
+    use denise_layout::GERMAN;
+
+    let (mut ui, mut keyboard, field) = set_up(&NORWEGIAN);
+    let events = keyboard.press_key(&mut ui, KeyCode::BracketRight); // ¨, held
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "");
+
+    keyboard.set_layout(&mut ui, &GERMAN);
+    let events = keyboard.press_key(&mut ui, KeyCode::O);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "o", "the abandoned mark came back");
+}
+
+/// Caps Lock is a fact about the keyboard rather than the layout, and survives.
+#[test]
+fn switching_layout_keeps_caps_lock() {
+    use denise_layout::GERMAN;
+
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Once
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Locked
+
+    keyboard.set_layout(&mut ui, &GERMAN);
+    let events = keyboard.press_key(&mut ui, KeyCode::Y);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "Z", "caps lock did not survive");
+}

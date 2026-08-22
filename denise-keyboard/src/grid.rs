@@ -115,12 +115,19 @@ const BOTTOM: [Key; 11] = [
 // letters, and a stock Alpine root has no fonts installed at all — so the
 // symbols draw as tofu on precisely the machine least able to spare a key
 // nobody can read. ASCII renders in every face there is.
-const MOD_ROW: [Key; 3] = [
+const MOD_ROW: [Key; 4] = [
     // Legends for these two come from the keyboard's state rather than the
     // layout: the key says what it will do next, not what it types.
     Key::wide(KeyCode::ShiftLeft, "shift", 2),
     Key::wide(KeyCode::AltRight, "alt", 2),
     Key::wide(KeyCode::Backspace, "back", 2),
+    // The layout key. Its legend is the layout's name and comes from the
+    // keyboard's state, so it is `None` here like the other two.
+    Key {
+        code: KeyCode::Unidentified(u32::MAX),
+        legend: None,
+        units: 2,
+    },
 ];
 
 const SPACE_ROW: [Key; 2] = [

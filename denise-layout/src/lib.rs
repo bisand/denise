@@ -540,6 +540,65 @@ const NORWEGIAN_ENTRIES: [Entry; 24] = {
     ]
 };
 
+const GERMAN_ENTRIES: [Entry; 26] = {
+    use KeyCode as K;
+    [
+        Entry::pair(K::Backquote, '\u{005e}', '\u{00b0}'),
+        Entry::pair(K::Digit1, '1', '!'),
+        Entry::triple(K::Digit2, '2', '"', '\u{00b2}'),
+        Entry::triple(K::Digit3, '3', '\u{00a7}', '\u{00b3}'),
+        Entry::pair(K::Digit4, '4', '$'),
+        Entry::pair(K::Digit5, '5', '%'),
+        Entry::pair(K::Digit6, '6', '&'),
+        Entry::triple(K::Digit7, '7', '/', '{'),
+        Entry::triple(K::Digit8, '8', '(', '['),
+        Entry::triple(K::Digit9, '9', ')', ']'),
+        Entry::triple(K::Digit0, '0', '=', '}'),
+        Entry::triple(K::Minus, '\u{00df}', '?', '\\'),
+        // Acute and grave, as on Norwegian but one position further left,
+        // because the German row is a key shorter before it.
+        Entry {
+            code: K::Equal,
+            base: Output::Dead('\u{00b4}'),
+            shift: Output::Dead('`'),
+            altgr: Output::None,
+            shift_altgr: Output::None,
+        },
+        // QWERTZ: the two letters that move. `KeyCode::Y` is a position, and on
+        // this layout that position types `z` — which is the whole reason a
+        // keyboard is lettered from the layout rather than from the key name.
+        Entry::letter(K::Y, 'z', 'Z'),
+        Entry::letter(K::Z, 'y', 'Y'),
+        Entry::letter(K::BracketLeft, '\u{00fc}', '\u{00dc}'),
+        Entry::triple(K::BracketRight, '+', '*', '~'),
+        Entry::letter(K::Semicolon, '\u{00f6}', '\u{00d6}'),
+        Entry::letter(K::Quote, '\u{00e4}', '\u{00c4}'),
+        Entry::pair(K::Backslash, '#', '\''),
+        Entry::triple(K::IntlBackslash, '<', '>', '|'),
+        Entry::pair(K::Comma, ',', ';'),
+        Entry::pair(K::Period, '.', ':'),
+        Entry::pair(K::Slash, '-', '_'),
+        // Two letters carrying a third level, as on Norwegian.
+        Entry::triple(K::E, 'e', 'E', '\u{20ac}'),
+        Entry::triple(K::M, 'm', 'M', '\u{00b5}'),
+    ]
+};
+
+/// German QWERTZ.
+///
+/// The layout that most repays keying by *position* rather than by name:
+/// `KeyCode::Y` types `z` here and `y` on both others, so a keyboard that
+/// lettered its keys from the key name would be wrong on two of its rows.
+///
+/// `ä`, `ö` and `ü` sit on the US `'`, `;` and `[` positions, `ß` on `-`, and
+/// the circumflex is a **live** character on the backquote rather than the dead
+/// key it is on Norwegian — a difference worth having in the tests.
+pub static GERMAN: Layout = Layout {
+    name: "de",
+    entries: &GERMAN_ENTRIES,
+    decimal_separator: ',',
+};
+
 /// Norwegian (Bokmål) QWERTY.
 ///
 /// `æ`, `ø` and `å` sit on the US `'`, `;` and `[` positions, the third level is
@@ -551,7 +610,7 @@ pub static NORWEGIAN: Layout = Layout {
 };
 
 /// Every layout that ships, for a runtime lookup by name.
-pub static BUILT_IN: [&Layout; 2] = [&US, &NORWEGIAN];
+pub static BUILT_IN: [&Layout; 3] = [&US, &NORWEGIAN, &GERMAN];
 
 /// Finds a layout by its short name, as `setxkbmap` would name it.
 pub fn by_name(name: &str) -> Option<&'static Layout> {
@@ -695,7 +754,7 @@ const COMPOSE: [(char, char, char); 118] = [
 ];
 
 /// Where a layout choice came from, for logging what a panel actually picked up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutSource {
     /// The `DENISE_KEYMAP` environment variable.
     Denise,
@@ -703,6 +762,14 @@ pub enum LayoutSource {
     Xkb,
     /// A system configuration file, named here so a wrong guess is traceable.
     File(&'static str),
+    /// The system asked for a layout there is no table for, so US was used.
+    ///
+    /// Carries what it asked for, because this is the case somebody has to be
+    /// able to act on: a panel typing US on a machine configured for German is
+    /// a bug report unless it can say which layout it wanted and did not find.
+    /// Adding a table is about thirty lines; discovering that one is missing
+    /// should not require reading the source.
+    Unknown(String),
     /// Nothing said, so US.
     Default,
 }
@@ -713,6 +780,7 @@ impl core::fmt::Display for LayoutSource {
             LayoutSource::Denise => f.write_str("DENISE_KEYMAP"),
             LayoutSource::Xkb => f.write_str("XKB_DEFAULT_LAYOUT"),
             LayoutSource::File(path) => write!(f, "{path}"),
+            LayoutSource::Unknown(name) => write!(f, "no table for {name:?}, using US"),
             LayoutSource::Default => f.write_str("default"),
         }
     }
@@ -764,14 +832,23 @@ pub fn normalise_name(raw: &str) -> &str {
 /// the `video` and `input` groups, and giving that up to read a keymap is a poor
 /// trade. Adding a layout table is about thirty lines; needing root is forever.
 pub fn from_system() -> (&'static Layout, LayoutSource) {
+    // What the system asked for but this crate has no table for. Remembered
+    // rather than skipped past, because falling through to US in silence is how
+    // a panel ends up typing the wrong thing with nothing to point at.
+    let mut unknown: Option<String> = None;
+
     for (variable, source) in [
         ("DENISE_KEYMAP", LayoutSource::Denise),
         ("XKB_DEFAULT_LAYOUT", LayoutSource::Xkb),
     ] {
-        if let Ok(value) = std::env::var(variable)
-            && let Some(layout) = by_name(normalise_name(&value))
-        {
-            return (layout, source);
+        let Ok(value) = std::env::var(variable) else {
+            continue;
+        };
+        let name = normalise_name(&value);
+        match by_name(name) {
+            Some(layout) => return (layout, source),
+            None if unknown.is_none() => unknown = Some(name.to_string()),
+            None => {}
         }
     }
 
@@ -779,14 +856,21 @@ pub fn from_system() -> (&'static Layout, LayoutSource) {
         let Ok(contents) = std::fs::read_to_string(path) else {
             continue;
         };
-        if let Some(value) = value_of(&contents, key)
-            && let Some(layout) = by_name(normalise_name(value))
-        {
-            return (layout, LayoutSource::File(path));
+        let Some(value) = value_of(&contents, key) else {
+            continue;
+        };
+        let name = normalise_name(value);
+        match by_name(name) {
+            Some(layout) => return (layout, LayoutSource::File(path)),
+            None if unknown.is_none() => unknown = Some(name.to_string()),
+            None => {}
         }
     }
 
-    (&US, LayoutSource::Default)
+    match unknown {
+        Some(name) => (&US, LayoutSource::Unknown(name)),
+        None => (&US, LayoutSource::Default),
+    }
 }
 
 /// Finds `KEY=value` in a shell-style configuration file, ignoring comments.
@@ -1152,22 +1236,32 @@ mod tests {
         }
     }
 
+    /// Every layout reaches every letter — *somewhere*.
+    ///
+    /// Asserted as a set rather than as a sequence, because the positions are
+    /// not named after what they type: `KeyCode::Y` types `z` on German, and a
+    /// test expecting `"...xyz"` from pressing A, B, C, X, Y, Z in order says
+    /// only that the layout under test happens to be QWERTY.
     #[test]
     fn every_layout_can_type_the_whole_alphabet_and_the_digits() {
         for layout in BUILT_IN {
+            let mut letters: Vec<char> = LETTERS
+                .iter()
+                .map(|entry| {
+                    let mut c = Composer::new(layout);
+                    type_keys(&mut c, &plain(&[entry.code]))
+                        .chars()
+                        .next()
+                        .unwrap_or_else(|| {
+                            panic!("{} types nothing at {:?}", layout.name, entry.code)
+                        })
+                })
+                .collect();
+            letters.sort_unstable();
+            let letters: String = letters.into_iter().collect();
+            assert_eq!(letters, "abcdefghijklmnopqrstuvwxyz", "{}", layout.name);
+
             let mut c = Composer::new(layout);
-            let letters = type_keys(
-                &mut c,
-                &plain(&[
-                    KeyCode::A,
-                    KeyCode::B,
-                    KeyCode::C,
-                    KeyCode::X,
-                    KeyCode::Y,
-                    KeyCode::Z,
-                ]),
-            );
-            assert_eq!(letters, "abcxyz", "{}", layout.name);
             let digits = type_keys(
                 &mut c,
                 &plain(&[KeyCode::Digit0, KeyCode::Digit5, KeyCode::Digit9]),
@@ -1217,3 +1311,86 @@ mod tests {
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct Readme;
+
+#[cfg(test)]
+mod german_tests {
+    use super::*;
+
+    fn typed(layout: &'static Layout, code: KeyCode, shift: bool) -> Option<char> {
+        let mut composer = Composer::new(layout);
+        let modifiers = if shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        };
+        let composed = composer.feed(code, ElementState::Down, modifiers);
+        composed.as_slice().first().copied()
+    }
+
+    /// The reason this layout is worth having: a position is not a letter.
+    #[test]
+    fn qwertz_swaps_the_two_letters_that_move() {
+        assert_eq!(typed(&GERMAN, KeyCode::Y, false), Some('z'));
+        assert_eq!(typed(&GERMAN, KeyCode::Z, false), Some('y'));
+        // And the other two agree with each other against it.
+        assert_eq!(typed(&US, KeyCode::Y, false), Some('y'));
+        assert_eq!(typed(&NORWEGIAN, KeyCode::Y, false), Some('y'));
+    }
+
+    /// The umlauts sit where ø, æ and å do on Norwegian, and ; ' [ on US: the
+    /// same three positions, three different letters.
+    #[test]
+    fn the_same_three_positions_carry_each_layouts_own_letters() {
+        for (code, de, no, us) in [
+            (KeyCode::Semicolon, '\u{00f6}', '\u{00f8}', ';'),
+            (KeyCode::Quote, '\u{00e4}', '\u{00e6}', '\''),
+            (KeyCode::BracketLeft, '\u{00fc}', '\u{00e5}', '['),
+        ] {
+            assert_eq!(typed(&GERMAN, code, false), Some(de), "de {code:?}");
+            assert_eq!(typed(&NORWEGIAN, code, false), Some(no), "no {code:?}");
+            assert_eq!(typed(&US, code, false), Some(us), "us {code:?}");
+        }
+    }
+
+    /// ß has no upper case here, and Shift on that position is `?`.
+    #[test]
+    fn eszett_and_its_shift() {
+        assert_eq!(typed(&GERMAN, KeyCode::Minus, false), Some('\u{00df}'));
+        assert_eq!(typed(&GERMAN, KeyCode::Minus, true), Some('?'));
+    }
+
+    /// The acute dead key composes, so é is two presses as it is on Norwegian.
+    #[test]
+    fn the_acute_dead_key_composes() {
+        let mut composer = Composer::new(&GERMAN);
+        let press = |c: &mut Composer, k| c.feed(k, ElementState::Down, Modifiers::NONE);
+        assert!(press(&mut composer, KeyCode::Equal).is_empty(), "dead");
+        assert_eq!(
+            press(&mut composer, KeyCode::E).as_slice(),
+            &['\u{00e9}'],
+            "expected é"
+        );
+    }
+
+    /// The circumflex is a live character here and a dead key on Norwegian —
+    /// the same mark, two behaviours, which is what makes it a useful third
+    /// table rather than a third spelling of the second.
+    #[test]
+    fn the_circumflex_is_live_here_and_dead_on_norwegian() {
+        assert_eq!(typed(&GERMAN, KeyCode::Backquote, false), Some('^'));
+
+        let mut composer = Composer::new(&NORWEGIAN);
+        let dead = composer.feed(KeyCode::BracketRight, ElementState::Down, Modifiers::SHIFT);
+        assert!(dead.is_empty(), "^ should be dead on Norwegian");
+    }
+
+    /// Three layouts, and `by_name` finds each.
+    #[test]
+    fn all_three_are_reachable_by_name() {
+        assert_eq!(BUILT_IN.len(), 3);
+        for name in ["us", "no", "de"] {
+            assert_eq!(by_name(name).map(|l| l.name), Some(name), "{name}");
+        }
+        assert!(by_name("fr").is_none(), "a layout there is no table for");
+    }
+}

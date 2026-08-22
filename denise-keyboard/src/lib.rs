@@ -47,11 +47,34 @@
 //! wrong on one of them. It latches, since a finger cannot hold one key and
 //! press another.
 //!
+//! # Layouts
+//!
+//! [`Keyboard::from_system`] starts from whatever the machine is configured
+//! for, which is the answer the hardware path starts from too — so a panel with
+//! a keyboard plugged into it and one without agree about what the `;` position
+//! types. It hands back a [`LayoutSource`], and
+//! [`LayoutSource::Unknown`] is the one
+//! worth showing somebody: the system asked for a layout there is no table for
+//! and got US.
+//!
+//! The layout key walks the built-ins. Switching **reletters the keys where
+//! they stand** rather than rebuilding them, because a position does not move
+//! when the layout changes — `KeyCode::Semicolon` is where `ø` lives on
+//! Norwegian and `ö` on German, and it is the same key.
+//!
+//! Switching the keyboard does not switch a physical keyboard attached to the
+//! same machine. An application that wants both in step calls
+//! `InputBackend::set_layout` as well; the toolkit does not couple them,
+//! because it does not know the two are meant to agree.
+//!
 //! # What is not here yet
 //!
 //! Key repeat — holding Backspace to keep deleting — needs a press-and-hold
-//! signal the toolkit does not have; `Button` emits on release. Layout
-//! switching from a key on the keyboard is the next issue.
+//! signal the toolkit does not have; `Button` emits on release.
+//!
+//! A field underneath the keyboard is not yet got out from under it. The tree
+//! reveals a focused node into its scrollable ancestor, which does not know a
+//! shelf is covering the bottom of the screen.
 //!
 //! [`InputEvent::Key`]: denise::InputEvent::Key
 //! [`InputEvent::Text`]: denise::InputEvent::Text
@@ -62,7 +85,7 @@
 //! [`TextInput`]: denise_ui::widgets::TextInput
 
 use denise::{ElementState, InputEvent, KeyCode, Modifiers, Rect};
-use denise_layout::{Composer, Layout, Output};
+use denise_layout::{Composer, Layout, LayoutSource, Output};
 use denise_ui::widgets::{Button, TextInput};
 use denise_ui::{NodeId, Side, Ui};
 
@@ -72,6 +95,14 @@ pub use grid::{Key, ROWS, Row};
 
 /// What the third-level key says.
 const LEVEL3_LEGEND: &str = "alt";
+
+/// The position the layout key borrows.
+///
+/// A key in the grid has to *be* a position, and no real position means "change
+/// layout". `Unidentified` is what the tree already uses for a key it cannot
+/// name, and no layout table letters it — so nothing can be pressed by accident
+/// and nothing else will ever claim it.
+const LAYOUT_KEY: KeyCode = KeyCode::Unidentified(u32::MAX);
 
 /// Height of one key, in logical pixels.
 ///
@@ -165,6 +196,55 @@ impl Keyboard {
             shelf: None,
             keys: Vec::new(),
         }
+    }
+
+    /// A keyboard in whatever layout the machine is configured for.
+    ///
+    /// The same answer the hardware path starts from, so a panel with a
+    /// keyboard plugged in and one without agree about what the `;` position
+    /// types. Returns the [`LayoutSource`] alongside, which is worth showing
+    /// somebody: [`LayoutSource::Unknown`] means the system asked for a layout
+    /// there is no table for and got US, and a keyboard silently in the wrong
+    /// language is a bad afternoon.
+    pub fn from_system() -> (Self, LayoutSource) {
+        let (layout, source) = denise_layout::from_system();
+        (Self::new(layout), source)
+    }
+
+    /// Changes layout, relettering the keys where they stand.
+    ///
+    /// A position does not move when the layout changes — `KeyCode::Semicolon`
+    /// is where `ø` lives on Norwegian and `ö` on German — so this replaces
+    /// legends rather than rebuilding the grid.
+    ///
+    /// Any half-typed dead key is dropped: a mark waiting for a base character
+    /// means nothing once the layout that was going to supply it has gone.
+    /// Shift, Caps Lock and the third level survive, because they are facts
+    /// about the keyboard rather than about the layout.
+    pub fn set_layout<M: Clone + 'static>(&mut self, ui: &mut Ui<M>, layout: &'static Layout) {
+        if core::ptr::eq(self.layout, layout) {
+            return;
+        }
+        self.layout = layout;
+        // `Composer::set_layout` drops the pending dead key and keeps Caps Lock
+        // and the third level, which is exactly the split wanted: a half-typed
+        // mark belonged to the old layout, and the user's hands have not moved.
+        self.composer.set_layout(layout);
+        self.relabel(ui);
+    }
+
+    /// Moves to the next built-in layout, wrapping.
+    ///
+    /// What the layout key does. Returns the layout it moved to, whose `name`
+    /// is what the key then says.
+    pub fn cycle_layout<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) -> &'static Layout {
+        let next = denise_layout::BUILT_IN
+            .iter()
+            .position(|l| core::ptr::eq(*l, self.layout))
+            .map_or(0, |i| (i + 1) % denise_layout::BUILT_IN.len());
+        let layout = denise_layout::BUILT_IN[next];
+        self.set_layout(ui, layout);
+        layout
     }
 
     /// The layout its keys are lettered from.
@@ -284,6 +364,10 @@ impl Keyboard {
             KeyCode::AltRight => {
                 self.tap_level3();
                 self.relabel(ui);
+                Vec::new()
+            }
+            LAYOUT_KEY => {
+                self.cycle_layout(ui);
                 Vec::new()
             }
             _ => {
@@ -423,6 +507,7 @@ impl Keyboard {
             let label = match code {
                 KeyCode::ShiftLeft => self.shift.legend().to_string(),
                 KeyCode::AltRight => LEVEL3_LEGEND.to_string(),
+                LAYOUT_KEY => self.layout.name.to_string(),
                 _ => grid::legend_of(code)
                     .map(str::to_string)
                     .or_else(|| self.legend(code).map(|ch| ch.to_string()))
