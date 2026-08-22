@@ -539,3 +539,38 @@ fn switching_layout_keeps_caps_lock() {
     ui.handle(&events);
     assert_eq!(text_of(&ui, field), "Z", "caps lock did not survive");
 }
+
+/// What the keyboard is covering, for a layout that cannot scroll out from
+/// under it.
+#[test]
+fn the_keyboard_says_what_it_covers() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut keyboard = Keyboard::new(&US);
+    assert_eq!(keyboard.occluded(&ui), None, "nothing is up");
+
+    keyboard.open(&mut ui, Msg::Key).expect("shelf");
+    let covered = keyboard.occluded(&ui).expect("the keyboard is up");
+    assert_eq!(
+        covered.height,
+        Keyboard::height(),
+        "not the height the keyboard asked for"
+    );
+    assert_eq!(
+        covered.bottom(),
+        SIZE.height as i32,
+        "a keyboard from below reaches the bottom edge"
+    );
+    ui.tick(1_250);
+    assert_eq!(
+        keyboard.occluded(&ui),
+        Some(covered),
+        "moved once it landed"
+    );
+
+    keyboard.close(&mut ui);
+    assert_eq!(
+        keyboard.occluded(&ui),
+        None,
+        "still covering on the way out"
+    );
+}

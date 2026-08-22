@@ -5653,6 +5653,175 @@ fn an_accordion_keeps_at_most_one_section_open() {
     assert_eq!(ui.bounds(sections[2]).expect("b").height, header);
 }
 
+/// The case that looked solved and was not: a viewport that extends under the
+/// shelf reveals a field into the viewport, which is not the same as revealing
+/// it where somebody can see it.
+#[test]
+fn revealing_a_field_scrolls_it_clear_of_the_shelf() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    // A viewport filling the screen, so it runs under the shelf.
+    let viewport = ui
+        .add(root, Panel::default(), Rect::from_size(SIZE))
+        .expect("viewport");
+    ui.set_scrollable(viewport, true);
+    // Content taller than the viewport, or there is nowhere to scroll to and
+    // the reveal has nothing it can do.
+    ui.add(
+        viewport,
+        Panel::default(),
+        Rect::new(0, 0, SIZE.width as i32, SIZE.height as i32 * 3),
+    )
+    .expect("content");
+    // A field low enough to be under a shelf once it is up.
+    let field = ui
+        .add(
+            viewport,
+            TextInput::new(),
+            Rect::new(10, SIZE.height as i32 - 60, 200, 40),
+        )
+        .expect("field");
+    ui.tick(1_000);
+
+    let shelf_height = 120;
+    ui.push_shelf(denise_ui::overlay::Side::Below, shelf_height)
+        .expect("shelf");
+    assert_eq!(
+        ui.occluded().map(|r| r.y),
+        Some(SIZE.height as i32 - shelf_height),
+        "the shelf did not claim its band"
+    );
+
+    ui.focus(Some(field));
+    ui.tick(1_100);
+
+    let bounds = ui.bounds(field).expect("field bounds");
+    let keyboard_top = SIZE.height as i32 - shelf_height;
+    assert!(
+        bounds.bottom() <= keyboard_top,
+        "the field was revealed under the keyboard: {bounds:?} against a keyboard at {keyboard_top}"
+    );
+}
+
+/// With nothing in the way the reveal is unchanged, so the shelf only ever
+/// takes away — it never scrolls something that did not need scrolling.
+#[test]
+fn revealing_without_a_shelf_is_unchanged() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let viewport = ui
+        .add(root, Panel::default(), Rect::from_size(SIZE))
+        .expect("viewport");
+    ui.set_scrollable(viewport, true);
+    let field = ui
+        .add(
+            viewport,
+            TextInput::new(),
+            Rect::new(10, SIZE.height as i32 - 60, 200, 40),
+        )
+        .expect("field");
+    ui.tick(1_000);
+    let before = ui.bounds(field).expect("bounds");
+
+    ui.focus(Some(field));
+    ui.tick(1_100);
+    assert_eq!(
+        ui.bounds(field).expect("bounds"),
+        before,
+        "a visible field was scrolled anyway"
+    );
+}
+
+/// The band is given back when the shelf starts leaving, not when it lands.
+#[test]
+fn the_occluded_band_is_returned_when_the_shelf_leaves() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    assert_eq!(ui.occluded(), None);
+    ui.push_shelf(denise_ui::overlay::Side::Below, 100)
+        .expect("shelf");
+    assert!(ui.occluded().is_some());
+    ui.tick(1_250);
+
+    ui.close_shelf();
+    assert_eq!(ui.occluded(), None, "still claimed while sliding out");
+    ui.tick(2_000);
+    assert_eq!(ui.occluded(), None);
+}
+
+/// A shelf against the top takes the top: the same arithmetic read the other
+/// way, which is why it is arithmetic rather than four special cases.
+#[test]
+fn a_shelf_above_pushes_the_reveal_down() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let viewport = ui
+        .add(root, Panel::default(), Rect::from_size(SIZE))
+        .expect("viewport");
+    ui.set_scrollable(viewport, true);
+    ui.add(
+        viewport,
+        Panel::default(),
+        Rect::new(0, 0, SIZE.width as i32, SIZE.height as i32 * 3),
+    )
+    .expect("content");
+    let field = ui
+        .add(viewport, TextInput::new(), Rect::new(10, 300, 200, 40))
+        .expect("field");
+    // Scrolled past the field, so revealing it means coming back *down* the
+    // content — the direction a top shelf interferes with.
+    ui.set_scroll(viewport, Point::new(0, 400));
+    ui.tick(1_000);
+
+    ui.push_shelf(denise_ui::overlay::Side::Above, 120)
+        .expect("shelf");
+    ui.focus(Some(field));
+    ui.tick(1_100);
+
+    let bounds = ui.bounds(field).expect("bounds");
+    assert!(
+        bounds.y >= 120,
+        "the field was revealed under a shelf at the top: {bounds:?}"
+    );
+}
+
+/// What scrolling cannot fix, said out loud: a viewport whose content fits has
+/// nowhere to scroll to, so a field under the keyboard stays there and the
+/// application has to move something. That is what [`Ui::occluded`] is for.
+#[test]
+fn a_viewport_with_nothing_to_scroll_cannot_reveal_and_says_so() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let viewport = ui
+        .add(root, Panel::default(), Rect::from_size(SIZE))
+        .expect("viewport");
+    ui.set_scrollable(viewport, true);
+    let field = ui
+        .add(
+            viewport,
+            TextInput::new(),
+            Rect::new(10, SIZE.height as i32 - 60, 200, 40),
+        )
+        .expect("field");
+    ui.tick(1_000);
+
+    ui.push_shelf(denise_ui::overlay::Side::Below, 120)
+        .expect("shelf");
+    ui.focus(Some(field));
+    ui.tick(1_100);
+
+    let bounds = ui.bounds(field).expect("bounds");
+    let occluded = ui.occluded().expect("a shelf is up");
+    assert!(
+        bounds.bottom() > occluded.y,
+        "this test is about the case that cannot be fixed by scrolling"
+    );
+    assert_eq!(
+        occluded.y,
+        SIZE.height as i32 - 120,
+        "the application is told exactly what it must move something clear of"
+    );
+}
+
 /// Gain, move and loss are three different answers, and "did not move" is a
 /// fourth. An application deciding whether to show a keyboard needs all four
 /// told apart.
