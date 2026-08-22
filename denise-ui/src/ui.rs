@@ -157,6 +157,7 @@ pub struct Ui<M: 'static> {
     /// has asked for yet.
     drawer: Option<DrawerState>,
     shelf: Option<ShelfState>,
+    focus_changed: Option<Option<NodeId>>,
     /// Transient notifications. Not nodes, for the reasons in [`crate::toast`].
     toasts: Toasts,
     /// The hover-dwell bubble. Not a node and not a widget — see
@@ -202,6 +203,7 @@ impl<M: 'static> Ui<M> {
             tweens: Vec::new(),
             drawer: None,
             shelf: None,
+            focus_changed: None,
             cursor_auto: true,
         }
     }
@@ -570,6 +572,33 @@ impl<M: 'static> Ui<M> {
             ..state
         });
         true
+    }
+
+    /// Where focus went since this was last asked, or `None` if it has not moved.
+    ///
+    /// Drained on read, like [`Ui::drain_messages`], and read in the same place:
+    /// the application's turn, once a frame. `Some(None)` is focus *lost* —
+    /// somebody clicked the background — which is a different event from focus
+    /// not having moved, and the two are worth telling apart.
+    ///
+    /// The tree reports the movement and takes no view on what it means. Whether
+    /// a node deserves an on-screen keyboard is a question only the application
+    /// can answer, and answering it here would mean `denise-ui` knowing what a
+    /// keyboard is.
+    ///
+    /// ```
+    /// # use denise::{Rect, Size, theme};
+    /// # use denise_ui::{Ui, widgets::TextInput};
+    /// # #[derive(Clone, Debug)] enum Msg { Noop }
+    /// # let mut ui: Ui<Msg> = Ui::new(Size::new(800, 480), theme::DARK);
+    /// # let root = ui.root();
+    /// let field = ui.add(root, TextInput::new(), Rect::new(0, 0, 200, 40)).unwrap();
+    /// ui.focus(Some(field));
+    /// assert_eq!(ui.focus_changed(), Some(Some(field)));
+    /// assert_eq!(ui.focus_changed(), None, "drained on read");
+    /// ```
+    pub fn focus_changed(&mut self) -> Option<Option<NodeId>> {
+        self.focus_changed.take()
     }
 
     /// Whether a shelf is up, closing included.
@@ -1992,6 +2021,9 @@ impl<M: 'static> Ui<M> {
             self.deliver(old, &Event::FocusLost);
         }
         self.focused = id;
+        // One place records it because one place changes it, and the early
+        // return above means a focus that did not move is never reported.
+        self.focus_changed = Some(id);
         if let Some(new) = id {
             self.set_state(new, VisualState::FOCUSED, true);
             self.deliver(new, &Event::FocusGained);

@@ -212,3 +212,82 @@ fn the_keys_land_inside_the_shelf_and_paint() {
         "the bottom key row painted nothing but a flat colour"
     );
 }
+
+/// The panel's ordinary behaviour: touch a field and the keyboard arrives,
+/// touch something else and it leaves.
+#[test]
+fn following_focus_opens_on_a_field_and_closes_off_it() {
+    use denise_ui::widgets::Button;
+
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 400, 40))
+        .expect("field");
+    let button = ui
+        .add(
+            root,
+            Button::new("Save", Msg::Key(KeyCode::Enter)),
+            Rect::new(20, 80, 120, 40),
+        )
+        .expect("button");
+    ui.tick(1_000);
+    let mut keyboard = Keyboard::new(&US);
+
+    // Nothing focused yet: nothing to do.
+    keyboard.follow_focus(&mut ui, Msg::Key);
+    assert!(!keyboard.is_open());
+
+    ui.focus(Some(field));
+    keyboard.follow_focus(&mut ui, Msg::Key);
+    assert!(keyboard.is_open(), "focusing a field did not open it");
+    ui.tick(1_250);
+
+    // Type something, so the next assertion has something to protect.
+    ui.handle(&keyboard.press(KeyCode::H));
+    ui.handle(&keyboard.press(KeyCode::I));
+    assert_eq!(text_of(&ui, field), "hi");
+
+    // A key press moves no focus, so following focus again changes nothing.
+    keyboard.follow_focus(&mut ui, Msg::Key);
+    assert!(keyboard.is_open(), "typing closed the keyboard");
+
+    ui.focus(Some(button));
+    keyboard.follow_focus(&mut ui, Msg::Key);
+    assert!(!keyboard.is_open(), "focusing a button did not close it");
+    ui.tick(2_000);
+    assert!(!ui.shelf_open());
+
+    // And the text survived both.
+    assert_eq!(text_of(&ui, field), "hi");
+}
+
+/// Moving between two fields keeps one keyboard up rather than closing and
+/// reopening it.
+#[test]
+fn following_focus_between_two_fields_keeps_it_up() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let first = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 300, 40))
+        .expect("first");
+    let second = ui
+        .add(root, TextInput::new(), Rect::new(20, 80, 300, 40))
+        .expect("second");
+    ui.tick(1_000);
+    let mut keyboard = Keyboard::new(&US);
+
+    ui.focus(Some(first));
+    keyboard.follow_focus(&mut ui, Msg::Key);
+    ui.tick(1_250);
+    let shelf = ui.shelf_open();
+
+    ui.focus(Some(second));
+    keyboard.follow_focus(&mut ui, Msg::Key);
+    assert!(keyboard.is_open(), "moving between fields closed it");
+    assert_eq!(ui.shelf_open(), shelf, "the shelf was rebuilt");
+
+    ui.handle(&keyboard.press(KeyCode::X));
+    assert_eq!(text_of(&ui, second), "x", "typing went to the wrong field");
+    assert_eq!(text_of(&ui, first), "");
+}

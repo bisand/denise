@@ -30,7 +30,11 @@ ui.focus(Some(field));
 
 // Whatever the machine is configured for; US when it says nothing.
 let mut keyboard = Keyboard::new(denise_layout::from_system().0);
-keyboard.open(&mut ui, Msg::Key).unwrap();
+
+// Once a frame, beside draining messages: the keyboard arrives when focus
+// lands on a text field and leaves when it goes anywhere else.
+keyboard.follow_focus(&mut ui, Msg::Key);
+assert!(keyboard.is_open());
 ui.tick(0);
 
 // What the application's message loop does with a key.
@@ -47,6 +51,16 @@ assert_eq!(ui.widget::<TextInput<Msg>>(field).unwrap().text(), "hi");
 // The field never lost the caret, which is the point.
 assert_eq!(ui.focused(), Some(field));
 ```
+
+`follow_focus` is the ordinary policy and nothing more: it asks the tree
+whether the newly focused node is a `TextInput` and opens or closes
+accordingly. An application wanting a different rule reads
+`Ui::focus_changed()` itself and decides — the toolkit reports that focus
+moved and takes no view on what it means, because whether a node deserves a
+keyboard is not a question `denise-ui` can answer.
+
+Escape is yours to bind. A shelf pushes no scene, so the tree does not claim
+the key and will not close the keyboard behind your back.
 
 ## How it stays out of the way
 

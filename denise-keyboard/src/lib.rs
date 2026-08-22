@@ -45,7 +45,7 @@
 
 use denise::{ElementState, InputEvent, KeyCode, Modifiers, Rect};
 use denise_layout::{Composer, Layout, Output};
-use denise_ui::widgets::Button;
+use denise_ui::widgets::{Button, TextInput};
 use denise_ui::{NodeId, Side, Ui};
 
 mod grid;
@@ -150,6 +150,37 @@ impl Keyboard {
             self.keys.clear();
             self.composer.set_layout(self.layout);
             ui.close_shelf();
+        }
+    }
+
+    /// Opens or closes the keyboard to follow the focus, once a frame.
+    ///
+    /// The ordinary policy, and the one a panel wants: focus lands on a
+    /// [`TextInput`] and the keyboard appears;
+    /// focus goes anywhere else, or nowhere, and it leaves. Call it in the
+    /// application's turn, beside [`Ui::drain_messages`](denise_ui::Ui::drain_messages).
+    ///
+    /// It answers *is this a text field* by asking the tree for the node as one,
+    /// so there is no list of fields to keep in step with the tree.
+    ///
+    /// A press on a key moves no focus, so the keyboard does not close itself
+    /// mid-word. Escape is the application's to bind: a shelf pushes no scene,
+    /// so the tree does not claim the key and will not close the keyboard for
+    /// you.
+    ///
+    /// An application wanting a different rule — a search box that already has a
+    /// hardware keyboard, a field that should never summon one — ignores this and
+    /// reads [`Ui::focus_changed`](denise_ui::Ui::focus_changed) itself. That is
+    /// the whole of what this does.
+    pub fn follow_focus<M: Clone + 'static>(&mut self, ui: &mut Ui<M>, on_key: fn(KeyCode) -> M) {
+        let Some(focus) = ui.focus_changed() else {
+            return;
+        };
+        let wants = focus.is_some_and(|id| ui.widget::<TextInput<M>>(id).is_some());
+        if wants {
+            self.open(ui, on_key);
+        } else {
+            self.close(ui);
         }
     }
 

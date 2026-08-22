@@ -5653,6 +5653,68 @@ fn an_accordion_keeps_at_most_one_section_open() {
     assert_eq!(ui.bounds(sections[2]).expect("b").height, header);
 }
 
+/// Gain, move and loss are three different answers, and "did not move" is a
+/// fourth. An application deciding whether to show a keyboard needs all four
+/// told apart.
+#[test]
+fn focus_changed_reports_gain_move_and_loss_once_each() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let first = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 160, 40))
+        .expect("first");
+    let second = ui
+        .add(root, TextInput::new(), Rect::new(20, 80, 160, 40))
+        .expect("second");
+    ui.tick(1_000);
+    // Building the tree moved nothing; whatever it did say, start clean.
+    let _ = ui.focus_changed();
+
+    ui.focus(Some(first));
+    assert_eq!(ui.focus_changed(), Some(Some(first)), "gain");
+    assert_eq!(ui.focus_changed(), None, "drained on read");
+
+    ui.focus(Some(second));
+    assert_eq!(ui.focus_changed(), Some(Some(second)), "move");
+
+    ui.focus(None);
+    assert_eq!(ui.focus_changed(), Some(None), "loss is not silence");
+    assert_eq!(ui.focus_changed(), None, "and it drains too");
+}
+
+/// Focusing what is already focused is not a change, and reporting it would
+/// make an application close and reopen a keyboard for nothing.
+#[test]
+fn refocusing_the_same_node_reports_nothing() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 160, 40))
+        .expect("field");
+    ui.tick(1_000);
+    ui.focus(Some(field));
+    let _ = ui.focus_changed();
+
+    ui.focus(Some(field));
+    assert_eq!(ui.focus_changed(), None);
+}
+
+/// A press reports through the same channel, since a press is how focus
+/// actually moves on a panel.
+#[test]
+fn a_press_reports_the_focus_it_moved() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let field = ui
+        .add(root, TextInput::new(), Rect::new(20, 20, 160, 40))
+        .expect("field");
+    ui.tick(1_000);
+    let _ = ui.focus_changed();
+
+    ui.handle(&click(60, 40));
+    assert_eq!(ui.focus_changed(), Some(Some(field)));
+}
+
 /// The two ordinary answers are both wrong for a keyboard key, and this pins
 /// each of them against the one `no_focus` gives.
 #[test]
