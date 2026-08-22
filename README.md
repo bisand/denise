@@ -254,12 +254,12 @@ no X, no Wayland, no compositor, no desktop. Same binaries, rebuilt with
 <tr>
 <td width="50%"><img src="assets/screenshots/pi-gallery-keyboard.jpg"
     alt="The gallery filling a monitor attached to a Raspberry Pi, in the dark theme, with the on-screen keyboard up"></td>
-<td width="50%"><img src="assets/screenshots/pi-table-editor-keyboard.jpg"
-    alt="The record editor on the same monitor, in the light theme, with the on-screen keyboard up"></td>
+<td width="50%"><img src="assets/screenshots/pi-table-editor-alternates.jpg"
+    alt="The record editor on the same monitor, in the light theme, with the on-screen keyboard up and a held key showing a framed strip of accented letters above it"></td>
 </tr>
 <tr>
 <td align="center"><code>gallery</code> — the dark theme, and the theme editor that built it</td>
-<td align="center"><code>table-editor</code> — the light one, same binary, same keyboard</td>
+<td align="center"><code>table-editor</code> — the light one, same binary, same keyboard, mid-gesture</td>
 </tr>
 <tr>
 <td><img src="assets/screenshots/pi-hello.jpg"
@@ -273,7 +273,17 @@ panel with nothing plugged into it types on. It emits exactly what evdev would
 have emitted, so nothing above it can tell the difference, and it reads the
 layout off the board rather than assuming one: this Pi's
 `/etc/conf.d/loadkmap` says `no`, so the home row ends `ø æ`, `å` is on the top
-row, and the keyboard says which layout it is on.
+row, and the globe key carries `no` in its corner.
+
+The keys whose meaning is a *name* are drawn rather than lettered — Backspace,
+Tab, Enter, the cursor keys, the globe, and the keyboard-going-down that puts it
+away — so they look the same on this board, which has no fonts installed at all,
+as they would anywhere else.
+
+The right-hand photograph is taken mid-gesture: a finger has been holding `e`,
+and the framed strip above it is offering `é è ê ë`, with the one under the
+finger picked out. Those come from the layout, so a board configured Norwegian
+offers what a Norwegian writer reaches for.
 
 (There is a mouse attached to the test board, which is why there is a pointer in
 the photographs. The keyboard is what a panel would be driven by; the mouse is
