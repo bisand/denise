@@ -817,10 +817,10 @@ mod app {
                 args: Vec::new(),
             }];
             let mut entry = parse_entry("Video-player=/usr/local/bin/denise-video-player").unwrap();
-            entry.args.push("/home/bisand/promo.h264".to_string());
+            entry.args.push("/media/promo.h264".to_string());
             merge(&mut demos, vec![entry]);
             assert_eq!(demos.len(), 1);
-            assert_eq!(demos[0].args, vec!["/home/bisand/promo.h264".to_string()]);
+            assert_eq!(demos[0].args, vec!["/media/promo.h264".to_string()]);
             assert_eq!(demos[0].label, "Video player", "the button keeps its name");
         }
 
