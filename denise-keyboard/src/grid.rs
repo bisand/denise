@@ -22,14 +22,15 @@
 //! instead of 330 — 54 back, which on an 800x480 panel is eleven per cent of
 //! the screen returned to the application.
 //!
-//! Legends are ASCII words rather than the obvious symbols, and that is not
-//! taste. `denise-render`'s built-in face covers ASCII plus a handful of Nordic
-//! letters, and a stock Alpine root has no fonts installed at all — so `⌫`,
-//! `⇧`, `⏎` and `←` draw as tofu on precisely the machine least able to spare a
-//! key nobody can read.
+//! The keys whose meaning is a *name* — Backspace, Tab, Enter, the cursor keys
+//! — are drawn rather than lettered: see [`icons`](crate::icons). The ones whose
+//! legend carries **state** keep their words, because one glyph cannot say which
+//! of two states it is in.
 
 use denise::KeyCode;
-use denise_text::{FontId, TextEngine};
+use denise_render::icon::Icon;
+
+use crate::icons;
 
 use crate::LAYOUT_KEY as LAYOUT;
 
@@ -41,20 +42,20 @@ pub struct Key {
     /// A fixed legend, for keys whose meaning is not a character the layout
     /// knows about. `None` means "ask the layout".
     pub legend: Option<&'static str>,
-    /// Symbols to prefer over the word, best first.
+    /// A picture to draw instead of the word.
     ///
-    /// A keyboard says `⌫` and not "back" when it can. It can only do that when
-    /// the font actually carries the glyph, and fonts disagree about which of
-    /// these they have: DejaVu — what a Pi gets from `font-dejavu` — carries
-    /// every one of them bar `⎋`, Arial carries the arrows and none of the
-    /// keyboard symbols, and the face that ships with `denise-render` carries
-    /// twenty-three non-ASCII characters of which not one is either.
+    /// Drawn rather than looked up, so it is the same on every machine. This
+    /// used to be a list of candidate *glyphs* tried against the loaded font,
+    /// because fonts disagree so completely about them: DejaVu has `⌫`, `⇥`,
+    /// `⏎` and the triangles, a Mac's Arial has none of those and no triangle
+    /// either, and the face that ships with `denise-render` has twenty-three
+    /// non-ASCII glyphs of which not one is either. That worked and left a
+    /// ceiling — no font, no symbol — which [`icons`](crate::icons) removes.
     ///
-    /// So this is a list and not a choice: the first glyph the loaded font can
-    /// actually draw wins, and the word is what is left when none of them can.
-    /// On a stock Alpine root with no fonts at all, that word is not a stylistic
-    /// preference — it is the difference between a legible key and a box.
-    pub symbols: &'static [&'static str],
+    /// The word stays as [`legend`](Self::legend) regardless: it is what the
+    /// key still *reports*, which is what a test reads and what an
+    /// accessibility pass would.
+    pub icon: Option<&'static Icon>,
     /// Width, in half-widths of an ordinary letter key.
     ///
     /// Halves rather than whole keys because the useful sizes are not multiples
@@ -79,7 +80,7 @@ impl Key {
         Self {
             code,
             legend: None,
-            symbols: &[],
+            icon: None,
             units: LETTER,
             repeats: false,
         }
@@ -90,7 +91,7 @@ impl Key {
         Self {
             code,
             legend: Some(legend),
-            symbols: &[],
+            icon: None,
             units,
             repeats: false,
         }
@@ -102,9 +103,9 @@ impl Key {
         self
     }
 
-    /// The same key, drawn as the first of `symbols` the font can render.
-    const fn symbolic(mut self, symbols: &'static [&'static str]) -> Self {
-        self.symbols = symbols;
+    /// The same key, drawn as a picture rather than its word.
+    const fn drawn(mut self, icon: &'static Icon) -> Self {
+        self.icon = Some(icon);
         self
     }
 }
@@ -139,7 +140,7 @@ const DIGITS: [Key; 14] = [
     // Where every keyboard puts it, and where a hand reaching to correct a typo
     // already goes.
     Key::wide(KeyCode::Backspace, "back", LETTER * 2)
-        .symbolic(&["\u{232b}"])
+        .drawn(&icons::BACKSPACE)
         .repeating(),
 ];
 
@@ -149,7 +150,7 @@ const DIGITS: [Key; 14] = [
 // with. `BracketLeft` carries å on Norwegian and `BracketRight` the diaeresis
 // that makes ö and ñ reachable.
 const TOP: [Key; 14] = [
-    Key::wide(KeyCode::Tab, "tab", LETTER * 3 / 2).symbolic(&["\u{21e5}"]),
+    Key::wide(KeyCode::Tab, "tab", LETTER * 3 / 2).drawn(&icons::TAB),
     Key::new(KeyCode::Q),
     Key::new(KeyCode::W),
     Key::new(KeyCode::E),
@@ -185,7 +186,7 @@ const HOME: [Key; 13] = [
     Key::new(KeyCode::L),
     Key::new(KeyCode::Semicolon),
     Key::new(KeyCode::Quote),
-    Key::wide(KeyCode::Enter, "enter", LETTER * 2).symbolic(&["\u{23ce}"]),
+    Key::wide(KeyCode::Enter, "enter", LETTER * 2).drawn(&icons::ENTER),
 ];
 
 // Shift at both ends, as on both references. They are the same position and do
@@ -228,13 +229,13 @@ const SPACE_ROW: [Key; 7] = [
     Key {
         code: LAYOUT,
         legend: None,
-        symbols: &[],
+        icon: None,
         units: LETTER * 2,
         repeats: false,
     },
     Key::wide(KeyCode::Space, " ", LETTER * 6),
-    Key::wide(KeyCode::ArrowLeft, "<-", LETTER).symbolic(&["\u{25c0}", "\u{2190}"]),
-    Key::wide(KeyCode::ArrowRight, "->", LETTER).symbolic(&["\u{25b6}", "\u{2192}"]),
+    Key::wide(KeyCode::ArrowLeft, "<-", LETTER).drawn(&icons::ARROW_LEFT),
+    Key::wide(KeyCode::ArrowRight, "->", LETTER).drawn(&icons::ARROW_RIGHT),
     Key::wide(KeyCode::Escape, "esc", LETTER * 2),
 ];
 
@@ -255,23 +256,9 @@ pub(crate) fn legend_of(code: KeyCode) -> Option<&'static str> {
     entry(code).and_then(|key| key.legend)
 }
 
-/// The fixed legend, preferring the symbol where the font can draw it.
-///
-/// `⌫` beats "back" on any panel whose font has the glyph, and the word beats a
-/// missing-character box on one whose font does not. Asking rather than
-/// assuming is the whole point, and the answers really do differ: a stock
-/// Alpine root has no fonts at all and falls back to a face carrying no symbol
-/// on this list; the same panel with `font-dejavu` draws every one of them; and
-/// a Mac's Arial has the arrows but neither triangle. Each key names its
-/// preferences in order, so the panel gets `◀`, the Mac gets `←`, and a machine
-/// with nothing gets `<-`.
-pub(crate) fn legend_in(code: KeyCode, engine: &TextEngine, font: FontId) -> Option<&'static str> {
-    let key = entry(code)?;
-    key.symbols
-        .iter()
-        .copied()
-        .find(|symbol| symbol.chars().all(|ch| engine.font_contains(font, ch)))
-        .or(key.legend)
+/// The picture a position is drawn as, if it has one.
+pub(crate) fn icon_of(code: KeyCode) -> Option<&'static Icon> {
+    entry(code).and_then(|key| key.icon)
 }
 
 /// The grid entry for a position.

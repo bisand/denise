@@ -47,6 +47,10 @@
 //! small second legend — the `!` over the `1`. Letters do not: a capital `Q`
 //! over a `q` is not news.
 //!
+//! The keys whose meaning is a *name* are drawn rather than lettered — see
+//! [`icons`] — which is why they look the same on a machine with no fonts
+//! installed as on one with DejaVu.
+//!
 //! The third level is the layout's own `AltGr` rather than a page of symbols
 //! chosen here, because there is no such page to choose: `@` is `AltGr`+`2` on a
 //! Norwegian keyboard and `Shift`+`2` on a US one, and a fixed grid would be
@@ -118,6 +122,7 @@ use denise_ui::widgets::{Button, Panel, TextInput};
 use denise_ui::{NodeId, Side, Ui};
 
 mod grid;
+pub mod icons;
 
 pub use grid::{Key, ROWS, Row};
 
@@ -752,16 +757,6 @@ impl Keyboard {
     /// [`build`](Self::build) and [`relabel`](Self::relabel) must agree: when
     /// they did not, the layout key came up blank and only found its name after
     /// something else had caused a relabel.
-    fn label_for_in(&self, code: KeyCode, engine: &denise_ui::TextEngine) -> String {
-        if let Some(fixed) = grid::legend_in(code, engine, self.style.font) {
-            return match code {
-                KeyCode::ShiftLeft => self.shift.legend().to_string(),
-                _ => fixed.to_string(),
-            };
-        }
-        self.label_for(code)
-    }
-
     fn label_for(&self, code: KeyCode) -> String {
         match code {
             KeyCode::ShiftLeft => self.shift.legend().to_string(),
@@ -818,7 +813,7 @@ impl Keyboard {
     /// so this replaces labels on the keys that are already there.
     pub fn relabel<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) {
         for &(code, node) in &self.keys {
-            let label = self.label_for_in(code, ui.text());
+            let label = self.label_for(code);
             let corner = self.corner_for(code);
             if let Some(button) = ui.widget_mut::<Button<M>>(node) {
                 button.set_label(label);
@@ -887,12 +882,17 @@ impl Keyboard {
                 let x = gaps + leftover * done / units;
                 done += key.units;
                 let w = gaps + leftover * done / units - x;
-                let mut button =
-                    Button::new(self.label_for_in(key.code, ui.text()), on_key(key.code))
-                        .no_focus()
-                        .with_role(role_of(key.code))
-                        .with_style(self.style)
-                        .with_corner(self.corner_for(key.code));
+                let mut button = Button::new(self.label_for(key.code), on_key(key.code))
+                    .no_focus()
+                    .with_role(role_of(key.code))
+                    .with_style(self.style)
+                    .with_corner(self.corner_for(key.code));
+                // The word stays the button's label even where a picture is
+                // drawn over it: that is what the key still reports, and what a
+                // test reads.
+                if let Some(icon) = grid::icon_of(key.code) {
+                    button = button.with_icon(icon);
+                }
                 if key.repeats {
                     button = button.with_repeat(REPEAT_DELAY_MS, REPEAT_INTERVAL_MS);
                 }

@@ -1102,45 +1102,36 @@ fn the_second_legend_changes_with_the_layout() {
     assert_eq!(corner(&ui), "\"", "Norwegian puts a quote there instead");
 }
 
-/// The keys say `⌫` where the font can draw it and "back" where it cannot.
+/// The named keys draw a picture, whatever font is loaded.
 ///
-/// The built-in face carries twenty-three non-ASCII glyphs and not one of them
-/// is an arrow, so on a machine with no fonts installed — a stock Alpine root,
-/// which is exactly the machine this is built for — a symbol legend would be a
-/// row of missing-character boxes on the keys nobody can afford to misread.
-/// Asking the font is what lets the same grid be handsome where it can and
-/// legible where it cannot.
+/// This is the whole point of drawing rather than looking up. The built-in face
+/// carries twenty-three non-ASCII glyphs and not one of `⌫`, `⇥`, `⏎` or a
+/// triangle is among them — so on a stock Alpine root, which is exactly the
+/// machine this is built for, a glyph legend was a box on the keys nobody can
+/// afford to misread. A picture does not care what the font has.
 #[test]
-fn the_named_keys_use_symbols_only_where_the_font_has_them() {
+fn the_named_keys_are_drawn_whatever_the_font_has() {
     use denise_ui::widgets::Button;
 
     let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
     let mut keyboard = Keyboard::new(&US);
     keyboard.open(&mut ui, Msg::Key).expect("shelf");
 
-    let label = |ui: &Ui<Msg>, keyboard: &Keyboard, code: KeyCode| {
-        ui.widget::<Button<Msg>>(key_node(keyboard, code))
-            .expect("a key is a button")
-            .label()
-            .to_string()
-    };
-
-    // No font registered beyond the built-in one, so words.
-    for (code, word) in [
-        (KeyCode::Backspace, "back"),
-        (KeyCode::Tab, "tab"),
-        (KeyCode::Enter, "enter"),
-        (KeyCode::ArrowLeft, "<-"),
-        (KeyCode::ArrowRight, "->"),
+    for code in [
+        KeyCode::Backspace,
+        KeyCode::Tab,
+        KeyCode::Enter,
+        KeyCode::ArrowLeft,
+        KeyCode::ArrowRight,
     ] {
-        assert_eq!(
-            label(&ui, &keyboard, code),
-            word,
-            "{code:?} drew a glyph the built-in face does not have"
-        );
+        let button = ui
+            .widget::<Button<Msg>>(key_node(&keyboard, code))
+            .expect("a key is a button");
+        assert!(button.icon().is_some(), "{code:?} is not drawn");
     }
 
-    // And the built-in face really does lack them, which is the premise.
+    // And the built-in face really does lack every glyph they replace, which is
+    // the premise the whole thing rests on.
     for ch in [
         '\u{232b}', '\u{21e5}', '\u{23ce}', '\u{25c0}', '\u{25b6}', '\u{2190}',
     ] {
@@ -1151,26 +1142,40 @@ fn the_named_keys_use_symbols_only_where_the_font_has_them() {
     }
 }
 
-/// Each key names its symbols in order, and the best one the font has wins.
+/// A drawn key still reports its word.
 ///
-/// One symbol per key would be a coin toss: DejaVu — what `font-dejavu` puts on
-/// a Pi — has the triangles a soft keyboard's cursor keys want, and a Mac's
-/// Arial has the arrows and neither triangle. A list lets the same grid draw
-/// `◀` on the panel, `←` on the desktop and `<-` on a machine with no fonts,
-/// without any of them being a compromise for the others.
+/// The picture is what somebody sees; the word is what the button reports, and
+/// what a test and an accessibility pass read. Losing the second to gain the
+/// first would be a bad trade, so the key carries both.
 #[test]
-fn a_key_falls_down_its_list_of_symbols_until_the_font_can_draw_one() {
-    let arrows = denise_keyboard::ROWS
-        .iter()
-        .flat_map(|row| row.keys)
-        .find(|key| key.code == KeyCode::ArrowLeft)
-        .expect("a left arrow key");
-    assert_eq!(
-        arrows.symbols,
-        ["\u{25c0}", "\u{2190}"],
-        "the triangle should be preferred to the arrow"
-    );
-    assert_eq!(arrows.legend, Some("<-"), "and a word under both");
+fn a_drawn_key_keeps_the_word_it_reports() {
+    let at = |code| {
+        denise_keyboard::ROWS
+            .iter()
+            .flat_map(|row| row.keys)
+            .find(|key| key.code == code)
+            .expect("a key at that position")
+    };
+    for (code, word) in [
+        (KeyCode::Backspace, "back"),
+        (KeyCode::Tab, "tab"),
+        (KeyCode::Enter, "enter"),
+        (KeyCode::ArrowLeft, "<-"),
+        (KeyCode::ArrowRight, "->"),
+    ] {
+        let key = at(code);
+        assert!(key.icon.is_some(), "{code:?} should be drawn");
+        assert_eq!(key.legend, Some(word), "{code:?} lost the word it reports");
+    }
+
+    // The keys whose legend carries state are deliberately not drawn: one glyph
+    // cannot say which of two states it is in.
+    for code in [KeyCode::ShiftLeft, KeyCode::CapsLock, KeyCode::ControlLeft] {
+        assert!(
+            at(code).icon.is_none(),
+            "{code:?} says which state it is in, and a picture cannot"
+        );
+    }
 }
 
 /// An open keyboard nobody is touching repaints nothing.

@@ -33,6 +33,13 @@ use crate::rounded::{COORD_LIMIT, ONE, SUB_STEP, SUBSAMPLES, ceil_px, floor_px, 
 /// at UI sizes.
 pub(crate) const MAX_VERTICES: usize = 32;
 
+/// The most vertices one shape of an [`Icon`](crate::icon::Icon) may have.
+///
+/// The same number, published because an icon's shapes are written by hand and
+/// silently dropping the thirty-third point would be a shape that is subtly
+/// wrong rather than absent.
+pub const MAX_ICON_VERTICES: usize = MAX_VERTICES;
+
 /// Crossings of one sub-row, sorted ascending, in fixed point.
 struct Crossings {
     xs: [i32; MAX_VERTICES],

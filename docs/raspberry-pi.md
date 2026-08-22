@@ -532,11 +532,12 @@ Three things worth knowing before it is on a wall:
   nothing when nobody is touching it: the key asks to be woken only between its
   press and its release, so an idle panel with the keyboard on screen schedules
   no wakes at all.
-- **It draws symbols where the font has them.** `⌫`, `⇥`, `⏎` and the cursor
-  triangles come out as glyphs with `font-dejavu` installed and as words
-  without, because the keyboard asks the font rather than assuming. A stock
-  Alpine root has no fonts at all, and its fallback face carries twenty-three
-  non-ASCII characters, none of them an arrow.
+- **The named keys are drawn, not lettered.** Backspace, Tab, Enter and the
+  cursor keys are filled polygons rather than font glyphs, so they look the same
+  whether or not `font-dejavu` is installed — which matters here, because a
+  stock Alpine root has no fonts at all and the fallback face carries no symbol
+  any of them would want. The keys that carry *state* keep their words: `shift`,
+  `caps` and `ctrl` say which state they are in, and one glyph cannot.
 
 ### If the panel flickers
 
