@@ -1203,6 +1203,8 @@ fn to_url(text: &str) -> Option<Url> {
     if text.starts_with("about:") {
         return Url::parse(text).ok();
     }
+    // Something that is there, named plainly: `basic.html` in the working
+    // directory is a page, not a host.
     let path = std::path::Path::new(text);
     if path.exists()
         && let Ok(canonical) = path.canonicalize()
@@ -1210,7 +1212,54 @@ fn to_url(text: &str) -> Option<Url> {
     {
         return Some(url);
     }
+    // And something that is *not* there but is plainly a path is still a path.
+    if looks_like_a_path(text) {
+        return file_url(text);
+    }
     Url::parse(&format!("https://{text}")).ok()
+}
+
+/// Whether a typed address is a filesystem path rather than a host.
+///
+/// Asked *before* the file is looked for, and that is the whole point: a path
+/// is a path whether or not it is there.
+///
+/// What used to happen to one that was not there is worth writing down, because
+/// it is not what it looks like. The catch-all built `https:///Users/me/x.html`
+/// — and a URL parser does not reject that. It collapses the slashes and reads
+/// the first path component as the **host**, so the address became
+/// `https://users/x.html`: a request to a machine called `users`, carrying the
+/// rest of somebody's path, sent to whatever the network's resolver makes of a
+/// bare name. A typo in a filename came back as a name-resolution failure after
+/// a wait, when "no such file" was both truthful and immediate.
+fn looks_like_a_path(text: &str) -> bool {
+    text.starts_with('/')
+        || text.starts_with("./")
+        || text.starts_with("../")
+        || text == "~"
+        || text.starts_with("~/")
+}
+
+/// A `file:` URL for a typed path: `~` expanded, relative made absolute.
+///
+/// Canonicalised where the file exists, so `..` and symlinks resolve to what
+/// the fetcher will actually open. Left as written where it does not, so the
+/// error page can name the path that was asked for rather than one nobody
+/// typed.
+fn file_url(text: &str) -> Option<Url> {
+    let expanded = match text.strip_prefix('~') {
+        Some(rest) => {
+            std::path::PathBuf::from(std::env::var_os("HOME")?).join(rest.trim_start_matches('/'))
+        }
+        None => std::path::PathBuf::from(text),
+    };
+    let absolute = if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir().ok()?.join(expanded)
+    };
+    let target = absolute.canonicalize().unwrap_or(absolute);
+    Url::from_file_path(target).ok()
 }
 
 /// Pre-scales decoded pixels to the box they will fill, box-filtering the
@@ -1397,12 +1446,12 @@ mod tests {
     /// through the same pipeline.
     #[test]
     fn an_unreachable_page_becomes_an_error_page() {
-        // A `file:` URL, spelled out, rather than a bare path. A bare path to
-        // something that does not exist falls past the `path.exists()` arm of
-        // `to_url` and is guessed at as `https:///that/path` — an https URL
-        // with an empty host — so this test made a real resolver call on every
-        // run and failed whenever the answer took longer than `pump` waits.
-        // It is meant to test the error page, not the network.
+        // A `file:` URL, spelled out, rather than a bare path. `to_url` now
+        // reads a path that is not there as a path, so a bare one would work
+        // too — but spelling it out keeps this test about the error page
+        // whatever `to_url` does next. It once made a real resolver call on
+        // every run, and failed whenever the answer took longer than `pump`
+        // waits; see `a_path_that_is_not_there_is_still_a_path`.
         let mut app = App::new(
             Size::new(800, 600),
             1.0,
@@ -1670,5 +1719,46 @@ mod tests {
         assert_eq!(to_url("https://a.example/x").unwrap().path(), "/x");
         let fixture = fixture("basic.html");
         assert_eq!(to_url(&fixture).unwrap().scheme(), "file");
+    }
+
+    /// A path is a path whether or not the file is there.
+    ///
+    /// This used to go somewhere else entirely. `path.exists()` failed — the
+    /// point of the test — and the catch-all built `https:///Users/…/x.html`,
+    /// which a URL parser does not reject: it collapses the slashes and reads
+    /// the first path component as the host. The address became
+    /// `https://users/x.html`, a request to a machine called `users` carrying
+    /// the rest of the path, and the browser waited on a resolver to find out
+    /// there wasn't one.
+    #[test]
+    fn a_path_that_is_not_there_is_still_a_path() {
+        let missing = fixture("does-not-exist.html");
+        let url = to_url(&missing).expect("a url for a missing path");
+        assert_eq!(url.scheme(), "file", "a missing path became {url}");
+        assert!(url.path().ends_with("does-not-exist.html"));
+
+        // The shape of the old bug, asserted directly: no part of a typed path
+        // may end up as a hostname.
+        assert!(url.host_str().is_none(), "{url} still has a host");
+
+        // Relative paths, spelled as paths, likewise.
+        for typed in ["./nope.html", "../nope.html"] {
+            let url = to_url(typed).expect("a url");
+            assert_eq!(url.scheme(), "file", "{typed} became {url}");
+        }
+    }
+
+    /// Hostnames still guess `https://`, which is the half worth keeping.
+    #[test]
+    fn a_bare_hostname_is_still_guessed_at() {
+        assert_eq!(
+            to_url("example.com").unwrap().as_str(),
+            "https://example.com/"
+        );
+        assert_eq!(to_url("localhost:8080").unwrap().scheme(), "https");
+        assert_eq!(
+            to_url("example.com/a/b").unwrap().host_str(),
+            Some("example.com")
+        );
     }
 }
