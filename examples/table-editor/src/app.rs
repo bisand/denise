@@ -512,9 +512,9 @@ impl App {
     ///
     /// So the form is shortened to what is above the keyboard, which makes it a
     /// viewport with more content than room — and *that* the tree knows what to
-    /// do with. [`Keyboard::occluded`] is the only part the application has to
-    /// supply, because only the application knows which of its panels may be cut
-    /// short.
+    /// do with. [`Keyboard::occluded`](denise_keyboard::Keyboard::occluded) is
+    /// the only part the application has to supply, because only the application
+    /// knows which of its panels may be cut short.
     fn fit_form_to_keyboard(&mut self) {
         let Some(form) = self.nodes.form else {
             return;
