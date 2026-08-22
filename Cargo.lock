@@ -633,6 +633,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "denise-keyboard"
+version = "0.15.1"
+dependencies = [
+ "denise",
+ "denise-layout",
+ "denise-render",
+ "denise-ui",
+]
+
+[[package]]
 name = "denise-layout"
 version = "0.15.1"
 dependencies = [

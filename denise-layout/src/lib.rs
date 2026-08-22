@@ -155,7 +155,16 @@ pub struct Layout {
 }
 
 impl Layout {
-    fn entry(&self, code: KeyCode) -> Option<&'static Entry> {
+    /// What this layout puts on one position, at each of its four levels.
+    ///
+    /// `None` for a position no layout describes. Positions the layout does not
+    /// list fall back to the shared letter table, so a layout only spells out
+    /// what it moves — which is why `Layout::entry` answers for `KeyCode::A` on
+    /// a table that never mentions it.
+    ///
+    /// An on-screen keyboard reads this to letter its keys: the caller picks the
+    /// level from the modifiers it is currently showing.
+    pub fn entry(&self, code: KeyCode) -> Option<&'static Entry> {
         // The layout's own table wins, so a layout that needs a different letter
         // overrides it simply by listing that position.
         self.entries
