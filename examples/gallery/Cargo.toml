@@ -24,6 +24,10 @@ kiosk = ["dep:bare-linux", "dep:denise-evdev", "dep:rustix"]
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-render = { workspace = true, features = ["std"] }
+# The overlays section compares the shelf with the drawer and the modal; this
+# is the shelf's most demanding user.
+denise-keyboard = { workspace = true }
+denise-layout = { workspace = true }
 denise-text = { workspace = true, features = ["truetype"] }
 denise-ui = { workspace = true, features = ["truetype"] }
 denise-winit = { workspace = true, optional = true }

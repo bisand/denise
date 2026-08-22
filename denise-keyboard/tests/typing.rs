@@ -172,7 +172,7 @@ fn the_keys_land_inside_the_shelf_and_paint() {
     let shelf_bounds = ui.bounds(shelf).expect("shelf bounds");
     assert_eq!(
         shelf_bounds.height,
-        Keyboard::height(),
+        keyboard.height(),
         "the shelf is not the height the keyboard asked for"
     );
 
@@ -552,7 +552,7 @@ fn the_keyboard_says_what_it_covers() {
     let covered = keyboard.occluded(&ui).expect("the keyboard is up");
     assert_eq!(
         covered.height,
-        Keyboard::height(),
+        keyboard.height(),
         "not the height the keyboard asked for"
     );
     assert_eq!(
@@ -573,4 +573,97 @@ fn the_keyboard_says_what_it_covers() {
         None,
         "still covering on the way out"
     );
+}
+
+/// A panel at 1.5x is not a panel with smaller fingers.
+///
+/// The grid is written in logical pixels, so a keyboard that ignored the scale
+/// would draw 48-pixel keys on a surface whose every other widget is 72 — half
+/// the target, and the half nobody can hit. This asserts the two things that
+/// have to hold at any scale: the keys grow with everything else, and they all
+/// still fit the shelf they were laid into.
+#[test]
+fn the_grid_scales_with_the_display() {
+    let mut plain: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut unscaled = Keyboard::new(&US);
+    unscaled.open(&mut plain, Msg::Key).expect("shelf");
+    plain.tick(1_000);
+
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut keyboard = Keyboard::new(&US).with_scale(1.5);
+    let shelf = keyboard.open(&mut ui, Msg::Key).expect("shelf");
+    ui.tick(1_000); // slid in
+
+    assert_eq!(
+        keyboard.height(),
+        Keyboard::LOGICAL_HEIGHT * 3 / 2,
+        "the shelf did not grow with the display"
+    );
+    let bounds = ui.bounds(shelf).expect("shelf bounds");
+    assert_eq!(bounds.height, keyboard.height());
+
+    // Every key inside the shelf, and taller than it would have been at 1x.
+    let plain_key = plain.layout(unscaled.keys()[0].1).expect("key layout");
+    for &(_, key) in keyboard.keys() {
+        let b = ui.bounds(key).expect("key bounds");
+        assert!(
+            b.x >= bounds.x
+                && b.right() <= bounds.right()
+                && b.y >= bounds.y
+                && b.bottom() <= bounds.bottom(),
+            "a key fell outside the shelf at 1.5x: {b:?} not within {bounds:?}"
+        );
+        assert!(
+            b.height > plain_key.height,
+            "a key is no bigger at 1.5x: {} vs {}",
+            b.height,
+            plain_key.height
+        );
+    }
+
+    // And the rows still reach the far edge, exactly one gap short of it: a
+    // row's leftover width is spent across its keys rather than truncated per
+    // key, so eleven keys do not accumulate eleven lost pixels.
+    let gap = denise_keyboard::KEY_GAP;
+    for (keyboard, ui, scale) in [(&unscaled, &plain, 1.0f32), (&keyboard, &ui, 1.5)] {
+        let last = keyboard.keys().last().expect("a key").1;
+        let right = ui.bounds(last).expect("bounds").right();
+        let want = SIZE.width as i32 - (gap as f32 * scale) as i32;
+        assert!(
+            (right - want).abs() <= 1,
+            "at {scale}x the bottom row ends at {right}, not {want}"
+        );
+    }
+}
+
+/// Legends in the application's own face, because the default cannot be.
+///
+/// A widget has no way to know which fonts were loaded, so `Button` falls back
+/// to the built-in bitmap face — visibly the wrong typeface on a panel that has
+/// a real one, and short of glyphs a layout needs.
+#[test]
+fn the_keys_are_lettered_in_the_style_they_were_given() {
+    use denise_text::TextStyle;
+    use denise_ui::widgets::Button;
+
+    let style = TextStyle::built_in(28);
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut keyboard = Keyboard::new(&US).with_style(style);
+    keyboard.open(&mut ui, Msg::Key).expect("shelf");
+
+    for &(code, node) in keyboard.keys() {
+        let button = ui.widget::<Button<Msg>>(node).expect("a key is a button");
+        assert_eq!(
+            button.style().size_px,
+            28,
+            "{code:?} kept the default style"
+        );
+    }
+
+    // And a relabel does not quietly put the default back.
+    keyboard.tap_shift();
+    keyboard.relabel(&mut ui);
+    let (_, node) = keyboard.keys()[0];
+    let button = ui.widget::<Button<Msg>>(node).expect("a key is a button");
+    assert_eq!(button.style().size_px, 28, "relabelling reset the style");
 }

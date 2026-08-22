@@ -129,6 +129,12 @@ Three things it is showing, none of which is obvious from the outside:
   [`table.rs`](examples/table-editor/src/table.rs) knows no widget exists — what a
   valid row is, what to select after a delete, whether re-selecting a row counts
   as an edit — and every rule in it is unit tested without a display.
+- **The form gets out of the keyboard's way, by shrinking.** Tapping a field on a
+  panel brings the on-screen keyboard up over the lower two thirds of the screen,
+  and this form is too tall to fit above it at any offset — so it is cut to what
+  is left, which makes it a viewport with more content than room, and the tree
+  scrolls the focused row into view the way it scrolls anything else. Moving the
+  panel would have been the obvious answer and does not arithmetically work.
 
 `--font` loads any TrueType or OpenType file. Without one it falls back to the
 built-in 8×8 bitmap font and says so, which is the tiered font story
@@ -147,8 +153,16 @@ not your job: the derivation aims at WCAG AA by construction.
 
 ```bash
 cargo run -p gallery                                          # a window
+cargo run -p gallery -- --keyboard                            # with the keyboard up
 cargo run -p gallery --no-default-features --features kiosk   # the display itself
 ```
+
+Its overlays section is where the three kinds are compared side by side: a
+modal takes the focus, a drawer dims what is behind it, and a **shelf** does
+neither — which is what lets the on-screen keyboard type into the field above
+it without the field ever losing its caret. Both shelves share the one bottom
+edge, so either closes the other; that is the demonstration, not a limitation
+being hidden.
 
 <img src="assets/screenshots/gallery.png" width="860"
      alt="The gallery: a theme editor sidebar beside live widgets — role buttons, form controls, sliders driving a progress ring, ratings and a spinner">
@@ -166,8 +180,13 @@ No JavaScript, on purpose. The same binary drives a window or a bare panel.
 
 ```bash
 cargo run -p browser -- https://news.ycombinator.com
+cargo run -p browser -- --keyboard                            # with the keyboard up
 cargo run -p browser --no-default-features --features kiosk   # the display itself
 ```
+
+A panel has no keyboard plugged into it, so tapping the URL bar brings one up:
+`denise-keyboard` follows the focus, types what evdev would have typed, and does
+it in the layout the machine is configured for.
 
 <img src="assets/screenshots/browser-form.png" width="860"
      alt="The browser rendering an HTML form: headings and styled text laid out by the example's engine, with the form's inputs, checkbox, radio group, dropdown and buttons all visibly Denise widgets">
@@ -384,11 +403,15 @@ is in [docs/design.md](docs/design.md).
   backdrop in the same buffer, which is what a kiosk wants and what an embedded
   control must do. A desktop application that wants a *native* dialog calls the
   platform for one — see [docs/design.md](docs/design.md).
-- **Only two keyboard layouts**, US and Norwegian, and the Norwegian AltGr
+- **Three keyboard layouts**, US, Norwegian and German, and the non-US AltGr
   assignments are a reconstruction that wants checking against real hardware.
+  `denise-layout` reads which one the machine is configured for; adding a fourth
+  is a table, not a code path.
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch routes to widgets as a pointer would, but no physical touchscreen
-  has driven it.
+  has driven it. The on-screen keyboard is the first thing built *for* touch and
+  so the thing to verify it with — `docs/raspberry-pi.md` says exactly what that
+  takes.
 - **The ActiveX control has never been hosted in a real form editor.** It
   registers, sites, activates, scripts, sinks events, and draws the design-time
   view a form editor asks for — the last of those checked pixel by pixel on the

@@ -4,6 +4,7 @@
 //! cargo run -p table-editor
 //! cargo run -p table-editor -- --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 //! cargo run -p table-editor -- --snapshot shot.ppm
+//! cargo run -p table-editor -- --keyboard        # the on-screen keyboard, up
 //! ```
 //!
 //! The same application as `hello`, grown up: about as much user interface as a
@@ -60,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Kiosk builds have no window to close, so a run length is the way out. Zero
     // means "until Escape".
     let mut seconds: u64 = 0;
+    let mut keyboard = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -67,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--font" => font = args.next(),
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "table.ppm".into())),
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            "--keyboard" => keyboard = true,
             other => path = other.to_string(),
         }
     }
@@ -86,9 +89,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if let Some(out) = snapshot {
-        return write_snapshot(&mut setup.build(WINDOW, 1.0), &out).map_err(Into::into);
+        let mut app = setup.build(WINDOW, 1.0);
+        if keyboard {
+            app.focus_last_field();
+            app.handle(0);
+            // A shelf slides, and a snapshot has no frames to slide over.
+            app.ui.tick(10_000);
+            app.handle(10_000);
+        }
+        return write_snapshot(&mut app, &out).map_err(Into::into);
     }
-    backend::run(setup, seconds)
+    backend::run(setup, seconds, keyboard)
 }
 
 /// Everything needed to build the tree, held until a backend says how big.
@@ -195,7 +206,11 @@ mod window_backend {
     use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
     use denise_winit::{DeniseApp, WindowConfig, run_with};
 
-    pub fn run(setup: Setup, _seconds: u64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(
+        setup: Setup,
+        _seconds: u64,
+        keyboard: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // A window's size is the application's choice, so this one is `WINDOW` —
         // logical, so it covers the same desk on every display. The tree is built
         // from the callback, because the surface behind that window and the scale
@@ -208,6 +223,9 @@ mod window_backend {
             },
             move |surface, scale| {
                 let mut app = setup.build(surface, scale);
+                if keyboard {
+                    app.focus_first_field();
+                }
                 // The window system already draws a pointer; the tree must not
                 // draw a second one over it. On the kiosk backend there is nothing
                 // else drawing one, so it keeps its own — the same tree, a
@@ -239,6 +257,10 @@ mod window_backend {
                         // Escape quits, as it does on the kiosk — but not out from
                         // under the delete confirmation, which is a question that
                         // deserves an answer rather than an exit.
+                        // The keyboard is dismissed before quitting is even
+                        // considered: a shelf pushes no scene, so nothing in the
+                        // tree claims Escape on its behalf.
+                        KeyCode::Escape if self.0.keyboard_open() => self.0.dismiss_keyboard(),
                         KeyCode::Escape if !self.0.is_confirming() => self.0.exit = true,
                         _ => {}
                     }
@@ -305,7 +327,11 @@ mod kiosk_backend {
     /// everywhere else.
     const SHOT_PATH: &str = "/tmp/denise-table-editor.ppm";
 
-    pub fn run(setup: Setup, seconds: u64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(
+        setup: Setup,
+        seconds: u64,
+        keyboard: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Immediate rather than vsync: this panel is driven by a keypad and a
         // pointer, so latency matters more to it than tearing does.
         let mut surface = Display::open(bare_linux::PresentMode::Immediate)?;
@@ -317,7 +343,13 @@ mod kiosk_backend {
         // Built at the display's size, not a window's — which is the whole reason
         // the tree is not constructed until a backend knows how big it is.
         let mut app = setup.build(size, surface.scale_factor());
-        eprintln!("\nTab moves, Enter applies, F2 theme, F12 screenshot, Escape quits\n");
+        if keyboard {
+            app.focus_first_field();
+        }
+        eprintln!(
+            "\nTap a field for the on-screen keyboard. Tab moves, Enter applies, F2 theme,\n\
+             F12 screenshot, Escape puts the keyboard away and then quits\n"
+        );
 
         // Refreshed by `wait` whenever a device is opened or closed, which is
         // why this is a `Waits` and not a list built once.
@@ -404,6 +436,8 @@ mod kiosk_backend {
                 // Not out from under the delete confirmation, which is a question
                 // that deserves an answer — the same guard the window backend
                 // applies.
+                // The keyboard first, for the same reason as the window arm.
+                KeyCode::Escape if app.keyboard_open() => app.dismiss_keyboard(),
                 KeyCode::Escape if !app.is_confirming() => return false,
                 KeyCode::ArrowUp if !app.is_confirming() => app.move_selection(-1),
                 KeyCode::ArrowDown if !app.is_confirming() => app.move_selection(1),

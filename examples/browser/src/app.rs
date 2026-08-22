@@ -9,7 +9,8 @@
 
 use std::time::Instant;
 
-use denise::{InputEvent, Point, Rect, Role, Size, Theme};
+use denise::{InputEvent, KeyCode, Point, Rect, Role, Size, Theme};
+use denise_keyboard::Keyboard;
 use denise_text::{GlyphSource, TrueTypeSource};
 use denise_ui::widgets::{Button, Panel, Spinner, TextInput};
 use denise_ui::{Motion, NodeId, Ui, Void};
@@ -39,6 +40,8 @@ pub enum Message {
     SelectChanged(usize),
     /// A control whose change nobody reacts to: values are read at submit.
     Noop,
+    /// A key tapped on the on-screen keyboard.
+    Key(KeyCode),
 }
 
 fn select_changed(index: usize) -> Message {
@@ -87,6 +90,8 @@ pub struct App {
     /// Pages already read, keyed by URL sans fragment: Back and Forward
     /// show them without a request, the way going back should feel.
     page_cache: std::collections::HashMap<String, String>,
+    /// The on-screen keyboard, and the only one a panel has.
+    keyboard: Keyboard,
 }
 
 struct Chrome {
@@ -149,6 +154,7 @@ impl App {
             needs_relayout: false,
             open_select_target: None,
             page_cache: std::collections::HashMap::new(),
+            keyboard: keyboard(scale, chrome_style),
         };
         match start.as_deref().and_then(to_url) {
             Some(url) => {
@@ -162,6 +168,16 @@ impl App {
 
     pub fn elapsed_ms(&self) -> u64 {
         self.started.elapsed().as_millis() as u64
+    }
+
+    /// Puts the caret in the URL bar, which brings the keyboard up.
+    ///
+    /// Through focus rather than by opening the keyboard directly, because that
+    /// is the path a tap takes and there is no point demonstrating a different
+    /// one. What `--keyboard` does, and what a snapshot of the keyboard is a
+    /// snapshot of.
+    pub fn focus_url_bar(&mut self) {
+        self.ui.focus(Some(self.chrome.url));
     }
 
     /// A fetch is in flight — the page itself, or any of its images; the
@@ -207,10 +223,82 @@ impl App {
             let scroll = self.ui.scroll(self.chrome.content);
             self.show_page(html, url, scroll);
         }
-        let messages: Vec<Message> = self.ui.drain_messages().collect();
-        for message in messages {
-            self.on_message(message);
+        // Drained until it stops rather than once, because a key from the
+        // on-screen keyboard is answered by feeding events back into the tree
+        // from inside this loop: Enter on the keyboard is the URL bar's submit
+        // message, and waiting a frame for it would be a keyboard that feels a
+        // frame slower than the one plugged in. Bounded, so a message that
+        // produced itself would stall for a frame rather than for good.
+        for _ in 0..8 {
+            let messages: Vec<Message> = self.ui.drain_messages().collect();
+            if messages.is_empty() {
+                break;
+            }
+            for message in messages {
+                self.on_message(message);
+            }
         }
+        // After the messages, so the keyboard sees where focus ended up rather
+        // than where it was passing through.
+        let was_open = self.keyboard.is_open();
+        self.keyboard.follow_focus(&mut self.ui, Message::Key);
+        if self.keyboard.is_open() != was_open {
+            self.fit_page_to_keyboard();
+            // The reveal that came with the focus ran before the keyboard was
+            // up and before the page had room to scroll into; neither is a
+            // change to the focus itself, so nothing re-runs it but this.
+            self.ui.reveal_focused();
+        }
+    }
+
+    /// Scroll room under the page for the keyboard to cover.
+    ///
+    /// A page ends where its last line ends, so a field in that final screenful
+    /// cannot be scrolled clear of a keyboard over the bottom third — there is
+    /// nothing below it to scroll into view, and the tree cannot invent any.
+    /// Growing the page by exactly what the keyboard covers gives it somewhere
+    /// to go; the room leaves with the keyboard, so a page never ends in blank
+    /// space nobody asked for.
+    ///
+    /// This is the application's job and not the toolkit's, because only the
+    /// application knows whether its content *may* grow. A fixed form cannot,
+    /// which is the case `Keyboard::occluded` is for.
+    fn fit_page_to_keyboard(&mut self) {
+        let pad = if self.keyboard.is_open() {
+            self.keyboard.height()
+        } else {
+            0
+        };
+        let Some(page) = &self.page else {
+            return;
+        };
+        let (root, height) = (page.root, page.height);
+        let Some(rect) = self.ui.layout(root) else {
+            return;
+        };
+        if rect.height != height + pad {
+            self.ui
+                .set_layout(root, Rect::new(rect.x, rect.y, rect.width, height + pad));
+        }
+    }
+
+    /// Whether the on-screen keyboard is up.
+    ///
+    /// The backends ask because Escape means "put it away" while it is, and
+    /// "quit" only when there is nothing left to dismiss.
+    pub const fn keyboard_open(&self) -> bool {
+        self.keyboard.is_open()
+    }
+
+    /// Puts the keyboard away, and takes the focus that summoned it with it.
+    ///
+    /// Clearing focus rather than merely closing is what makes it stay shut:
+    /// `follow_focus` opens on a focused text field, so a keyboard dismissed
+    /// with the caret still in the URL bar would be back on the next frame that
+    /// moved focus into it again.
+    pub fn dismiss_keyboard(&mut self) {
+        self.ui.focus(None);
+        self.keyboard.close(&mut self.ui);
     }
 
     pub fn on_message(&mut self, message: Message) {
@@ -279,6 +367,13 @@ impl App {
                 self.ui.close_popup();
             }
             Message::Noop => {}
+            Message::Key(code) => {
+                // Straight back into the tree, as though the events had come off
+                // a keyboard plugged into the machine — which as far as
+                // everything below here is concerned, they did.
+                let events = self.keyboard.press_key(&mut self.ui, code);
+                self.ui.handle(&events);
+            }
         }
     }
 
@@ -634,6 +729,10 @@ impl App {
             base.clone(),
             control_style,
         ));
+        // A new page is a new height, so the keyboard's room has to be put back
+        // on it — a navigation with the keyboard up would otherwise land on a
+        // page that ends under the keys.
+        self.fit_page_to_keyboard();
         self.ui.set_scroll(self.chrome.content, restore);
 
         // Fill what is already decoded, fetch what is not. The cap keeps a
@@ -748,6 +847,28 @@ impl App {
             self.show_page(html, url, scroll);
         }
     }
+}
+
+/// The keyboard a panel browses with, and the one a desktop build never sees
+/// because focus only reaches a field when somebody has already got a keyboard.
+///
+/// Two things are worth handing it and both are the application's to know: the
+/// display scale, so the keys are a fingertip rather than 48 device pixels of
+/// a 1.5x panel; and the chrome's own font, because a `Button` given no style
+/// falls back to the built-in bitmap face — which on the Pi is the one widget
+/// somebody is touching drawn in the one typeface that is not the rest of the
+/// browser's.
+///
+/// `from_system` rather than a layout named here, so the panel agrees with the
+/// machine: a Norwegian Pi types `ø` on the same key a Norwegian keyboard
+/// plugged into it would. The source is printed once, because a layout silently
+/// falling back to US is worth knowing before you type an address in it.
+fn keyboard(scale: f32, style: denise_text::TextStyle) -> Keyboard {
+    let (keyboard, source) = Keyboard::from_system();
+    if let denise_layout::LayoutSource::Unknown(name) = &source {
+        eprintln!("keyboard: no table for the system layout {name:?}; using us");
+    }
+    keyboard.with_scale(scale).with_style(style)
 }
 
 /// Adds the chrome once; `place_chrome` owns every rectangle so a resize
@@ -1314,6 +1435,150 @@ mod tests {
         assert_eq!(field.name.as_deref(), Some("q"));
         let node = page.controls.get(&field.dom).copied().expect("a widget");
         assert_eq!(app.ui.focused(), Some(node), "the field takes the keyboard");
+    }
+
+    /// The welcome page's search box brings the keyboard with it.
+    ///
+    /// This is the whole panel story in one assertion: a Pi with nothing
+    /// plugged into it boots the browser, and the first thing on screen is a
+    /// search box with a keyboard under it. Nothing arranges that — the
+    /// welcome page focuses its own field, and the keyboard follows focus.
+    #[test]
+    fn the_welcome_page_brings_the_keyboard_up_by_itself() {
+        let mut app = App::new(Size::new(900, 700), 1.0, None, Motion::None, None);
+        pump(&mut app);
+        assert!(
+            app.keyboard_open(),
+            "a panel with no keyboard has no way in"
+        );
+
+        // And Escape puts it away for good: closing while the field still had
+        // the caret would open it again on the next frame.
+        app.dismiss_keyboard();
+        pump(&mut app);
+        assert!(!app.keyboard_open(), "it came straight back");
+    }
+
+    /// Typing an address on the on-screen keyboard, and going there.
+    ///
+    /// The claim `#55` is really about: on the Pi the URL bar is the only way
+    /// to anywhere, and until now a visitor could see it and not use it. Every
+    /// step here is one a finger takes — focus the bar, tap the keys, tap
+    /// Enter — and none of them is a shortcut past the keyboard.
+    #[test]
+    fn a_url_typed_on_the_keyboard_navigates() {
+        let mut app = App::new(
+            Size::new(900, 700),
+            1.0,
+            None,
+            Motion::None,
+            Some(fixture("basic.html")),
+        );
+        pump(&mut app);
+
+        // A tap on the URL bar. The keyboard arrives because focus did.
+        app.focus_url_bar();
+        pump(&mut app);
+        assert!(
+            app.keyboard_open(),
+            "the URL bar did not summon the keyboard"
+        );
+
+        // Trim the bar back to the directory. Not part of what is being tested
+        // — a finger would hold Backspace, and holding a key is exactly what
+        // this keyboard cannot do yet — and the filename is what gets typed.
+        let dir = fixture("");
+        app.ui
+            .widget_mut::<TextInput<Message>>(app.chrome.url)
+            .expect("the URL bar")
+            .set_text(dir.clone());
+
+        // `second.html`, one key at a time, exactly as taps arrive.
+        for code in [
+            KeyCode::S,
+            KeyCode::E,
+            KeyCode::C,
+            KeyCode::O,
+            KeyCode::N,
+            KeyCode::D,
+            KeyCode::Period,
+            KeyCode::H,
+            KeyCode::T,
+            KeyCode::M,
+            KeyCode::L,
+        ] {
+            app.on_message(Message::Key(code));
+        }
+        let typed = app
+            .ui
+            .widget::<TextInput<Message>>(app.chrome.url)
+            .expect("the URL bar")
+            .text()
+            .to_string();
+        assert_eq!(
+            typed,
+            format!("{dir}second.html"),
+            "the keys did not reach the field"
+        );
+        assert!(app.keyboard_open(), "typing closed the keyboard");
+        assert_eq!(
+            app.ui.focused(),
+            Some(app.chrome.url),
+            "a key press stole the caret"
+        );
+
+        // Enter on the keyboard is the bar's submit, not a character.
+        app.on_message(Message::Key(KeyCode::Enter));
+        pump(&mut app);
+        let (_, here) = app.source.as_ref().expect("a source");
+        assert!(
+            here.as_str().ends_with("second.html"),
+            "Enter did not navigate: {here}"
+        );
+    }
+
+    /// A page field under the keyboard is scrolled clear of it, not merely
+    /// into the viewport.
+    ///
+    /// The form fixture is short, so the surface is made short instead: a
+    /// viewport with the keyboard over its lower half, and a field that starts
+    /// out inside the viewport and underneath the keys. Revealing it "into
+    /// view" would leave it exactly where it is and hidden.
+    #[test]
+    fn a_field_under_the_keyboard_is_scrolled_out_from_under_it() {
+        let mut app = App::new(
+            Size::new(900, 560),
+            1.0,
+            None,
+            Motion::None,
+            Some(fixture("long-form.html")),
+        );
+        pump(&mut app);
+
+        // The last control on the page: furthest down, most likely covered.
+        let page = app.page.as_ref().expect("a page");
+        let field = *page
+            .forms
+            .forms
+            .first()
+            .expect("the form")
+            .fields
+            .iter()
+            .filter_map(|f| page.controls.get(&f.dom))
+            .next_back()
+            .expect("a bound control");
+
+        app.focus_url_bar();
+        pump(&mut app);
+        let covered = app.keyboard.occluded(&app.ui).expect("the keyboard is up");
+
+        app.ui.focus(Some(field));
+        pump(&mut app);
+        let bounds = app.ui.bounds(field).expect("the field is placed");
+        assert!(
+            bounds.bottom() <= covered.y,
+            "the field sits under the keyboard: {bounds:?} against {covered:?}"
+        );
     }
 
     /// The same flow against a real search engine, typing included: the

@@ -5822,6 +5822,83 @@ fn a_viewport_with_nothing_to_scroll_cannot_reveal_and_says_so() {
     );
 }
 
+/// The reveal can be asked for again when the geometry moved and the focus
+/// did not.
+///
+/// Focus reveals itself the moment it moves, which is the only moment the tree
+/// can act on unprompted. A keyboard sliding up over a field that already has
+/// the caret is the other case entirely: nothing about the focus changed, so
+/// nothing re-runs the reveal, and the caret is left under the keys. This is
+/// how an application says the ground moved.
+#[test]
+fn reveal_focused_runs_the_reveal_again_after_the_ground_moved() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let viewport = ui
+        .add(root, Panel::default(), Rect::from_size(SIZE))
+        .expect("viewport");
+    ui.set_scrollable(viewport, true);
+    // Taller than the viewport, so there is somewhere to scroll to.
+    let tall = ui
+        .add(
+            viewport,
+            Panel::default(),
+            Rect::new(0, 0, SIZE.width as i32, SIZE.height as i32 * 2),
+        )
+        .expect("content");
+    let field = ui
+        .add(
+            tall,
+            TextInput::new(),
+            Rect::new(10, SIZE.height as i32 - 60, 200, 40),
+        )
+        .expect("field");
+
+    // Focused first, and revealed against a screen with nothing covering it.
+    ui.focus(Some(field));
+    ui.tick(1_000);
+    let settled = ui.bounds(field).expect("bounds");
+
+    // Now the keyboard arrives over the field that already had the caret.
+    ui.push_shelf(denise_ui::overlay::Side::Below, 200)
+        .expect("shelf");
+    ui.tick(2_000);
+    let occluded = ui.occluded().expect("a shelf is up");
+    assert!(
+        ui.bounds(field).expect("bounds").bottom() > occluded.y,
+        "this test needs the field to end up under the shelf"
+    );
+    assert_eq!(
+        ui.bounds(field),
+        Some(settled),
+        "the field moved by itself; nothing should have re-revealed it"
+    );
+
+    // The application says so, and the tree does the rest.
+    ui.reveal_focused();
+    let moved = ui.bounds(field).expect("bounds");
+    assert!(
+        moved.bottom() <= occluded.y,
+        "asking again left the field under the shelf: {moved:?} against {occluded:?}"
+    );
+}
+
+/// Asking with nothing focused is a question with no answer, not a panic.
+#[test]
+fn reveal_focused_with_no_focus_does_nothing() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let viewport = ui
+        .add(root, Panel::default(), Rect::from_size(SIZE))
+        .expect("viewport");
+    ui.set_scrollable(viewport, true);
+    ui.tick(1_000);
+    let before = ui.scroll(viewport);
+    assert_eq!(ui.focused(), None);
+    ui.reveal_focused();
+    assert_eq!(ui.scroll(viewport), before);
+}
+
 /// Gain, move and loss are three different answers, and "did not move" is a
 /// fourth. An application deciding whether to show a keyboard needs all four
 /// told apart.

@@ -19,6 +19,8 @@ all-features = true
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-layout = { workspace = true }
+# Legends are text, and an application that loaded a font wants them in it.
+denise-text = { workspace = true }
 denise-ui = { workspace = true, features = ["std"] }
 
 [dev-dependencies]

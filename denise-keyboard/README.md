@@ -28,7 +28,8 @@ let root = ui.root();
 let field = ui.add(root, TextInput::new(), Rect::new(20, 20, 400, 40)).unwrap();
 ui.focus(Some(field));
 
-// Whatever the machine is configured for; US when it says nothing.
+// Whatever the machine is configured for; US when it says nothing. The scale
+// and the style are worth handing it: see "Fitting the panel" below.
 let mut keyboard = Keyboard::new(denise_layout::from_system().0);
 
 // Once a frame, beside draining messages: the keyboard arrives when focus
@@ -61,6 +62,26 @@ keyboard is not a question `denise-ui` can answer.
 
 Escape is yours to bind. A shelf pushes no scene, so the tree does not claim
 the key and will not close the keyboard behind your back.
+
+## Fitting the panel
+
+Two things the application knows and a widget cannot, both builders on
+`Keyboard`:
+
+`with_scale` turns the grid's logical pixels into the surface's own. `KEY_HEIGHT`
+is 48 because that is a fingertip, not because it is a count of device pixels —
+on a 2× panel a keyboard that ignored the scale would draw half-size keys beside
+full-size everything else. Same `scale` the application scales its own layout by.
+
+`with_style` names the face the legends are drawn in. Given none, a `Button`
+falls back to the built-in 8×8 bitmap face, and the result is visible: the one
+widget somebody is touching, drawn in the one typeface that is not the rest of
+the application. `set_style` is the same thing for an application that registers
+its font after building its tree.
+
+The keys wear roles rather than the toolkit's default: characters are
+`Base100`, the modifiers and the layout key are `Neutral`, and Enter is
+`Primary`. Forty `Primary` buttons at once is not emphasis.
 
 ## How it stays out of the way
 
@@ -114,6 +135,20 @@ Focusing a field scrolls it clear of the keyboard, not merely into its
 viewport — the tree knows a shelf is in the way. A viewport with nothing to
 scroll cannot do that, and for those `Keyboard::occluded()` says exactly what
 the application has to move something clear of.
+
+What to *do* about it is the application's, because only it knows what may move,
+and the two demos in this repository need different answers:
+
+- The **browser** grows its page by `Keyboard::height()` while the keyboard is
+  up, so a field in the last screenful has somewhere to scroll into. Every phone
+  browser does this.
+- The **table editor** cannot: its form is 300 tall on a 470-tall panel and does
+  not fit above a 330-tall keyboard at any offset. So it cuts the form to what is
+  above the keyboard, which turns it into a viewport with more content than room
+  — and *that* the tree already knows how to scroll.
+
+Either way, tell the tree afterwards: `Ui::reveal_focused()` re-runs the reveal
+when the geometry around the focus changed rather than the focus itself.
 
 ## What is not here yet
 

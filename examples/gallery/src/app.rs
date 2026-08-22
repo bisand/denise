@@ -86,6 +86,9 @@ pub enum Message {
     CloseDialog,
     ShowDrawer,
     ToggleShelf,
+    ToggleKeyboard,
+    /// A key tapped on the on-screen keyboard.
+    Key(denise::KeyCode),
 }
 
 // `Slider` and `Collapse` take a plain `fn` constructor, so a message that
@@ -213,6 +216,9 @@ struct Nodes {
     tab_body: NodeId,
     mode_select: NodeId,
     grid_caption: NodeId,
+    /// The field the keyboard demo types into, and the caption under it.
+    keyboard_field: NodeId,
+    keyboard_note: NodeId,
 }
 
 pub struct App {
@@ -238,6 +244,9 @@ pub struct App {
     heading: TextStyle,
     small: TextStyle,
     toasts_sent: u32,
+    /// The on-screen keyboard, and what the machine says it should type.
+    keyboard: denise_keyboard::Keyboard,
+    layout_source: denise_layout::LayoutSource,
 }
 
 impl App {
@@ -295,6 +304,7 @@ impl App {
 
         let theme = *ui.theme();
         let seeds = SEEDS.map(|(role, _)| theme.color(role));
+        let (keyboard, layout_source) = denise_keyboard::Keyboard::from_system();
 
         let mut app = App {
             ui,
@@ -323,12 +333,21 @@ impl App {
                 tab_body: NodeId::default(),
                 mode_select: NodeId::default(),
                 grid_caption: NodeId::default(),
+                keyboard_field: NodeId::default(),
+                keyboard_note: NodeId::default(),
             },
             started: Instant::now(),
             body,
             heading,
             small,
             toasts_sent: 0,
+            // The layout the machine is configured for, so a Norwegian panel
+            // comes up Norwegian without being told; `body` because a `Button`
+            // given no style falls back to the built-in bitmap face, and the
+            // scale because the grid is written in logical pixels like
+            // everything else here.
+            keyboard: keyboard.with_scale(scale).with_style(body),
+            layout_source,
         };
         // Built against the logical extent of that surface: the numbers below
         // are the ones the layout was designed with, on any display.
@@ -898,7 +917,10 @@ impl App {
 
     fn section_folding(&mut self, content: NodeId, cw: i32) {
         let s = self.section(content, cw, 260, "Folding & overlays");
-        let stack = self.add(s, denise_ui::Void, Rect::new(PAD, 44, 560, 200));
+        // 440 and not the full half of the section: the keyboard demo's column
+        // starts at 472, and two overlapping rectangles are a hit test waiting
+        // to surprise somebody even where nothing visibly collides.
+        let stack = self.add(s, denise_ui::Void, Rect::new(PAD, 44, 440, 200));
         self.ui.set_stack(stack, 6);
         let mut sections = Vec::new();
         for (title, message) in [
@@ -909,14 +931,14 @@ impl App {
             let section = self.add(
                 stack,
                 Collapse::new(title, message).with_style(self.body),
-                Rect::new(0, 0, 560, 34 + 52),
+                Rect::new(0, 0, 440, 34 + 52),
             );
             self.add(
                 section,
                 Label::new("The body is any subtree; the fold is a layout tween")
                     .with_style(self.small)
                     .with_role(Role::Base300),
-                Rect::new(20, 40, 520, 18),
+                Rect::new(20, 40, 400, 18),
             );
             sections.push(section);
         }
@@ -972,6 +994,71 @@ impl App {
                 .with_style(self.body),
             Rect::new(cw - 220 - PAD, 200, 220, 40),
         );
+        // The keyboard is a shelf too, and the most demanding thing that can
+        // be one: it lives entirely in the overlay, and the field it types into
+        // does not. Beside the drawer and the modal on purpose — this is where
+        // the overlay kinds are compared, and "the thing underneath keeps the
+        // caret" is the difference the comparison is about.
+        self.nodes.keyboard_field = self.add(
+            s,
+            TextInput::<Message>::new()
+                .with_placeholder("type here")
+                .with_style(self.body),
+            Rect::new(cw - 460 - PAD, 148, 220, 40),
+        );
+        self.nodes.keyboard_note = self.add(
+            s,
+            Label::new(self.keyboard_caption())
+                .with_style(self.small)
+                .with_role(Role::Base300),
+            Rect::new(cw - 460 - PAD, 194, 220, 18),
+        );
+        self.add(
+            s,
+            Button::new("Keyboard", Message::ToggleKeyboard)
+                .with_role(Role::Neutral)
+                .with_style(self.body),
+            Rect::new(cw - 460 - PAD, 44, 220, 40),
+        );
+    }
+
+    /// What the caption under the keyboard field says.
+    ///
+    /// The layout, and where it came from. Worth a line of the gallery because
+    /// it is the thing a visitor cannot otherwise discover: the panel read the
+    /// system's configuration, and `LayoutSource::Unknown` means it asked and
+    /// did not understand the answer — a keyboard quietly in the wrong language
+    /// is a bad afternoon.
+    fn keyboard_caption(&self) -> String {
+        use denise_layout::LayoutSource;
+        let name = self.keyboard.layout().name;
+        match &self.layout_source {
+            LayoutSource::Default => format!("{name} — nothing configured"),
+            LayoutSource::Unknown(asked) => format!("{name} — no table for {asked:?}"),
+            other => format!("{name} — from {other:?}"),
+        }
+    }
+
+    /// The keyboard, on or off, sharing the one shelf with the plain one.
+    ///
+    /// The tree allows a single shelf at a time, so opening either has to close
+    /// the other — and that is not a limitation worth hiding here, it is the
+    /// thing the section is demonstrating. A shelf is *the* bottom edge, not
+    /// one of several.
+    fn toggle_keyboard(&mut self) {
+        if self.keyboard.is_open() {
+            self.keyboard.close(&mut self.ui);
+            return;
+        }
+        if self.ui.shelf_open() {
+            self.ui.close_shelf();
+            return;
+        }
+        // The field takes the caret first, so there is somewhere for the keys
+        // to type — and it keeps it, because a key is a `Button::no_focus` and
+        // a shelf pushes no scene.
+        self.ui.focus(Some(self.nodes.keyboard_field));
+        self.keyboard.open(&mut self.ui, Message::Key);
     }
 
     /// `Ui::add` with the panic this application wants: the tree is built once
@@ -1101,9 +1188,18 @@ impl App {
     // ------------------------------------------------------------- messages
 
     pub fn handle(&mut self, _now_ms: u64) {
-        let messages: Vec<Message> = self.ui.drain_messages().collect();
-        for message in messages {
-            self.on_message(message);
+        // Drained until it stops rather than once: a key press is answered by
+        // feeding events straight back into the tree, and whatever *those*
+        // produce belongs to the same frame as the tap. Bounded, so a message
+        // that produced itself would cost a frame rather than the application.
+        for _ in 0..8 {
+            let messages: Vec<Message> = self.ui.drain_messages().collect();
+            if messages.is_empty() {
+                break;
+            }
+            for message in messages {
+                self.on_message(message);
+            }
         }
     }
 
@@ -1233,6 +1329,11 @@ impl App {
                 self.ui.pop_scene();
             }
             Message::ShowDrawer => self.open_drawer(),
+            Message::ToggleKeyboard => self.toggle_keyboard(),
+            Message::Key(code) => {
+                let events = self.keyboard.press_key(&mut self.ui, code);
+                self.ui.handle(&events);
+            }
             Message::ToggleShelf => self.toggle_shelf(),
         }
     }
@@ -1319,6 +1420,10 @@ impl App {
     /// the buttons behind it still press, and nothing dims. A drawer offers the
     /// opposite of each, which is why both are here to compare.
     fn toggle_shelf(&mut self) {
+        if self.keyboard.is_open() {
+            self.keyboard.close(&mut self.ui);
+            return;
+        }
         if self.ui.shelf_open() {
             self.ui.close_shelf();
             return;
@@ -1505,6 +1610,98 @@ mod tests {
         app.on_message(Message::ShowDrawer);
         assert!(app.ui.drawer_open());
         assert!(app.ui.close_drawer(), "the exit slide starts");
+    }
+
+    /// The keyboard is a shelf, and the field underneath keeps the caret.
+    ///
+    /// That is the whole reason it is filed with the drawer and the modal
+    /// rather than beside the buttons: those two take the focus away, and this
+    /// one must not. A key press that moved the caret would be a keyboard that
+    /// types one character and then stops.
+    #[test]
+    fn the_keyboard_types_into_the_field_without_taking_its_caret() {
+        let mut app = app();
+        app.on_message(Message::ToggleKeyboard);
+        assert!(app.keyboard.is_open());
+        assert_eq!(
+            app.ui.focused(),
+            Some(app.nodes.keyboard_field),
+            "the field was not given the caret to type into"
+        );
+
+        for code in [KeyCode::H, KeyCode::E, KeyCode::J] {
+            app.on_message(Message::Key(code));
+        }
+        app.handle(0);
+        let field = app
+            .ui
+            .widget::<TextInput<Message>>(app.nodes.keyboard_field)
+            .expect("the field");
+        assert_eq!(field.text(), "hej");
+        assert_eq!(
+            app.ui.focused(),
+            Some(app.nodes.keyboard_field),
+            "a key press stole the caret"
+        );
+
+        app.on_message(Message::ToggleKeyboard);
+        assert!(!app.keyboard.is_open());
+    }
+
+    /// The layout key, which is the thing a visitor learns the panel from.
+    ///
+    /// Positions do not move when the layout changes — only what they type — so
+    /// the same key that types `;` on US types `ø` on Norwegian, and the key
+    /// itself says which layout is in force.
+    #[test]
+    fn the_layout_key_says_which_language_the_panel_is_in() {
+        let mut app = app();
+        app.on_message(Message::ToggleKeyboard);
+        let start = app.keyboard.layout().name;
+
+        // Walk the built-ins until Norwegian comes round, then type the key
+        // that separates it from US.
+        for _ in 0..denise_layout::BUILT_IN.len() {
+            if app.keyboard.layout().name == "no" {
+                break;
+            }
+            app.on_message(Message::Key(denise::KeyCode::Unidentified(u32::MAX)));
+        }
+        assert_eq!(app.keyboard.layout().name, "no", "no Norwegian to cycle to");
+        assert_ne!(start, "", "a layout always has a name");
+
+        app.on_message(Message::Key(KeyCode::Semicolon));
+        app.handle(0);
+        let field = app
+            .ui
+            .widget::<TextInput<Message>>(app.nodes.keyboard_field)
+            .expect("the field");
+        assert_eq!(
+            field.text(),
+            "\u{f8}",
+            "the semicolon position is not Norwegian"
+        );
+    }
+
+    /// One shelf at a time, and the section says so by letting either one
+    /// close the other.
+    #[test]
+    fn the_keyboard_and_the_plain_shelf_share_the_one_bottom_edge() {
+        let mut app = app();
+        app.on_message(Message::ToggleShelf);
+        assert!(app.ui.shelf_open());
+        assert!(!app.keyboard.is_open());
+
+        // The keyboard cannot open over it; asking closes what is there.
+        app.on_message(Message::ToggleKeyboard);
+        assert!(!app.keyboard.is_open(), "two shelves at once");
+        app.ui.tick(10_000);
+        app.on_message(Message::ToggleKeyboard);
+        assert!(app.keyboard.is_open());
+
+        // And the plain shelf gives way in the same manner.
+        app.on_message(Message::ToggleShelf);
+        assert!(!app.keyboard.is_open());
     }
 
     /// One slider drives the bar and the ring: the message loop, not a
