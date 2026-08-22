@@ -3,7 +3,7 @@
 <img src="assets/logo.svg" width="148"
      alt="Three translucent layers compositing into one, with a cursor sprite on top">
 
-# Denise
+# DeniseUI
 
 **A direct-rendering UI toolkit in Rust, for embedded Linux and systems without a
 desktop environment.**

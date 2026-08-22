@@ -1,4 +1,4 @@
-# Denise — design notes
+# DeniseUI — design notes
 
 How Denise is built and why, written milestone by milestone as it was built. This
 is the long half of what used to be the README: the architecture, the reasoning,
