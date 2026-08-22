@@ -147,7 +147,20 @@ impl Entry {
 }
 
 /// A keyboard layout: a table of positions, and the decimal key's character.
+///
+/// `#[non_exhaustive]`, because a layout is a description of a keyboard and
+/// keyboards keep turning out to have one more thing about them worth writing
+/// down. This crate has now added a field twice — the decimal separator, then
+/// the alternates — and the second one broke every struct literal building a
+/// `Layout` outside it. There is no third time: an added field costs nobody a
+/// compile error from here.
+///
+/// It also says something true about the type. These tables are the layouts
+/// that ship; a caller wanting another writes one *here*, where the tests that
+/// walk every layout and check it can type its own alphabet will walk that one
+/// too. A `Layout` assembled elsewhere would have skipped them.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Layout {
     /// Human-readable name, for logging what a device is being read as.
     pub name: &'static str,
