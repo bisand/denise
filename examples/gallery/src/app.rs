@@ -219,6 +219,10 @@ struct Nodes {
     /// The field the keyboard demo types into, and the caption under it.
     keyboard_field: NodeId,
     keyboard_note: NodeId,
+    /// The scrolling column of sections, and the room the keyboard borrows at
+    /// the bottom of it.
+    content: NodeId,
+    content_pad: NodeId,
 }
 
 pub struct App {
@@ -247,6 +251,9 @@ pub struct App {
     /// The on-screen keyboard, and what the machine says it should type.
     keyboard: denise_keyboard::Keyboard,
     layout_source: denise_layout::LayoutSource,
+    /// Whether the focus is somewhere that wants a keyboard. Kept rather than
+    /// acted on immediately, because the bottom edge may still be busy.
+    wants_keyboard: bool,
 }
 
 impl App {
@@ -335,6 +342,8 @@ impl App {
                 grid_caption: NodeId::default(),
                 keyboard_field: NodeId::default(),
                 keyboard_note: NodeId::default(),
+                content: NodeId::default(),
+                content_pad: NodeId::default(),
             },
             started: Instant::now(),
             body,
@@ -348,6 +357,7 @@ impl App {
             // everything else here.
             keyboard: keyboard.with_scale(scale).with_style(body),
             layout_source,
+            wants_keyboard: false,
         };
         // Built against the logical extent of that surface: the numbers below
         // are the ones the layout was designed with, on any display.
@@ -445,6 +455,17 @@ impl App {
         self.section_data(content, cw);
         self.section_pictures(content, cw);
         self.section_folding(content, cw);
+
+        // Room for the keyboard to cover, added only while it is up. The
+        // sections end where the last one ends, and the keyboard demo *is* the
+        // last one — so without this the reveal runs out of scroll and leaves
+        // the field it was revealing under the keys. Hidden when there is no
+        // keyboard, because the stack skips invisible children and an
+        // always-present spacer would be a strip of over-scroll at the bottom
+        // of a gallery nobody asked to be able to scroll past.
+        self.nodes.content = content;
+        self.nodes.content_pad = self.add(content, denise_ui::Void, Rect::new(0, 0, 1, 0));
+        self.ui.set_visible(self.nodes.content_pad, false);
     }
 
     fn build_sidebar(&mut self, at: Rect) {
@@ -1039,26 +1060,74 @@ impl App {
         }
     }
 
-    /// The keyboard, on or off, sharing the one shelf with the plain one.
+    /// The button, which does what tapping the field does.
     ///
-    /// The tree allows a single shelf at a time, so opening either has to close
-    /// the other — and that is not a limitation worth hiding here, it is the
-    /// thing the section is demonstrating. A shelf is *the* bottom edge, not
-    /// one of several.
+    /// Focus is the trigger everywhere else in this repository and it is the
+    /// trigger here: the button moves the caret and the keyboard follows. A
+    /// button that opened the keyboard *directly* would be the one place in
+    /// three demos where focus and the keyboard disagreed, which is exactly
+    /// what somebody reading the gallery to learn the toolkit should not find.
     fn toggle_keyboard(&mut self) {
         if self.keyboard.is_open() {
+            self.ui.focus(None);
+        } else {
+            self.ui.focus(Some(self.nodes.keyboard_field));
+        }
+    }
+
+    /// The gallery's own focus policy, which is `follow_focus` with one wait.
+    ///
+    /// The rule is the same — a [`TextInput`] wants a keyboard, anything else
+    /// does not — and the gallery has to spell it out itself for one reason:
+    /// this is the only application here with a *second* shelf on screen, the
+    /// one in the overlays section. The tree allows one at a time, so a field
+    /// focused while the plain shelf is up cannot have its keyboard yet.
+    ///
+    /// So the intent is remembered rather than dropped. The plain shelf is told
+    /// to leave, and the keyboard opens on the frame after it has gone —
+    /// which is why this is a small state machine and not a call to
+    /// [`Keyboard::follow_focus`](denise_keyboard::Keyboard::follow_focus).
+    fn keyboard_follows_focus(&mut self) {
+        if let Some(focus) = self.ui.focus_changed() {
+            self.wants_keyboard =
+                focus.is_some_and(|id| self.ui.widget::<TextInput<Message>>(id).is_some());
+        }
+        if !self.wants_keyboard {
             self.keyboard.close(&mut self.ui);
             return;
         }
+        if self.keyboard.is_open() {
+            return;
+        }
         if self.ui.shelf_open() {
+            // Ours or the demo's, it is in the way. Asking it to go is all that
+            // happens this frame; the slide takes a moment and the keyboard
+            // arrives when the edge is free.
             self.ui.close_shelf();
             return;
         }
-        // The field takes the caret first, so there is somewhere for the keys
-        // to type — and it keeps it, because a key is a `Button::no_focus` and
-        // a shelf pushes no scene.
-        self.ui.focus(Some(self.nodes.keyboard_field));
         self.keyboard.open(&mut self.ui, Message::Key);
+    }
+
+    /// Gives the sections somewhere to scroll to while the keyboard covers them.
+    ///
+    /// The same thing the browser and the table editor each do, for the same
+    /// reason: a view ends where its last widget ends, so a field in the covered
+    /// part has nothing below it to scroll into. Only the application knows its
+    /// content may grow, which is why the toolkit cannot do this for anyone.
+    fn fit_content_to_keyboard(&mut self) {
+        let pad = self.nodes.content_pad;
+        let covered = self.keyboard.occluded(&self.ui);
+        let height = covered.map_or(0, |c| c.height);
+        let want = Rect::new(0, 0, 1, height);
+        if self.ui.layout(pad) == Some(want) {
+            return;
+        }
+        self.ui.set_visible(pad, covered.is_some());
+        self.ui.set_layout(pad, want);
+        // The reveal that came with the focus ran before there was anywhere to
+        // scroll to; nothing about the focus has changed since.
+        self.ui.reveal_focused();
     }
 
     /// `Ui::add` with the panic this application wants: the tree is built once
@@ -1208,6 +1277,10 @@ impl App {
                 self.on_message(message);
             }
         }
+        // Every frame, not only the ones with messages: focus moves on a Tab
+        // that produces no message at all.
+        self.keyboard_follows_focus();
+        self.fit_content_to_keyboard();
     }
 
     pub fn on_message(&mut self, message: Message) {
@@ -1427,8 +1500,14 @@ impl App {
     /// the buttons behind it still press, and nothing dims. A drawer offers the
     /// opposite of each, which is why both are here to compare.
     fn toggle_shelf(&mut self) {
-        if self.keyboard.is_open() {
+        // The keyboard first, and the order matters: the keyboard *is* a shelf,
+        // so `shelf_open` is true while it is up and a plain "is a shelf open?"
+        // check would close it without ever letting go of the focus that
+        // summoned it — which brings it straight back on the next frame.
+        if self.keyboard.is_open() || self.wants_keyboard {
+            self.ui.focus(None);
             self.keyboard.close(&mut self.ui);
+            self.wants_keyboard = false;
             return;
         }
         if self.ui.shelf_open() {
@@ -1574,6 +1653,20 @@ mod tests {
         App::new(Size::new(1280, 800), 1.0, None, Motion::default())
     }
 
+    /// A few frames of the real loop.
+    ///
+    /// The keyboard follows focus once a frame and a shelf takes a moment to
+    /// slide, so anything about it being on screen is a claim about several
+    /// frames rather than about one call.
+    fn pump(app: &mut App) {
+        let mut now = app.started.elapsed().as_millis() as u64 + 1_000;
+        for _ in 0..8 {
+            now += 200;
+            app.ui.tick(now);
+            app.handle(now);
+        }
+    }
+
     /// The same tree on a 2× display is the same tree, twice the size — the
     /// property the whole scaling path exists for, checked at the front door.
     #[test]
@@ -1629,6 +1722,7 @@ mod tests {
     fn the_keyboard_types_into_the_field_without_taking_its_caret() {
         let mut app = app();
         app.on_message(Message::ToggleKeyboard);
+        pump(&mut app);
         assert!(app.keyboard.is_open());
         assert_eq!(
             app.ui.focused(),
@@ -1639,7 +1733,7 @@ mod tests {
         for code in [KeyCode::H, KeyCode::E, KeyCode::J] {
             app.on_message(Message::Key(code));
         }
-        app.handle(0);
+        pump(&mut app);
         let field = app
             .ui
             .widget::<TextInput<Message>>(app.nodes.keyboard_field)
@@ -1652,6 +1746,7 @@ mod tests {
         );
 
         app.on_message(Message::ToggleKeyboard);
+        pump(&mut app);
         assert!(!app.keyboard.is_open());
     }
 
@@ -1690,24 +1785,105 @@ mod tests {
         );
     }
 
+    /// The field being typed into is not under the keyboard.
+    ///
+    /// The gallery's content scrolls, but a view ends where its last section
+    /// ends — and the keyboard demo *is* the last section, so without room
+    /// added below it the reveal runs out of scroll and leaves the field under
+    /// the keys.
+    #[test]
+    fn the_keyboard_field_ends_up_above_the_keyboard() {
+        let mut app = app();
+        app.ui.focus(Some(app.nodes.keyboard_field));
+        pump(&mut app);
+        let covered = app.keyboard.occluded(&app.ui).expect("the keyboard is up");
+        let field = app
+            .ui
+            .bounds(app.nodes.keyboard_field)
+            .expect("the field is placed");
+        assert!(
+            field.bottom() <= covered.y,
+            "the field is under the keyboard: {field:?} against {covered:?}"
+        );
+        assert!(field.y >= 0, "and it has not gone off the top: {field:?}");
+    }
+
+    /// Focus opens the keyboard and losing focus closes it, as everywhere else.
+    ///
+    /// The gallery used to open it from a button and never close it, so a
+    /// keyboard on screen stayed there whatever the caret did — the one place in
+    /// three demos where focus and the keyboard disagreed, in the application
+    /// somebody reads to learn how the toolkit behaves.
+    #[test]
+    fn the_keyboard_comes_and_goes_with_the_focus() {
+        let mut app = app();
+        assert!(!app.keyboard.is_open(), "it starts closed");
+
+        app.ui.focus(Some(app.nodes.keyboard_field));
+        pump(&mut app);
+        assert!(app.keyboard.is_open(), "focusing a field summoned nothing");
+
+        // Anywhere that is not a text field takes it away again.
+        app.ui.focus(None);
+        pump(&mut app);
+        assert!(!app.keyboard.is_open(), "blurring the field left it up");
+
+        // And focusing again brings it back.
+        app.ui.focus(Some(app.nodes.keyboard_field));
+        pump(&mut app);
+        assert!(app.keyboard.is_open(), "it did not come back");
+
+        // The plain shelf demo takes the edge, and the focus with it.
+        app.on_message(Message::ToggleShelf);
+        pump(&mut app);
+        assert!(
+            !app.keyboard.is_open(),
+            "the plain shelf demo did not get the bottom edge"
+        );
+    }
+
+    /// The plain shelf and the keyboard want the same edge, and the wait is
+    /// remembered rather than dropped.
+    #[test]
+    fn a_field_focused_over_the_plain_shelf_gets_its_keyboard_once_the_edge_is_free() {
+        let mut app = app();
+        app.on_message(Message::ToggleShelf);
+        app.handle(0);
+        assert!(app.ui.shelf_open(), "the demo shelf is up");
+
+        // A field takes the caret while the edge is busy. The keyboard cannot
+        // open this frame, and the intent must not be thrown away.
+        app.ui.focus(Some(app.nodes.keyboard_field));
+        app.handle(0);
+        assert!(!app.keyboard.is_open(), "two shelves at once");
+
+        // Ticking past the slide-out, the keyboard arrives by itself.
+        pump(&mut app);
+        assert!(
+            app.keyboard.is_open(),
+            "the keyboard never arrived after the shelf left"
+        );
+    }
+
     /// One shelf at a time, and the section says so by letting either one
     /// close the other.
     #[test]
     fn the_keyboard_and_the_plain_shelf_share_the_one_bottom_edge() {
         let mut app = app();
         app.on_message(Message::ToggleShelf);
+        pump(&mut app);
         assert!(app.ui.shelf_open());
         assert!(!app.keyboard.is_open());
 
-        // The keyboard cannot open over it; asking closes what is there.
+        // Asking for the keyboard takes the edge off the demo shelf, and the
+        // keyboard arrives once it has gone.
         app.on_message(Message::ToggleKeyboard);
-        assert!(!app.keyboard.is_open(), "two shelves at once");
-        app.ui.tick(10_000);
-        app.on_message(Message::ToggleKeyboard);
-        assert!(app.keyboard.is_open());
+        pump(&mut app);
+        assert!(app.keyboard.is_open(), "the keyboard never got the edge");
 
-        // And the plain shelf gives way in the same manner.
+        // And the plain shelf takes it back the same way.
         app.on_message(Message::ToggleShelf);
+        pump(&mut app);
         assert!(!app.keyboard.is_open());
     }
 

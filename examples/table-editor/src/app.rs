@@ -66,9 +66,14 @@ struct Nodes {
     rows: Vec<NodeId>,
     cells: Vec<[Option<NodeId>; 4]>,
     fields: [Option<NodeId>; 4],
-    /// The form panel, and where it sits with no keyboard in the way.
-    form: Option<NodeId>,
-    form_home: Rect,
+    /// The scrollable everything sits in, so the whole view moves as one.
+    view: Option<NodeId>,
+    /// An empty node below the content, grown to the keyboard's height while it
+    /// is up: a view ends where its last widget ends, so without this there is
+    /// nothing under a covered field to scroll into.
+    pad: Option<NodeId>,
+    /// Where the content ends with no keyboard in the way.
+    content_bottom: i32,
     status: Option<NodeId>,
     position: Option<NodeId>,
     /// Every node drawn at body size, and every node drawn at heading size.
@@ -121,7 +126,20 @@ impl App {
         // The surface back in the units the layout is written in.
         let logical_w = ((size.width as f32) / scale + 0.5) as i32;
         let mut nodes = Nodes::default();
+        // Everything hangs off a viewport rather than off the root, so that the
+        // *view* is what moves when the keyboard covers the bottom of it. The
+        // alternative — cutting the one panel a covered field happens to live
+        // in — reads as a form coming apart while the rest of the screen sits
+        // still, and it only works at all for applications whose fields are all
+        // in one panel. A whole view scrolling is what a phone does and what
+        // the browser here already did.
         let root = ui.root();
+        let view = ui
+            .add(root, denise_ui::Void, Rect::from_size(size))
+            .expect("view");
+        ui.set_scrollable(view, true);
+        nodes.view = Some(view);
+        let root = view;
 
         nodes.title = ui.add(
             root,
@@ -224,21 +242,18 @@ impl App {
         // ------------------------------------------------------------ the form
 
         let form_x = GRID_LEFT + GRID_WIDTH + 16;
-        let form_home = s(Rect::new(
-            form_x,
-            GRID_TOP - 34,
-            logical_w - form_x - 16,
-            300,
-        ));
-        let form = ui.add(root, Panel::default(), form_home).expect("form");
-        // Scrollable so the keyboard has an answer. A form of four rows never
-        // overflows on its own and this changes nothing while the keyboard is
-        // down — but with the keyboard up the form is cut to the space above it
-        // (see `fit_form_to_keyboard`), and a viewport that may be scrolled is
-        // what lets the tree bring the focused row into what is left.
-        ui.set_scrollable(form, true);
-        nodes.form = Some(form);
-        nodes.form_home = form_home;
+        let form = ui
+            .add(
+                root,
+                Panel::default(),
+                s(Rect::new(
+                    form_x,
+                    GRID_TOP - 34,
+                    logical_w - form_x - 16,
+                    300,
+                )),
+            )
+            .expect("form");
         nodes.heading.extend(ui.add(
             form,
             Label::new("Record").with_style(heading),
@@ -288,6 +303,19 @@ impl App {
             s(Rect::new(GRID_LEFT, actions_y + 42, logical_w - 32, 20)),
         );
         nodes.body.extend(nodes.status);
+
+        // The bottom of the content, which is where the keyboard's scroll room
+        // gets added. Read from the tree rather than recomputed from the
+        // constants above, so a layout change cannot leave it stale.
+        nodes.content_bottom = nodes
+            .status
+            .and_then(|id| ui.layout(id))
+            .map_or(size.height as i32, |r| r.bottom());
+        nodes.pad = ui.add(
+            root,
+            denise_ui::Void,
+            Rect::new(0, nodes.content_bottom, 1, 0),
+        );
 
         let mut app = Self {
             ui,
@@ -468,7 +496,7 @@ impl App {
         // Every frame, not only the ones with messages: focus moves on a Tab
         // the application never sees, and the keyboard follows focus.
         self.keyboard.follow_focus(&mut self.ui, Message::Key);
-        self.fit_form_to_keyboard();
+        self.fit_view_to_keyboard();
     }
 
     /// Puts the caret in the first form field, which brings the keyboard up.
@@ -503,51 +531,45 @@ impl App {
     pub fn dismiss_keyboard(&mut self) {
         self.ui.focus(None);
         self.keyboard.close(&mut self.ui);
-        self.fit_form_to_keyboard();
+        self.fit_view_to_keyboard();
     }
 
-    /// Cuts the form to the screen the keyboard has left it, and restores it.
+    /// Gives the view somewhere to scroll to while the keyboard covers it.
     ///
-    /// The form is a fixed panel of four rows: it never overflows by itself, so
-    /// there is nothing to scroll and the tree's reveal correctly makes no move
-    /// — leaving `City` under the keys being pressed. Lifting the whole panel
-    /// instead does not work either, and the reason is arithmetic rather than
-    /// taste: on a panel this short a 300-tall form does not fit above a
-    /// 330-tall keyboard at any offset.
+    /// A view ends where its last widget ends, so a field in the covered part
+    /// has nothing below it to scroll into and the tree's reveal correctly makes
+    /// no move — leaving `City` under the keys being pressed. Growing the
+    /// content by exactly what the keyboard covers gives the whole view
+    /// somewhere to go; the room leaves with the keyboard, so the view never
+    /// ends in blank space nobody asked for.
     ///
-    /// So the form is shortened to what is above the keyboard, which makes it a
-    /// viewport with more content than room — and *that* the tree knows what to
-    /// do with. [`Keyboard::occluded`](denise_keyboard::Keyboard::occluded) is
-    /// the only part the application has to supply, because only the application
-    /// knows which of its panels may be cut short.
-    fn fit_form_to_keyboard(&mut self) {
-        let Some(form) = self.nodes.form else {
+    /// The **whole view** and not the one panel a covered field happens to be
+    /// in. Cutting that panel also works and is what this did first, and it is
+    /// wrong for two reasons: it reads as the form coming apart while the rest
+    /// of the screen sits still, and it only generalises to applications whose
+    /// fields are all in one panel. Scrolling the view is what a phone does, and
+    /// what the browser here already did.
+    ///
+    /// [`Keyboard::occluded`](denise_keyboard::Keyboard::occluded) is the only
+    /// part the application supplies, because only the application knows whether
+    /// its content may grow.
+    fn fit_view_to_keyboard(&mut self) {
+        let Some(pad) = self.nodes.pad else {
             return;
         };
-        let home = self.nodes.form_home;
-        let want = match self.keyboard.occluded(&self.ui) {
-            // A minimum, so a keyboard on a truly tiny display leaves a form
-            // that is cramped rather than one that is gone.
-            Some(covered) => Rect::new(
-                home.x,
-                home.y,
-                home.width,
-                (covered.y - home.y).max(self.px(64)).min(home.height),
-            ),
-            None => home,
-        };
-        if self.ui.layout(form) == Some(want) {
+        let height = self
+            .keyboard
+            .occluded(&self.ui)
+            .map_or(0, |covered| covered.height);
+        let want = Rect::new(0, self.nodes.content_bottom, 1, height);
+        if self.ui.layout(pad) == Some(want) {
             return;
         }
-        self.ui.set_layout(form, want);
-        // The reveal that came with the focus ran against the form's old height;
-        // nothing about the focus has changed since, so nothing re-runs it.
+        self.ui.set_layout(pad, want);
+        // The reveal that came with the focus ran before the view had anywhere
+        // to scroll to; nothing about the focus has changed since, so nothing
+        // re-runs it.
         self.ui.reveal_focused();
-    }
-
-    /// A logical measurement in physical pixels.
-    fn px(&self, v: i32) -> i32 {
-        ((v as f32) * self.scale + 0.5) as i32
     }
 
     /// Handles one message. Public so a backend can synthesise one from a key.
@@ -824,43 +846,54 @@ mod tests {
     #[test]
     fn the_last_field_is_readable_with_the_keyboard_up() {
         let mut app = app();
-        let form = app.nodes.form.expect("the form");
+        let view = app.nodes.view.expect("the view");
         let city = app.nodes.fields[3].expect("the city field");
-        let home = app.ui.layout(form).expect("laid out");
+        let grid_before = app
+            .ui
+            .bounds(app.nodes.rows[0])
+            .expect("the first row is placed");
 
         app.ui.focus(Some(city));
         app.handle(0);
         let covered = app.keyboard.occluded(&app.ui).expect("the keyboard is up");
-        let cut = app.ui.layout(form).expect("laid out");
-        assert!(
-            cut.bottom() <= covered.y,
-            "the form still runs under the keyboard: {cut:?} against {covered:?}"
-        );
-
         let bounds = app.ui.bounds(city).expect("the field is placed");
         assert!(
-            bounds.bottom() <= covered.y && bounds.y >= cut.y,
-            "the field is not in what is left of the form: {bounds:?} in {cut:?}"
+            bounds.bottom() <= covered.y,
+            "the field is still under the keyboard: {bounds:?} against {covered:?}"
         );
 
-        // And the form gets its full height back when the keyboard leaves.
+        // The *whole view* moved, not the form alone: the grid on the other
+        // side of the screen came up with it.
+        let grid_after = app
+            .ui
+            .bounds(app.nodes.rows[0])
+            .expect("the first row is placed");
+        assert!(
+            grid_after.y < grid_before.y,
+            "only the form moved; the grid stayed at {} while the form scrolled",
+            grid_before.y
+        );
+        assert!(app.ui.scroll(view).y > 0, "the view did not scroll");
+
+        // And it all goes back when the keyboard leaves.
         app.dismiss_keyboard();
         app.handle(0);
         assert_eq!(
-            app.ui.layout(form),
-            Some(home),
-            "the form stayed cut short with nothing covering it"
+            app.ui.scroll(view),
+            denise::Point::ZERO,
+            "the view stayed up"
         );
+        assert_eq!(app.ui.bounds(app.nodes.rows[0]), Some(grid_before));
     }
 
-    /// The first field is already clear, so nothing scrolls it.
+    /// The first field is already clear, so nothing scrolls.
     ///
-    /// A form that jumped whenever the keyboard appeared would be worse than one
+    /// A view that jumped whenever the keyboard appeared would be worse than one
     /// that never moved: the movement is only justified where it buys something.
     #[test]
     fn a_field_already_clear_of_the_keyboard_is_left_where_it_is() {
         let mut app = app();
-        let form = app.nodes.form.expect("the form");
+        let view = app.nodes.view.expect("the view");
         let name = app.nodes.fields[0].expect("the name field");
         let before = app.ui.bounds(name).expect("the field is placed");
 
@@ -868,9 +901,9 @@ mod tests {
         app.handle(0);
         assert!(app.keyboard_open());
         assert_eq!(
-            app.ui.scroll(form),
+            app.ui.scroll(view),
             denise::Point::ZERO,
-            "the form scrolled for a field that was already visible"
+            "the view scrolled for a field that was already visible"
         );
         assert_eq!(app.ui.bounds(name), Some(before));
     }

@@ -5899,6 +5899,77 @@ fn reveal_focused_with_no_focus_does_nothing() {
     assert_eq!(ui.scroll(viewport), before);
 }
 
+/// Content that shrinks takes the scroll offset down with it.
+///
+/// A viewport left scrolled past its own last child paints a band of nothing
+/// at the bottom, with what used to be above it unreachable. Every way content
+/// shrinks gets there — a section collapsing, a widget hidden, rows taken out
+/// of a list, or an application giving back the room a keyboard was borrowing.
+#[test]
+fn a_viewport_stops_being_scrolled_past_content_that_shrank() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let view = ui
+        .add(root, Panel::default(), Rect::new(0, 0, 200, 100))
+        .expect("view");
+    ui.set_scrollable(view, true);
+    let tall = ui
+        .add(view, Panel::default(), Rect::new(0, 0, 200, 400))
+        .expect("content");
+    ui.tick(0);
+
+    ui.set_scroll(view, Point::new(0, 300));
+    assert_eq!(
+        ui.scroll(view).y,
+        300,
+        "the test needs it scrolled to the end"
+    );
+
+    // The content shrinks to something that fits.
+    ui.set_layout(tall, Rect::new(0, 0, 200, 80));
+    assert_eq!(
+        ui.scroll(view),
+        Point::ZERO,
+        "the viewport is still scrolled past content that now fits"
+    );
+
+    // And a partial shrink clamps to the new end rather than to zero.
+    ui.set_layout(tall, Rect::new(0, 0, 200, 400));
+    ui.set_scroll(view, Point::new(0, 300));
+    ui.set_layout(tall, Rect::new(0, 0, 200, 250));
+    assert_eq!(
+        ui.scroll(view).y,
+        150,
+        "a partial shrink should land on the new last row, not at the top"
+    );
+}
+
+/// Growing content leaves the offset alone.
+///
+/// The clamp is a clamp and not a reset: somebody reading halfway down a page
+/// that gains a paragraph at the bottom stays where they were reading.
+#[test]
+fn content_that_grows_does_not_move_the_scroll() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let view = ui
+        .add(root, Panel::default(), Rect::new(0, 0, 200, 100))
+        .expect("view");
+    ui.set_scrollable(view, true);
+    let tall = ui
+        .add(view, Panel::default(), Rect::new(0, 0, 200, 400))
+        .expect("content");
+    ui.tick(0);
+    ui.set_scroll(view, Point::new(0, 120));
+
+    ui.set_layout(tall, Rect::new(0, 0, 200, 800));
+    assert_eq!(
+        ui.scroll(view).y,
+        120,
+        "growing the content moved the reader"
+    );
+}
+
 /// A repeating button acts on press, not on release.
 ///
 /// It has to: the repeats begin while the finger is still down, so waiting for

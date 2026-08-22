@@ -114,9 +114,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(out) = snapshot {
         let mut app = App::new(size, scale, font, motion);
         if keyboard {
+            // The button moves the caret; the keyboard follows on the next
+            // frame, and a shelf slides. A snapshot has no frames of its own, so
+            // it runs a few.
             app.on_message(Message::ToggleKeyboard);
-            // A shelf slides, and a snapshot has no frames to slide over.
-            app.ui.tick(10_000);
+            for now in [1, 200, 400, 10_000] {
+                app.ui.tick(now);
+                app.handle(now);
+            }
         }
         return write_snapshot(&mut app, size, &out).map_err(Into::into);
     }

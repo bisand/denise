@@ -955,6 +955,40 @@ impl<M: 'static> Ui<M> {
         self.nodes[id].layout = layout;
         self.reflow(root);
         self.damage_subtree(root);
+        // Content that shrank may have left a viewport scrolled past its own
+        // last child, which paints as a band of nothing at the bottom and no
+        // way to reach what is above it — collapse a section, hide a widget,
+        // take rows out of a list, or give back the room an on-screen keyboard
+        // was borrowing. `max_scroll` is computed on demand and was already
+        // right; the stored offset was the stale half.
+        self.clamp_scroll_above(id);
+    }
+
+    /// Re-clamps this node's scroll and every scrollable ancestor's.
+    ///
+    /// Upwards because the node that changed size is the *content*: the
+    /// viewport whose offset is now out of range is one of its parents. Itself
+    /// too, since a node can be both.
+    fn clamp_scroll_above(&mut self, id: NodeId) {
+        let mut next = Some(id);
+        while let Some(current) = next {
+            let Some(node) = self.nodes.get(current) else {
+                return;
+            };
+            next = node.parent;
+            if node.scroll == Point::ZERO {
+                continue;
+            }
+            let limit = self.max_scroll(current);
+            let scroll = self.nodes[current].scroll;
+            let clamped = Point::new(scroll.x.clamp(0, limit.x), scroll.y.clamp(0, limit.y));
+            if clamped != scroll {
+                self.nodes[current].scroll = clamped;
+                let clip = self.nodes[current].clip;
+                self.damage.add(clip);
+                self.reflow(current);
+            }
+        }
     }
 
     /// Carries a node's layout to `to` over `duration_ms`, through the same
