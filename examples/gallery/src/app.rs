@@ -1792,6 +1792,103 @@ mod tests {
         );
     }
 
+    /// The keyboard does not flicker over a scrolled page.
+    ///
+    /// Reported from a Pi: steady at the top of the gallery, violent flicker a
+    /// third of the way down. Both halves matter — whatever is wrong is not
+    /// wrong until something *behind* the keyboard is both animating and
+    /// scrolled under it, which is the spinner once the page has moved.
+    ///
+    /// The check is the one the other repaint tests use: what the panel is
+    /// showing, against what the same tree drawn whole would show.
+    #[test]
+    fn a_scrolled_page_does_not_flicker_under_the_keyboard() {
+        const SIZE: Size = Size::new(1280, 800);
+        const PIXELS: usize = (SIZE.width * SIZE.height) as usize;
+
+        fn paint_into(ui: &mut Ui<Message>, buffer: &mut [u32], age: denise::BufferAge) {
+            let mut frame =
+                denise::Frame::new(buffer, SIZE, SIZE.width, denise::PixelFormat::Xrgb8888, age)
+                    .expect("frame");
+            ui.paint(&mut frame);
+            drop(frame);
+            ui.presented();
+        }
+
+        let mut app = App::new(SIZE, 1.0, None, Motion::default());
+        app.ui.focus(Some(app.nodes.keyboard_field));
+        let mut now = 0;
+        for _ in 0..8 {
+            now += 200;
+            app.ui.tick(now);
+            app.handle(now);
+        }
+        assert!(app.keyboard.is_open(), "the keyboard never came up");
+
+        let range = app.ui.max_scroll(app.nodes.content);
+        assert!(range.y > 0, "the gallery should have somewhere to scroll");
+
+        // Every part of the page, not the one that was reported: nothing below
+        // the first screenful had ever been under this check, so the honest
+        // sweep is the whole scroll range.
+        for tenth in 0..=10 {
+            app.ui
+                .set_scroll(app.nodes.content, Point::new(0, range.y * tenth / 10));
+            app.ui.invalidate_all();
+
+            let mut buffers = [vec![0u32; PIXELS], vec![0u32; PIXELS]];
+            let mut truth = vec![0u32; PIXELS];
+            let mut frame = 0usize;
+
+            // Two settling frames, then the spinner drives the rest.
+            for step in 0..24 {
+                now += 16;
+                app.ui.tick(now);
+                app.handle(now);
+                if !app.ui.needs_paint() {
+                    continue;
+                }
+                let age = if frame < 2 {
+                    denise::BufferAge::Undefined
+                } else {
+                    denise::BufferAge::Frames(2)
+                };
+                let shown = frame % 2;
+                let damage = format!("{:?}", app.ui.damage());
+                paint_into(&mut app.ui, &mut buffers[shown], age);
+                frame += 1;
+                if step < 3 {
+                    continue;
+                }
+
+                app.ui.invalidate_all();
+                paint_into(&mut app.ui, &mut truth, denise::BufferAge::Undefined);
+
+                let covered = app.keyboard.occluded(&app.ui).expect("the keyboard is up");
+                let mut wrong = 0usize;
+                let (mut y0, mut y1) = (i32::MAX, i32::MIN);
+                for (offset, (a, b)) in buffers[shown].iter().zip(truth.iter()).enumerate() {
+                    if a == b {
+                        continue;
+                    }
+                    let y = (offset / SIZE.width as usize) as i32;
+                    wrong += 1;
+                    y0 = y0.min(y);
+                    y1 = y1.max(y);
+                }
+                assert!(
+                    wrong == 0,
+                    "scrolled {}/10 down, frame {frame} at {now} ms: {wrong} stale \
+                 pixels in rows {y0}..={y1}; the keyboard covers rows {}..={}\n\
+                 repainted: {damage}",
+                    tenth,
+                    covered.y,
+                    covered.bottom() - 1,
+                );
+            }
+        }
+    }
+
     /// The field being typed into is not under the keyboard.
     ///
     /// The gallery's content scrolls, but a view ends where its last section

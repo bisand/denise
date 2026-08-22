@@ -1172,3 +1172,75 @@ fn a_key_falls_down_its_list_of_symbols_until_the_font_can_draw_one() {
     );
     assert_eq!(arrows.legend, Some("<-"), "and a word under both");
 }
+
+/// An open keyboard nobody is touching repaints nothing.
+///
+/// Reported as violent flicker on a Pi with the keyboard up. The cause was in
+/// `tick`: collecting what a held key owes went through `Ui::widget_mut`, which
+/// damages the node it hands out — "you asked to change it, so assume you did".
+/// Asking every key every frame therefore damaged all sixty-odd of them, sixty
+/// rectangles overflowed the sixteen the tracker keeps, and the union of them is
+/// the whole keyboard. So the keyboard repainted on every frame anything else
+/// woke the tree for, and whether that landed above or below `Immediate`'s
+/// quarter-of-the-rows threshold decided between a paced flip and an async one
+/// that tears.
+#[test]
+fn an_untouched_keyboard_damages_nothing_per_frame() {
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+    ui.tick(5_000); // past the slide-in
+    ui.presented();
+
+    for step in 1..=8 {
+        let now = 5_000 + step * 16;
+        ui.tick(now);
+        let events = keyboard.tick(&mut ui, now);
+        assert!(events.is_empty(), "nothing is held, so nothing repeats");
+        let damage: Vec<_> = ui.pending_damage().to_vec();
+        assert!(
+            damage.is_empty(),
+            "frame at {now} ms damaged {} rectangles with nobody touching the \
+             keyboard: {damage:?}",
+            damage.len()
+        );
+        ui.presented();
+    }
+}
+
+/// A finger landing between two keys does not dismiss the keyboard.
+///
+/// Reported from the panel: an accidental press in the gap put the keyboard
+/// away. The gaps are the shelf's backdrop, and an ordinary `Panel` is
+/// invisible to hit testing — so the press fell through to the page underneath,
+/// and pressing *that* takes the focus off the field being typed into, which is
+/// what closes a keyboard that follows focus. A near-miss should cost nothing.
+#[test]
+fn a_press_in_the_gap_between_keys_changes_nothing() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    ui.tick(5_000);
+    assert_eq!(ui.focused(), Some(field));
+
+    // Between two keys on the home row: right of one, left of the next.
+    let a = ui.bounds(key_node(&keyboard, KeyCode::A)).expect("bounds");
+    let s = ui.bounds(key_node(&keyboard, KeyCode::S)).expect("bounds");
+    let gap = denise::Point::new((a.right() + s.x) / 2, a.y + a.height / 2);
+    assert!(s.x > a.right(), "the keys should not touch");
+
+    press_at(&mut ui, gap, 5_000);
+    release_at(&mut ui, gap, 5_010);
+
+    assert_eq!(
+        ui.focused(),
+        Some(field),
+        "a press in the gap took the focus off the field"
+    );
+    assert!(keyboard.is_open(), "and put the keyboard away with it");
+    assert!(
+        ui.drain_messages().next().is_none(),
+        "the gap emitted a key press"
+    );
+
+    // And typing still works afterwards.
+    let events = keyboard.press(KeyCode::A);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "a");
+}

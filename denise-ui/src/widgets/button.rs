@@ -183,8 +183,24 @@ impl<M> Button<M> {
     ///
     /// Zero unless [`with_repeat`](Self::with_repeat) was asked for and a finger
     /// has been resting on the button for longer than its delay.
+    ///
+    /// Reach for [`repeats_pending`](Self::repeats_pending) first when polling
+    /// several buttons: taking needs `&mut`, and getting one out of the tree
+    /// costs a repaint of the node whether or not anything had changed.
     pub fn take_repeats(&mut self) -> u32 {
         core::mem::take(&mut self.pending)
+    }
+
+    /// Repeats owed, without taking them.
+    ///
+    /// The read that costs nothing. `Ui::widget_mut` damages the node it hands
+    /// out — it cannot know whether the caller changed anything — so polling a
+    /// keyboard's sixty keys through it repaints the whole keyboard on every
+    /// frame. This is how a caller finds the one key that owes something before
+    /// asking for it mutably.
+    #[inline]
+    pub const fn repeats_pending(&self) -> u32 {
+        self.pending
     }
 
     /// Whether a finger is on it now.

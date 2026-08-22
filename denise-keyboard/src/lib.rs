@@ -529,12 +529,25 @@ impl Keyboard {
         let mut out = Vec::new();
         // Collected by position rather than from one remembered key, because
         // "which key is held" is the tree's fact and not this crate's.
-        let held: Vec<(KeyCode, u32)> = self
+        //
+        // Read first, take second, and the split is not tidiness: `widget_mut`
+        // damages the node it hands out, because it cannot know whether the
+        // caller changed anything. Asking sixty keys mutably once a frame
+        // therefore repainted the whole keyboard on every frame anything else
+        // woke the tree for — which on a panel is a keyboard that flickers.
+        let owed: Vec<(KeyCode, NodeId)> = self
             .keys
             .iter()
-            .filter_map(|&(code, node)| {
-                let button = ui.widget_mut::<Button<M>>(node)?;
-                let repeats = button.take_repeats();
+            .copied()
+            .filter(|&(_, node)| {
+                ui.widget::<Button<M>>(node)
+                    .is_some_and(|button| button.repeats_pending() > 0)
+            })
+            .collect();
+        let held: Vec<(KeyCode, u32)> = owed
+            .into_iter()
+            .filter_map(|(code, node)| {
+                let repeats = ui.widget_mut::<Button<M>>(node)?.take_repeats();
                 (repeats > 0).then_some((code, repeats))
             })
             .collect();
@@ -830,13 +843,18 @@ impl Keyboard {
         // between the keys — which on a browser is a paragraph of text running
         // between the rows. Added before the keys so it paints behind them.
         //
+        // A *backdrop* and not an ordinary panel, which is what stops a finger
+        // landing in the gap between two keys from falling through to the page
+        // and taking the focus with it — a near-miss used to dismiss the whole
+        // keyboard.
+        //
         // `Base300` rather than `Base200`, which is two steps from the keys
         // rather than one: at one step a light theme's keys barely lift off the
         // deck and the whole thing reads as a flat grey slab. The dark themes
         // were always fine; this is the light one catching up.
         ui.add(
             shelf,
-            Panel::filled(Role::Base300),
+            Panel::filled(Role::Base300).backdrop(),
             Rect::new(0, 0, width, self.height()),
         );
 

@@ -1174,6 +1174,21 @@ impl<M: 'static> Ui<M> {
     /// cannot see what you did through the `&mut`. The cost of being conservative
     /// is repainting one widget; the cost of being clever would be the class of bug
     /// this whole design exists to remove.
+    ///
+    /// # Do not poll with it
+    ///
+    /// "Repainting one widget" is the cost of *one* call. Calling it over many
+    /// nodes every frame to see whether any of them has something for you costs
+    /// a repaint of all of them, every frame — and past
+    /// [`MAX_DAMAGE_RECTS`](denise::MAX_DAMAGE_RECTS) rectangles the tracker
+    /// collapses to their bounding box, so the answer is not even "sixty small
+    /// repaints" but one large one.
+    ///
+    /// This is not hypothetical: it is how the on-screen keyboard came to
+    /// repaint itself on every frame anything else woke the tree for, which on a
+    /// panel showed up as a keyboard that flickers. Read through
+    /// [`widget`](Ui::widget) to find the node worth writing to, and use this on
+    /// that one.
     pub fn widget_mut<W: Widget<M>>(&mut self, id: NodeId) -> Option<&mut W> {
         let clip = self.nodes.get(id)?.clip;
         self.damage.add(clip);
