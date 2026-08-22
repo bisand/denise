@@ -528,7 +528,7 @@ mod app {
     fn open_display() -> Result<Display, String> {
         let mut last = String::new();
         for attempt in 0..40 {
-            match Display::open(PresentMode::Immediate) {
+            match Display::open(PresentMode::Vsync) {
                 Ok(display) => return Ok(display),
                 Err(e) => {
                     last = e;

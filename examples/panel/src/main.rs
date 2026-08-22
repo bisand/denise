@@ -337,9 +337,12 @@ mod app {
             .and_then(|a| a.parse().ok())
             .unwrap_or(120)
             .clamp(1, 3600);
+        // Vsync by default, measured on a Pi 3: the vc4's async flips tear
+        // visibly enough to read as flicker. `immediate` asks for the latency
+        // back.
         let requested = match std::env::args().nth(2).as_deref() {
-            Some("vsync") | Some("tearfree") => PresentMode::Vsync,
-            _ => PresentMode::Immediate,
+            Some("immediate") | Some("tearing") => PresentMode::Immediate,
+            _ => PresentMode::Vsync,
         };
 
         let mut surface = Display::open(requested)?;

@@ -754,7 +754,13 @@ const COMPOSE: [(char, char, char); 118] = [
 ];
 
 /// Where a layout choice came from, for logging what a panel actually picked up.
+///
+/// `#[non_exhaustive]`, because the list of places a system might record its
+/// keyboard grows: this release already added [`Unknown`](Self::Unknown) and
+/// broke every exhaustive `match` on it. A wildcard arm now means the next one
+/// costs nobody a compile error.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LayoutSource {
     /// The `DENISE_KEYMAP` environment variable.
     Denise,

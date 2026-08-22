@@ -20,7 +20,7 @@ use crate::{Hello, Message};
 const SHOT_PATH: &str = "/tmp/denise-hello.ppm";
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut surface = Display::open(PresentMode::Immediate)?;
+    let mut surface = Display::open(PresentMode::Vsync)?;
     let size = surface.size();
     let (mut input, _keymap) = open_input(size)?;
     // Held for the whole run: dropping it puts the console back as it was.

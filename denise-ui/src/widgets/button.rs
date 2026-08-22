@@ -2,7 +2,7 @@
 
 use alloc::string::String;
 
-use denise::{ElementState, InputEvent, KeyCode, Radius, Role};
+use denise::{ElementState, InputEvent, KeyCode, Radius, Rect, Role};
 use denise_render::Canvas;
 use denise_text::TextStyle;
 
@@ -33,6 +33,8 @@ pub struct Button<M> {
     counted: u32,
     /// Repeats owed to whoever asks next.
     pending: u32,
+    /// A small second label in the top-right corner. Empty for most buttons.
+    corner: String,
 }
 
 /// A button's press-and-hold schedule.
@@ -71,6 +73,7 @@ impl<M> Button<M> {
             held_since: None,
             counted: 0,
             pending: 0,
+            corner: String::new(),
         }
     }
 
@@ -88,6 +91,7 @@ impl<M> Button<M> {
             held_since: None,
             counted: 0,
             pending: 0,
+            corner: String::new(),
         }
     }
 
@@ -147,12 +151,56 @@ impl<M> Button<M> {
         self
     }
 
+    /// A small second label in the top-right corner.
+    ///
+    /// What a key on a real keyboard has printed above the character it types:
+    /// the `!` over the `1`, the `?` over the `+`. It says what the *other*
+    /// state of this button would give, which is the whole reason a keyboard
+    /// prints it — you cannot discover Shift by pressing Shift if pressing it
+    /// is what changes the legend.
+    ///
+    /// Drawn at two thirds the label's size in the same content colour, so it
+    /// reads as an annotation rather than as a second button. Empty is the
+    /// normal case and costs nothing.
+    #[must_use]
+    pub fn with_corner(mut self, corner: impl Into<String>) -> Self {
+        self.corner = corner.into();
+        self
+    }
+
+    /// Replaces the corner label.
+    pub fn set_corner(&mut self, corner: impl Into<String>) {
+        self.corner = corner.into();
+    }
+
+    /// What is printed in the corner, if anything.
+    #[inline]
+    pub fn corner(&self) -> &str {
+        &self.corner
+    }
+
     /// Repeats owed since this was last called, and clears the tally.
     ///
     /// Zero unless [`with_repeat`](Self::with_repeat) was asked for and a finger
     /// has been resting on the button for longer than its delay.
+    ///
+    /// Reach for [`repeats_pending`](Self::repeats_pending) first when polling
+    /// several buttons: taking needs `&mut`, and getting one out of the tree
+    /// costs a repaint of the node whether or not anything had changed.
     pub fn take_repeats(&mut self) -> u32 {
         core::mem::take(&mut self.pending)
+    }
+
+    /// Repeats owed, without taking them.
+    ///
+    /// The read that costs nothing. `Ui::widget_mut` damages the node it hands
+    /// out — it cannot know whether the caller changed anything — so polling a
+    /// keyboard's sixty keys through it repaints the whole keyboard on every
+    /// frame. This is how a caller finds the one key that owes something before
+    /// asking for it mutably.
+    #[inline]
+    pub const fn repeats_pending(&self) -> u32 {
+        self.pending
     }
 
     /// Whether a finger is on it now.
@@ -244,12 +292,56 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         if ctx.state.contains(VisualState::FOCUSED) {
             focus_ring(ctx.theme, ctx.bounds, radius, canvas);
         }
+        // The corner first, so that a label wide enough to reach it is drawn
+        // over the annotation rather than under it — the character somebody is
+        // about to type matters more than the one they are not.
+        if !self.corner.is_empty() {
+            let size = (i32::from(self.style.size_px) * 2 / 3).max(1) as u16;
+            let small = TextStyle {
+                size_px: size,
+                ..self.style
+            };
+            let pad = i32::from(size) / 3;
+            let corner = Rect::new(
+                ctx.bounds.x,
+                ctx.bounds.y + pad,
+                (ctx.bounds.width - pad).max(0),
+                i32::from(size) + pad,
+            );
+            draw_aligned(
+                canvas,
+                ctx.text,
+                small,
+                corner,
+                (Align::End, Align::Start),
+                &self.corner,
+                content,
+            );
+        }
+        // The label sits low when something shares the key with it, so the two
+        // do not collide and the row of characters still reads as a row.
+        let vertical = if self.corner.is_empty() {
+            Align::Center
+        } else {
+            Align::End
+        };
+        let inset = if self.corner.is_empty() {
+            ctx.bounds
+        } else {
+            let pad = i32::from(self.style.size_px) / 4;
+            Rect::new(
+                ctx.bounds.x,
+                ctx.bounds.y,
+                ctx.bounds.width,
+                (ctx.bounds.height - pad).max(0),
+            )
+        };
         draw_aligned(
             canvas,
             ctx.text,
             self.style,
-            ctx.bounds,
-            (Align::Center, Align::Center),
+            inset,
+            (Align::Center, vertical),
             &self.label,
             content,
         );

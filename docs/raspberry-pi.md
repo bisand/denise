@@ -519,9 +519,9 @@ browser, the gallery and the table editor all take it.
 
 Three things worth knowing before it is on a wall:
 
-- **It is 330 logical pixels tall**, six rows of 48. That is a third of a 1080p
-  panel and two thirds of an 800×480 one, so on a short display expect it to be
-  the larger half of the screen.
+- **It is 276 logical pixels tall**, five rows of 48. That is a quarter of a
+  1080p panel and rather over half of an 800×480 one, so on a short display
+  expect it to take a real bite out of the screen.
 - **`--scale` applies to it.** The grid is written in logical pixels like every
   other layout in these examples, so a 2× panel gets fingertip-sized keys rather
   than 48 device pixels of them.
@@ -532,6 +532,35 @@ Three things worth knowing before it is on a wall:
   nothing when nobody is touching it: the key asks to be woken only between its
   press and its release, so an idle panel with the keyboard on screen schedules
   no wakes at all.
+- **It draws symbols where the font has them.** `⌫`, `⇥`, `⏎` and the cursor
+  triangles come out as glyphs with `font-dejavu` installed and as words
+  without, because the keyboard asks the font rather than assuming. A stock
+  Alpine root has no fonts at all, and its fallback face carries twenty-three
+  non-ASCII characters, none of them an arrow.
+
+### If the panel flickers
+
+Two different faults look identical from in front of a panel, and it is worth
+knowing which one you have before changing anything. A **tear** is one frame
+torn across a seam; a **stale buffer** is two frames alternating.
+
+```console
+$ denise-gallery --present immediate    # the async flip, tearing possible
+$ denise-gallery --present vsync        # paced by vblank, tearing impossible
+```
+
+**Vsync is the default** as of 0.16, measured on a Pi 3 A+: the vc4's async
+flips tear visibly enough to read as flicker, and a panel is read rather than
+aimed at — the 17 ms a paced flip costs is invisible where a tear is not.
+`--present immediate` asks for the latency back.
+
+If `vsync` does *not* remove it, the flip was never involved and the damage is
+wrong somewhere. That is a bug, and the shape of it is a region repainting when
+nothing in it changed. The on-screen keyboard had exactly that before 0.16 —
+collecting what a held key owed went through `Ui::widget_mut`, which damages
+whatever it hands out, so asking sixty keys once a frame repainted the whole
+keyboard on every frame. Both halves were real on this hardware: the repaint bug
+did most of the flicker and the flip did the rest.
 
 ## Taking a screenshot with no desktop
 
