@@ -22,6 +22,7 @@ pub struct Button<M> {
     role: Role,
     radius: Radius,
     style: TextStyle,
+    no_focus: bool,
 }
 
 impl<M> Button<M> {
@@ -33,6 +34,7 @@ impl<M> Button<M> {
             role: Role::Primary,
             radius: Radius::Field,
             style: TextStyle::built_in(16),
+            no_focus: false,
         }
     }
 
@@ -45,7 +47,35 @@ impl<M> Button<M> {
             role: Role::Primary,
             radius: Radius::Field,
             style: TextStyle::built_in(16),
+            no_focus: false,
         }
+    }
+
+    /// Presses without touching focus: the button takes none, and costs none.
+    ///
+    /// An ordinary button takes focus when pressed, which is right for a button
+    /// somebody tabs to and wrong for a key on an on-screen keyboard — that key
+    /// is pressed *while* a field is being typed into, and the field has to keep
+    /// the caret. Making the key merely unfocusable is not enough either, since
+    /// pressing an unfocusable node is what drops focus and commits a field.
+    ///
+    /// So this asks for neither. The button still presses, still paints pressed,
+    /// still emits its message; Tab skips it, and the focus ring never moves.
+    ///
+    /// ```
+    /// # use denise::{Rect, Size, theme};
+    /// # use denise_ui::{Ui, widgets::{Button, TextInput}};
+    /// # #[derive(Clone, Debug)] enum Msg { Key(char) }
+    /// # let mut ui: Ui<Msg> = Ui::new(Size::new(800, 480), theme::DARK);
+    /// # let root = ui.root();
+    /// # let field = ui.add(root, TextInput::new(), Rect::new(0, 0, 200, 40)).unwrap();
+    /// # ui.focus(Some(field));
+    /// ui.add(root, Button::new("q", Msg::Key('q')).no_focus(), Rect::new(0, 100, 40, 40));
+    /// assert_eq!(ui.focused(), Some(field));
+    /// ```
+    pub fn no_focus(mut self) -> Self {
+        self.no_focus = true;
+        self
     }
 
     /// Sets the colour role. The content colour comes from the theme's pairing, so
@@ -176,6 +206,10 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     }
 
     fn focusable(&self) -> bool {
-        true
+        !self.no_focus
+    }
+
+    fn preserves_focus(&self) -> bool {
+        self.no_focus
     }
 }

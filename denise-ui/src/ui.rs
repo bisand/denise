@@ -1890,8 +1890,18 @@ impl<M: 'static> Ui<M> {
             Some(id) => {
                 self.set_state(id, VisualState::PRESSED, true);
                 self.set_hovered(Some(id));
-                let focus = self.is_focusable(id).then_some(id);
-                self.set_focus(focus);
+                // A widget that preserves focus is asking to be pressed without
+                // being noticed by the focus ring at all — neither taking it nor
+                // clearing it, which is what a keyboard key needs while the field
+                // it types into stays live.
+                if !self
+                    .nodes
+                    .get(id)
+                    .is_some_and(|node| node.widget.preserves_focus())
+                {
+                    let focus = self.is_focusable(id).then_some(id);
+                    self.set_focus(focus);
+                }
                 self.dispatch(id, &Event::Input(event));
             }
             // Clicking the background drops focus, which is what makes a text
