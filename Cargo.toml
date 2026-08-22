@@ -38,7 +38,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.16.0"
+version = "0.17.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -47,22 +47,22 @@ repository = "https://github.com/bisand/denise"
 homepage = "https://github.com/bisand/denise"
 
 [workspace.dependencies]
-denise = { version = "0.16.0", path = "denise", default-features = false }
-denise-activex = { version = "0.16.0", path = "denise-activex" }
-denise-drm = { version = "0.16.0", path = "denise-drm" }
-denise-evdev = { version = "0.16.0", path = "denise-evdev" }
-denise-fbdev = { version = "0.16.0", path = "denise-fbdev" }
-denise-ffi = { version = "0.16.0", path = "denise-ffi" }
-denise-image = { version = "0.16.0", path = "denise-image", default-features = false }
-denise-keyboard = { version = "0.16.0", path = "denise-keyboard" }
-denise-layout = { version = "0.16.0", path = "denise-layout" }
-denise-macos = { version = "0.16.0", path = "denise-macos" }
-denise-render = { version = "0.16.0", path = "denise-render", default-features = false }
-denise-text = { version = "0.16.0", path = "denise-text", default-features = false }
-denise-ui = { version = "0.16.0", path = "denise-ui", default-features = false }
-denise-video = { version = "0.16.0", path = "denise-video" }
-denise-win32 = { version = "0.16.0", path = "denise-win32" }
-denise-winit = { version = "0.16.0", path = "denise-winit" }
+denise = { version = "0.17.0", path = "denise", default-features = false }
+denise-activex = { version = "0.17.0", path = "denise-activex" }
+denise-drm = { version = "0.17.0", path = "denise-drm" }
+denise-evdev = { version = "0.17.0", path = "denise-evdev" }
+denise-fbdev = { version = "0.17.0", path = "denise-fbdev" }
+denise-ffi = { version = "0.17.0", path = "denise-ffi" }
+denise-image = { version = "0.17.0", path = "denise-image", default-features = false }
+denise-keyboard = { version = "0.17.0", path = "denise-keyboard" }
+denise-layout = { version = "0.17.0", path = "denise-layout" }
+denise-macos = { version = "0.17.0", path = "denise-macos" }
+denise-render = { version = "0.17.0", path = "denise-render", default-features = false }
+denise-text = { version = "0.17.0", path = "denise-text", default-features = false }
+denise-ui = { version = "0.17.0", path = "denise-ui", default-features = false }
+denise-video = { version = "0.17.0", path = "denise-video" }
+denise-win32 = { version = "0.17.0", path = "denise-win32" }
+denise-winit = { version = "0.17.0", path = "denise-winit" }
 
 drm = "0.15"
 evdev = "0.13"
