@@ -116,12 +116,37 @@ has is on a key.
 
 ## Modifiers
 
-Shift cycles — off, once, locked — because there is no clock in the press path
-and a double-tap window needs one. The key says which state it is in.
+Shift is a one-shot: armed by a tap, spent by the next key. There is no clock
+in the press path, so there is no double-tap window to latch it with — and none
+is wanted, because Caps Lock has a key of its own where Caps Lock goes.
 
-`Locked` is Caps Lock rather than a held Shift: it applies to letters and
-spares the digit row, which is the difference between a locked keyboard typing
-`1` and typing `!`.
+Caps is a latch and not a held Shift: it applies to letters and spares the digit
+row, which is the difference between a locked keyboard typing `1` and typing
+`!`, and caps plus shift gives lower case the way a hand expects. The
+`Composer` modelled that already, so it is latched with a `CapsLock` key rather
+than reimplemented here.
+
+Ctrl is a one-shot too, and reaches the events it modifies — so a binding on
+Ctrl+something fires from this keyboard as it would from a real one.
+
+Every key that changes what the *next* press means says which state it is in:
+`shift` becomes `SHIFT`, `caps` becomes `CAPS`, `ctrl` becomes `CTRL`.
+
+## Two legends on a key
+
+Numbers and punctuation carry what Shift would give, small in the top-right
+corner: the `!` over the `1`, the `?` over the `+`. That is the whole reason a
+real keyboard prints it — you cannot discover Shift by pressing Shift, since
+pressing it is what changes the legend.
+
+Letters do not. A capital `Q` over a `q` is not news, and forty keys each
+carrying a second glyph is a keyboard that reads as noise. The corner also goes
+away while Shift is held, because the main legend has already become the
+shifted character.
+
+`Button::with_corner` is where it lives — a small second label in the top-right
+corner, which is a button idea rather than a keyboard one: a stepper or a
+shortcut button wants the same thing.
 
 The third level is the layout's own `AltGr`, not a page of symbols chosen here
 — `@` is `AltGr`+`2` on Norwegian and `Shift`+`2` on US, so a fixed grid would

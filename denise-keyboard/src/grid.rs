@@ -29,6 +29,7 @@
 //! key nobody can read.
 
 use denise::KeyCode;
+use denise_text::{FontId, TextEngine};
 
 use crate::LAYOUT_KEY as LAYOUT;
 
@@ -40,6 +41,20 @@ pub struct Key {
     /// A fixed legend, for keys whose meaning is not a character the layout
     /// knows about. `None` means "ask the layout".
     pub legend: Option<&'static str>,
+    /// Symbols to prefer over the word, best first.
+    ///
+    /// A keyboard says `⌫` and not "back" when it can. It can only do that when
+    /// the font actually carries the glyph, and fonts disagree about which of
+    /// these they have: DejaVu — what a Pi gets from `font-dejavu` — carries
+    /// every one of them bar `⎋`, Arial carries the arrows and none of the
+    /// keyboard symbols, and the face that ships with `denise-render` carries
+    /// twenty-three non-ASCII characters of which not one is either.
+    ///
+    /// So this is a list and not a choice: the first glyph the loaded font can
+    /// actually draw wins, and the word is what is left when none of them can.
+    /// On a stock Alpine root with no fonts at all, that word is not a stylistic
+    /// preference — it is the difference between a legible key and a box.
+    pub symbols: &'static [&'static str],
     /// Width, in half-widths of an ordinary letter key.
     ///
     /// Halves rather than whole keys because the useful sizes are not multiples
@@ -64,6 +79,7 @@ impl Key {
         Self {
             code,
             legend: None,
+            symbols: &[],
             units: LETTER,
             repeats: false,
         }
@@ -74,6 +90,7 @@ impl Key {
         Self {
             code,
             legend: Some(legend),
+            symbols: &[],
             units,
             repeats: false,
         }
@@ -82,6 +99,12 @@ impl Key {
     /// The same key, repeating while it is held.
     const fn repeating(mut self) -> Self {
         self.repeats = true;
+        self
+    }
+
+    /// The same key, drawn as the first of `symbols` the font can render.
+    const fn symbolic(mut self, symbols: &'static [&'static str]) -> Self {
+        self.symbols = symbols;
         self
     }
 }
@@ -115,7 +138,9 @@ const DIGITS: [Key; 14] = [
     Key::new(KeyCode::Equal),
     // Where every keyboard puts it, and where a hand reaching to correct a typo
     // already goes.
-    Key::wide(KeyCode::Backspace, "back", LETTER * 2).repeating(),
+    Key::wide(KeyCode::Backspace, "back", LETTER * 2)
+        .symbolic(&["\u{232b}"])
+        .repeating(),
 ];
 
 // Tab opens the second row, as it does on a real one. It is here because a form
@@ -124,7 +149,7 @@ const DIGITS: [Key; 14] = [
 // with. `BracketLeft` carries å on Norwegian and `BracketRight` the diaeresis
 // that makes ö and ñ reachable.
 const TOP: [Key; 14] = [
-    Key::wide(KeyCode::Tab, "tab", LETTER * 3 / 2),
+    Key::wide(KeyCode::Tab, "tab", LETTER * 3 / 2).symbolic(&["\u{21e5}"]),
     Key::new(KeyCode::Q),
     Key::new(KeyCode::W),
     Key::new(KeyCode::E),
@@ -140,19 +165,15 @@ const TOP: [Key; 14] = [
     Key::new(KeyCode::Backslash),
 ];
 
-// The layout key takes the slot Caps Lock has on the keyboards this is shaped
-// after. Caps itself does not need one: Shift here cycles off, once, locked, so
-// a separate Caps key would be a second way to reach a state that already has
-// one. `Semicolon` and `Quote` carry ø and æ on Norwegian and `;` and `'` on
+// Caps Lock where Caps Lock goes. It is a latch of its own rather than a third
+// state of Shift, which is how the keyboards this is shaped after do it and how
+// the composer already modelled it — Shift is then simply a one-shot, and the
+// two together behave the way a hand expects: caps on plus shift gives lower
+// case. `Semicolon` and `Quote` carry ø and æ on Norwegian and `;` and `'` on
 // US — the position is the same, only the legend moves — and Enter closes the
 // row they are on, which is where a hand looks for it.
 const HOME: [Key; 13] = [
-    Key {
-        code: LAYOUT,
-        legend: None,
-        units: LETTER * 2,
-        repeats: false,
-    },
+    Key::wide(KeyCode::CapsLock, "caps", LETTER * 2),
     Key::new(KeyCode::A),
     Key::new(KeyCode::S),
     Key::new(KeyCode::D),
@@ -164,7 +185,7 @@ const HOME: [Key; 13] = [
     Key::new(KeyCode::L),
     Key::new(KeyCode::Semicolon),
     Key::new(KeyCode::Quote),
-    Key::wide(KeyCode::Enter, "enter", LETTER * 2),
+    Key::wide(KeyCode::Enter, "enter", LETTER * 2).symbolic(&["\u{23ce}"]),
 ];
 
 // Shift at both ends, as on both references. They are the same position and do
@@ -184,19 +205,37 @@ const BOTTOM: [Key; 12] = [
     Key::wide(KeyCode::ShiftLeft, "shift", LETTER * 5 / 2),
 ];
 
-// Escape is how a panel with no other keyboard puts this one away, and the
-// arrows are so that correcting the middle of an address does not mean retyping
-// its tail. `<-` and `->` rather than `<` and `>`, which on a Norwegian layout
-// are characters a key can type — and rather than the references' `◀ ▶`, which
-// draw as tofu on a stock Alpine with no fonts installed.
-const SPACE_ROW: [Key; 5] = [
+// Ctrl, Alt, the layout key, space, the arrows, and the key that puts the
+// keyboard away — in that order, which is the order the keyboards this is
+// shaped after use.
+//
+// The layout key lives here rather than in the Caps slot for the same reason
+// those keyboards put it here: it is a *setting*, pressed once in the life of a
+// panel, and a setting does not belong under the left hand's home position.
+//
+// Escape ends the row because that is where a soft keyboard puts the key that
+// dismisses it. It is a real `Escape` and not a private dismiss signal, so a
+// field that wants to cancel on Escape still hears one.
+//
+// `<-` and `->` rather than `<` and `>`, which on a Norwegian layout are
+// characters a key can type — and rather than the references' `◀ ▶`, which draw
+// as tofu on a stock Alpine with no fonts installed.
+const SPACE_ROW: [Key; 7] = [
+    // Legends for these two come from the keyboard's state rather than the
+    // layout: the key says what it will do next, not what it types.
+    Key::wide(KeyCode::ControlLeft, "ctrl", LETTER * 3 / 2),
+    Key::wide(KeyCode::AltRight, "alt", LETTER * 3 / 2),
+    Key {
+        code: LAYOUT,
+        legend: None,
+        symbols: &[],
+        units: LETTER * 2,
+        repeats: false,
+    },
+    Key::wide(KeyCode::Space, " ", LETTER * 6),
+    Key::wide(KeyCode::ArrowLeft, "<-", LETTER).symbolic(&["\u{25c0}", "\u{2190}"]),
+    Key::wide(KeyCode::ArrowRight, "->", LETTER).symbolic(&["\u{25b6}", "\u{2192}"]),
     Key::wide(KeyCode::Escape, "esc", LETTER * 2),
-    // The third level, whose legend comes from the keyboard's state rather than
-    // the layout: the key says what it will do next, not what it types.
-    Key::wide(KeyCode::AltRight, "alt", LETTER * 2),
-    Key::wide(KeyCode::Space, " ", LETTER * 9),
-    Key::wide(KeyCode::ArrowLeft, "<-", LETTER * 3 / 2),
-    Key::wide(KeyCode::ArrowRight, "->", LETTER * 3 / 2),
 ];
 
 /// The grid, top row first.
@@ -213,8 +252,31 @@ pub static ROWS: [Row; 5] = [
 /// Keys that type nothing carry their own words; everything else asks the
 /// layout, and the answer changes with the shift level.
 pub(crate) fn legend_of(code: KeyCode) -> Option<&'static str> {
+    entry(code).and_then(|key| key.legend)
+}
+
+/// The fixed legend, preferring the symbol where the font can draw it.
+///
+/// `⌫` beats "back" on any panel whose font has the glyph, and the word beats a
+/// missing-character box on one whose font does not. Asking rather than
+/// assuming is the whole point, and the answers really do differ: a stock
+/// Alpine root has no fonts at all and falls back to a face carrying no symbol
+/// on this list; the same panel with `font-dejavu` draws every one of them; and
+/// a Mac's Arial has the arrows but neither triangle. Each key names its
+/// preferences in order, so the panel gets `◀`, the Mac gets `←`, and a machine
+/// with nothing gets `<-`.
+pub(crate) fn legend_in(code: KeyCode, engine: &TextEngine, font: FontId) -> Option<&'static str> {
+    let key = entry(code)?;
+    key.symbols
+        .iter()
+        .copied()
+        .find(|symbol| symbol.chars().all(|ch| engine.font_contains(font, ch)))
+        .or(key.legend)
+}
+
+/// The grid entry for a position.
+fn entry(code: KeyCode) -> Option<&'static Key> {
     ROWS.iter()
         .flat_map(|row| row.keys)
         .find(|key| key.code == code)
-        .and_then(|key| key.legend)
 }

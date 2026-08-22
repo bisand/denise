@@ -130,6 +130,22 @@ impl TextEngine {
         self.sources.get(font.0 as usize).map(|s| s.name())
     }
 
+    /// Whether a registered font has a glyph of its own for `ch`.
+    ///
+    /// The question an application asks before *choosing* what to draw: a
+    /// keyboard that would like `⌫` on its Backspace key, a status line that
+    /// would like `°`. Drawing a character the font lacks is not an error — it
+    /// comes out as the missing-character box — so this is what turns a silent
+    /// row of tofu into a legible fallback the author picked.
+    ///
+    /// `false` for an unregistered id, and for a font that can only render `ch`
+    /// through shaping — see [`GlyphSource::glyph_id`].
+    pub fn font_contains(&self, font: FontId, ch: char) -> bool {
+        self.sources
+            .get(font.0 as usize)
+            .is_some_and(|s| s.contains(ch))
+    }
+
     /// The glyph cache.
     #[inline]
     pub const fn atlas(&self) -> &GlyphAtlas {

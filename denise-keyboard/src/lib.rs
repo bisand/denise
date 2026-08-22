@@ -31,15 +31,21 @@
 //!
 //! # Modifiers
 //!
-//! Shift cycles rather than latching on a double tap: off, once, locked. There
-//! is no clock in the press path and threading a timestamp through every key to
-//! serve one of them is a poor trade, so the key says which state it is in and
-//! a tap moves to the next.
+//! Shift is a one-shot: armed by a tap and spent by the next key. There is no
+//! clock in the press path, so no double-tap window could latch it — and none
+//! is wanted, because Caps Lock has a key of its own where Caps Lock goes.
 //!
-//! `Locked` is Caps Lock and not a held Shift — it applies to letters and
-//! leaves the digit row alone, which is the difference between a locked
-//! keyboard typing `1` and typing `!`. The [`Composer`] models that already, so
-//! it is latched with a `CapsLock` key rather than reimplemented here.
+//! Caps is a latch and not a held Shift: it applies to letters and leaves the
+//! digit row alone, which is the difference between a locked keyboard typing
+//! `1` and typing `!`, and caps over shift gives lower case the way a hand
+//! expects. The [`Composer`] models that already, so it is latched with a
+//! `CapsLock` key rather than reimplemented here. Ctrl is a one-shot too, and
+//! reaches the events it modifies.
+//!
+//! Every key that changes what the *next* press means says which state it is
+//! in, and the number and punctuation keys carry what Shift would give in a
+//! small second legend — the `!` over the `1`. Letters do not: a capital `Q`
+//! over a `q` is not news.
 //!
 //! The third level is the layout's own `AltGr` rather than a page of symbols
 //! chosen here, because there is no such page to choose: `@` is `AltGr`+`2` on a
@@ -164,9 +170,6 @@ pub enum Shift {
     Off,
     /// The next character is shifted, and then this releases.
     Once,
-    /// Every letter is shifted until this is turned off. Caps Lock, and like
-    /// Caps Lock it leaves the digit row alone.
-    Locked,
 }
 
 impl Shift {
@@ -176,7 +179,6 @@ impl Shift {
         match self {
             Shift::Off => "shift",
             Shift::Once => "SHIFT",
-            Shift::Locked => "CAPS",
         }
     }
 
@@ -185,16 +187,15 @@ impl Shift {
     const fn next(self) -> Self {
         match self {
             Shift::Off => Shift::Once,
-            Shift::Once => Shift::Locked,
-            Shift::Locked => Shift::Off,
+            Shift::Once => Shift::Off,
         }
     }
 
     /// Whether Shift itself is held for the next press.
     ///
-    /// `Locked` is **not** included: Caps Lock is not a held Shift, and treating
-    /// it as one is the bug that makes a locked keyboard type `!` for `1`. The
-    /// composer models it properly, latched by a `CapsLock` key, and applies it
+    /// Caps Lock is deliberately not part of this. It is not a held Shift —
+    /// treating it as one is the bug that makes a locked keyboard type `!` for
+    /// `1` — and it now has a key of its own, latched in the composer, applying
     /// to letters only.
     #[inline]
     const fn holds_shift(self) -> bool {
@@ -214,6 +215,8 @@ pub struct Keyboard {
     modifiers: Modifiers,
     shift: Shift,
     level3: bool,
+    /// Ctrl armed for the next key. One-shot, like Shift.
+    ctrl: bool,
     shelf: Option<NodeId>,
     keys: Vec<(KeyCode, NodeId)>,
     scale: f32,
@@ -232,6 +235,7 @@ impl Keyboard {
             modifiers: Modifiers::NONE,
             shift: Shift::Off,
             level3: false,
+            ctrl: false,
             shelf: None,
             keys: Vec::new(),
             scale: 1.0,
@@ -469,6 +473,16 @@ impl Keyboard {
                 self.relabel(ui);
                 Vec::new()
             }
+            KeyCode::CapsLock => {
+                self.tap_caps();
+                self.relabel(ui);
+                Vec::new()
+            }
+            KeyCode::ControlLeft => {
+                self.tap_ctrl();
+                self.relabel(ui);
+                Vec::new()
+            }
             KeyCode::AltRight => {
                 self.tap_level3();
                 self.relabel(ui);
@@ -479,11 +493,11 @@ impl Keyboard {
                 Vec::new()
             }
             _ => {
-                let was_once = self.shift == Shift::Once;
+                let spent = self.shift == Shift::Once || self.ctrl;
                 let events = self.press(code);
-                // A one-shot shift has just been spent, so the keys have to stop
-                // claiming they are still shifted.
-                if was_once {
+                // A one-shot modifier has just been spent, so the keys have to
+                // stop claiming it is still armed.
+                if spent {
                     self.relabel(ui);
                 }
                 events
@@ -583,12 +597,13 @@ impl Keyboard {
                 out.push(InputEvent::Text { ch });
             }
         }
-        // A one-shot shift is spent on the character it shifted. Doing this
+        // A one-shot modifier is spent on the character it modified. Doing this
         // after the feed rather than before is what makes it apply to exactly
         // one key.
         if self.shift == Shift::Once {
             self.shift = Shift::Off;
         }
+        self.ctrl = false;
         out
     }
 
@@ -597,18 +612,45 @@ impl Keyboard {
     /// Returns the state it moved to. The caller relabels with
     /// [`Keyboard::relabel`] — or lets [`Keyboard::press_key`] do both.
     pub fn tap_shift(&mut self) -> Shift {
-        let was_locked = self.shift == Shift::Locked;
         self.shift = self.shift.next();
-        let locked = self.shift == Shift::Locked;
-        if locked != was_locked {
-            // The composer latches Caps Lock from the key stream, exactly as it
-            // does for a real one, so it is told the same way.
-            self.composer
-                .feed(KeyCode::CapsLock, ElementState::Down, self.modifiers());
-            self.composer
-                .feed(KeyCode::CapsLock, ElementState::Up, self.modifiers());
-        }
         self.shift
+    }
+
+    /// Caps Lock on or off. Returns the state it moved to.
+    ///
+    /// A latch of its own rather than a third state of Shift, which is what a
+    /// real keyboard does and what the composer already modelled: it applies to
+    /// letters and spares the digit row, so a locked keyboard types `1` and not
+    /// `!`. Told through the key stream, exactly as a real Caps Lock reaches it.
+    pub fn tap_caps(&mut self) -> bool {
+        let modifiers = self.modifiers();
+        self.composer
+            .feed(KeyCode::CapsLock, ElementState::Down, modifiers);
+        self.composer
+            .feed(KeyCode::CapsLock, ElementState::Up, modifiers);
+        self.composer.caps_lock()
+    }
+
+    /// Whether Caps Lock is on.
+    #[inline]
+    pub fn caps(&self) -> bool {
+        self.composer.caps_lock()
+    }
+
+    /// Ctrl for the next key, on or off. Returns the state it moved to.
+    ///
+    /// One-shot like Shift, and spent by the next key that types: a modifier
+    /// that stayed on would be a keyboard that could not type a plain letter
+    /// again without somebody noticing why.
+    pub fn tap_ctrl(&mut self) -> bool {
+        self.ctrl = !self.ctrl;
+        self.ctrl
+    }
+
+    /// Whether Ctrl is armed for the next key.
+    #[inline]
+    pub const fn ctrl(&self) -> bool {
+        self.ctrl
     }
 
     /// Taps the third-level key, the one a physical keyboard spells `AltGr`.
@@ -665,11 +707,14 @@ impl Keyboard {
 
     /// The modifiers a key press reports right now.
     fn modifiers(&self) -> Modifiers {
+        let mut modifiers = self.modifiers;
         if self.shift.holds_shift() {
-            self.modifiers | Modifiers::SHIFT
-        } else {
-            self.modifiers
+            modifiers |= Modifiers::SHIFT;
         }
+        if self.ctrl {
+            modifiers |= Modifiers::CTRL;
+        }
+        modifiers
     }
 
     /// What to print on a key, at the level the keyboard is currently showing.
@@ -694,9 +739,21 @@ impl Keyboard {
     /// [`build`](Self::build) and [`relabel`](Self::relabel) must agree: when
     /// they did not, the layout key came up blank and only found its name after
     /// something else had caused a relabel.
+    fn label_for_in(&self, code: KeyCode, engine: &denise_ui::TextEngine) -> String {
+        if let Some(fixed) = grid::legend_in(code, engine, self.style.font) {
+            return match code {
+                KeyCode::ShiftLeft => self.shift.legend().to_string(),
+                _ => fixed.to_string(),
+            };
+        }
+        self.label_for(code)
+    }
+
     fn label_for(&self, code: KeyCode) -> String {
         match code {
             KeyCode::ShiftLeft => self.shift.legend().to_string(),
+            KeyCode::CapsLock => if self.caps() { "CAPS" } else { "caps" }.to_string(),
+            KeyCode::ControlLeft => if self.ctrl { "CTRL" } else { "ctrl" }.to_string(),
             KeyCode::AltRight => LEVEL3_LEGEND.to_string(),
             LAYOUT_KEY => self.layout.name.to_string(),
             _ => grid::legend_of(code)
@@ -706,15 +763,53 @@ impl Keyboard {
         }
     }
 
+    /// What is printed small in a key's top-right corner, if anything.
+    ///
+    /// What the key would type with Shift held — the `!` over the `1`, the `?`
+    /// over the `+` — which is the whole reason a real keyboard prints it: you
+    /// cannot discover Shift by pressing Shift, because pressing it is what
+    /// changes the legend.
+    ///
+    /// **Numbers and punctuation only.** A letter's shifted form is its own
+    /// capital and tells nobody anything, and forty keys each carrying a second
+    /// glyph is a keyboard that reads as noise. This is the rule the keyboards
+    /// it is shaped after use, and the reason they use it.
+    ///
+    /// Empty while Shift is held, because the main legend has already become
+    /// the shifted character and printing it twice on one key says nothing.
+    fn corner_for(&self, code: KeyCode) -> String {
+        if grid::legend_of(code).is_some() {
+            // A key with a fixed word on it — back, enter, tab — types nothing
+            // and has no other state to advertise.
+            return String::new();
+        }
+        let Some(base) = self.legend(code) else {
+            return String::new();
+        };
+        if base.is_alphabetic() {
+            return String::new();
+        }
+        let shifted = match self.composer.output_for(code, true) {
+            Output::Char(ch) | Output::Dead(ch) => ch,
+            Output::None => return String::new(),
+        };
+        if shifted == base {
+            return String::new();
+        }
+        shifted.to_string()
+    }
+
     /// Rewrites every key's legend for the current shift and level.
     ///
     /// A position does not move when a modifier changes — only what it types —
     /// so this replaces labels on the keys that are already there.
     pub fn relabel<M: Clone + 'static>(&mut self, ui: &mut Ui<M>) {
         for &(code, node) in &self.keys {
-            let label = self.label_for(code);
+            let label = self.label_for_in(code, ui.text());
+            let corner = self.corner_for(code);
             if let Some(button) = ui.widget_mut::<Button<M>>(node) {
                 button.set_label(label);
+                button.set_corner(corner);
             }
         }
     }
@@ -734,9 +829,14 @@ impl Keyboard {
         // container, so without one the page underneath shows through the gaps
         // between the keys — which on a browser is a paragraph of text running
         // between the rows. Added before the keys so it paints behind them.
+        //
+        // `Base300` rather than `Base200`, which is two steps from the keys
+        // rather than one: at one step a light theme's keys barely lift off the
+        // deck and the whole thing reads as a flat grey slab. The dark themes
+        // were always fine; this is the light one catching up.
         ui.add(
             shelf,
-            Panel::filled(Role::Base200),
+            Panel::filled(Role::Base300),
             Rect::new(0, 0, width, self.height()),
         );
 
@@ -769,10 +869,12 @@ impl Keyboard {
                 let x = gaps + leftover * done / units;
                 done += key.units;
                 let w = gaps + leftover * done / units - x;
-                let mut button = Button::new(self.label_for(key.code), on_key(key.code))
-                    .no_focus()
-                    .with_role(role_of(key.code))
-                    .with_style(self.style);
+                let mut button =
+                    Button::new(self.label_for_in(key.code, ui.text()), on_key(key.code))
+                        .no_focus()
+                        .with_role(role_of(key.code))
+                        .with_style(self.style)
+                        .with_corner(self.corner_for(key.code));
                 if key.repeats {
                     button = button.with_repeat(REPEAT_DELAY_MS, REPEAT_INTERVAL_MS);
                 }
@@ -800,7 +902,16 @@ impl Keyboard {
 /// every key here: forty of them shouting at once is not emphasis.
 fn role_of(code: KeyCode) -> Role {
     match code {
-        KeyCode::ShiftLeft | KeyCode::AltRight | KeyCode::Backspace | LAYOUT_KEY => Role::Neutral,
+        KeyCode::ShiftLeft
+        | KeyCode::CapsLock
+        | KeyCode::ControlLeft
+        | KeyCode::AltRight
+        | KeyCode::Backspace
+        | KeyCode::Tab
+        | KeyCode::Escape
+        | KeyCode::ArrowLeft
+        | KeyCode::ArrowRight
+        | LAYOUT_KEY => Role::Neutral,
         KeyCode::Enter => Role::Primary,
         _ => Role::Base100,
     }

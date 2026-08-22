@@ -359,15 +359,23 @@ fn shift_once_capitalises_one_letter() {
     assert_eq!(keyboard.shift(), denise_keyboard::Shift::Off);
 }
 
-/// Locked shift holds until it is turned off, and leaves the digit row alone —
+/// Caps Lock holds until it is turned off, and leaves the digit row alone —
 /// the bug that makes a locked keyboard type `!` for `1`.
+///
+/// It is a key of its own now rather than a third state of Shift, which is how
+/// the keyboard it is shaped after does it and what lets the two combine the
+/// way a hand expects.
 #[test]
-fn locked_shift_holds_and_spares_the_digits() {
+fn caps_lock_holds_and_spares_the_digits() {
     let (mut ui, mut keyboard, field) = set_up(&US);
 
-    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Once
-    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Locked
-    assert_eq!(keyboard.shift(), denise_keyboard::Shift::Locked);
+    keyboard.press_key(&mut ui, KeyCode::CapsLock);
+    assert!(keyboard.caps());
+    assert_eq!(
+        keyboard.shift(),
+        denise_keyboard::Shift::Off,
+        "caps is not a shift"
+    );
 
     for code in [KeyCode::A, KeyCode::B, KeyCode::Digit1] {
         let events = keyboard.press_key(&mut ui, code);
@@ -379,10 +387,49 @@ fn locked_shift_holds_and_spares_the_digits() {
         "caps lock reached the digit row"
     );
 
-    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Off
+    keyboard.press_key(&mut ui, KeyCode::CapsLock);
+    assert!(!keyboard.caps());
     let events = keyboard.press_key(&mut ui, KeyCode::C);
     ui.handle(&events);
     assert_eq!(text_of(&ui, field), "AB1c");
+}
+
+/// Caps on plus Shift gives lower case, as on a real keyboard.
+#[test]
+fn shift_over_caps_lock_types_lower_case() {
+    let (mut ui, mut keyboard, field) = set_up(&US);
+    keyboard.press_key(&mut ui, KeyCode::CapsLock);
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft);
+    let events = keyboard.press_key(&mut ui, KeyCode::A);
+    ui.handle(&events);
+    assert_eq!(text_of(&ui, field), "a", "caps and shift did not cancel");
+}
+
+/// Ctrl arms for exactly one key, and reports itself on that key's events.
+#[test]
+fn ctrl_is_a_one_shot_that_reaches_the_event() {
+    use denise::{ElementState, InputEvent, Modifiers};
+
+    let (mut ui, mut keyboard, _field) = set_up(&US);
+    keyboard.press_key(&mut ui, KeyCode::ControlLeft);
+    assert!(keyboard.ctrl());
+
+    let events = keyboard.press_key(&mut ui, KeyCode::A);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            InputEvent::Key {
+                state: ElementState::Down,
+                modifiers,
+                ..
+            } if modifiers.contains(Modifiers::CTRL)
+        )),
+        "Ctrl did not reach the key event"
+    );
+    assert!(
+        !keyboard.ctrl(),
+        "Ctrl stayed armed after the key it modified"
+    );
 }
 
 /// Shifted keys report the modifier, so a binding on Shift+Enter fires from the
@@ -574,10 +621,10 @@ fn switching_layout_keeps_caps_lock() {
     use denise_layout::GERMAN;
 
     let (mut ui, mut keyboard, field) = set_up(&US);
-    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Once
-    keyboard.press_key(&mut ui, KeyCode::ShiftLeft); // Locked
+    keyboard.press_key(&mut ui, KeyCode::CapsLock);
 
     keyboard.set_layout(&mut ui, &GERMAN);
+    assert!(keyboard.caps(), "the latch went with the layout");
     let events = keyboard.press_key(&mut ui, KeyCode::Y);
     ui.handle(&events);
     assert_eq!(text_of(&ui, field), "Z", "caps lock did not survive");
@@ -984,4 +1031,144 @@ fn a_norwegian_panel_can_type_all_three_of_its_letters() {
         "\u{f8}\u{e6}\u{e5}",
         "ø, æ and å are what a Norwegian keyboard is for"
     );
+}
+
+/// Numbers and punctuation say what Shift would give; letters do not.
+///
+/// A real keyboard prints the `!` above the `1` because you cannot discover
+/// Shift by pressing Shift — pressing it is what changes the legend. It prints
+/// nothing above the `q`, because a capital Q is not news, and forty keys each
+/// carrying a second glyph is a keyboard that reads as noise.
+#[test]
+fn only_the_number_and_symbol_keys_carry_a_second_legend() {
+    use denise_ui::widgets::Button;
+
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut keyboard = Keyboard::new(&US);
+    keyboard.open(&mut ui, Msg::Key).expect("shelf");
+
+    let corner = |ui: &Ui<Msg>, keyboard: &Keyboard, code: KeyCode| {
+        let node = key_node(keyboard, code);
+        ui.widget::<Button<Msg>>(node)
+            .expect("a key is a button")
+            .corner()
+            .to_string()
+    };
+
+    assert_eq!(corner(&ui, &keyboard, KeyCode::Digit1), "!");
+    assert_eq!(corner(&ui, &keyboard, KeyCode::Slash), "?");
+    assert_eq!(corner(&ui, &keyboard, KeyCode::Equal), "+");
+
+    for letter in [KeyCode::Q, KeyCode::A, KeyCode::Z] {
+        assert_eq!(
+            corner(&ui, &keyboard, letter),
+            "",
+            "{letter:?} is a letter and its capital is not news"
+        );
+    }
+    // Keys with a word on them have no other state to advertise.
+    for named in [KeyCode::Backspace, KeyCode::Enter, KeyCode::Tab] {
+        assert_eq!(corner(&ui, &keyboard, named), "");
+    }
+
+    // With Shift held the main legend has already become the shifted
+    // character, so printing it again in the corner would say nothing.
+    keyboard.press_key(&mut ui, KeyCode::ShiftLeft);
+    assert_eq!(
+        corner(&ui, &keyboard, KeyCode::Digit1),
+        "",
+        "the corner repeated what the key now says"
+    );
+}
+
+/// The corner follows the layout, because the shifted character does.
+#[test]
+fn the_second_legend_changes_with_the_layout() {
+    use denise_ui::widgets::Button;
+
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut keyboard = Keyboard::new(&US);
+    keyboard.open(&mut ui, Msg::Key).expect("shelf");
+    let node = key_node(&keyboard, KeyCode::Digit2);
+    let corner = |ui: &Ui<Msg>| {
+        ui.widget::<Button<Msg>>(node)
+            .expect("a key is a button")
+            .corner()
+            .to_string()
+    };
+
+    assert_eq!(corner(&ui), "@", "US puts @ over the 2");
+    keyboard.set_layout(&mut ui, &NORWEGIAN);
+    assert_eq!(corner(&ui), "\"", "Norwegian puts a quote there instead");
+}
+
+/// The keys say `⌫` where the font can draw it and "back" where it cannot.
+///
+/// The built-in face carries twenty-three non-ASCII glyphs and not one of them
+/// is an arrow, so on a machine with no fonts installed — a stock Alpine root,
+/// which is exactly the machine this is built for — a symbol legend would be a
+/// row of missing-character boxes on the keys nobody can afford to misread.
+/// Asking the font is what lets the same grid be handsome where it can and
+/// legible where it cannot.
+#[test]
+fn the_named_keys_use_symbols_only_where_the_font_has_them() {
+    use denise_ui::widgets::Button;
+
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let mut keyboard = Keyboard::new(&US);
+    keyboard.open(&mut ui, Msg::Key).expect("shelf");
+
+    let label = |ui: &Ui<Msg>, keyboard: &Keyboard, code: KeyCode| {
+        ui.widget::<Button<Msg>>(key_node(keyboard, code))
+            .expect("a key is a button")
+            .label()
+            .to_string()
+    };
+
+    // No font registered beyond the built-in one, so words.
+    for (code, word) in [
+        (KeyCode::Backspace, "back"),
+        (KeyCode::Tab, "tab"),
+        (KeyCode::Enter, "enter"),
+        (KeyCode::ArrowLeft, "<-"),
+        (KeyCode::ArrowRight, "->"),
+    ] {
+        assert_eq!(
+            label(&ui, &keyboard, code),
+            word,
+            "{code:?} drew a glyph the built-in face does not have"
+        );
+    }
+
+    // And the built-in face really does lack them, which is the premise.
+    for ch in [
+        '\u{232b}', '\u{21e5}', '\u{23ce}', '\u{25c0}', '\u{25b6}', '\u{2190}',
+    ] {
+        assert!(
+            !ui.text().font_contains(denise_ui::FontId::default(), ch),
+            "the built-in face has {ch:?} after all; this test is about the case where it does not"
+        );
+    }
+}
+
+/// Each key names its symbols in order, and the best one the font has wins.
+///
+/// One symbol per key would be a coin toss: DejaVu — what `font-dejavu` puts on
+/// a Pi — has the triangles a soft keyboard's cursor keys want, and a Mac's
+/// Arial has the arrows and neither triangle. A list lets the same grid draw
+/// `◀` on the panel, `←` on the desktop and `<-` on a machine with no fonts,
+/// without any of them being a compromise for the others.
+#[test]
+fn a_key_falls_down_its_list_of_symbols_until_the_font_can_draw_one() {
+    let arrows = denise_keyboard::ROWS
+        .iter()
+        .flat_map(|row| row.keys)
+        .find(|key| key.code == KeyCode::ArrowLeft)
+        .expect("a left arrow key");
+    assert_eq!(
+        arrows.symbols,
+        ["\u{25c0}", "\u{2190}"],
+        "the triangle should be preferred to the arrow"
+    );
+    assert_eq!(arrows.legend, Some("<-"), "and a word under both");
 }
