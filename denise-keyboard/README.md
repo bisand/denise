@@ -108,7 +108,13 @@ changes. German is the layout that proves it — QWERTZ, so `KeyCode::Y` types
 Switching this keyboard does not switch a physical one attached to the same
 machine; call `InputBackend::set_layout` too if you want them in step.
 
+## Seeing what you are typing
+
+Focusing a field scrolls it clear of the keyboard, not merely into its
+viewport — the tree knows a shelf is in the way. A viewport with nothing to
+scroll cannot do that, and for those `Keyboard::occluded()` says exactly what
+the application has to move something clear of.
+
 ## What is not here yet
 
-Key repeat, which needs a press-and-hold signal the toolkit does not have. And
-a field underneath the keyboard is not yet got out from under it.
+Key repeat, which needs a press-and-hold signal the toolkit does not have.

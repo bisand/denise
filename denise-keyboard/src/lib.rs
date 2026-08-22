@@ -72,9 +72,9 @@
 //! Key repeat — holding Backspace to keep deleting — needs a press-and-hold
 //! signal the toolkit does not have; `Button` emits on release.
 //!
-//! A field underneath the keyboard is not yet got out from under it. The tree
-//! reveals a focused node into its scrollable ancestor, which does not know a
-//! shelf is covering the bottom of the screen.
+//! Nothing else. A field focused under the keyboard is scrolled clear of it
+//! where it sits in something that scrolls; where it does not,
+//! [`Keyboard::occluded`] says what to move it clear of.
 //!
 //! [`InputEvent::Key`]: denise::InputEvent::Key
 //! [`InputEvent::Text`]: denise::InputEvent::Text
@@ -460,6 +460,23 @@ impl Keyboard {
         self.composer
             .feed(KeyCode::AltRight, state, self.modifiers());
         self.level3
+    }
+
+    /// The screen rectangle the keyboard is covering, or `None` when it is not
+    /// up.
+    ///
+    /// Focusing a field already scrolls it clear of this, where the field is in
+    /// something that scrolls and has somewhere to scroll to. This is for when
+    /// it is not: a form at fixed rectangles has no scroll to give, and getting
+    /// a field out from under the keyboard means the application moving
+    /// something — shrinking a viewport by this height, or sliding a panel up.
+    ///
+    /// The keyboard's resting place from the moment it is opened, so an
+    /// application acting on it during the slide aims where the keyboard is
+    /// going.
+    #[inline]
+    pub fn occluded<M: Clone + 'static>(&self, ui: &Ui<M>) -> Option<Rect> {
+        self.shelf.and(ui.occluded())
     }
 
     /// The state of the Shift key.

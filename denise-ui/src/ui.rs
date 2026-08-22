@@ -158,6 +158,7 @@ pub struct Ui<M: 'static> {
     drawer: Option<DrawerState>,
     shelf: Option<ShelfState>,
     focus_changed: Option<Option<NodeId>>,
+    occluded: Option<Rect>,
     /// Transient notifications. Not nodes, for the reasons in [`crate::toast`].
     toasts: Toasts,
     /// The hover-dwell bubble. Not a node and not a widget — see
@@ -204,6 +205,7 @@ impl<M: 'static> Ui<M> {
             drawer: None,
             shelf: None,
             focus_changed: None,
+            occluded: None,
             cursor_auto: true,
         }
     }
@@ -533,6 +535,10 @@ impl<M: 'static> Ui<M> {
         let container = self.add(base, Void, offstage)?;
         self.set_z(container, SHELF_Z);
         self.animate_layout(container, resting, SHELF_MS);
+        // Where it will be, not where it is: something focused during the slide
+        // should be revealed clear of the keyboard's resting place rather than
+        // scrolled twice.
+        self.occluded = Some(resting);
         self.shelf = Some(ShelfState {
             container,
             closing: false,
@@ -567,6 +573,9 @@ impl<M: 'static> Ui<M> {
             Rect::new(layout.x, screen.height, layout.width, layout.height)
         };
         self.animate_layout(state.container, offstage, SHELF_MS);
+        // Given back when it starts leaving rather than when it lands: it is on
+        // its way out, and a field focused now belongs on the whole screen.
+        self.occluded = None;
         self.shelf = Some(ShelfState {
             closing: true,
             ..state
@@ -599,6 +608,24 @@ impl<M: 'static> Ui<M> {
     /// ```
     pub fn focus_changed(&mut self) -> Option<Option<NodeId>> {
         self.focus_changed.take()
+    }
+
+    /// The part of the surface a shelf is covering, if one is up.
+    ///
+    /// A shelf is the one thing that hides content without capturing input, so
+    /// it is the one thing the tree has to remember is in the way. Revealing a
+    /// focused node already scrolls clear of it — see
+    /// [`Ui::focus_changed`] for what an application does with the movement —
+    /// and this is for the case scrolling cannot fix: a layout with fixed
+    /// rectangles, where getting a field out from under the keyboard means the
+    /// application moving something.
+    ///
+    /// The resting rectangle from the moment the shelf is pushed, so a reveal
+    /// during the slide aims where the shelf is going rather than where it has
+    /// got to. `None` from the moment it starts leaving.
+    #[inline]
+    pub const fn occluded(&self) -> Option<Rect> {
+        self.occluded
     }
 
     /// Whether a shelf is up, closing included.
@@ -1238,6 +1265,38 @@ impl<M: 'static> Ui<M> {
     /// Walks inside-out, so a scrollable inside a scrollable brings the target
     /// into its own viewport first and the outer one then brings *that* into
     /// view.
+    /// `view` with any occluded band taken off it.
+    ///
+    /// A shelf lies against one screen edge and spans it, so removing it from a
+    /// viewport leaves a rectangle rather than an L — which is what makes this
+    /// arithmetic rather than a region.
+    ///
+    /// Without this, revealing a focused node scrolls it into its viewport and
+    /// stops, and a viewport that extends under the keyboard happily reveals a
+    /// field underneath it: solved-looking, and not solved.
+    fn unoccluded(&self, view: Rect) -> Rect {
+        let Some(occ) = self.occluded else {
+            return view;
+        };
+        let screen = Rect::from_size(self.size);
+        let (mut top, mut bottom) = (view.y, view.bottom());
+        let (mut left, mut right) = (view.x, view.right());
+        if occ.width >= screen.width {
+            if occ.y <= screen.y {
+                top = top.max(occ.bottom());
+            } else {
+                bottom = bottom.min(occ.y);
+            }
+        } else if occ.height >= screen.height {
+            if occ.x <= screen.x {
+                left = left.max(occ.right());
+            } else {
+                right = right.min(occ.x);
+            }
+        }
+        Rect::new(left, top, (right - left).max(0), (bottom - top).max(0))
+    }
+
     fn reveal_rect(&mut self, id: NodeId, rect: Rect) {
         let mut rect = rect;
         let mut current = self.nodes.get(id).and_then(|n| n.parent);
@@ -1249,7 +1308,7 @@ impl<M: 'static> Ui<M> {
             if !node.scrollable {
                 continue;
             }
-            let view = node.bounds;
+            let view = self.unoccluded(node.bounds);
             let scroll = node.scroll;
             // How far the viewport must move so the rect's near edge is inside.
             // A rect taller than the viewport reveals its top, which is where
@@ -1401,6 +1460,9 @@ impl<M: 'static> Ui<M> {
             } else if state.closing && !self.tweens.iter().any(|t| t.id == state.container) {
                 self.shelf = None;
                 self.remove(state.container);
+            }
+            if self.shelf.is_none() {
+                self.occluded = None;
             }
         }
 
