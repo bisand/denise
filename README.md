@@ -26,11 +26,11 @@ opens the display, draws, and reads input.
 
 ```toml
 [dependencies]
-denise = "0.17"
-denise-ui = "0.17"
-denise-winit = "0.17"    # develop on a desktop
-# denise-drm = "0.17"    # ship on a display with no compositor
-# denise-image = "0.17"  # decode PNG, JPEG, GIF and BMP
+denise = "0.18"
+denise-ui = "0.18"
+denise-winit = "0.18"    # develop on a desktop
+# denise-drm = "0.18"    # ship on a display with no compositor
+# denise-image = "0.18"  # decode PNG, JPEG, GIF and BMP
 ```
 
 ## Show me the code
