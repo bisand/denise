@@ -67,10 +67,20 @@
 //! `InputBackend::set_layout` as well; the toolkit does not couple them,
 //! because it does not know the two are meant to agree.
 //!
+//! # Holding a key
+//!
+//! Backspace repeats while it is held and nothing else does, which is what a
+//! phone does and what stops a slow finger typing `aaaaaa`. [`Keyboard::tick`]
+//! collects what a held key has earned, once a frame; it costs nothing when
+//! nobody is touching one, because a repeating key asks the tree to wake it
+//! only between its press and its release.
+//!
 //! # What is not here yet
 //!
-//! Key repeat — holding Backspace to keep deleting — needs a press-and-hold
-//! signal the toolkit does not have; `Button` emits on release.
+//! Holding a *letter* to reach its alternates, the way a phone offers `é è ê ë`
+//! for `e`. The layout's dead keys and third level already reach those
+//! characters, so what is missing is the discoverability rather than the
+//! capability.
 //!
 //! Nothing else. A field focused under the keyboard is scrolled clear of it
 //! where it sits in something that scrolls; where it does not,
