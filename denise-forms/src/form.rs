@@ -351,12 +351,114 @@ impl Form {
             .unwrap_or(Role::Base100)
     }
 
-    /// The file, exactly as it was parsed.
+    /// The file as it now stands.
     ///
-    /// Byte for byte: `kdl` keeps comments, spacing and entry order, so this is
-    /// the round trip the designer depends on and not a re-rendering.
-    pub fn source(&self) -> &str {
-        &self.source
+    /// Byte for byte what was parsed, until something edits it, and then byte for
+    /// byte what was parsed **apart from what was edited**. `kdl` holds the
+    /// document rather than a value taken from it, so comments, blank lines,
+    /// column alignment and entry order all survive an edit to a property three
+    /// nodes away. That is the round trip the designer stands on, and the reason
+    /// this crate parses the way it does.
+    pub fn text(&self) -> String {
+        self.doc.to_string()
+    }
+
+    // ------------------------------------------------------------- editing
+
+    /// The node at a child path, if there is one.
+    fn at_mut(&mut self, path: &[usize]) -> Option<&mut KdlNode> {
+        let (&first, rest) = path.split_first()?;
+        let mut node = self
+            .doc
+            .nodes_mut()
+            .first_mut()?
+            .children_mut()
+            .as_mut()?
+            .nodes_mut()
+            .get_mut(first)?;
+        for &index in rest {
+            node = node.children_mut().as_mut()?.nodes_mut().get_mut(index)?;
+        }
+        Some(node)
+    }
+
+    /// Sets a whole-number property on the node at `path`.
+    ///
+    /// Replaces the value **in place** when the property is already there, which
+    /// is what keeps a move to a one-line diff: everything else on the line, and
+    /// every line around it, is untouched. Appends when it is not.
+    ///
+    /// Returns `false` if there is no node at that path.
+    ///
+    /// ```
+    /// # use denise_forms::Form;
+    /// let mut form = Form::parse(
+    ///     "form \"F\" version=1 width=99 height=99 {\n    \
+    ///      label \"hi\" x=10 y=20 w=30 h=40  // where it sits\n}\n",
+    /// )?;
+    /// assert!(form.set_number(&[0], "x", 25));
+    /// assert!(form.text().contains("x=25 y=20"));
+    /// assert!(form.text().contains("// where it sits"), "the comment survived");
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn set_number(&mut self, path: &[usize], name: &str, value: i64) -> bool {
+        match self.at_mut(path) {
+            Some(node) => {
+                node.insert(name, KdlValue::Integer(i128::from(value)));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Removes a property from the node at `path`.
+    ///
+    /// What a designer does when a property goes back to its default: the schema
+    /// says a default is not written, so resetting one is deleting it rather than
+    /// spelling it out.
+    pub fn clear_property(&mut self, path: &[usize], name: &str) -> bool {
+        let Some(node) = self.at_mut(path) else {
+            return false;
+        };
+        // Not `KdlNode::remove`, whose documentation says string keys remove
+        // properties and which returns `None` and removes nothing — `entry("z")`
+        // finds the property that `remove("z")` cannot. `retain` does what the
+        // other was for, and leaves the rest of the line alone.
+        let before = node.entries().len();
+        node.retain(|entry| entry.name().map(|key| key.value()) != Some(name));
+        node.entries().len() != before
+    }
+
+    /// Removes the node at `path`, and everything under it.
+    ///
+    /// Returns `false` if there is no node there.
+    pub fn remove_at(&mut self, path: &[usize]) -> bool {
+        let Some((&last, above)) = path.split_last() else {
+            return false;
+        };
+        let Some(parent) = self.children_of_mut(above) else {
+            return false;
+        };
+        if last >= parent.len() {
+            return false;
+        }
+        parent.remove(last);
+        true
+    }
+
+    /// The children of the node at `path`, or of the form itself for an empty one.
+    fn children_of_mut(&mut self, path: &[usize]) -> Option<&mut Vec<KdlNode>> {
+        if path.is_empty() {
+            return Some(
+                self.doc
+                    .nodes_mut()
+                    .first_mut()?
+                    .children_mut()
+                    .as_mut()?
+                    .nodes_mut(),
+            );
+        }
+        Some(self.at_mut(path)?.children_mut().as_mut()?.nodes_mut())
     }
 }
 

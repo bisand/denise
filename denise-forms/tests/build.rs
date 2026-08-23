@@ -538,3 +538,144 @@ fn an_anchor_edge_that_is_not_an_edge_is_refused() {
     };
     assert_eq!(found, "sideways");
 }
+
+// ----------------------------------------------------------------- editing
+
+/// The lines that differ between two versions of a file.
+fn changed_lines(before: &str, after: &str) -> Vec<(String, String)> {
+    let a: Vec<&str> = before.lines().collect();
+    let b: Vec<&str> = after.lines().collect();
+    assert_eq!(a.len(), b.len(), "an edit changed how many lines there are");
+    a.iter()
+        .zip(&b)
+        .filter(|(x, y)| x != y)
+        .map(|(x, y)| ((*x).to_string(), (*y).to_string()))
+        .collect()
+}
+
+#[test]
+fn moving_a_node_is_a_one_line_diff() {
+    let source = repo_form("reference.dform");
+    let mut form = Form::parse(&source).expect("parses");
+
+    // The slider, four levels into the file and inside a panel.
+    let (ui, built) = build_str::<Void>(&source, &mut Anything).expect("builds");
+    let id = built.node("volume").expect("named");
+    let path = built
+        .placed()
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.path.clone())
+        .expect("placed");
+    drop(ui);
+
+    assert!(form.set_number(&path, "y", 400));
+
+    let after = form.text();
+    let diff = changed_lines(&source, &after);
+    assert_eq!(
+        diff.len(),
+        1,
+        "a move touched {} lines: {diff:#?}",
+        diff.len()
+    );
+    assert!(diff[0].0.contains("y=388"), "{:?}", diff[0]);
+    assert!(diff[0].1.contains("y=400"), "{:?}", diff[0]);
+    // Everything else on that line came along unchanged.
+    assert!(diff[0].1.contains("name=volume"), "{:?}", diff[0]);
+    assert!(diff[0].1.contains("on-change=set-volume"), "{:?}", diff[0]);
+
+    // And it still loads.
+    Form::parse(&after).expect("an edited form is still a form");
+}
+
+#[test]
+fn an_untouched_form_comes_back_byte_for_byte() {
+    let source = repo_form("reference.dform");
+    let form = Form::parse(&source).expect("parses");
+    assert_eq!(form.text(), source);
+}
+
+#[test]
+fn a_property_that_was_not_there_is_appended_rather_than_refused() {
+    let mut form = Form::parse(
+        "form \"F\" version=1 width=99 height=99 {\n    label \"hi\" x=1 y=2 w=3 h=4\n}\n",
+    )
+    .expect("parses");
+    assert!(form.set_number(&[0], "z", 5));
+    assert!(form.text().contains("z=5"), "{}", form.text());
+    assert!(form.text().contains("x=1 y=2 w=3 h=4"), "{}", form.text());
+}
+
+#[test]
+fn clearing_a_property_takes_it_out_of_the_file() {
+    let mut form = Form::parse(
+        "form \"F\" version=1 width=99 height=99 {\n    label \"hi\" x=1 y=2 w=3 h=4 z=9\n}\n",
+    )
+    .expect("parses");
+    assert!(form.clear_property(&[0], "z"));
+    assert!(!form.text().contains("z=9"), "{}", form.text());
+    assert!(
+        !form.clear_property(&[0], "z"),
+        "clearing twice is not an error"
+    );
+}
+
+#[test]
+fn removing_a_node_takes_its_children_with_it() {
+    let mut form = Form::parse(
+        "form \"F\" version=1 width=99 height=99 {\n\
+         \x20   panel name=p x=0 y=0 w=9 h=9 {\n\
+         \x20       label \"inside\" x=0 y=0 w=1 h=1\n\
+         \x20   }\n\
+         \x20   label \"after\" x=0 y=20 w=1 h=1\n\
+         }\n",
+    )
+    .expect("parses");
+
+    assert!(form.remove_at(&[0]));
+    let after = form.text();
+    assert!(!after.contains("inside"), "{after}");
+    assert!(!after.contains("name=p"), "{after}");
+    assert!(after.contains("after"), "the sibling went too: {after}");
+    Form::parse(&after).expect("still a form");
+
+    assert!(!form.remove_at(&[9]), "a path to nothing is not a removal");
+}
+
+#[test]
+fn every_node_is_placed_with_a_path_that_points_back_at_it() {
+    let source = repo_form("reference.dform");
+    let (_ui, built) = build_str::<Void>(&source, &mut Anything).expect("builds");
+
+    // More than the named ones: a designer selects what was clicked, and most of
+    // what gets clicked was never named.
+    assert!(
+        built.placed().len() > built.len(),
+        "{} placed against {} named",
+        built.placed().len(),
+        built.len()
+    );
+
+    let mut form = Form::parse(&source).expect("parses");
+    for placed in built.placed() {
+        assert!(
+            form.set_number(&placed.path, "z", 0),
+            "the path for `{}` ({}) points at nothing: {:?}",
+            placed.name.as_deref().unwrap_or("unnamed"),
+            placed.kind,
+            placed.path
+        );
+    }
+
+    // A node under the form has a one-element path; a node inside a panel has
+    // more, and its parent is the panel.
+    let nested = built
+        .placed()
+        .iter()
+        .find(|p| p.name.as_deref() == Some("volume"))
+        .expect("the slider");
+    assert!(nested.path.len() > 1, "{:?}", nested.path);
+    assert!(nested.parent.is_some());
+    assert_eq!(nested.kind, "slider");
+}

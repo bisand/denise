@@ -104,10 +104,32 @@ where
     }
 }
 
-/// What a form built, so an application can find the nodes it named.
+/// One node the form put in the tree, and where in the file it came from.
+///
+/// A designer needs both halves: the [`NodeId`] to hit-test and draw a selection
+/// around, and the [`path`](Placed::path) to edit when the selection moves. The
+/// path is a list of child indices from the `form` node down, which is stable
+/// across a rebuild in a way a byte offset is not — every edit shifts the offsets
+/// after it, and the whole point is to edit and carry on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    /// The node in the tree.
+    pub id: NodeId,
+    /// Its parent in the tree, or `None` for a node directly under the form.
+    pub parent: Option<NodeId>,
+    /// What kind of widget it is.
+    pub kind: &'static str,
+    /// The name the file gave it, if it gave one.
+    pub name: Option<String>,
+    /// Child indices from the `form` node's children down to this node.
+    pub path: Vec<usize>,
+}
+
+/// What a form built, so an application can find what it made.
 #[derive(Clone, Debug, Default)]
 pub struct Built {
     names: HashMap<String, NodeId>,
+    placed: Vec<Placed>,
 }
 
 impl Built {
@@ -119,6 +141,19 @@ impl Built {
     /// Every name the form gave a node, in no particular order.
     pub fn names(&self) -> impl Iterator<Item = (&str, NodeId)> {
         self.names.iter().map(|(name, &id)| (name.as_str(), id))
+    }
+
+    /// Every node the form built, in file order.
+    ///
+    /// Includes the ones with no name: a designer selects what a person clicked
+    /// on, and most of what a person clicks on was never named.
+    pub fn placed(&self) -> &[Placed] {
+        &self.placed
+    }
+
+    /// The node at a path, if the form put one there.
+    pub fn at(&self, path: &[usize]) -> Option<&Placed> {
+        self.placed.iter().find(|p| p.path == path)
     }
 
     /// How many nodes were named.
@@ -176,8 +211,8 @@ impl Form {
             .children()
             .map(|d| d.nodes().iter().collect())
             .unwrap_or_default();
-        for node in children {
-            builder.node(node, parent, 0)?;
+        for (index, node) in children.into_iter().enumerate() {
+            builder.node(node, parent, 0, &[index])?;
         }
         // The caret goes last, once every node exists: a form may name a field
         // that appears after the one before it in the file.
@@ -204,7 +239,13 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
     }
 
     /// Builds one node and everything under it.
-    fn node(&mut self, node: &KdlNode, parent: NodeId, depth: usize) -> Result<(), Error> {
+    fn node(
+        &mut self,
+        node: &KdlNode,
+        parent: NodeId,
+        depth: usize,
+        path: &[usize],
+    ) -> Result<(), Error> {
         if depth >= MAX_DEPTH {
             return Err(self.err(node, Reason::TooDeep { limit: MAX_DEPTH }));
         }
@@ -238,12 +279,19 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
         let id = self.construct(node, &info, parent, rect)?;
         self.apply_properties(node, &info, id)?;
         self.apply_node_properties(node, id)?;
+        self.built.placed.push(Placed {
+            id,
+            parent: (depth > 0).then_some(parent),
+            kind: info.kind,
+            name: self.string(node, "name"),
+            path: path.to_vec(),
+        });
 
         // Children that are not the parent's own content are nodes in their own
         // right. A widget that cannot lay children out says so.
         if let Some(children) = node.children() {
             let owns_children = kind == "panel" || kind == "collapse";
-            for child in children.nodes() {
+            for (index, child) in children.nodes().iter().enumerate() {
                 let name = child.name().value();
                 if COLLECTIONS.contains(&name) {
                     continue;
@@ -257,7 +305,9 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                         },
                     ));
                 }
-                self.node(child, id, depth + 1)?;
+                let mut below = path.to_vec();
+                below.push(index);
+                self.node(child, id, depth + 1, &below)?;
             }
         }
         Ok(())

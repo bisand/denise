@@ -37,6 +37,7 @@
 //! [#93]: https://github.com/bisand/denise/issues/93
 
 mod app;
+mod canvas;
 mod document;
 mod settings;
 
@@ -54,14 +55,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut snapshot: Option<String> = None;
     let mut path: Option<String> = None;
+    // Review aids for `--snapshot`, which has no pointer to select or drag with.
+    let mut select: Option<String> = None;
+    let mut drag: Option<(i32, i32)> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--snapshot" => snapshot = rest.next().cloned().or(Some("designer.ppm".into())),
+            "--select" => select = rest.next().cloned(),
+            "--drag" => {
+                drag = rest.next().and_then(|value| {
+                    let (dx, dy) = value.split_once(',')?;
+                    Some((dx.trim().parse().ok()?, dy.trim().parse().ok()?))
+                });
+            }
             "-h" | "--help" => {
                 println!(
-                    "denise-designer [--snapshot out.ppm] [form.dform]\n\n\
-                     A visual form designer for DeniseUI."
+                    "denise-designer [form.dform]\n\n\
+                     A visual form designer for DeniseUI.\n\n\
+                     \x20 --snapshot <out.ppm>   draw one frame and exit, with no window\n\
+                     \x20 --select <name>        snapshot: select this node first\n\
+                     \x20 --drag <dx>,<dy>       snapshot: and drag it, so the guides show"
                 );
                 return Ok(());
             }
@@ -85,6 +99,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(out) = snapshot {
         let size = Size::new(settings.width, settings.height);
         let mut designer = Designer::new(size, 1.0, settings, document);
+        if let Some(name) = select
+            && !designer.select_named(&name)
+        {
+            eprintln!("denise-designer: this form has no node called `{name}`");
+        }
+        if let Some((dx, dy)) = drag {
+            designer.drag_selection(dx, dy);
+        }
         return write_snapshot(&mut designer, size, &out).map_err(Into::into);
     }
 
@@ -136,7 +158,12 @@ impl DeniseApp for Main {
             }
         }
 
-        self.designer.ui.handle(events);
+        // Design mode reads them first and keeps what is its own — a press on the
+        // canvas is a selection or a drag, and the tree must never see it. What
+        // comes back is everything else, so the toolbar and the panes go on
+        // working while the form under design does not.
+        let rest = self.designer.input(events);
+        self.designer.ui.handle(&rest);
         self.designer
             .ui
             .tick(self.started.elapsed().as_millis() as u64);

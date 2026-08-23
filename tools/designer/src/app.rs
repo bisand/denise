@@ -2,11 +2,14 @@
 
 use std::path::PathBuf;
 
-use denise::{Radius, Rect, Role, Size, theme};
-use denise_forms::{Handler, Payload, Picture, Wiring};
+use denise::{
+    ElementState, InputEvent, KeyCode, Point, PointerButton, Radius, Rect, Role, Size, theme,
+};
+use denise_forms::{Handler, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{Button, Divider, Label, List, ListItem, Panel};
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
+use crate::canvas::{Drag, Grip, Guide, place, topmost};
 use crate::document::Document;
 use crate::settings::Settings;
 
@@ -231,6 +234,17 @@ pub struct Designer {
     /// The named nodes of the open form, in the order the outline lists them.
     outline: Vec<(String, NodeId)>,
     selected: Option<NodeId>,
+    /// Every node of the open form, and where in the file it came from.
+    placed: Vec<Placed>,
+    /// What is selected, by file path rather than by `NodeId`: a path survives a
+    /// rebuild, and every edit rebuilds.
+    selection: Vec<Vec<usize>>,
+    drag: Option<Drag>,
+    /// The selection outline, its handles and any alignment guides. Rebuilt
+    /// whenever any of them moves, and removed before the form is.
+    overlay: Vec<NodeId>,
+    snapping: bool,
+    grid: i32,
     status: String,
     exit: bool,
 }
@@ -250,6 +264,12 @@ impl Designer {
             palette,
             outline: Vec::new(),
             selected: None,
+            placed: Vec::new(),
+            selection: Vec::new(),
+            drag: None,
+            overlay: Vec::new(),
+            snapping: true,
+            grid: 4,
             status: String::new(),
             exit: false,
         };
@@ -311,9 +331,14 @@ impl Designer {
     /// The old stage goes and a new one takes its place, because a form's tree is
     /// not something to reconcile: it is a file, and opening one is opening one.
     pub fn show_form(&mut self) {
+        for id in std::mem::take(&mut self.overlay) {
+            self.ui.remove(id);
+        }
         self.ui.remove(self.chrome.stage);
         self.selected = None;
         self.outline.clear();
+        self.placed.clear();
+        self.drag = None;
 
         let size = self.document.form().size();
         // Centred in the viewport if it fits, and at the margin if it does not —
@@ -344,6 +369,7 @@ impl Designer {
             .form()
             .build(&mut self.ui, stage, &mut wiring)
             .map(|built| {
+                self.placed = built.placed().to_vec();
                 let mut names: Vec<(String, NodeId)> = built
                     .names()
                     .map(|(name, id)| (name.to_string(), id))
@@ -522,6 +548,471 @@ impl Designer {
         }
     }
 
+    // ------------------------------------------------------------ design mode
+
+    /// Reads the events before the tree does, and hands back what the tree
+    /// should still see.
+    ///
+    /// Everything over the canvas is design mode's: a press there selects,
+    /// drags or resizes, and the tree never learns of it. Everything else — the
+    /// toolbar, the palette, the outline — passes through untouched, which is
+    /// why the panes go on working while the form does not.
+    pub fn input(&mut self, events: &[InputEvent]) -> Vec<InputEvent> {
+        let canvas = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
+        let mut forward = Vec::with_capacity(events.len());
+
+        for event in events {
+            let mine = match event {
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state,
+                    position,
+                    modifiers,
+                } if canvas.contains(*position) || self.drag.is_some() => {
+                    match state {
+                        ElementState::Down => {
+                            self.press(*position, modifiers.contains(denise::Modifiers::SHIFT))
+                        }
+                        ElementState::Up => self.release(),
+                    }
+                    true
+                }
+                InputEvent::PointerMoved { position } if self.drag.is_some() => {
+                    self.drag_to(*position);
+                    true
+                }
+                InputEvent::Key {
+                    code,
+                    state: ElementState::Down,
+                    modifiers,
+                    ..
+                } => self.key(*code, modifiers.contains(denise::Modifiers::SHIFT)),
+                _ => false,
+            };
+            if !mine {
+                forward.push(event.clone());
+            }
+        }
+        forward
+    }
+
+    fn press(&mut self, at: Point, add: bool) {
+        // A handle on what is already selected comes first: its handles stick
+        // out past the node, and a press on one means resize rather than
+        // "select whatever is under there".
+        if let Some(path) = self.selection.last().cloned()
+            && let Some(bounds) = self.path_bounds(&path)
+            && let Some(grip) = Grip::at(bounds, at)
+            && matches!(grip, Grip::Resize { .. })
+        {
+            self.begin(grip, at, path);
+            return;
+        }
+
+        let hit = topmost(
+            &self.placed,
+            |p| {
+                self.ui
+                    .bounds(p.id)
+                    .map(|r| (r, self.ui.visible(p.id), self.ui.z(p.id)))
+            },
+            at,
+        )
+        .map(|p| p.path.clone());
+        let Some(path) = hit else {
+            if !add {
+                self.selection.clear();
+                self.selected = None;
+                self.refresh_inspector();
+                self.refresh_overlay();
+            }
+            return;
+        };
+
+        if add {
+            if let Some(already) = self.selection.iter().position(|p| *p == path) {
+                self.selection.remove(already);
+            } else {
+                self.selection.push(path.clone());
+            }
+        } else if !self.selection.contains(&path) {
+            self.selection = vec![path.clone()];
+        }
+        self.selected = self.node_id(&path);
+        self.refresh_inspector();
+
+        if let Some(bounds) = self.path_bounds(&path)
+            && let Some(grip) = Grip::at(bounds, at)
+        {
+            self.begin(grip, at, path);
+        }
+        self.refresh_overlay();
+    }
+
+    fn begin(&mut self, grip: Grip, at: Point, path: Vec<usize>) {
+        let Some(origin) = self.node_id(&path).and_then(|id| self.ui.layout(id)) else {
+            return;
+        };
+        self.drag = Some(Drag {
+            grip,
+            from: at,
+            origin,
+            path,
+            moved: false,
+        });
+    }
+
+    fn drag_to(&mut self, to: Point) {
+        let Some(drag) = self.drag.as_mut() else {
+            return;
+        };
+        if to == drag.from {
+            return;
+        }
+        drag.moved = true;
+        let drag = drag.clone();
+        let Some(id) = self.node_id(&drag.path) else {
+            return;
+        };
+
+        let siblings = self.siblings_of(&drag.path);
+        let placement = place(&drag, to, &siblings, self.grid, self.snapping);
+
+        // The tree moves so the person can see it. The *file* does not, until
+        // the button comes up: one drag is one edit, which is what keeps a move
+        // to a one-line diff and will make it one undo step.
+        self.ui.set_layout(id, placement.rect);
+        self.refresh_overlay_with(&placement.guides, &drag.path);
+        self.status = format!(
+            "{} {},{} {}x{}",
+            self.placed
+                .iter()
+                .find(|p| p.path == drag.path)
+                .map_or("node", |p| p.kind),
+            placement.rect.x,
+            placement.rect.y,
+            placement.rect.width,
+            placement.rect.height
+        );
+        self.refresh_labels();
+    }
+
+    fn release(&mut self) {
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        if !drag.moved {
+            // A press that never moved was a selection, and a selection must not
+            // touch the file.
+            self.refresh_overlay();
+            return;
+        }
+        let Some(rect) = self.node_id(&drag.path).and_then(|id| self.ui.layout(id)) else {
+            return;
+        };
+        self.write_rect(&drag.path, rect, drag.origin);
+        self.refresh_overlay();
+    }
+
+    /// Writes a node's rectangle back to the document, and only what changed.
+    fn write_rect(&mut self, path: &[usize], rect: Rect, was: Rect) {
+        let form = self.document.form_mut();
+        for (name, new, old) in [
+            ("x", rect.x, was.x),
+            ("y", rect.y, was.y),
+            ("w", rect.width, was.width),
+            ("h", rect.height, was.height),
+        ] {
+            if new != old {
+                form.set_number(path, name, i64::from(new));
+            }
+        }
+        self.document.touch();
+        self.refresh_labels();
+    }
+
+    fn key(&mut self, code: KeyCode, shift: bool) -> bool {
+        let step = if shift { self.grid * 2 } else { 1 };
+        let nudge = match code {
+            KeyCode::ArrowLeft => Some((-step, 0)),
+            KeyCode::ArrowRight => Some((step, 0)),
+            KeyCode::ArrowUp => Some((0, -step)),
+            KeyCode::ArrowDown => Some((0, step)),
+            _ => None,
+        };
+        if let Some((dx, dy)) = nudge {
+            if self.selection.is_empty() {
+                return false;
+            }
+            self.nudge(dx, dy);
+            return true;
+        }
+        // A key that would also be a keystroke is only design mode's while
+        // nothing in the designer's own chrome has the caret. Nothing does yet;
+        // the inspector's editors (#93) are what make this matter.
+        let typing = self.ui.focused().is_some();
+        match code {
+            KeyCode::G if !typing => {
+                self.toggle_snapping();
+                true
+            }
+            KeyCode::Escape if !self.selection.is_empty() => {
+                self.selection.clear();
+                self.selected = None;
+                self.refresh_inspector();
+                self.refresh_overlay();
+                true
+            }
+            KeyCode::Delete | KeyCode::Backspace if !self.selection.is_empty() && !typing => {
+                self.delete_selection();
+                true
+            }
+            KeyCode::Tab => {
+                self.cycle(shift);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Moves the selection by whole pixels, writing each step to the file.
+    ///
+    /// A nudge is deliberately not a drag: there is no release to commit on, so
+    /// each press of the key is its own edit.
+    pub fn nudge(&mut self, dx: i32, dy: i32) {
+        for path in self.selection.clone() {
+            let Some(id) = self.node_id(&path) else {
+                continue;
+            };
+            let Some(was) = self.ui.layout(id) else {
+                continue;
+            };
+            let rect = Rect::new(was.x + dx, was.y + dy, was.width, was.height);
+            self.ui.set_layout(id, rect);
+            self.write_rect(&path, rect, was);
+        }
+        self.refresh_overlay();
+    }
+
+    /// Takes the selection out of the form.
+    ///
+    /// Deepest path first, so removing one does not shift the index of another
+    /// still to go.
+    pub fn delete_selection(&mut self) {
+        let mut paths = self.selection.clone();
+        paths.sort();
+        paths.reverse();
+        for path in paths {
+            self.document.form_mut().remove_at(&path);
+        }
+        self.document.touch();
+        self.selection.clear();
+        self.reload_from_document();
+    }
+
+    /// Selects the next node in file order.
+    pub fn cycle(&mut self, backwards: bool) {
+        if self.placed.is_empty() {
+            return;
+        }
+        let current = self
+            .selection
+            .last()
+            .and_then(|path| self.placed.iter().position(|p| p.path == *path));
+        let next = match (current, backwards) {
+            (Some(i), false) => (i + 1) % self.placed.len(),
+            (Some(i), true) => (i + self.placed.len() - 1) % self.placed.len(),
+            (None, true) => self.placed.len() - 1,
+            (None, false) => 0,
+        };
+        self.selection = vec![self.placed[next].path.clone()];
+        self.selected = Some(self.placed[next].id);
+        self.refresh_inspector();
+        self.refresh_overlay();
+    }
+
+    /// Rebuilds the canvas from the document, which an edit has changed.
+    fn reload_from_document(&mut self) {
+        match self.document.reparse() {
+            Ok(()) => self.show_form(),
+            Err(error) => {
+                self.status = format!("the edit made a form that will not load: {error}");
+                self.refresh_labels();
+            }
+        }
+    }
+
+    /// Turns snapping on or off, and says which it is now.
+    pub fn toggle_snapping(&mut self) {
+        self.snapping = !self.snapping;
+        self.status = if self.snapping {
+            format!("snapping to a {}px grid and to siblings", self.grid)
+        } else {
+            String::from("snapping off")
+        };
+        self.refresh_labels();
+    }
+
+    /// Selects a node by the name the form gave it.
+    ///
+    /// For `--snapshot`, which has no pointer: a picture of a designer with
+    /// nothing selected shows none of what a designer does.
+    pub fn select_named(&mut self, name: &str) -> bool {
+        let Some(path) = self
+            .placed
+            .iter()
+            .find(|p| p.name.as_deref() == Some(name))
+            .map(|p| p.path.clone())
+        else {
+            return false;
+        };
+        self.selection = vec![path.clone()];
+        self.selected = self.node_id(&path);
+        self.refresh_inspector();
+        self.refresh_overlay();
+        true
+    }
+
+    /// Takes hold of the selection and drags it, without letting go.
+    ///
+    /// Also for `--snapshot`: the alignment guides exist only while a drag is
+    /// happening, so a picture of them has to be taken mid-drag. Nothing is
+    /// committed, because nothing was released.
+    pub fn drag_selection(&mut self, dx: i32, dy: i32) {
+        let Some(path) = self.selection.last().cloned() else {
+            return;
+        };
+        let Some(bounds) = self.path_bounds(&path) else {
+            return;
+        };
+        let from = Point::new(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        self.press(from, false);
+        self.drag_to(Point::new(from.x + dx, from.y + dy));
+    }
+
+    fn node_id(&self, path: &[usize]) -> Option<NodeId> {
+        self.placed.iter().find(|p| p.path == path).map(|p| p.id)
+    }
+
+    fn path_bounds(&self, path: &[usize]) -> Option<Rect> {
+        self.node_id(path).and_then(|id| self.ui.bounds(id))
+    }
+
+    /// The layouts of everything sharing a node's parent, in the same space as
+    /// its own — which is what an alignment guide is measured against.
+    fn siblings_of(&self, path: &[usize]) -> Vec<Rect> {
+        let Some((_, parent)) = path.split_last() else {
+            return Vec::new();
+        };
+        self.placed
+            .iter()
+            .filter(|p| p.path.len() == path.len() && p.path.starts_with(parent) && p.path != path)
+            .filter_map(|p| self.ui.layout(p.id))
+            .collect()
+    }
+
+    fn refresh_overlay(&mut self) {
+        self.refresh_overlay_with(&[], &[]);
+    }
+
+    /// Draws the selection: an outline, eight handles, a name tag, and any
+    /// alignment guides.
+    ///
+    /// Above the form rather than in it, so nothing a form contains has to know
+    /// it is being designed — the overlay is the designer's, drawn in the
+    /// designer's colours, and removed when the form is.
+    fn refresh_overlay_with(&mut self, guides: &[Guide], dragging: &[usize]) {
+        for id in std::mem::take(&mut self.overlay) {
+            self.ui.remove(id);
+        }
+        let canvas = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
+        let scroll = self.ui.scroll(self.chrome.canvas);
+        let to_canvas = |r: Rect| {
+            Rect::new(
+                r.x - canvas.x + scroll.x,
+                r.y - canvas.y + scroll.y,
+                r.width,
+                r.height,
+            )
+        };
+
+        let mut added: Vec<NodeId> = Vec::new();
+        let mut add = |ui: &mut Ui<Message>, rect: Rect, panel: Panel, z: i32| {
+            if let Some(id) = ui.add(self.chrome.canvas, panel, to_canvas(rect)) {
+                ui.set_z(id, z);
+                added.push(id);
+            }
+        };
+
+        // The guides first, so a handle is never hidden under one.
+        if let Some(parent) = self
+            .placed
+            .iter()
+            .find(|p| p.path == dragging)
+            .and_then(|p| p.parent)
+            .and_then(|id| self.ui.bounds(id))
+        {
+            for guide in guides {
+                let line = if guide.vertical {
+                    Rect::new(parent.x + guide.at, parent.y, 1, parent.height)
+                } else {
+                    Rect::new(parent.x, parent.y + guide.at, parent.width, 1)
+                };
+                add(&mut self.ui, line, Panel::filled(Role::Accent), 190);
+            }
+        }
+
+        let selection = self.selection.clone();
+        for (index, path) in selection.iter().enumerate() {
+            let Some(bounds) = self.path_bounds(path) else {
+                continue;
+            };
+            let outline = Panel {
+                fill: None,
+                border: Some(Role::Primary),
+                border_width: 1,
+                radius: Radius::Box,
+                backdrop: false,
+            };
+            add(&mut self.ui, bounds, outline, 200);
+
+            // Handles on the last one only: with several selected they would be
+            // a thicket, and only one of them could be resized anyway.
+            if index + 1 == selection.len() {
+                for corner in Grip::HANDLES {
+                    add(
+                        &mut self.ui,
+                        Grip::handle_rect(bounds, corner),
+                        Panel::filled(Role::Primary),
+                        210,
+                    );
+                }
+            }
+        }
+        self.overlay = added;
+
+        // The name tag goes last: it is a label rather than a panel, and it says
+        // what is selected without the eye going to the inspector.
+        if let Some(path) = self.selection.last()
+            && let Some(bounds) = self.path_bounds(path)
+            && let Some(node) = self.placed.iter().find(|p| p.path == *path)
+        {
+            let text = node.name.as_deref().map_or_else(
+                || node.kind.to_string(),
+                |name| format!("{} {name}", node.kind),
+            );
+            let tag = Rect::new(bounds.x, bounds.y - 15, 200, 14);
+            if let Some(id) = self.ui.add(
+                self.chrome.canvas,
+                Label::new(text).with_size(10).with_role(Role::Primary),
+                to_canvas(tag),
+            ) {
+                self.ui.set_z(id, 220);
+                self.overlay.push(id);
+            }
+        }
+    }
+
     /// Acts on one of the designer's own messages.
     pub fn handle(&mut self, message: Message) {
         match message {
@@ -668,6 +1159,373 @@ mod tests {
                 modifiers: Default::default(),
             },
         ]);
+    }
+
+    /// Drives the designer the way the event loop does: design mode first, and
+    /// the tree gets what is left.
+    fn feed(designer: &mut Designer, events: &[InputEvent]) {
+        let rest = designer.input(events);
+        designer.ui.handle(&rest);
+    }
+
+    fn button(state: ElementState, at: Point) -> InputEvent {
+        InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state,
+            position: at,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn click_at(designer: &mut Designer, at: Point, shift: bool) {
+        let modifiers = if shift {
+            denise::Modifiers::SHIFT
+        } else {
+            denise::Modifiers::NONE
+        };
+        feed(
+            designer,
+            &[
+                InputEvent::PointerMoved { position: at },
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state: ElementState::Down,
+                    position: at,
+                    modifiers,
+                },
+                button(ElementState::Up, at),
+            ],
+        );
+    }
+
+    fn drag_from_to(designer: &mut Designer, from: Point, to: Point) {
+        feed(
+            designer,
+            &[
+                InputEvent::PointerMoved { position: from },
+                button(ElementState::Down, from),
+                InputEvent::PointerMoved { position: to },
+                button(ElementState::Up, to),
+            ],
+        );
+    }
+
+    fn press_key(designer: &mut Designer, code: KeyCode, shift: bool) {
+        feed(
+            designer,
+            &[InputEvent::Key {
+                code,
+                state: ElementState::Down,
+                repeat: false,
+                modifiers: if shift {
+                    denise::Modifiers::SHIFT
+                } else {
+                    denise::Modifiers::NONE
+                },
+            }],
+        );
+    }
+
+    fn middle(designer: &Designer, path: &[usize]) -> Point {
+        let b = designer.path_bounds(path).expect("laid out");
+        Point::new(b.x + b.width / 2, b.y + b.height / 2)
+    }
+
+    fn path_named(designer: &Designer, name: &str) -> Vec<usize> {
+        designer
+            .placed
+            .iter()
+            .find(|p| p.name.as_deref() == Some(name))
+            .unwrap_or_else(|| panic!("no node named `{name}`"))
+            .path
+            .clone()
+    }
+
+    fn text(designer: &Designer) -> String {
+        designer.document.form().text()
+    }
+
+    /// The lines that differ, which must be the same count on both sides.
+    fn diff(before: &str, after: &str) -> Vec<String> {
+        let a: Vec<&str> = before.lines().collect();
+        let b: Vec<&str> = after.lines().collect();
+        assert_eq!(a.len(), b.len(), "an edit changed the number of lines");
+        a.iter()
+            .zip(&b)
+            .filter(|(x, y)| x != y)
+            .map(|(_, y)| (*y).to_string())
+            .collect()
+    }
+
+    // --------------------------------------------------------------- selection
+
+    #[test]
+    fn a_click_selects_a_label_even_though_a_running_form_would_not() {
+        // The whole reason design mode hit-tests for itself: a `Label` answers
+        // `false` to `accepts_pointer`, so the tree would send this press
+        // straight past it.
+        let mut designer = designer_on("forms/reference.dform");
+        let label = designer
+            .placed
+            .iter()
+            .find(|p| p.kind == "label" && p.name.is_none())
+            .expect("the reference form has unnamed labels")
+            .path
+            .clone();
+        let at = middle(&designer, &label);
+
+        click_at(&mut designer, at, false);
+        assert_eq!(designer.selection, vec![label]);
+        assert_eq!(
+            designer.ui.kind(designer.selected().unwrap()),
+            Some("label")
+        );
+    }
+
+    #[test]
+    fn an_invisible_node_is_not_what_a_click_finds() {
+        // `reference.dform` ends with a full-surface `scrim` that is
+        // `visible=#false`. It is the last node in the file and the highest `z`,
+        // so it is on top of everything — and clicking the canvas must find what
+        // can actually be seen.
+        let mut designer = designer_on("forms/reference.dform");
+        let scrim = path_named(&designer, "scrim");
+        assert!(!designer.ui.visible(designer.node_id(&scrim).unwrap()));
+
+        let at = middle(&designer, &path_named(&designer, "notify"));
+        click_at(&mut designer, at, false);
+        assert_ne!(designer.selection, vec![scrim]);
+        assert_eq!(
+            designer.ui.kind(designer.selected().unwrap()),
+            Some("checkbox")
+        );
+    }
+
+    #[test]
+    fn shift_adds_to_the_selection_and_takes_away_again() {
+        let mut designer = designer_on("forms/reference.dform");
+        let first = path_named(&designer, "notify");
+        let second = path_named(&designer, "dark");
+
+        let at_first = middle(&designer, &first);
+        click_at(&mut designer, at_first, false);
+        let at_second = middle(&designer, &second);
+        click_at(&mut designer, at_second, true);
+        assert_eq!(designer.selection.len(), 2, "{:?}", designer.selection);
+
+        click_at(&mut designer, at_second, true);
+        assert_eq!(designer.selection, vec![first]);
+    }
+
+    #[test]
+    fn escape_clears_and_tab_walks_the_form_in_file_order() {
+        let mut designer = designer_on("forms/reference.dform");
+        let at = middle(&designer, &path_named(&designer, "notify"));
+        click_at(&mut designer, at, false);
+        assert!(!designer.selection.is_empty());
+
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert!(designer.selection.is_empty());
+        assert!(designer.selected().is_none());
+
+        press_key(&mut designer, KeyCode::Tab, false);
+        assert_eq!(designer.selection, vec![designer.placed[0].path.clone()]);
+        press_key(&mut designer, KeyCode::Tab, false);
+        assert_eq!(designer.selection, vec![designer.placed[1].path.clone()]);
+        press_key(&mut designer, KeyCode::Tab, true);
+        assert_eq!(designer.selection, vec![designer.placed[0].path.clone()]);
+    }
+
+    #[test]
+    fn a_selection_draws_an_outline_eight_handles_and_a_name_tag() {
+        let mut designer = designer_on("forms/reference.dform");
+        assert!(
+            designer.overlay.is_empty(),
+            "nothing selected, nothing drawn"
+        );
+
+        let at = middle(&designer, &path_named(&designer, "notify"));
+        click_at(&mut designer, at, false);
+        // One outline, eight handles, one name tag.
+        assert_eq!(designer.overlay.len(), 10, "{:?}", designer.overlay.len());
+
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert!(
+            designer.overlay.is_empty(),
+            "the overlay outlived the selection"
+        );
+    }
+
+    // ------------------------------------------------------------------ edits
+
+    #[test]
+    fn dragging_a_node_inside_a_panel_is_a_one_line_diff() {
+        let mut designer = designer_on("forms/reference.dform");
+        designer.toggle_snapping(); // off, so the arithmetic is the test's
+        let slider = path_named(&designer, "volume");
+        assert!(slider.len() > 1, "the slider is meant to be inside a panel");
+
+        let before = text(&designer);
+        let from = middle(&designer, &slider);
+        drag_from_to(&mut designer, from, Point::new(from.x + 24, from.y + 8));
+
+        let after = text(&designer);
+        let changed = diff(&before, &after);
+        assert_eq!(
+            changed.len(),
+            1,
+            "a drag touched {} lines: {changed:#?}",
+            changed.len()
+        );
+        // Relative to the panel it sits in, which is the only space the file
+        // knows: the slider was at x=140 y=388, and the drag was +24 +8.
+        assert!(changed[0].contains("x=164"), "{}", changed[0]);
+        assert!(changed[0].contains("y=396"), "{}", changed[0]);
+        // Everything else on the line came along.
+        assert!(
+            changed[0].contains("on-change=set-volume"),
+            "{}",
+            changed[0]
+        );
+        assert!(changed[0].contains("min=0 max=100"), "{}", changed[0]);
+    }
+
+    #[test]
+    fn a_press_that_never_moved_leaves_the_file_exactly_as_it_was() {
+        let mut designer = designer_on("forms/reference.dform");
+        let before = text(&designer);
+        let at = middle(&designer, &path_named(&designer, "volume"));
+        click_at(&mut designer, at, false);
+        assert!(!designer.selection.is_empty(), "it did select");
+        assert_eq!(text(&designer), before, "a selection wrote to the file");
+    }
+
+    #[test]
+    fn dragging_a_handle_resizes_and_writes_the_extent() {
+        let mut designer = designer_on("forms/reference.dform");
+        designer.toggle_snapping();
+        let path = path_named(&designer, "volume");
+        let before_rect = designer.path_bounds(&path).expect("laid out");
+
+        // Select first, then take the south-east handle.
+        let at = middle(&designer, &path);
+        click_at(&mut designer, at, false);
+        let corner = Point::new(
+            before_rect.x + before_rect.width,
+            before_rect.y + before_rect.height,
+        );
+        drag_from_to(
+            &mut designer,
+            corner,
+            Point::new(corner.x + 30, corner.y + 10),
+        );
+
+        let after = text(&designer);
+        assert!(after.contains("w=254"), "{after}");
+        assert!(after.contains("h=34"), "{after}");
+    }
+
+    #[test]
+    fn an_arrow_key_nudges_by_one_and_shift_by_more() {
+        let mut designer = designer_on("forms/reference.dform");
+        let path = path_named(&designer, "volume");
+        let at = middle(&designer, &path);
+        click_at(&mut designer, at, false);
+
+        press_key(&mut designer, KeyCode::ArrowRight, false);
+        assert!(
+            text(&designer).contains("x=141"),
+            "one pixel: {}",
+            text(&designer)
+        );
+
+        // Shift nudges by twice the grid, so 388 becomes 396.
+        press_key(&mut designer, KeyCode::ArrowDown, true);
+        assert!(
+            text(&designer).contains("y=396"),
+            "eight: {}",
+            text(&designer)
+        );
+    }
+
+    #[test]
+    fn delete_takes_the_node_and_its_children_out_of_the_file() {
+        let mut designer = designer_on("forms/reference.dform");
+        let panel = path_named(&designer, "media-section");
+        let at = middle(&designer, &panel);
+        click_at(&mut designer, at, false);
+        // The panel itself, not something inside it.
+        designer.selection = vec![panel];
+
+        press_key(&mut designer, KeyCode::Delete, false);
+
+        let after = text(&designer);
+        assert!(!after.contains("name=media-section"), "{after}");
+        assert!(!after.contains("name=shots"), "a child survived its parent");
+        assert!(after.contains("name=header"), "it took the whole file");
+        assert!(designer.selection.is_empty());
+        // And the canvas rebuilt from what is left.
+        assert!(
+            !designer.outline_names().any(|n| n == "media-section"),
+            "the outline still lists it"
+        );
+        denise_forms::Form::parse(&after).expect("still a form");
+    }
+
+    #[test]
+    fn snapping_lines_a_node_up_with_its_sibling_and_says_so() {
+        let mut designer = designer_on("forms/reference.dform");
+        let path = path_named(&designer, "volume");
+        let stars = path_named(&designer, "stars");
+        let target = designer
+            .ui
+            .layout(designer.node_id(&stars).unwrap())
+            .expect("laid out");
+
+        // Drag the slider until its left edge is a pixel or two from the
+        // rating's, and let the snap close the gap.
+        let from = middle(&designer, &path);
+        let here = designer
+            .ui
+            .layout(designer.node_id(&path).unwrap())
+            .unwrap();
+        let want = target.x - here.x + 2;
+        drag_from_to(&mut designer, from, Point::new(from.x + want, from.y));
+
+        let now = designer
+            .ui
+            .layout(designer.node_id(&path).unwrap())
+            .unwrap();
+        assert_eq!(
+            now.x, target.x,
+            "it did not line up: {now:?} against {target:?}"
+        );
+    }
+
+    #[test]
+    fn a_snapping_drag_draws_a_guide_and_lets_it_go_on_release() {
+        let mut designer = designer_on("forms/reference.dform");
+        assert!(designer.select_named("volume"));
+        let settled = designer.overlay.len();
+
+        // Far enough left that its edge lands within snapping distance of the
+        // rating and the labels, all of which start at x=16.
+        designer.drag_selection(-122, -6);
+        assert!(
+            designer.overlay.len() > settled,
+            "a snap drew no guide: {} against {settled}",
+            designer.overlay.len()
+        );
+        let now = designer
+            .ui
+            .layout(designer.node_id(&path_named(&designer, "volume")).unwrap())
+            .unwrap();
+        assert_eq!(now.x, 16, "it did not line up: {now:?}");
+
+        // Letting go takes the guides away and leaves the selection.
+        designer.release();
+        assert_eq!(designer.overlay.len(), settled);
+        assert!(!designer.selection.is_empty());
     }
 
     #[test]
