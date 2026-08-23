@@ -117,6 +117,47 @@ The ranges on a numeric property are what an editor should offer, not a gate: a
 widget that clamps clamps a value from `set` exactly as it clamps one from its
 own setter, so there is one rule rather than two.
 
+## Anchors and docking
+
+A node keeps its rectangle when its parent resizes — unless it says otherwise.
+The two ways to say otherwise are the two Delphi and the WinForms designer had.
+
+```rust
+# use denise::{Rect, Size, theme};
+# use denise_ui::widgets::Panel;
+# use denise_ui::{Ui, Void};
+use denise_ui::{Anchors, Dock};
+# let mut ui: Ui<Void> = Ui::new(Size::new(320, 200), theme::DARK);
+# let root = ui.root();
+# let toolbar = ui.add(root, Panel::default(), Rect::new(0, 0, 0, 32)).unwrap();
+# let field = ui.add(root, Panel::default(), Rect::new(8, 40, 304, 24)).unwrap();
+# let ok = ui.add(root, Panel::default(), Rect::new(252, 168, 60, 24)).unwrap();
+
+ui.set_dock(toolbar, Some(Dock::Top));                          // full width, at the top
+ui.set_anchors(field, Anchors::new(true, true, true, false));   // stretches
+ui.set_anchors(ok, Anchors::new(false, false, true, true));     // stays bottom-right
+# assert_eq!(ui.bounds(toolbar).unwrap(), Rect::new(0, 0, 320, 32));
+```
+
+`Anchors` names the parent edges a node keeps its distance from: one edge of an
+axis and it holds its place and its size, both and it **stretches**, neither and
+its two gaps grow equally so a centred node stays centred. The default is
+`TOP_LEFT`, which derives exactly the rectangle the node already had — so a tree
+that never mentions anchoring behaves as it always did.
+
+`Dock` gives a node an edge of what is *left* of its parent, in paint order, so
+two bars docked to the top are two stacked bars and a `Dock::Fill` takes the rest.
+Docking shrinks the box the undocked children are placed in, which is why docking
+a toolbar moves the form down instead of covering it.
+
+Neither is a solver, and neither rewrites a node's `layout`: both **derive** a
+rectangle in `reflow`, the one pass that turns layouts into bounds — the same
+place the vertical stack and the scroll offset happen, and for the same reason.
+Paint, damage, clipping and hit testing all read what that pass wrote, so they
+cannot disagree about where a node ended up. It is also what keeps a form file to
+one rectangle per node: a designer moving a button still produces a one-line diff,
+whatever the anchors do with it afterwards.
+
 ## Damage is the toolkit's job
 
 There are no dirty flags to set. `Ui::widget_mut` invalidates on access; hover,
@@ -171,10 +212,13 @@ that does.
 ## What is not here
 
 **No layout engine.** Nodes take explicit rectangles relative to their parent,
-which is what a fixed-resolution panel wants; a constraint solver can be added over
-this without changing anything below it. Widgets with a natural size offer
+which is what a fixed-resolution panel wants. Widgets with a natural size offer
 `preferred_width`/`preferred_height` as *queries the application makes* — the tree
-never calls them, and that is the line.
+never calls them, and that is the line. There are two *placement rules* over those
+rectangles — see [Anchors and docking](#anchors-and-docking) — and neither is a
+solver: each derives one rectangle per child in a pass that already runs. Content
+-driven sizing, where a label is as wide as its text, is the thing this does not
+do, and it belongs in a crate an application opts into rather than in here.
 
 ## Scrolling
 

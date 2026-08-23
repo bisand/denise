@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use denise::Rect;
 
+use crate::anchor::{Anchors, Dock};
 use crate::widget::{BoxedWidget, VisualState};
 
 slotmap::new_key_type! {
@@ -72,6 +73,26 @@ pub(crate) struct Node<M> {
     /// layouts into bounds, so nothing can disagree about where a moved
     /// sibling is. See [`Ui::set_stack`](crate::Ui::set_stack).
     pub(crate) stack: Option<i32>,
+    /// Which of the parent's edges this node keeps its distance from.
+    ///
+    /// [`Anchors::TOP_LEFT`] by default, which derives the rectangle the node
+    /// already had — so a tree that never mentions anchoring behaves exactly as
+    /// it did before anchoring existed.
+    pub(crate) anchors: Anchors,
+    /// An edge of the parent this node takes entirely, if any. Applied in
+    /// `reflow`, before the anchored children and before any stack, so a docked
+    /// bar shrinks the box the rest are placed in.
+    pub(crate) dock: Option<Dock>,
+    /// The size of the box this node was placed in when its layout was last set,
+    /// against which [`Node::anchors`] measures the parent's growth.
+    ///
+    /// `None` until the first reflow places it, and captured there rather than
+    /// at insertion, because the box a child is placed in is not knowable until
+    /// its docked siblings have taken their edges. Reset by
+    /// [`Ui::set_layout`](crate::Ui::set_layout) — a new layout is a new design,
+    /// stated against whatever the parent is now — but *not* by a layout tween,
+    /// which would otherwise re-baseline on every frame and stand still.
+    pub(crate) anchor_base: Option<denise::Size>,
 }
 
 impl<M> Node<M> {
@@ -92,6 +113,9 @@ impl<M> Node<M> {
             tooltip: None,
             scroll: denise::Point::ZERO,
             stack: None,
+            anchors: Anchors::TOP_LEFT,
+            dock: None,
+            anchor_base: None,
         }
     }
 

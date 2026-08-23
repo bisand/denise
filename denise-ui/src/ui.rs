@@ -21,6 +21,7 @@ use crate::tooltip::Tooltip;
 /// dropdown visually belongs to its button, and a gap wide enough to see the
 /// page through reads as two unrelated panels.
 const POPUP_GAP: i32 = 4;
+use crate::anchor::{self, Anchors, Dock};
 use crate::motion::{Motion, Wake};
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
 use crate::widgets::describe::{DynDescribe, Property, PropertyError, Value};
@@ -937,6 +938,14 @@ impl<M: 'static> Ui<M> {
     /// silent-setter rule applied to the tree itself.
     pub fn set_layout(&mut self, id: NodeId, layout: Rect) {
         self.tweens.retain(|t| t.id != id);
+        // A new layout is a new design, stated against whatever the parent is
+        // now, so anchoring re-baselines against the box this node is next
+        // placed in. `apply_layout` deliberately does not: it is also the path a
+        // tween drives, and re-baselining every frame would leave an anchored
+        // node standing still while its parent moved around it.
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.anchor_base = None;
+        }
         self.apply_layout(id, layout);
     }
 
@@ -1049,6 +1058,92 @@ impl<M: 'static> Ui<M> {
         }
     }
 
+    /// Sets which of its parent's edges a node keeps its distance from.
+    ///
+    /// [`Anchors::TOP_LEFT`] by default — the node keeps its rectangle whatever
+    /// its parent does, which is what the tree did before anchoring existed.
+    /// See the [`anchor`](crate::anchor) module for what each combination means.
+    ///
+    /// Not a layout engine: this is one derived rectangle per child, in the
+    /// reflow the tree already runs. The node's own `layout` is never rewritten.
+    ///
+    /// ```
+    /// # use denise::{Rect, Size, theme};
+    /// # use denise_ui::{Anchors, Ui, Void};
+    /// # use denise_ui::widgets::Panel;
+    /// let mut ui: Ui<Void> = Ui::new(Size::new(200, 100), theme::DARK);
+    /// let root = ui.root();
+    /// let bar = ui.add(root, Panel::default(), Rect::new(10, 10, 180, 20)).unwrap();
+    ///
+    /// // Held at both ends, so it spans whatever width there is.
+    /// ui.set_anchors(bar, Anchors::new(true, true, true, false));
+    /// assert_eq!(ui.bounds(bar).unwrap().width, 180);
+    /// ```
+    pub fn set_anchors(&mut self, id: NodeId, anchors: Anchors) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if node.anchors == anchors {
+            return;
+        }
+        node.anchors = anchors;
+        let root = self.reflow_root(id);
+        self.damage_subtree(root);
+        self.reflow(root);
+        self.damage_subtree(root);
+        self.clamp_scroll_above(id);
+    }
+
+    /// Which of its parent's edges this node keeps its distance from.
+    pub fn anchors(&self, id: NodeId) -> Anchors {
+        self.nodes.get(id).map_or(Anchors::TOP_LEFT, |n| n.anchors)
+    }
+
+    /// Gives a node an entire edge of what is left of its parent, or takes it
+    /// back with `None`.
+    ///
+    /// Docked children are placed in paint order, each taking its edge from what
+    /// the ones before it left, and everything undocked is placed in what
+    /// remains — so docking a bar to the top moves the rest down rather than
+    /// covering it. Only the node's extent along the docking axis is used: a
+    /// [`Dock::Top`] keeps its `height` and is given the full width.
+    ///
+    /// ```
+    /// # use denise::{Rect, Size, theme};
+    /// # use denise_ui::{Dock, Ui, Void};
+    /// # use denise_ui::widgets::Panel;
+    /// let mut ui: Ui<Void> = Ui::new(Size::new(200, 100), theme::DARK);
+    /// let root = ui.root();
+    /// let bar = ui.add(root, Panel::default(), Rect::new(0, 0, 0, 24)).unwrap();
+    /// let body = ui.add(root, Panel::default(), Rect::new(0, 0, 0, 0)).unwrap();
+    ///
+    /// ui.set_dock(bar, Some(Dock::Top));
+    /// ui.set_dock(body, Some(Dock::Fill));
+    /// assert_eq!(ui.bounds(bar).unwrap(), Rect::new(0, 0, 200, 24));
+    /// assert_eq!(ui.bounds(body).unwrap(), Rect::new(0, 24, 200, 76));
+    /// ```
+    pub fn set_dock(&mut self, id: NodeId, dock: Option<Dock>) {
+        let Some(node) = self.nodes.get_mut(id) else {
+            return;
+        };
+        if node.dock == dock {
+            return;
+        }
+        node.dock = dock;
+        // Docking changes the box every *sibling* is placed in, so the reflow
+        // and the damage start at the parent whether or not it stacks.
+        let root = node.parent.unwrap_or(id);
+        self.damage_subtree(root);
+        self.reflow(root);
+        self.damage_subtree(root);
+        self.clamp_scroll_above(id);
+    }
+
+    /// Which edge of its parent this node takes, if any.
+    pub fn dock(&self, id: NodeId) -> Option<Dock> {
+        self.nodes.get(id).and_then(|n| n.dock)
+    }
+
     /// Stops stacking: children return to their own layout positions.
     pub fn clear_stack(&mut self, id: NodeId) {
         if let Some(node) = self.nodes.get_mut(id)
@@ -1074,12 +1169,25 @@ impl<M: 'static> Ui<M> {
     /// Where a reflow triggered by `id` has to start: the parent when it
     /// stacks, because the change moves siblings, and the node itself
     /// otherwise.
+    /// Where a reflow touching `id` has to start.
+    ///
+    /// Usually `id` itself. But a node whose parent *arranges* its children —
+    /// a stack, or any docked sibling — cannot be placed without them: its
+    /// position depends on what its siblings took first. Those start at the
+    /// parent instead, which is also where the damage has to start.
     fn reflow_root(&self, id: NodeId) -> NodeId {
-        self.nodes
-            .get(id)
-            .and_then(|n| n.parent)
-            .filter(|&p| self.nodes.get(p).is_some_and(|n| n.stack.is_some()))
-            .unwrap_or(id)
+        let Some(parent) = self.nodes.get(id).and_then(|n| n.parent) else {
+            return id;
+        };
+        let Some(node) = self.nodes.get(parent) else {
+            return id;
+        };
+        let arranges = node.stack.is_some()
+            || node
+                .children
+                .iter()
+                .any(|&c| self.nodes.get(c).is_some_and(|n| n.dock.is_some()));
+        if arranges { parent } else { id }
     }
 
     /// Sets the sibling sort key. Higher paints later, so higher is on top.
@@ -2414,69 +2522,130 @@ impl<M: 'static> Ui<M> {
         self.order_dirty = false;
     }
 
+    /// A rectangle's extent as a [`Size`], never negative.
+    fn extent(rect: Rect) -> Size {
+        Size::new(rect.width.max(0) as u32, rect.height.max(0) as u32)
+    }
+
+    /// Turns layouts into absolute bounds for a subtree.
+    ///
+    /// The one place that happens. Four rules meet here and their order is the
+    /// contract: **docking** takes edges from the parent's content box, then a
+    /// **stack** or **anchoring** places what is left, then the **scroll offset**
+    /// shifts all of it. Everything downstream — bounds, clip, paint, damage,
+    /// hit testing — reads only what this loop wrote, so none of them can
+    /// disagree about where a node ended up.
+    ///
+    /// No rule rewrites a node's `layout`. Each derives a rectangle from it, so
+    /// the application's rectangles stay the application's, and a form file keeps
+    /// one rectangle per node however it is being placed.
     fn reflow(&mut self, id: NodeId) {
-        let (origin, clip, disabled) = match self.nodes.get(id).and_then(|n| n.parent) {
-            Some(parent) => match self.nodes.get(parent) {
-                Some(node) => (
-                    Point::new(node.bounds.x, node.bounds.y),
-                    node.clip,
-                    node.state.contains(VisualState::DISABLED),
-                ),
+        let (rect, clip, disabled) = match self.nodes.get(id).and_then(|n| n.parent) {
+            Some(parent) => {
+                let Some(node) = self.nodes.get(parent) else {
+                    return;
+                };
+                let (clip, disabled) = (node.clip, node.state.contains(VisualState::DISABLED));
+                let origin =
+                    Point::new(node.bounds.x - node.scroll.x, node.bounds.y - node.scroll.y);
+                let available = Self::extent(node.bounds);
+                // Reaching here means the parent does not arrange its children:
+                // `reflow_root` sends a node whose parent stacks or docks to the
+                // parent instead, because such a node cannot be placed without
+                // its siblings. So the box is the parent's whole content box.
+                let Some(child) = self.nodes.get(id) else {
+                    return;
+                };
+                let base = child.anchor_base.unwrap_or(available);
+                let local = anchor::anchored(child.layout, base, available, child.anchors);
+                if let Some(child) = self.nodes.get_mut(id) {
+                    child.anchor_base.get_or_insert(available);
+                }
+                (local.translate(origin.x, origin.y), clip, disabled)
+            }
+            None => match self.nodes.get(id) {
+                Some(node) => (node.layout, Rect::from_size(self.size), false),
                 None => return,
             },
-            None => (Point::ZERO, Rect::from_size(self.size), false),
         };
 
-        let mut work = vec![(id, origin, clip, disabled)];
-        while let Some((id, origin, clip, disabled)) = work.pop() {
+        let mut work = vec![(id, rect, clip, disabled)];
+        while let Some((id, rect, clip, disabled)) = work.pop() {
             let Some(node) = self.nodes.get_mut(id) else {
                 continue;
             };
-            node.bounds = node.layout.translate(origin.x, origin.y);
-            node.clip = node.bounds.intersect(&clip).unwrap_or(Rect::ZERO);
+            node.bounds = rect;
+            node.clip = rect.intersect(&clip).unwrap_or(Rect::ZERO);
             let disabled = disabled || !node.enabled;
             node.state = node.state.set(VisualState::DISABLED, disabled);
-            // The scroll offset happens here and only here. Children lay out
-            // against a shifted origin, and everything downstream — bounds,
-            // clip, paint, hit testing — reads the fields this loop wrote, so
-            // nothing can disagree about where a scrolled child is.
-            let child_origin =
-                Point::new(node.bounds.x - node.scroll.x, node.bounds.y - node.scroll.y);
+            // The scroll offset happens here and only here.
+            let origin = Point::new(rect.x - node.scroll.x, rect.y - node.scroll.y);
             let child_clip = node.clip;
-            match node.stack {
-                None => work.extend(
-                    node.children
-                        .iter()
-                        .map(|&c| (c, child_origin, child_clip, disabled)),
-                ),
-                // A stack places its visible children top-to-bottom at the
-                // running y, keeping their own x, width and height. Like the
-                // scroll offset above, it happens here and only here — which
-                // is what lets a layout tween on one child move every sibling
-                // below it without anybody keeping books. Each child gets its
-                // own origin, shifted so its layout lands at the running
-                // position; the layout itself is never rewritten, so the
-                // application's rectangles stay the application's.
-                Some(spacing) => {
-                    let children = node.children.clone();
-                    let mut running = 0i32;
-                    for c in children {
-                        let Some(child) = self.nodes.get(c) else {
-                            continue;
-                        };
-                        if !child.visible {
-                            // A hidden child takes no space and moves nobody.
-                            work.push((c, child_origin, child_clip, disabled));
-                            continue;
-                        }
-                        let shifted =
-                            Point::new(child_origin.x, child_origin.y + running - child.layout.y);
+            let stack = node.stack;
+            let children = node.children.clone();
+
+            // Docked children take their edges first, in paint order, each from
+            // what the ones before it left — so two bars docked to the top are
+            // two stacked bars, and what remains is the box everything else is
+            // placed in. A hidden child takes no room, as in a stack.
+            let mut remaining = Rect::new(0, 0, rect.width, rect.height);
+            for &c in &children {
+                let Some(child) = self.nodes.get(c) else {
+                    continue;
+                };
+                let (Some(dock), true) = (child.dock, child.visible) else {
+                    continue;
+                };
+                let (taken, rest) = anchor::docked(child.layout, remaining, dock);
+                remaining = rest;
+                work.push((c, taken.translate(origin.x, origin.y), child_clip, disabled));
+            }
+
+            let available = Self::extent(remaining);
+            let mut running = 0i32;
+            for c in children {
+                let Some(child) = self.nodes.get(c) else {
+                    continue;
+                };
+                if child.dock.is_some() && child.visible {
+                    continue;
+                }
+                let local = match stack {
+                    // A stack places its visible children top-to-bottom at the
+                    // running y, keeping their own x, width and height — which
+                    // is what lets a layout tween on one child move every
+                    // sibling below it without anybody keeping books.
+                    Some(spacing) if child.visible => {
+                        let placed = Rect::new(
+                            child.layout.x,
+                            running,
+                            child.layout.width,
+                            child.layout.height,
+                        );
                         running = running
                             .saturating_add(child.layout.height.max(0))
                             .saturating_add(spacing);
-                        work.push((c, shifted, child_clip, disabled));
+                        placed
                     }
-                }
+                    // A hidden child takes no space and moves nobody, but still
+                    // needs bounds: it may be shown again, and its own children
+                    // are reflowed from them.
+                    Some(_) => child.layout,
+                    None => {
+                        let base = child.anchor_base.unwrap_or(available);
+                        let local = anchor::anchored(child.layout, base, available, child.anchors);
+                        if let Some(child) = self.nodes.get_mut(c) {
+                            child.anchor_base.get_or_insert(available);
+                        }
+                        local
+                    }
+                };
+                work.push((
+                    c,
+                    local.translate(origin.x + remaining.x, origin.y + remaining.y),
+                    child_clip,
+                    disabled,
+                ));
             }
         }
     }

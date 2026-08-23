@@ -227,6 +227,8 @@ primary text, where it has one — and then properties. These apply to all of th
 | `scroll` | bool | `#false` | `Ui::set_scrollable` — this node is a viewport for children larger than it. |
 | `stack` | integer | — | `Ui::set_stack`: place children top to bottom with this spacing. A stacked container's children still declare `y`; the tree overwrites it. Containers only. |
 | `focus` | bool | `#false` | This node has the caret when the form opens. At most one per form. |
+| `anchor` | names | `"left top"` | Which of the parent's edges this node keeps its distance from, space separated, from `left` `top` `right` `bottom`. Both edges of an axis and it stretches; neither and it stays centred between them. See [Responsiveness](#responsiveness). |
+| `dock` | `top` `bottom` `left` `right` `fill` | — | Take an edge of what is left of the parent, across its full width or height. Docked nodes are placed in file order, each from what the ones before it left, and everything undocked is placed in what remains. |
 
 There is no `id` distinct from `name`, no `class`, and no style attribute. A
 widget's appearance comes from its [role](#roles) and the theme, and nothing else.
@@ -745,10 +747,10 @@ separate problems that are easy to run together:
 | | | |
 |---|---|---|
 | **Scale** | Same design, more pixels. A 1024×600 form on a 2048×1200 panel, or on a 2× display. | [#111](https://github.com/bisand/denise/issues/111) — the engine multiplies on the way in, exactly as `hello` does by hand, and the form declares with `scaling=` whether it consents to being scaled at all. |
-| **Resize** | A window being dragged, a different aspect ratio, a panel turned to portrait. Scaling alone letterboxes or distorts. | [#110](https://github.com/bisand/denise/issues/110) — `anchor=` and `dock=` per node: Delphi's and WinForms' own answer, one derived rectangle per child in the reflow pass the tree already runs. |
+| **Resize** | A window being dragged, a different aspect ratio, a panel turned to portrait. Scaling alone letterboxes or distorts. | **Done** — `anchor=` and `dock=` per node ([#110](https://github.com/bisand/denise/issues/110)): Delphi's and WinForms' own answer, one derived rectangle per child in the reflow pass the tree already runs. The toolkit has them; [#86](https://github.com/bisand/denise/issues/86) is what makes a `.dform` say so. |
 | **Content-driven sizing** | A label as wide as its text, a row that grows with what is in it. | [#112](https://github.com/bisand/denise/issues/112) — a real measure-and-arrange engine, in a crate of its own that an application opts into, so the core keeps costing nothing. |
 
-Both of the first two arrive as **properties added to existing nodes**, which
+Both of the first two are **properties added to existing nodes**, which
 `version 1` allows without a bump — nesting, naming, roles, messages and
 collections are untouched, and every form written before them keeps working
 because their defaults are today's behaviour.
