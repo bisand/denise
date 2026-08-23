@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn a_modeless_form_blocks_nothing() {
-        let links = vec![
+        let links = [
             (id(1), None, Modality::Independent),
             (id(2), Some(id(1)), Modality::Owned),
         ];
@@ -696,7 +696,7 @@ mod tests {
     /// An independent window is nobody's child, so nothing takes it along.
     #[test]
     fn an_independent_window_is_not_cascaded() {
-        let links = vec![
+        let links = [
             (id(1), None, Modality::Independent),
             (id(2), None, Modality::Independent),
         ];
