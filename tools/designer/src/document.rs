@@ -90,9 +90,12 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
         &mut self.form
     }
 
-    /// Notes that the file on disk is now behind.
-    pub fn touch(&mut self) {
-        self.dirty = true;
+    /// Records whether the file on disk is behind what is on screen.
+    ///
+    /// Told rather than inferred: the history knows, because undoing back to the
+    /// last save makes a file clean again and nothing here could work that out.
+    pub fn set_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
     }
 
     /// Re-reads the form from its own edited text.

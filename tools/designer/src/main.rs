@@ -39,6 +39,7 @@
 mod app;
 mod canvas;
 mod document;
+mod history;
 mod settings;
 
 use std::time::{Duration, Instant};

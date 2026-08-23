@@ -56,6 +56,7 @@ is skipped, so an invisible sheet over the whole form does not eat every click.
 | Arrow keys | One pixel. With Shift, twice the grid. |
 | Delete | Takes the node and everything under it out of the file. |
 | G | Turns snapping off, and on again. |
+| Ctrl/Cmd-Z | Undo. With Shift: redo. |
 
 Snapping is to a 4-pixel grid and, in preference to it, to the edges and centres
 of the node's **siblings** — the only alignment that means anything when there is
@@ -64,8 +65,28 @@ no layout engine. A guide is drawn on whatever it lined up with.
 **A drag is one edit.** The tree moves while the pointer does, so it can be seen;
 the file is written once, on release, as a targeted edit to that node's line. A
 press that never moved writes nothing at all, because it was a selection. That is
-what keeps a move to a one-line diff, and what will make it one undo step in
-[#94].
+what keeps a move to a one-line diff, and what makes it one undo step.
+
+## Undo
+
+There is no snapshot of anything. `Form::apply` hands back the edit that reverses
+the one just made, so undo is applying that, and what *it* hands back is the redo.
+The whole mechanism is two stacks of edits and a marker for where the file was
+last saved — which is only possible because the thing being edited is the
+document, comments and spacing included, rather than a value taken from it.
+
+So an undo is exact. Delete a panel and undo it, and the panel comes back with
+its children, its indentation, **and the comment written above it** — that
+comment is part of the node, and removing the node took it too.
+
+A drag is one step even when it moved and resized at once, and a run of nudges to
+one property is one step until you work on something else. The title carries a `•`
+while the file on disk is behind, and undoing back to the last save takes the mark
+away again.
+
+Closing with unsaved work stops once and says so; ask again and it goes. A modal
+would be the better question and needs a second window — this is the honest
+version until then, and it is at least impossible to lose a form to one keystroke.
 
 ## What is here
 
@@ -83,9 +104,8 @@ round trip the whole file format is built around, and there is a test for it.
 
 ## What is not here yet
 
-Dragging from the palette is [#91], editing a property is [#93], and undo is
-[#94] — the inspector reports, it does not yet edit, and there is **no undo**, so
-Delete is as final as the file.
+Dragging from the palette is [#91] and editing a property is [#93] — the
+inspector reports, it does not yet edit.
 
 Three parts of [#92] are not done either: a rubber band over empty space, dropping
 a node onto a panel to reparent it, and bring-to-front and send-to-back. Each is
@@ -94,7 +114,6 @@ its own mechanism rather than a corner of what is here.
 [#91]: https://github.com/bisand/denise/issues/91
 [#92]: https://github.com/bisand/denise/issues/92
 [#93]: https://github.com/bisand/denise/issues/93
-[#94]: https://github.com/bisand/denise/issues/94
 
 ## Elsewhere
 
