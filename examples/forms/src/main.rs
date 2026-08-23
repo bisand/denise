@@ -29,7 +29,7 @@
 //! is all. A form is an ordinary [`DeniseApp`] — same trait as this file's main
 //! window, same `Ui`, same message loop — so there is no form type to learn, no
 //! base class, and nothing that makes a "dialog" different from a "window" except
-//! the [`Modality`] the application asked for.
+//! the [`Modality`](denise_winit::Modality) the application asked for.
 //!
 //! **This is a desktop-only capability and the crate that has it is the desktop
 //! backend.** A kiosk build links `denise-drm` or `denise-fbdev`, never sees any
