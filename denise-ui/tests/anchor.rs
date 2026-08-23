@@ -319,3 +319,52 @@ fn a_docked_node_is_hit_where_it_was_placed_and_not_where_it_was_written() {
         "nothing is where its layout was written"
     );
 }
+
+#[test]
+fn touching_a_docked_node_reflows_from_where_its_rectangle_is_decided() {
+    // Found by the designer: a reflow that starts *at* a docked node computes its
+    // rectangle from its own layout, because docking is a rule about siblings and
+    // the node alone cannot apply it. The rest of the layout still reserved the
+    // room, so the symptom was one pane with the right gap beside it and nothing
+    // in it.
+    let (mut ui, root) = tree();
+    let side = panel(&mut ui, root, Rect::new(0, 0, 60, 0));
+    let body = panel(&mut ui, root, Rect::new(0, 0, 0, 0));
+    ui.set_dock(side, Some(Dock::Right));
+    ui.set_dock(body, Some(Dock::Fill));
+    assert_eq!(ui.bounds(side), Some(Rect::new(140, 0, 60, 100)));
+
+    // Anything that reflows from inside the docked node must not undo that.
+    let inner = panel(&mut ui, side, Rect::new(0, 0, 10, 10));
+    assert_eq!(
+        ui.bounds(side),
+        Some(Rect::new(140, 0, 60, 100)),
+        "adding a child moved the docked pane back to its own layout"
+    );
+    assert_eq!(ui.bounds(inner), Some(Rect::new(140, 0, 10, 10)));
+
+    // And so must a change to the docked node's own layout.
+    ui.set_layout(side, Rect::new(0, 0, 80, 0));
+    assert_eq!(ui.bounds(side), Some(Rect::new(120, 0, 80, 100)));
+    assert_eq!(ui.bounds(body), Some(Rect::new(0, 0, 120, 100)));
+}
+
+#[test]
+fn a_dock_inside_a_dock_survives_a_reflow_from_the_inside() {
+    let (mut ui, root) = tree();
+    let column = panel(&mut ui, root, Rect::new(0, 0, 80, 0));
+    ui.set_dock(column, Some(Dock::Right));
+    let header = panel(&mut ui, column, Rect::new(0, 0, 0, 20));
+    ui.set_dock(header, Some(Dock::Top));
+    let rest = panel(&mut ui, column, Rect::new(0, 0, 0, 0));
+    ui.set_dock(rest, Some(Dock::Fill));
+
+    assert_eq!(ui.bounds(column), Some(Rect::new(120, 0, 80, 100)));
+    assert_eq!(ui.bounds(header), Some(Rect::new(120, 0, 80, 20)));
+    assert_eq!(ui.bounds(rest), Some(Rect::new(120, 20, 80, 80)));
+
+    // Two levels down, so the climb has to go all the way up.
+    let deep = panel(&mut ui, rest, Rect::new(2, 2, 10, 10));
+    assert_eq!(ui.bounds(column), Some(Rect::new(120, 0, 80, 100)));
+    assert_eq!(ui.bounds(deep), Some(Rect::new(122, 22, 10, 10)));
+}

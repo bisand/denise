@@ -1,0 +1,32 @@
+[package]
+name = "denise-designer"
+description = "A visual form designer for DeniseUI: drag widgets onto a form and edit their properties."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-forms = { workspace = true }
+denise-ui = { workspace = true, features = ["std"] }
+denise-winit = { workspace = true }
+
+# A form under design names pictures, and a designer that drew none of them would
+# be showing something other than what the panel will.
+denise-image = { workspace = true, features = ["png", "jpeg", "gif"] }
+
+# The platform's own Open and Save dialogs. Its Linux default is the XDG desktop
+# portal rather than GTK, so this adds no system packages to a build.
+rfd = "0.15"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
