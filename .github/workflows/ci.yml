@@ -3,10 +3,40 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: &prose
+      # Prose that no job reads. Everything here is genuinely inert: changing it
+      # cannot break a build, a test, a lint or a link check, so spending
+      # fourteen jobs on it buys nothing.
+      #
+      # **A crate's README is not in this list and must never be.** Every one of
+      # them is pulled into its crate with `#[doc = include_str!("../README.md")]`,
+      # which makes its Rust blocks doctests that `cargo test --doc` compiles and
+      # its links something `cargo doc -D warnings` checks. A crate README is
+      # source code that happens to be Markdown, and ignoring it here would let a
+      # broken example through. The repository README is different: nothing
+      # includes it, and no job asserts anything about it.
+      #
+      # `forms/**` is deliberately absent too — #87 adds a job that runs
+      # `denise-forms check` over every `.dform`, and this list should not be a
+      # thing that has to be remembered on that day.
+      #
+      # A commit touching prose *and* code runs everything: `paths-ignore` skips
+      # only when every changed file matches.
+      - 'docs/**'
+      - 'README.md'
+      - 'assets/**'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
+    paths-ignore: *prose
   # For the Release workflow: its version-bump commit is pushed with the
   # workflow token, which starts no `on: push` run (GitHub's recursion guard),
   # so it dispatches this workflow explicitly and waits for the verdict.
+  #
+  # This is also why the filters above cannot strand a release: `paths-ignore`
+  # applies to `push` and `pull_request` only, so a dispatched run happens
+  # whatever the bump commit touched — and it touches `README.md`, among the
+  # manifests, every time.
   workflow_dispatch:
 
 env:
