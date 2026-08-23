@@ -9,6 +9,9 @@ use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 use crate::{NodeId, Ui};
 
@@ -286,6 +289,13 @@ fn chevron(canvas: &mut Canvas<'_>, centre: Point, arm: i32, open: bool, color: 
 }
 
 impl<M: 'static> Widget<M> for Collapse<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -384,6 +394,76 @@ impl<M: 'static> Widget<M> for Collapse<M> {
 
     fn focusable(&self) -> bool {
         self.message.is_some()
+    }
+}
+
+impl<M> Describe for Collapse<M> {
+    const KIND: &'static str = "collapse";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "text",
+            PropertyKind::Text,
+            "The header's title. Named as `button` and `label` name theirs, because a form writes it the same way: as the node's first argument.",
+        ),
+        Property::new(
+            "open",
+            PropertyKind::Bool,
+            "Whether the section is unfolded.",
+        ),
+        Property::new(
+            "expanded-height",
+            PropertyKind::Int { min: 0, max: 4096 },
+            "The content's height when open; measured from the children without it.",
+        ),
+        Property::new(
+            "on-toggle",
+            PropertyKind::Message(Payload::Bool),
+            "Emitted with the new state when the header is pressed. The application answers with `set_open`, which is what actually folds the node.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role the header strip is filled with.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Title size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.title.as_str()),
+            "open" => Value::Bool(self.open),
+            // A section that has never been folded has no remembered height, so
+            // there is nothing to report and nothing for a file to write.
+            "expanded-height" => Value::Int(self.expanded?),
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            // The message is the application's own type; see the `describe`
+            // module documentation.
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "text" => self.title = value.as_text()?,
+            // Silently: `set_open` animates a node's height, and a form being
+            // loaded or a designer flipping a checkbox is stating what the
+            // section *is*, not folding it in front of anyone. The node's own
+            // height comes from the file, which is why the widget only has to
+            // agree about the chevron.
+            "open" => self.set_open_silent(value.as_bool()?),
+            "expanded-height" => self.set_expanded_height(value.as_int()?),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            "on-toggle" => return Err(Mismatch::Supplied),
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

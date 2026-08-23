@@ -8,6 +8,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
 /// A set of options, exactly one of which is chosen.
@@ -237,6 +240,13 @@ fn circle_rect(row: Rect, theme: &Theme) -> Rect {
 }
 
 impl<M: 'static> Widget<M> for RadioGroup<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let count = self.options.len();
         if count == 0 {
@@ -377,6 +387,58 @@ impl<M: 'static> Widget<M> for RadioGroup<M> {
     /// strands a keyboard-only panel on a widget no key does anything to.
     fn focusable(&self) -> bool {
         !self.options.is_empty()
+    }
+}
+
+impl<M> Describe for RadioGroup<M> {
+    const KIND: &'static str = "radio-group";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "selected",
+            PropertyKind::Int {
+                min: 0,
+                max: i32::MAX,
+            },
+            "Index into the options. A group always has an answer, so this is never unset.",
+        ),
+        Property::new(
+            "on-change",
+            PropertyKind::Message(Payload::Index),
+            "Emitted with the chosen option's index.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role of the chosen option's disc.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "selected" => Value::Int(i32::try_from(self.selected).unwrap_or(i32::MAX)),
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter, which clamps into the options: unlike a list,
+            // this widget cannot represent nothing chosen.
+            "selected" => self.set_selected(value.as_index()?),
+            "on-change" => return Err(Mismatch::Supplied),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

@@ -4,6 +4,9 @@ use denise::{Rect, Role};
 use denise_render::Canvas;
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::interactive_pair;
 
 /// A determinate progress bar, `0.0` to `1.0`.
@@ -156,6 +159,13 @@ fn fill_width(width: i32, value: f32) -> i32 {
 }
 
 impl<M: 'static> Widget<M> for Progress {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -178,6 +188,43 @@ impl<M: 'static> Widget<M> for Progress {
         let (fill, _) = interactive_pair(ctx.theme, self.role, ctx.state);
         let bar = Rect::new(bounds.x, bounds.y, filled, bounds.height);
         canvas.fill_rounded_rect(bar, radius.min(filled / 2), fill);
+    }
+}
+
+impl Describe for Progress {
+    const KIND: &'static str = "progress";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "value",
+            PropertyKind::Float { min: 0.0, max: 1.0 },
+            "How much of the bar is filled, from empty at `0.0` to full at `1.0`.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour of the filled portion; `warning` or `error` for a bar that means something is running out rather than something is being achieved.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "value" => Value::Float(self.value),
+            "role" => Value::role(self.role),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter rather than the field: the range above is what
+            // an inspector should offer, and `set_value` is the one place that
+            // decides what a number outside it — or a NaN — means.
+            "value" => self.set_value(value.as_float()?),
+            "role" => self.role = value.as_role()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

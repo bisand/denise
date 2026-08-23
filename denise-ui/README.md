@@ -83,6 +83,40 @@ a time against [issue #6](https://github.com/bisand/denise/issues/6).
 Every one names theme *roles* rather than colours, and every surface/foreground
 pair is contrast-checked by a test in all three built-in themes.
 
+## Widgets describe their own properties
+
+Every widget implements `Describe`: what a form file calls it, what settings it
+has, and how to read and write each one by name.
+
+```rust
+use denise_ui::widgets::{Button, Describe, Value};
+use denise_ui::Void;
+
+let mut button = Button::<Void>::inert("Save");
+button.set("text", Value::text("Apply")).unwrap();
+assert_eq!(button.get("text"), Some(Value::text("Apply")));
+```
+
+The list lives beside the widget so that nothing else has to keep a copy. Two
+things want one — [`denise-forms`](../docs/forms.md), which builds a tree from a
+`.dform` file, and the designer's property inspector, which shows one editor per
+property — and a table maintained in either would drift from the widgets the
+first time one grew a setting. `widgets::all()` is the catalogue a palette lists,
+and a test reads `mod.rs` and fails if a widget is missing from it.
+
+Through the tree it is `ui.set_property(id, "role", Value::Enum("primary"))`,
+which is the single place a string becomes a typed call on a widget. An error
+names the widget, the property, and everything that *would* have been accepted.
+
+Two kinds of property are described but not settable here, and
+`Property::is_settable` says which. A **message** is a value of your type, and
+this crate has never seen your type. An **asset** is a path, and this crate
+decodes nothing. The engine resolves both and passes them to the constructor.
+
+The ranges on a numeric property are what an editor should offer, not a gate: a
+widget that clamps clamps a value from `set` exactly as it clamps one from its
+own setter, so there is one rule rather than two.
+
 ## Damage is the toolkit's job
 
 There are no dirty flags to set. `Ui::widget_mut` invalidates on access; hover,

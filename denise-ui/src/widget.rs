@@ -14,6 +14,7 @@ use denise_render::Canvas;
 use denise_text::TextEngine;
 
 use crate::motion::Wake;
+use crate::widgets::describe::DynDescribe;
 
 /// Upcast to [`Any`], so an application can get its concrete widget type back out
 /// of the tree. Blanket-implemented; never implement it by hand.
@@ -404,6 +405,35 @@ pub trait Widget<M>: AsAny {
     fn snap(&mut self, now_ms: u64) -> Animation {
         let _ = now_ms;
         Animation::NONE
+    }
+
+    /// This widget's property description, if it has one.
+    ///
+    /// The tree stores widgets boxed, and [`Describe`](crate::widgets::Describe)
+    /// has associated constants, so it is not object-safe and cannot be reached
+    /// through a `dyn Widget<M>` directly. These two hand over the object-safe
+    /// half, and they are what
+    /// [`Ui::set_property`](crate::Ui::set_property) calls.
+    ///
+    /// Opting in is two lines in a widget's `Widget` implementation, once it
+    /// implements `Describe`:
+    ///
+    /// ```ignore
+    /// fn describe(&self) -> Option<&dyn DynDescribe> { Some(self) }
+    /// fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> { Some(self) }
+    /// ```
+    ///
+    /// The default answers `None`, so a one-off widget in an application is not
+    /// obliged to describe itself — it simply does not appear in a form file or
+    /// a property inspector, which for a widget nobody else will ever place is
+    /// the right amount of ceremony. Every widget this crate ships does opt in.
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        None
+    }
+
+    /// The mutable half of [`describe`](Widget::describe).
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        None
     }
 }
 

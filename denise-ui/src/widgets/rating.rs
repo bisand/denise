@@ -4,6 +4,9 @@ use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role};
 use denise_render::Canvas;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{focus_ring, interactive_pair};
 
 /// The valley radius as a fraction of the tip radius, in percent.
@@ -261,6 +264,13 @@ fn geometry(bounds: Rect, max: u32) -> (i32, i32) {
 }
 
 impl<M: 'static> Widget<M> for Rating<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         let (side, step) = geometry(bounds, self.max);
@@ -398,6 +408,70 @@ pub(crate) fn star_colors(
     } else {
         let (empty, _) = interactive_pair(theme, Role::Base300, state);
         (empty, interactive_pair(theme, role, state).0)
+    }
+}
+
+impl<M> Describe for Rating<M> {
+    const KIND: &'static str = "rating";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "value",
+            PropertyKind::Float { min: 0.0, max: 5.0 },
+            "How many stars are filled; fractional, so an average of `4.3` draws four stars and a bit.",
+        ),
+        Property::new(
+            "max",
+            PropertyKind::Int { min: 1, max: 10 },
+            "How many symbols there are.",
+        ),
+        Property::new(
+            "on-change",
+            PropertyKind::Message(Payload::Number),
+            "Emitted with the new value when a person rates. Omitted, the rating is display-only.",
+        ),
+        Property::new(
+            "clearable",
+            PropertyKind::Bool,
+            "Whether pressing the current value clears it to zero — the only route to zero without a keyboard.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour of the filled stars.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "value" => Value::Float(self.value),
+            "max" => Value::Int(self.max as i32),
+            "clearable" => Value::Bool(self.clearable),
+            "role" => Value::role(self.role),
+            // The message is the application's own type; see the `describe`
+            // module documentation.
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // The editor range above is for five stars, the default; the value
+            // is really clamped against `max`, which `set_value` is where that
+            // happens.
+            "value" => self.set_value(value.as_float()?),
+            "max" => {
+                // `with_max`'s rule, and the value comes with it: a four left
+                // over on a row shrunk to three stars would point past the end.
+                self.max = value.as_count()?.max(1);
+                self.set_value(self.value);
+            }
+            "clearable" => self.clearable = value.as_bool()?,
+            "role" => self.role = value.as_role()?,
+            "on-change" => return Err(Mismatch::Supplied),
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

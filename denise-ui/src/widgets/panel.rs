@@ -4,6 +4,9 @@ use denise::{Radius, Role};
 use denise_render::Canvas;
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Property, PropertyKind, RADII, ROLES, Value, role_from_name,
+};
 
 /// A filled, optionally bordered rounded rectangle.
 ///
@@ -83,6 +86,13 @@ impl Panel {
 }
 
 impl<M: 'static> Widget<M> for Panel {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn accepts_pointer(&self) -> bool {
         self.backdrop
     }
@@ -108,5 +118,99 @@ impl<M: 'static> Widget<M> for Panel {
                 ctx.theme.color(role),
             );
         }
+    }
+}
+
+/// The name that clears a colour rather than choosing one.
+const NONE: &str = "none";
+
+/// Every [`Role`], plus [`NONE`].
+///
+/// `fill` and `border` are `Option<Role>`, so a form file needs a way to say the
+/// absence — `fill=none` — and an inspector needs to offer it in the same list it
+/// offers the colours in. Built from [`ROLES`] rather than written out again
+/// because a slice cannot be concatenated in a `const`, and a second copy of the
+/// role names is a second thing to forget when one is added.
+const fn roles_or_none() -> [&'static str; ROLES.len() + 1] {
+    let mut names = [NONE; ROLES.len() + 1];
+    let mut i = 0;
+    while i < ROLES.len() {
+        names[i] = ROLES[i];
+        i += 1;
+    }
+    // The last stays `NONE`, which is what the array was filled with.
+    names
+}
+
+/// [`roles_or_none`] as a slice, which is what [`PropertyKind::Enum`] takes.
+const ROLES_OR_NONE: &[&str] = &roles_or_none();
+
+/// A role, or the absence of one.
+fn role_or_none(value: Value) -> Result<Option<Role>, Mismatch> {
+    let name = value.as_name()?;
+    if name == NONE {
+        return Ok(None);
+    }
+    role_from_name(name).map(Some).ok_or(Mismatch::WrongType {
+        expected: PropertyKind::Enum(ROLES_OR_NONE),
+    })
+}
+
+impl Describe for Panel {
+    const KIND: &'static str = "panel";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "fill",
+            PropertyKind::Enum(ROLES_OR_NONE),
+            "Surface colour. `none` leaves what is underneath alone.",
+        ),
+        Property::new(
+            "border",
+            PropertyKind::Enum(ROLES_OR_NONE),
+            "Border colour. `none` for no border.",
+        ),
+        Property::new(
+            "border-width",
+            PropertyKind::Int { min: 0, max: 16 },
+            "Border thickness in pixels, drawn inside the bounds.",
+        ),
+        Property::new(
+            "radius",
+            PropertyKind::Enum(RADII),
+            "Corner rounding token. The theme decides the pixels.",
+        ),
+        Property::new(
+            "backdrop",
+            PropertyKind::Bool,
+            "This panel absorbs presses rather than letting them fall through, and leaves the focus where it is. What the sheet under an on-screen keyboard is.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            // A panel with no fill reports nothing rather than reporting
+            // `none`: an unset property is one nothing has to write down.
+            "fill" => Value::role(self.fill?),
+            "border" => Value::role(self.border?),
+            "border-width" => Value::Int(self.border_width),
+            "radius" => Value::radius(self.radius),
+            "backdrop" => Value::Bool(self.backdrop),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "fill" => self.fill = role_or_none(value)?,
+            "border" => self.border = role_or_none(value)?,
+            // Negative is not a thinner border, it is an inverted rectangle by
+            // the time `stroke_rounded_rect` sees it.
+            "border-width" => self.border_width = value.as_int()?.max(0),
+            "radius" => self.radius = value.as_radius()?,
+            "backdrop" => self.backdrop = value.as_bool()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }

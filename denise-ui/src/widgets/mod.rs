@@ -53,6 +53,8 @@
 //! looking it up afterwards. An enum's tuple variant already is such a function:
 //! `Checkbox::new("Mute", Message::Muted)`.
 //!
+pub mod describe;
+
 mod alert;
 mod avatar;
 mod badge;
@@ -87,6 +89,10 @@ pub use button::Button;
 pub use carousel::Carousel;
 pub use checkbox::Checkbox;
 pub use collapse::{Accordion, Collapse, FOLD_MS, set_open};
+pub use describe::{
+    ALIGNMENTS, Describe, DynDescribe, FITS, Mismatch, ORIENTATIONS, PRESENCES, Payload, Property,
+    PropertyError, PropertyKind, RADII, ROLES, Value, WidgetInfo, all,
+};
 pub use divider::Divider;
 pub use image::{Fit, Image};
 pub use label::Label;

@@ -1,9 +1,12 @@
 //! The rectangle a video plane sits in.
 
+use alloc::format;
+
 use denise::Color;
 use denise_render::Canvas;
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{Describe, DynDescribe, Mismatch, Property, PropertyKind, Value};
 
 /// Where a video goes: a placeholder that reserves space in the tree and
 /// paints the letterbox ground. **The video itself never comes through
@@ -68,8 +71,61 @@ impl Default for Video {
 }
 
 impl<M: 'static> Widget<M> for Video {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         canvas.fill_rect(ctx.bounds, self.ground);
+    }
+}
+
+/// The colour `"#RRGGBB"` names, opaque.
+///
+/// The one literal colour in the format, so this is the only hand-written
+/// colour parser: everything else names a [`Role`](denise::Role) and the theme
+/// decides. Exactly six hex digits, with the `#` optional — a shorter form
+/// would have to guess whether `#abc` is a shorthand or a typo, and the ground
+/// of a video plane is not worth the guess.
+fn ground_from_hex(text: &str) -> Option<Color> {
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok().map(Color::from_rgb888)
+}
+
+impl Describe for Video {
+    const KIND: &'static str = "video";
+
+    const PROPERTIES: &'static [Property] = &[Property::new(
+        "ground",
+        PropertyKind::Color,
+        "The letterbox colour behind the plane, as `\"#RRGGBB\"`.",
+    )];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            // Alpha is dropped rather than written: the ground is painted under
+            // a hardware plane, where translucency has nothing to mean.
+            "ground" => Value::Text(format!("#{:06X}", self.ground.to_argb8888() & 0x00FF_FFFF)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "ground" => {
+                self.ground = ground_from_hex(&value.as_text()?).ok_or(Mismatch::WrongType {
+                    expected: PropertyKind::Color,
+                })?;
+            }
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

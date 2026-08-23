@@ -23,6 +23,7 @@ use crate::tooltip::Tooltip;
 const POPUP_GAP: i32 = 4;
 use crate::motion::{Motion, Wake};
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
+use crate::widgets::describe::{DynDescribe, Property, PropertyError, Value};
 
 /// A drawer's life, tracked by the tree.
 #[derive(Clone, Copy, Debug)]
@@ -1197,6 +1198,64 @@ impl<M: 'static> Ui<M> {
             .widget
             .as_any_mut()
             .downcast_mut::<W>()
+    }
+
+    // ----------------------------------------------------------- properties
+
+    /// What kind of widget a node holds, as a form file spells it.
+    ///
+    /// `None` for a widget that does not describe itself — see
+    /// [`Widget::describe`].
+    pub fn kind(&self, id: NodeId) -> Option<&'static str> {
+        self.nodes.get(id)?.widget.describe().map(DynDescribe::kind)
+    }
+
+    /// Every property a node's widget accepts.
+    ///
+    /// Empty for a widget that does not describe itself. A property inspector
+    /// walks this to decide which editors to show, so it never names a widget.
+    pub fn properties(&self, id: NodeId) -> &'static [Property] {
+        self.nodes
+            .get(id)
+            .and_then(|node| node.widget.describe())
+            .map_or(&[], DynDescribe::properties)
+    }
+
+    /// The current value of one property.
+    ///
+    /// `None` for a node that does not exist, a widget that does not describe
+    /// itself, a property it does not have, and a property that is simply not
+    /// set — [`Describe::get`](crate::widgets::Describe::get) explains why those
+    /// last two share an answer.
+    pub fn get_property(&self, id: NodeId, name: &str) -> Option<Value> {
+        self.nodes.get(id)?.widget.describe()?.get_property(name)
+    }
+
+    /// Sets one property by name, and marks the node for repaint.
+    ///
+    /// The one place a string becomes a typed call on a widget: a form file's
+    /// `role=primary` and a property inspector's dropdown arrive here and go no
+    /// further apart. An error names the widget, the property and what would
+    /// have been accepted.
+    ///
+    /// Returns `None` if the node does not exist or its widget does not describe
+    /// itself; that is a different thing from a property that was refused, which
+    /// is the `Err` inside.
+    pub fn set_property(
+        &mut self,
+        id: NodeId,
+        name: &str,
+        value: Value,
+    ) -> Option<Result<(), PropertyError>> {
+        let node = self.nodes.get_mut(id)?;
+        let result = node.widget.describe_mut()?.set_property(name, value);
+        // The widget does not own its damage, so setting a property that changed
+        // what it draws would otherwise leave a stale rectangle on the panel.
+        // Invalidating unconditionally costs one widget-sized repaint on a
+        // no-op, which is the cheap way to be wrong.
+        let clip = node.clip;
+        self.damage.add(clip);
+        Some(result)
     }
 
     // ---------------------------------------------------------------- focus

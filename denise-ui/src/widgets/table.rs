@@ -8,6 +8,9 @@ use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{
     Align, ClickPair, Intent, RowKind, draw_aligned, focus_ring, hovered_row, interactive_pair,
     row_colors,
@@ -474,6 +477,13 @@ fn column_spans(width: i32, columns: &[Column], pad: i32) -> Vec<(i32, i32)> {
 }
 
 impl<M: 'static> Widget<M> for Table<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.columns.is_empty() {
@@ -691,6 +701,79 @@ impl<M: 'static> Widget<M> for Table<M> {
     /// nothing about it.
     fn focusable(&self) -> bool {
         !self.rows.is_empty()
+    }
+}
+
+impl<M> Describe for Table<M> {
+    const KIND: &'static str = "table";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "selected",
+            PropertyKind::Int {
+                min: 0,
+                max: i32::MAX,
+            },
+            "The selected row. An index no row has selects nothing, rather than the nearest row.",
+        ),
+        Property::new(
+            "on-select",
+            PropertyKind::Message(Payload::Index),
+            "Emitted with the row's index whenever the selection moves.",
+        ),
+        Property::new(
+            "on-activate",
+            PropertyKind::Message(Payload::Index),
+            "Emitted on Enter, or a double press.",
+        ),
+        Property::new(
+            "activate-on-click",
+            PropertyKind::Bool,
+            "A single press activates as well as selects.",
+        ),
+        Property::new(
+            "row-height",
+            PropertyKind::Int { min: 16, max: 200 },
+            "Height of every row in logical pixels, overriding the theme's field height.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role of the selected row.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            // Nothing selected and no row height of its own report nothing at
+            // all, so a property left at its default need not be written out.
+            "selected" => Value::Int(i32::try_from(self.selected?).unwrap_or(i32::MAX)),
+            "activate-on-click" => Value::Bool(self.single_click),
+            "row-height" => Value::Int(self.row_height?),
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter, which drops a row that is not there rather
+            // than remembering an index nothing can draw.
+            "selected" => self.set_selected(Some(value.as_index()?)),
+            "on-select" | "on-activate" => return Err(Mismatch::Supplied),
+            "activate-on-click" => self.single_click = value.as_bool()?,
+            "row-height" => self.row_height = Some(value.as_int()?.max(1)),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

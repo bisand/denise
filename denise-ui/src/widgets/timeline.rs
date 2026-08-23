@@ -8,6 +8,7 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{Describe, DynDescribe, Mismatch, Property, PropertyKind, Value};
 use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
 /// One event on a [`Timeline`].
@@ -215,6 +216,13 @@ fn disc_radius(row_height: i32) -> i32 {
 }
 
 impl<M: 'static> Widget<M> for Timeline {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.items.is_empty() {
@@ -311,6 +319,45 @@ impl<M: 'static> Widget<M> for Timeline {
                 }
             }
         }
+    }
+}
+
+impl Describe for Timeline {
+    const KIND: &'static str = "timeline";
+
+    /// A timeline has no colour role of its own: the role belongs to each
+    /// event, so a run of them can be `success` up to the one that is still
+    /// `warning`.
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "row-height",
+            PropertyKind::Int { min: 16, max: 200 },
+            "Height of every event row in logical pixels, overriding the theme's field height.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            // A timeline taking the theme's row height has nothing to report,
+            // so nothing is written back out for it.
+            "row-height" => Value::Int(self.row_height?),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "row-height" => self.row_height = Some(value.as_int()?.max(1)),
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

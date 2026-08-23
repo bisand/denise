@@ -8,6 +8,9 @@ use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair, muted};
 
 /// A control showing one chosen option, which asks to be opened.
@@ -202,6 +205,13 @@ fn draw_chevron(canvas: &mut Canvas<'_>, box_of: Rect, thickness: i32, color: de
 }
 
 impl<M: Clone + 'static> Widget<M> for Select<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -291,6 +301,70 @@ impl<M: Clone + 'static> Widget<M> for Select<M> {
     /// A select with no options is not a tab stop: there is nothing to open.
     fn focusable(&self) -> bool {
         !self.options.is_empty()
+    }
+}
+
+impl<M> Describe for Select<M> {
+    const KIND: &'static str = "select";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "selected",
+            PropertyKind::Int {
+                min: 0,
+                max: i32::MAX,
+            },
+            "The chosen option. Without one, nothing is chosen and the placeholder shows.",
+        ),
+        Property::new(
+            "placeholder",
+            PropertyKind::Text,
+            "Shown while nothing is chosen.",
+        ),
+        Property::new(
+            "on-change",
+            // The exception to the payload table: a `Select` holds one message
+            // and the application reads `selected()` when it arrives, because a
+            // dropdown's choice outlives the event that made it.
+            PropertyKind::Message(Payload::None),
+            "Emitted when a choice is made; the application reads `selected` afterwards.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role of the control's own surface.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            // Nothing chosen reports nothing, which is the state the format
+            // spells by leaving `selected` out.
+            "selected" => Value::Int(i32::try_from(self.selected?).unwrap_or(i32::MAX)),
+            "placeholder" => Value::text(self.placeholder.as_str()),
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter, so an option that is not there chooses
+            // nothing rather than leaving a dangling index behind.
+            "selected" => self.set_selected(Some(value.as_index()?)),
+            "placeholder" => self.placeholder = value.as_text()?,
+            "on-change" => return Err(Mismatch::Supplied),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 
