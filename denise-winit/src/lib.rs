@@ -28,22 +28,17 @@
 mod keymap;
 #[cfg(target_os = "macos")]
 mod macos;
+mod owner;
+mod runner;
 #[cfg(not(target_os = "macos"))]
 mod surface;
 
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use denise::{
-    DamageTracker, ElementState, Frame, InputEvent, InputSource, MAX_DAMAGE_RECTS, Point,
-    PointerButton, Rect, Size, Surface,
-};
-use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{MouseButton, MouseScrollDelta, StartCause, TouchPhase, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::ModifiersState;
-use winit::window::{Window, WindowId};
+use denise::{DamageTracker, Frame, InputEvent, Rect, Size};
+use winit::event_loop::EventLoop;
+
+use runner::Runner;
 
 #[cfg(target_os = "macos")]
 pub use macos::MacSurface;
@@ -192,6 +187,54 @@ pub trait DeniseApp {
     fn close_requested(&mut self) -> bool {
         true
     }
+
+    /// Windows this application wants opened, taken once per frame.
+    ///
+    /// This is the whole of the secondary-window API, and what it hands back is
+    /// another [`DeniseApp`] — so a settings form, an "edit details" window and
+    /// the main window are the same kind of thing, built the same way, running in
+    /// the same loop. The backend supplies a window, a surface and a place in the
+    /// event loop; **what is inside one is entirely the application's**, exactly
+    /// as `Ui::push_scene` knows nothing about the scene it pushed.
+    ///
+    /// Called immediately after [`update`](DeniseApp::update) on every frame,
+    /// including frames that draw nothing. Returning the same request twice opens
+    /// two windows: an application that must not open its settings form twice
+    /// remembers that it has one open, which it needs to do anyway to know what to
+    /// tell the second click.
+    ///
+    /// The new window is owned by the window whose application asked for it — so
+    /// a modal opened from a settings form is modal to *that* form, not to the
+    /// main window, and closing the form takes the modal with it.
+    ///
+    /// # Talking to a window you opened
+    ///
+    /// Nothing here carries state back, on purpose. A form is built by the
+    /// application, so the application can give it whatever it likes to hold —
+    /// and `Rc<RefCell<_>>` is the whole mechanism:
+    ///
+    /// ```no_run
+    /// # use std::cell::RefCell;
+    /// # use std::rc::Rc;
+    /// #[derive(Default)]
+    /// struct Settings {
+    ///     brightness: u8,
+    ///     /// Set by the form when it wants to go; read by its `exit_requested`.
+    ///     closing: bool,
+    /// }
+    ///
+    /// // The main window keeps one handle, the form gets another. Whichever one
+    /// // writes, both see it.
+    /// let shared = Rc::new(RefCell::new(Settings::default()));
+    /// let for_the_form = shared.clone();
+    /// ```
+    ///
+    /// The form's `exit_requested` returns `shared.borrow().closing`, which is
+    /// also how the main window closes it from the outside. Nothing in the
+    /// backend needs to know any of this happened.
+    fn take_windows(&mut self) -> Vec<WindowRequest> {
+        Vec::new()
+    }
 }
 
 /// Opens a window and runs `app` until it exits.
@@ -200,7 +243,7 @@ pub trait DeniseApp {
 /// display's scale factor. On a 1× display that is exactly right; on a HiDPI one
 /// it means a tree laid out in physical pixels comes out half size. Use
 /// [`run_with`] there.
-pub fn run<A: DeniseApp>(config: WindowConfig, app: A) -> Result<(), Error> {
+pub fn run<A: DeniseApp + 'static>(config: WindowConfig, app: A) -> Result<(), Error> {
     run_with(config, move |_, _| app)
 }
 
@@ -219,23 +262,11 @@ pub fn run<A: DeniseApp>(config: WindowConfig, app: A) -> Result<(), Error> {
 /// display.
 pub fn run_with<A, B>(config: WindowConfig, build: B) -> Result<(), Error>
 where
-    A: DeniseApp,
-    B: FnOnce(Size, f32) -> A,
+    A: DeniseApp + 'static,
+    B: FnOnce(Size, f32) -> A + 'static,
 {
     let event_loop = EventLoop::new()?;
-    let mut runner = Runner {
-        config,
-        build: Some(build),
-        app: None,
-        window: None,
-        surface: None,
-        damage: DamageTracker::new(Size::ZERO),
-        events: Vec::new(),
-        modifiers: ModifiersState::empty(),
-        cursor: Point::ZERO,
-        next_frame: Some(Instant::now()),
-        error: None,
-    };
+    let mut runner = Runner::new(config, boxed(build));
     event_loop.run_app(&mut runner)?;
     match runner.error {
         Some(err) => Err(err),
@@ -243,333 +274,105 @@ where
     }
 }
 
-struct Runner<A, B> {
-    config: WindowConfig,
-    /// Consumed when the window appears; `None` from then on.
-    build: Option<B>,
-    app: Option<A>,
-    window: Option<Rc<Window>>,
-    surface: Option<PlatformSurface>,
-    damage: DamageTracker,
-    events: Vec<InputEvent>,
-    modifiers: ModifiersState,
-    cursor: Point,
-    /// When the next frame is due, or `None` to wait for input.
-    next_frame: Option<Instant>,
-    error: Option<Error>,
+/// How a secondary window relates to the one that opened it.
+///
+/// How much of this the platform will actually enforce differs sharply: Windows
+/// does all of it, macOS keeps the z-order and blocks nothing, and X11 and Wayland
+/// offer neither through winit. So the one guarantee that holds everywhere is
+/// [`Modal`](Modality::Modal) input blocking, because the runner does that itself
+/// rather than asking. The rest is appearance, and the crate's README has the
+/// table.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Modality {
+    /// Above its owner, closed with it, and input still reaches both.
+    ///
+    /// The default, and what a settings form or an "edit details" window wants: a
+    /// window belonging to this application rather than a second application that
+    /// happens to share a process. The user can keep working in the main window
+    /// while it is open.
+    #[default]
+    Owned,
+
+    /// Owned, and the owner takes no input until this window closes.
+    ///
+    /// The window-sized version of `Ui::push_scene` with a dim: a confirmation, a
+    /// wizard, anything the user must answer before going back. The owner keeps
+    /// drawing — animations there do not freeze — it simply stops listening, and
+    /// a press on it raises this window instead.
+    Modal,
+
+    /// A window of its own, with no relationship to its opener at all.
+    ///
+    /// A second document window, or a tool palette the user may want behind the
+    /// main window. It does not close when its opener does, so an application that
+    /// opens one is responsible for it — including for the fact that closing the
+    /// main window ends the run and takes it down regardless.
+    Independent,
 }
 
-impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> Runner<A, B> {
-    fn fail(&mut self, event_loop: &ActiveEventLoop, err: Error) {
-        self.error = Some(err);
-        event_loop.exit();
-    }
+/// A window the application wants opened, and the application that will run in it.
+///
+/// Handed back from [`DeniseApp::take_windows`]. The builder is called once, at
+/// the moment the window's surface exists, and is given its size in **physical**
+/// pixels and its display's scale factor — the same contract [`run_with`] makes
+/// for the main window, and for the same reason: a form built without them is
+/// laid out for a display it may not be opening on.
+pub struct WindowRequest {
+    /// Title, size, resizability and frame cadence for the new window.
+    pub config: WindowConfig,
+    /// How it relates to the window that asked for it.
+    pub modality: Modality,
+    pub(crate) build: Build,
+}
 
-    fn on_resize(&mut self, size: PhysicalSize<u32>) {
-        let Some(surface) = self.surface.as_mut() else {
-            return;
-        };
-        let size = Size::new(size.width, size.height);
-        let scale = surface.window().scale_factor() as f32;
-        surface.resize(size, scale);
-        self.damage.resize(size);
-        self.events.push(InputEvent::SurfaceResized {
-            size,
-            scale_factor: scale,
-        });
-    }
-
-    fn draw(&mut self, event_loop: &ActiveEventLoop) {
-        match self.draw_frame() {
-            // A zero-sized or minimised window has nothing to draw; not an error.
-            Ok(_) => {}
-            Err(err) => self.fail(event_loop, err),
-        }
-
-        // Advance the cadence only when a frame was actually attempted. Doing this
-        // from `about_to_wait` instead pushes the deadline further out on every
-        // spurious wake-up, and the loop never draws again.
-        //
-        // How far it advances is the application's to say. `frame_interval` is
-        // the floor — a cap on how fast, never a demand — and the answer is
-        // taken after the frame, when whatever just animated has had its say.
-        let now = Instant::now();
-        self.next_frame = self
-            .app
-            .as_ref()
-            .map_or(Some(Duration::ZERO), A::next_frame_in)
-            .map(|asked| now + asked.max(self.config.frame_interval));
-
-        if self.app.as_ref().is_some_and(A::exit_requested) {
-            event_loop.exit();
+impl WindowRequest {
+    /// A window of `config`, whose application is built once its surface exists.
+    ///
+    /// [`Modality::Owned`] unless [`with_modality`](WindowRequest::with_modality)
+    /// says otherwise.
+    pub fn new<A, B>(config: WindowConfig, build: B) -> Self
+    where
+        A: DeniseApp + 'static,
+        B: FnOnce(Size, f32) -> A + 'static,
+    {
+        Self {
+            config,
+            modality: Modality::default(),
+            build: boxed(build),
         }
     }
 
-    /// Runs one update/render/present cycle. `Ok(false)` means the surface was not
-    /// in a drawable state and the frame was skipped.
-    fn draw_frame(&mut self) -> Result<bool, Error> {
-        let Runner {
-            app,
-            surface,
-            damage,
-            events,
-            ..
-        } = self;
-        let (Some(surface), Some(app)) = (surface.as_mut(), app.as_mut()) else {
-            return Ok(false);
-        };
+    /// A window whose application is already built.
+    ///
+    /// Convenient, and wrong on a HiDPI display unless the tree inside it does not
+    /// care about scale: the application cannot have been told the scale factor,
+    /// because the window it will open on does not exist yet.
+    /// [`new`](WindowRequest::new) is the one to reach for.
+    pub fn ready<A: DeniseApp + 'static>(config: WindowConfig, app: A) -> Self {
+        Self::new(config, move |_, _| app)
+    }
 
-        surface.poll(events);
-        app.update(events, damage);
-        events.clear();
-
-        // Nothing changed: no buffer, no paint, no present, no frame at all.
-        //
-        // This is the whole promise of a damage tracker, and skipping it here
-        // was costing more than everything else in the loop put together. A
-        // present is not free anywhere, and on macOS it is not even
-        // proportional to the damage: CoreAnimation re-uploads the entire
-        // surface through `CGContextDrawImage` on every commit, whatever
-        // rectangles softbuffer was handed. At 60 Hz on a 2560×1600 Retina
-        // surface that is sixteen megabytes a frame — about a gigabyte a
-        // second — to display a window in which nothing had happened.
-        //
-        // The shadow buffer is persistent, so a skipped frame leaves the
-        // screen exactly as it was and the next real frame still only owes the
-        // damage since this one.
-        if damage.is_clean() {
-            return Ok(false);
-        }
-
-        let mut frame = match surface.acquire() {
-            Ok(frame) => frame,
-            Err(denise::SurfaceError::NotReady) => return Ok(false),
-            Err(err) => return Err(err.into()),
-        };
-
-        // Widen this frame's damage to cover everything the acquired buffer missed,
-        // then copy it out so the tracker can be advanced afterwards.
-        let mut resolved = [Rect::ZERO; MAX_DAMAGE_RECTS];
-        let count = {
-            let src = damage.resolve(frame.age());
-            resolved[..src.len()].copy_from_slice(src);
-            src.len()
-        };
-        let region = &resolved[..count];
-
-        app.render(&mut frame, region);
-        drop(frame);
-
-        surface.present(region)?;
-        damage.end_frame();
-        Ok(true)
+    /// Sets how this window relates to the one opening it.
+    #[must_use]
+    pub fn with_modality(self, modality: Modality) -> Self {
+        Self { modality, ..self }
     }
 }
 
-impl<A: DeniseApp, B: FnOnce(Size, f32) -> A> ApplicationHandler for Runner<A, B> {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
+/// Builds an application once the surface it will draw to is known.
+///
+/// Boxed because the windows in one run do not share an application type — a
+/// settings form is not the main window with different data, it is a different
+/// program — and the loop holds them in one collection.
+type Build = Box<dyn FnOnce(Size, f32) -> Box<dyn DeniseApp>>;
 
-        let attrs = Window::default_attributes()
-            .with_title(self.config.title.clone())
-            // Logical, so the window covers the same apparent area whatever the
-            // display's DPI. What comes back is physical and may be larger.
-            .with_inner_size(LogicalSize::new(
-                self.config.size.width,
-                self.config.size.height,
-            ))
-            .with_resizable(self.config.resizable);
-
-        let window = match event_loop.create_window(attrs) {
-            Ok(window) => Rc::new(window),
-            Err(err) => return self.fail(event_loop, err.into()),
-        };
-
-        let surface = match PlatformSurface::new(window.clone()) {
-            Ok(surface) => surface,
-            Err(err) => return self.fail(event_loop, err),
-        };
-
-        // The first moment the scale factor exists, and the last one before a tree
-        // is built from it.
-        if let Some(build) = self.build.take() {
-            self.app = Some(build(surface.size(), surface.scale_factor()));
-        }
-
-        self.damage = DamageTracker::new(surface.size());
-        self.window = Some(window);
-        self.surface = Some(surface);
-        self.next_frame = Some(Instant::now());
-    }
-
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
-        // Deliberately not keyed on `StartCause::ResumeTimeReached`. macOS cancels
-        // the wait constantly for reasons of its own, and a loop that only draws on
-        // a clean timeout never draws at all there. Compare against the deadline
-        // instead: it is the same test, and it survives spurious wake-ups.
-        if let Some(next) = self.next_frame
-            && Instant::now() >= next
-            && let Some(window) = self.window.as_ref()
-        {
-            window.request_redraw();
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        if self.surface.is_none() {
-            return;
-        }
-
-        match event {
-            WindowEvent::RedrawRequested => return self.draw(event_loop),
-
-            WindowEvent::Resized(size) => return self.on_resize(size),
-
-            WindowEvent::ScaleFactorChanged { .. } => {
-                let size = self.window.as_ref().map(|w| w.inner_size());
-                if let Some(size) = size {
-                    self.on_resize(size);
-                }
-                return;
-            }
-
-            // Handled before the surface is borrowed below, because answering it
-            // needs the application: the event goes to the tree either way, and
-            // the answer decides whether this is the last frame.
-            WindowEvent::CloseRequested => {
-                if let Some(surface) = self.surface.as_mut() {
-                    surface.push_event(InputEvent::CloseRequested);
-                }
-                if self.app.as_mut().is_none_or(A::close_requested) {
-                    event_loop.exit();
-                }
-                return;
-            }
-
-            WindowEvent::ModifiersChanged(mods) => {
-                self.modifiers = mods.state();
-                return;
-            }
-
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = Point::new(position.x as i32, position.y as i32);
-            }
-
-            _ => {}
-        }
-
-        let modifiers = keymap::modifiers(self.modifiers);
-        let cursor = self.cursor;
-        let Some(surface) = self.surface.as_mut() else {
-            return;
-        };
-
-        match event {
-            WindowEvent::CursorMoved { .. } => {
-                surface.push_event(InputEvent::PointerMoved { position: cursor });
-            }
-
-            WindowEvent::CursorLeft { .. } => surface.push_event(InputEvent::PointerLeft),
-
-            WindowEvent::MouseInput { state, button, .. } => {
-                surface.push_event(InputEvent::PointerButton {
-                    button: match button {
-                        MouseButton::Left => PointerButton::Left,
-                        MouseButton::Right => PointerButton::Right,
-                        MouseButton::Middle => PointerButton::Middle,
-                        MouseButton::Back => PointerButton::Other(3),
-                        MouseButton::Forward => PointerButton::Other(4),
-                        MouseButton::Other(n) => PointerButton::Other(n),
-                    },
-                    state: element_state(state),
-                    position: cursor,
-                    modifiers,
-                });
-            }
-
-            WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => (x * LINE_HEIGHT_PX, y * LINE_HEIGHT_PX),
-                    MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
-                };
-                surface.push_event(InputEvent::PointerScroll {
-                    delta_x: dx,
-                    // winit reports positive-up; Denise reports positive-down so the
-                    // sign matches the content offset a scroll view applies.
-                    delta_y: -dy,
-                    position: cursor,
-                });
-            }
-
-            WindowEvent::KeyboardInput { event, .. } => {
-                surface.push_event(InputEvent::Key {
-                    code: keymap::key_code(event.physical_key),
-                    state: element_state(event.state),
-                    repeat: event.repeat,
-                    modifiers,
-                });
-                // Composed text only, and only on press. This is where `æøå` and
-                // dead-key output arrive; the physical key above cannot carry them.
-                if event.state.is_pressed()
-                    && let Some(text) = event.text
-                {
-                    for ch in text.chars().filter(|c| !c.is_control()) {
-                        surface.push_event(InputEvent::Text { ch });
-                    }
-                }
-            }
-
-            WindowEvent::Touch(touch) => {
-                let position = Point::new(touch.location.x as i32, touch.location.y as i32);
-                let id = touch.id;
-                surface.push_event(match touch.phase {
-                    TouchPhase::Started => InputEvent::TouchDown { id, position },
-                    TouchPhase::Moved => InputEvent::TouchMoved { id, position },
-                    TouchPhase::Ended => InputEvent::TouchUp {
-                        id,
-                        position,
-                        cancelled: false,
-                    },
-                    TouchPhase::Cancelled => InputEvent::TouchUp {
-                        id,
-                        position,
-                        cancelled: true,
-                    },
-                });
-            }
-
-            _ => {}
-        }
-
-        // Input outranks the cadence. An application that said "wake me in a
-        // second, nothing is moving" still expects its button to light up when
-        // pressed, so anything that arrived here is drawn at the next
-        // opportunity rather than at the deadline.
-        self.next_frame = Some(Instant::now());
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.error.is_some() {
-            return;
-        }
-        // Sleep until the next frame is due rather than spinning. An idle UI should
-        // cost nothing, which is the property that has to hold on the real target.
-        // `None` is the strongest form of that: nothing is animating, so there is
-        // no deadline at all and the loop blocks until something arrives.
-        event_loop.set_control_flow(match self.next_frame {
-            Some(next) => ControlFlow::WaitUntil(next),
-            None => ControlFlow::Wait,
-        });
-    }
-}
-
-fn element_state(state: winit::event::ElementState) -> ElementState {
-    match state {
-        winit::event::ElementState::Pressed => ElementState::Down,
-        winit::event::ElementState::Released => ElementState::Up,
-    }
+/// Erases a builder's application type.
+fn boxed<A, B>(build: B) -> Build
+where
+    A: DeniseApp + 'static,
+    B: FnOnce(Size, f32) -> A + 'static,
+{
+    Box::new(move |size, scale| Box::new(build(size, scale)))
 }
 
 /// Compiles the examples in this crate's README, so they cannot drift from the API

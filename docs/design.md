@@ -660,16 +660,44 @@ and all three are now resolved:
 
 ### One surface, and what that rules out
 
-Denise is a single `Surface`. There is no second window, and there will not be
-one: `denise-drm` owns the display and there is no window system to open one in,
-and `denise-win32`, `denise-macos` and `denise-activex` are *embedded* — the host
-owns the window and Denise owns one rectangle inside it. A control that spawned a
-top-level window would escape its host's modality, land on the wrong monitor and
-outlive the dialog that owns it, which is the behaviour that makes embedded
-controls hated.
+A Denise **tree** is a single `Surface`, and on every backend that ships that is
+also the whole of what the process has: `denise-drm` owns the display and there is
+no window system to open a second one in, and `denise-win32`, `denise-macos` and
+`denise-activex` are *embedded* — the host owns the window and Denise owns one
+rectangle inside it. A control that spawned a top-level window would escape its
+host's modality, land on the wrong monitor and outlive the dialog that owns it,
+which is the behaviour that makes embedded controls hated. None of that has
+changed and none of it is going to.
 
 So a modal is `Ui::push_scene`: another root over a dimmed backdrop, inside the
 same buffer. An `Alert` is an inline banner, not a message box.
+
+**The desktop backend is the exception, since [#83].** `denise-winit` can run
+several trees at once, one per window — `DeniseApp::take_windows` hands back a
+`WindowRequest` and gets a window with its own surface, damage tracker and frame
+deadline. It is there because a desktop application asked for a settings form that
+is a *window*, and on a desktop that is the native answer rather than a scene.
+
+What that does *not* do is make Denise a multi-window toolkit:
+
+- **The tree never learns about it.** `denise-ui` is untouched by the feature and
+  has no idea another tree exists. A window is a `DeniseApp`, which is a backend
+  concept, so a form is composed the same way the main window is and shares
+  nothing but whatever the application chose to put in an `Rc`.
+- **It cannot be portable, so it is not pretending to be.** The capability lives
+  in the desktop backend and nowhere else; an application built for the kiosk
+  links `denise-drm` and never sees it. This is the same compile-time split
+  everything else about the display already uses.
+- **Modality is ours, not the platform's.** Only Windows has a real modal dialog
+  (`with_owner_window` plus `set_enable(false)`); macOS gives z-order through
+  `addChildWindow:ordered:` and nothing more; X11 and Wayland are not reachable
+  through winit at all. So the runner blocks a modal's owner itself and the
+  platform calls are appearance. `denise-winit::owner` says which is which.
+- **There is no handle to somebody else's window.** Nothing can close, invalidate
+  or reach into a window it did not build. A form closes *itself* through
+  `exit_requested`, and a window that wants another one's state watches for it.
+  This is deliberate: a handle would be the seam through which the tree stops
+  being the only thing that owns a tree.
 
 The same stack carries popups, since [#18]. What was already there did most of
 the work: input only ever reaches the topmost scene, so a scene *is* input
@@ -734,6 +762,7 @@ scenes would otherwise double-darken everything under both, and a popup inside
 a modal must not darken the modal it serves.
 
 [#18]: https://github.com/bisand/denise/issues/18
+[#83]: https://github.com/bisand/denise/pull/83
 
 An application that wants a *native* dialog on a desktop build should call the
 platform for one — `MessageBoxW`, `NSAlert` — behind the same `cfg` seam it

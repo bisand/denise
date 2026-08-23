@@ -1035,6 +1035,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "forms"
+version = "0.18.1"
+dependencies = [
+ "denise",
+ "denise-ui",
+ "denise-winit",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
