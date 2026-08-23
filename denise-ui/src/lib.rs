@@ -45,6 +45,7 @@
 
 extern crate alloc;
 
+pub mod anchor;
 pub mod cursor;
 pub mod motion;
 mod node;
@@ -55,6 +56,7 @@ mod ui;
 pub mod widget;
 pub mod widgets;
 
+pub use anchor::{Anchors, Dock};
 pub use cursor::{ARROW, CROSSHAIR, Cursor, CursorImage};
 pub use motion::{Motion, Wake};
 pub use node::NodeId;
