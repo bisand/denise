@@ -454,3 +454,35 @@ jobs:
       # Where this one can actually be documented, for the reason the manifest's
       # `default-target` gives: linux documents an empty crate.
       - run: cargo doc -p denise-macos --no-deps --all-features
+
+  forms:
+    name: every form file still loads
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # A `.dform` is text somebody hand-edits, and nothing else in this workflow
+      # reads one: the crate's own tests load two by name, so a third could be
+      # added broken and stay broken. This builds every form in the repository
+      # with a real widget tree — the same code a panel runs — and lints the
+      # geometry, which is the only thing that will ever catch a node quietly
+      # sitting outside its parent when there is no layout engine to complain.
+      #
+      # `git ls-files` rather than a glob, so a form added anywhere is covered and
+      # a stray file in `target/` is not.
+      # `git ls-files` rather than a shell glob, so a form added in any directory
+      # is covered and nothing in `target/` is. Unquoted on purpose, to split into
+      # arguments; a `.dform` with a space in its name would need more, and there
+      # is no reason to have one.
+      - name: Check every .dform in the repository
+        run: |
+          forms=$(git ls-files '*.dform')
+          if [ -z "$forms" ]; then
+            echo "::error::no .dform files found; this job would be checking nothing"
+            exit 1
+          fi
+          echo "$forms"
+          cargo run --quiet -p denise-forms --features cli --bin denise-forms \
+            -- check $forms

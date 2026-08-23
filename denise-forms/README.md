@@ -107,6 +107,33 @@ A form is something a person typed, so every failure carries a line, a column, a
       radius, repeat-delay, repeat-interval, role, size, text, watch-hold
 ```
 
+## The command-line tool
+
+```bash
+cargo install denise-forms --features cli
+```
+
+Behind a feature, and not a default one: the library's job on a panel is to turn
+a file into widgets, and a kiosk linking it should not also link three image
+decoders because a command-line tool needs them to draw a picture into a PPM.
+
+```bash
+denise-forms check settings.dform            # exit 1, with positions
+denise-forms check $(git ls-files '*.dform')
+denise-forms render settings.dform out.ppm   # --theme light, --font path.ttf
+```
+
+`check` parses the file **and builds it**, so it catches everything a panel
+would, and prints `file:line:column: message`. It also lints geometry — a node
+outside its parent, a pair of siblings on top of each other — as warnings, since
+with no layout engine nothing else ever will. `--no-lint` turns that off,
+`--quiet` says nothing unless something is wrong.
+
+`render` draws one frame with no display attached. Deterministic: without
+`--font` it uses the built-in bitmap font rather than whatever the machine has
+installed, so two renders of one file are the same bytes and a snapshot is worth
+committing. `--font` needs the `truetype` feature.
+
 ## What this crate does not do
 
 **It does not open anything.** `Form::kind` reports that a file is a dialog;

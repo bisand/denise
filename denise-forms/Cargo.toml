@@ -13,6 +13,26 @@ homepage.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+# `check`, `render` and `fmt`, for validating a form without an application.
+#
+# Behind a feature, and not a default one. The library's whole job on a panel is
+# to turn a file into widgets, and a kiosk linking it should not also link three
+# image decoders because a *command-line tool* needs them to draw a picture into
+# a PPM. `cargo install denise-forms --features cli` is one flag; a megabyte a
+# board did not ask for is not one flag.
+[[bin]]
+name = "denise-forms"
+path = "src/cli.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:denise-image"]
+# Passed through, so `render --font` can draw real text. Off by default here for
+# the same reason it is off in `denise-ui`: the built-in bitmap font costs
+# nothing and `fontdue` costs 145 KB — and a snapshot drawn in the built-in font
+# is the same on every machine, which is what makes one worth committing.
+truetype = ["denise-ui/truetype", "dep:denise-text"]
+
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-ui = { workspace = true, features = ["std"] }
@@ -24,6 +44,17 @@ denise-ui = { workspace = true, features = ["std"] }
 kdl = { workspace = true }
 
 thiserror = { workspace = true, features = ["std"] }
+
+# `render` only, and only to turn a form's `src=` into pixels.
+# Every decoder, listed rather than inherited: the workspace pins this crate with
+# `default-features = false`, so a bare `workspace = true` here would compile PNG,
+# JPEG and GIF *out* and `render` would refuse every picture a form names. This is
+# a developer tool rather than a panel counting its kilobytes.
+denise-image = { workspace = true, features = ["png", "jpeg", "gif"], optional = true }
+
+# `render --font` only. `denise-ui` re-exports the text engine's types but not
+# the TrueType source, which is the one thing loading a font by path needs.
+denise-text = { workspace = true, features = ["std", "truetype"], optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"

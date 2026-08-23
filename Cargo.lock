@@ -628,6 +628,8 @@ name = "denise-forms"
 version = "0.19.0"
 dependencies = [
  "denise",
+ "denise-image",
+ "denise-text",
  "denise-ui",
  "kdl",
  "thiserror 2.0.20",

@@ -688,20 +688,38 @@ ask it to change, that is a bug with a test waiting for it.
 
 ## Checking a file
 
-`denise-forms check` parses without an application and reports what is wrong with
-a line and a column; `denise-forms render` draws one frame to a `.ppm`, which is
-how a layout is reviewed over SSH; `denise-forms fmt` writes the canonical
-formatting without disturbing what it need not.
-[#87](https://github.com/bisand/denise/issues/87) builds them, and CI runs
-`check` over every `.dform` in this repository.
+```bash
+cargo install denise-forms --features cli
 
-`check` should lint geometry as well as syntax: a node whose rectangle escapes
-its parent and a pair of siblings that overlap are both legal and both usually
-mistakes. Written as warnings rather than errors, because both are sometimes
-meant — a scrim covers the surface on purpose, and a `collapse`'s content is
-outside it while closed. Writing [`reference.dform`](../forms/reference.dform)
-by hand produced two of each within an hour, which is the argument for the
-lint.
+denise-forms check settings.dform            # exit 1, with positions
+denise-forms render settings.dform out.ppm   # --theme light, --font path.ttf
+```
+
+`check` parses the file, **builds it into a real widget tree** — the same code a
+panel runs — and reports what is wrong as `file:line:column: message`. CI runs it
+over every `.dform` in this repository, so a form added broken does not stay
+broken.
+
+`render` draws one frame into a PPM with no display attached, which is how a
+layout is reviewed over SSH and how a theme change is diffed before and after. It
+is deterministic: the same file renders the same bytes twice, because without
+`--font` it uses the built-in bitmap font rather than whatever the machine
+happens to have installed.
+
+`check` also **lints geometry**, which nothing else can: with no layout engine,
+a node quietly sitting outside its parent or on top of its sibling is legal and
+usually a mistake. Both are warnings rather than errors, because both are
+sometimes meant — a scrim covers the surface on purpose, a `collapse`'s content
+sits outside it while closed, and a stack or a viewport places its children
+somewhere other than where the rectangles say. `--no-lint` turns it off. Writing
+[`reference.dform`](../forms/reference.dform) by hand produced two of each within
+an hour, which is the argument for it.
+
+There is no `fmt`. There was going to be
+([#87](https://github.com/bisand/denise/issues/87) asked for one), and `kdl`'s
+own formatter turns out to delete a comment written at the end of a node's line —
+which is not a thing to ship into a format whose first promise is that comments
+survive. [#119](https://github.com/bisand/denise/issues/119) is where that sits.
 
 ## What the format will not do
 
