@@ -464,6 +464,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
 | [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all sixteen share one number, and what each guard is for |
+| [docs/forms.md](docs/forms.md) | The `.dform` file: why KDL, the version 1 schema, and what a form file deliberately will not do |
 
 ## Constraints
 

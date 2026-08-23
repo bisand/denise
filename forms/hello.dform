@@ -1,0 +1,21 @@
+// examples/hello, as a form file.
+//
+// The same tree the example builds in Rust, with one difference: the example
+// centres its card with arithmetic against the surface size, and a form file
+// has no arithmetic. The card is placed instead. That is the no-layout-engine
+// boundary, showing exactly where docs/forms.md says it is.
+
+form "Hello" version=1 kind=screen width=460 height=260 theme=dark {
+    panel name=card x=16 y=16 w=428 h=228 {
+        label "Hello, Denise"      x=20 y=18 w=388 h=28 size=22
+        label "What is your name?" x=20 y=58 w=388 h=20 size=16
+
+        // Enter submits, so a keypad-only panel never needs the button.
+        text-input name=who x=20 y=82 w=388 h=34 placeholder="your name" on-submit=greet size=16 focus=#true
+
+        button "Greet" x=20 y=128 w=110 h=34 role=primary on-press=greet size=16
+
+        // Filled in by the application from what was typed.
+        label "" name=greeting x=20 y=176 w=388 h=24 size=16
+    }
+}
