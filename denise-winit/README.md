@@ -71,6 +71,67 @@ application that needs to *stop* the close — unsaved changes, a confirmation �
 overrides `DeniseApp::close_requested` to return `false`, and quits later
 through `exit_requested` once it has its answer.
 
+## Secondary windows
+
+A desktop has a window manager, so a settings form can be a *window* rather than a
+scene in the same buffer. `DeniseApp::take_windows` is the whole of it: hand back a
+`WindowRequest` and the backend opens a window with its own surface, its own damage
+tracker and its own frame deadline, running an application you built.
+
+```rust
+# use denise::{DamageTracker, Frame, InputEvent, Rect, Size};
+# use denise_winit::{DeniseApp, Modality, WindowConfig, WindowRequest};
+# struct Settings;
+# impl Settings { fn new(_: Size, _: f32) -> Self { Settings } }
+# impl DeniseApp for Settings {
+#     fn update(&mut self, _: &[InputEvent], _: &mut DamageTracker) {}
+#     fn render(&mut self, _: &mut Frame<'_>, _: &[Rect]) {}
+# }
+# struct Main { wanted: bool }
+# impl Main {
+fn take_windows(&mut self) -> Vec<WindowRequest> {
+    if !std::mem::take(&mut self.wanted) {
+        return Vec::new();
+    }
+    // Modeless and owned by the window that asked, which is the default: above it,
+    // closed with it, and the main window stays usable. `Modality::Modal` blocks
+    // the owner instead; `Modality::Independent` is a window of its own.
+    vec![WindowRequest::new(WindowConfig::default(), Settings::new)]
+}
+# }
+```
+
+A form is an ordinary `DeniseApp` — the same trait the main window implements — so
+there is no form type, no base class, and nothing that makes a "dialog" different
+from a "window" except the `Modality` asked for. It is built through the same
+`(Size, f32)` callback `run_with` uses, because a form opens on whichever display
+its owner is on and needs that display's scale factor.
+
+Closing the **main** window ends the run. Closing any other window closes that
+window and everything it opened. Nothing can close a window it did not build: a
+form ends itself through `exit_requested`, which is also how the window that opened
+it asks — through state they share, which the application owns and this crate never
+sees.
+
+**Modality is enforced here, not by the platform.** A window with a modal over it
+stops receiving input and keeps repainting; a press on it raises the modal instead.
+That is the same on all three platforms, which the platforms themselves are not:
+
+| | Owned z-order | Owner blocked |
+|---|---|---|
+| Windows | `with_owner_window` | `set_enable(false)` — a real Win32 modal |
+| macOS | `addChildWindow:ordered:` | nothing; `runModal` would fight winit's loop |
+| X11 / Wayland | nothing reachable through winit | nothing |
+
+So the platform calls are appearance, and deleting them would cost looks rather
+than correctness. On Linux the window manager may put a modal behind its owner;
+it still cannot be typed into. `cargo run -p forms` is the whole feature in one
+example.
+
+**This is desktop-only and stays here.** `denise-ui` is untouched by it and knows
+nothing about a second tree; a kiosk build links `denise-drm` and never compiles a
+line of this. The portable way to ask a question is still `Ui::push_scene`.
+
 ## What a frame costs here, and why it is not what a panel costs
 
 A frame in which nothing changed costs nothing: the loop skips the acquire, the

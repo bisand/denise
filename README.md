@@ -345,6 +345,7 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 |---|---|
 | [`hello`](examples/hello) | **Start here.** Eighty lines: a message enum, a tree, an event loop. Builds for a window or a bare display. |
 | [`table-editor`](examples/table-editor) | A record editor with a grid, a form, validation, a modal and real fonts. Builds for a window *or* for a bare display. |
+| [`forms`](examples/forms) | Secondary windows on the desktop: a modeless settings form, a modal, and the state they share. Desktop only, deliberately. |
 | [`hello-rect`](examples/hello-rect) | The damage proof: a bouncing rectangle that repaints two rectangles, not a window. |
 | [`panel`](examples/panel) | The widget tree, a modal and a cursor sprite, on bare Linux with no X. |
 | [`kiosk`](examples/kiosk) | The instrumented loop: input latency and frame-time percentiles. |
@@ -422,10 +423,13 @@ is in [docs/design.md](docs/design.md).
   at all, which is both the reduced-motion answer and the tightest power budget.
 - **No text selection, clipboard or word motion** in `TextInput`. The measurement
   it needs exists; the editing model does not.
-- **One surface, so no second window.** A modal is another scene over a dimmed
-  backdrop in the same buffer, which is what a kiosk wants and what an embedded
-  control must do. A desktop application that wants a *native* dialog calls the
-  platform for one — see [docs/design.md](docs/design.md).
+- **One surface per tree, so a modal is a scene** over a dimmed backdrop in the
+  same buffer — which is what a kiosk wants and what an embedded control must do.
+  The desktop backend is the exception: `denise-winit` runs one tree per window,
+  so a settings form or a confirmation can be a *window* where a window manager
+  exists (`cargo run -p forms`). It is a desktop-only capability in the
+  desktop-only crate, and a kiosk build never compiles it — see
+  [docs/design.md](docs/design.md).
 - **Three keyboard layouts**, US, Norwegian and German, and the non-US AltGr
   assignments are a reconstruction that wants checking against real hardware.
   `denise-layout` reads which one the machine is configured for; adding a fourth

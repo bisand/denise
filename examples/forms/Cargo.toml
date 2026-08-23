@@ -1,0 +1,20 @@
+[package]
+name = "forms"
+description = "Secondary windows: a modeless settings form, a modal, and the state they share."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# No `kiosk` feature, and there will not be one. Every other example builds for
+# both a window and a bare display; this one is *about* windows, and a Raspberry Pi
+# with no desktop has nowhere to put a second one. The toolkit's answer there is
+# `Ui::push_scene`, which the `panel` and `table-editor` examples show.
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true }
+denise-winit = { workspace = true }

@@ -37,7 +37,16 @@ softbuffer = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 denise-macos = { workspace = true }
 objc2 = { workspace = true }
-objc2-app-kit = { workspace = true, features = ["objc2-quartz-core", "NSView"] }
+# `NSWindow` is for `owner.rs` — the child-window call that makes a secondary
+# window sit above the one that opened it — and nothing else here needs it.
+objc2-app-kit = { workspace = true, features = [
+    "objc2-quartz-core",
+    # `NSGraphics` is where `NSWindowOrderingMode` lives, and the child-window
+    # call is gated on it.
+    "NSGraphics",
+    "NSView",
+    "NSWindow",
+] }
 objc2-core-foundation = { workspace = true, features = ["CFCGTypes"] }
 objc2-io-surface = { workspace = true, features = ["IOSurfaceRef"] }
 objc2-quartz-core = { workspace = true, features = [
