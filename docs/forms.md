@@ -700,17 +700,17 @@ lint.
 
 Every one of these is a decision, not an omission.
 
-**No layout engine.** There are no constraints, no anchors, no docking and no
-percentages. Nodes are rectangles relative to their parent, because that is what a
-fixed-resolution panel wants and it is what the toolkit does; the file cannot
-express what the toolkit cannot draw. `hello`'s card is centred by arithmetic in
-`main.rs` and [`hello.dform`](../forms/hello.dform) puts it at a fixed offset
-instead — the one visible difference between them, and an honest one. The
-designer's answer to placement is snapping and alignment
+**No layout engine.** There are no constraints and no percentages. Nodes are
+rectangles relative to their parent, because that is what a fixed-resolution panel
+wants and it is what the toolkit does; the file cannot express what the toolkit
+cannot draw. `hello`'s card is centred by arithmetic in `main.rs` and
+[`hello.dform`](../forms/hello.dform) puts it at a fixed offset instead — the one
+visible difference between them, and an honest one. The designer's answer to
+placement is snapping and alignment
 ([#92](https://github.com/bisand/denise/issues/92),
 [#95](https://github.com/bisand/denise/issues/95)), which is a tool for a person
-rather than a solver at runtime. A constraint layer can still be built over all of
-this later without changing anything below it.
+rather than a solver at runtime. What a form *can* do about being shown at a size
+it was not designed at is [below](#responsiveness).
 
 **No expressions, no bindings, no scripting.** No `visible={not loading}`. A form
 file describes a tree of widgets and their initial state; everything that
@@ -729,6 +729,35 @@ rest of the application.
 
 **One form per file.** A file that held several would need names for them and a
 way to say which one is meant, and the filesystem already has both.
+
+## Responsiveness
+
+A form file in version 1 describes one rectangle per node at one size. That is
+the honest state of it, and worth saying outright rather than leaving a reader to
+discover it: **a form designed at 1024×600 is a form that works at 1024×600.**
+
+The reason is not the format. It is that `denise-ui` positions every node by an
+explicit rectangle and the parent never tells a child it resized, so a file that
+said anything else would be saying something nothing could render. The fix
+therefore belongs in the toolkit first and the schema second, and it is three
+separate problems that are easy to run together:
+
+| | | |
+|---|---|---|
+| **Scale** | Same design, more pixels. A 1024×600 form on a 2048×1200 panel, or on a 2× display. | [#111](https://github.com/bisand/denise/issues/111) — the engine multiplies on the way in, exactly as `hello` does by hand, and the form declares with `scaling=` whether it consents to being scaled at all. |
+| **Resize** | A window being dragged, a different aspect ratio, a panel turned to portrait. Scaling alone letterboxes or distorts. | [#110](https://github.com/bisand/denise/issues/110) — `anchor=` and `dock=` per node: Delphi's and WinForms' own answer, one derived rectangle per child in the reflow pass the tree already runs. |
+| **Content-driven sizing** | A label as wide as its text, a row that grows with what is in it. | [#112](https://github.com/bisand/denise/issues/112) — a real measure-and-arrange engine, in a crate of its own that an application opts into, so the core keeps costing nothing. |
+
+Both of the first two arrive as **properties added to existing nodes**, which
+`version 1` allows without a bump — nesting, naming, roles, messages and
+collections are untouched, and every form written before them keeps working
+because their defaults are today's behaviour.
+
+What none of them is: a phone-style reflow from three columns to one. That needs
+per-size layout overrides, which KDL can carry later as `at width<=800 { … }`
+child nodes with no version bump. It is deliberately not being built yet — for two
+genuinely different layouts, two form files is a good answer, and no panel has
+asked for the other thing.
 
 ## What is still open
 
