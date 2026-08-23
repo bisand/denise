@@ -1053,8 +1053,9 @@ impl<M: 'static> Ui<M> {
     pub fn set_stack(&mut self, id: NodeId, spacing: i32) {
         if let Some(node) = self.nodes.get_mut(id) {
             node.stack = Some(spacing);
-            self.reflow(id);
-            self.damage_subtree(id);
+            let root = self.reflow_root(id);
+            self.reflow(root);
+            self.damage_subtree(root);
         }
     }
 
@@ -1130,9 +1131,11 @@ impl<M: 'static> Ui<M> {
             return;
         }
         node.dock = dock;
-        // Docking changes the box every *sibling* is placed in, so the reflow
-        // and the damage start at the parent whether or not it stacks.
-        let root = node.parent.unwrap_or(id);
+        // Docking changes the box every *sibling* is placed in, so the reflow and
+        // the damage start at the parent whether or not it stacks — and climb
+        // from there, since the parent may be docked itself.
+        let parent = node.parent;
+        let root = parent.map_or(id, |p| self.reflow_root(p));
         self.damage_subtree(root);
         self.reflow(root);
         self.damage_subtree(root);
@@ -1149,8 +1152,9 @@ impl<M: 'static> Ui<M> {
         if let Some(node) = self.nodes.get_mut(id)
             && node.stack.take().is_some()
         {
-            self.reflow(id);
-            self.damage_subtree(id);
+            let root = self.reflow_root(id);
+            self.reflow(root);
+            self.damage_subtree(root);
         }
     }
 
@@ -1171,23 +1175,40 @@ impl<M: 'static> Ui<M> {
     /// otherwise.
     /// Where a reflow touching `id` has to start.
     ///
-    /// Usually `id` itself. But a node whose parent *arranges* its children —
-    /// a stack, or any docked sibling — cannot be placed without them: its
-    /// position depends on what its siblings took first. Those start at the
-    /// parent instead, which is also where the damage has to start.
+    /// Usually `id` itself. But a node whose rectangle depends on its *siblings*
+    /// cannot be computed without them, and there are two ways for that to be
+    /// true: the node **docks**, so it takes an edge of whatever the siblings
+    /// before it left; or its parent **arranges** its children — a stack, or any
+    /// docked sibling shrinking the box the rest are placed in.
+    ///
+    /// Either way the reflow, and the damage, start at the parent. And it climbs:
+    /// a docked node inside a docked column depends on its siblings, which depend
+    /// on theirs, all the way to whoever is placed on their own terms. Stopping
+    /// after one step leaves the node it stopped at holding the rectangle its
+    /// `layout` happens to say, which for a docked node is not a position at all.
     fn reflow_root(&self, id: NodeId) -> NodeId {
-        let Some(parent) = self.nodes.get(id).and_then(|n| n.parent) else {
-            return id;
-        };
-        let Some(node) = self.nodes.get(parent) else {
-            return id;
-        };
-        let arranges = node.stack.is_some()
-            || node
-                .children
-                .iter()
-                .any(|&c| self.nodes.get(c).is_some_and(|n| n.dock.is_some()));
-        if arranges { parent } else { id }
+        let mut at = id;
+        loop {
+            let Some(node) = self.nodes.get(at) else {
+                return at;
+            };
+            let Some(parent) = node.parent else {
+                return at;
+            };
+            let Some(above) = self.nodes.get(parent) else {
+                return at;
+            };
+            let arranged = node.dock.is_some()
+                || above.stack.is_some()
+                || above
+                    .children
+                    .iter()
+                    .any(|&c| self.nodes.get(c).is_some_and(|n| n.dock.is_some()));
+            if !arranged {
+                return at;
+            }
+            at = parent;
+        }
     }
 
     /// Sets the sibling sort key. Higher paints later, so higher is on top.
@@ -2540,6 +2561,12 @@ impl<M: 'static> Ui<M> {
     /// the application's rectangles stay the application's, and a form file keeps
     /// one rectangle per node however it is being placed.
     fn reflow(&mut self, id: NodeId) {
+        // A docked node's rectangle is a statement about its siblings, so it
+        // cannot be computed from the node alone. Climbing here rather than at
+        // every call site is what makes that true of *every* path into the
+        // reflow — a layout set, a stack turned on, a scroll clamped — instead of
+        // only the ones that remembered.
+        let id = self.reflow_root(id);
         let (rect, clip, disabled) = match self.nodes.get(id).and_then(|n| n.parent) {
             Some(parent) => {
                 let Some(node) = self.nodes.get(parent) else {

@@ -31,6 +31,7 @@ members = [
     "examples/splash",
     "examples/system-font",
     "examples/table-editor",
+    "tools/designer",
 ]
 
 # The fuzz targets are a crate, but not one of these. They need nightly and a
