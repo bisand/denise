@@ -36,13 +36,44 @@ affordance that lets an on-screen keyboard type into a field without the field
 losing its caret. Preview mode is hiding the scrim, and that is the whole of
 preview mode.
 
+![The designer with a slider selected and being dragged: the palette and outline on the left, the reference form on the canvas with a selection outline, eight handles and a name tag, an alignment guide running down the panel, and the slider's own properties in the inspector](../../assets/screenshots/designer.png)
+
+## Design mode
+
+A press on the canvas never reaches the form. Design mode reads the events first
+and does **its own hit test**, because the tree's is about what a *running* form
+should react to and that is not the same question: a `Label` answers `false` to
+`accepts_pointer`, so the tree would send a click straight past it — right on a
+panel, where a label sitting on a button must not swallow the press, and wrong
+here, where clicking a label has to select the label. A node that is not *drawn*
+is skipped, so an invisible sheet over the whole form does not eat every click.
+
+| | |
+|---|---|
+| Click | Selects what is under it. Shift adds and takes away. Escape clears. |
+| Tab | Walks the form in file order; Shift+Tab back. |
+| Drag the body | Moves. Drag a handle: resizes. |
+| Arrow keys | One pixel. With Shift, twice the grid. |
+| Delete | Takes the node and everything under it out of the file. |
+| G | Turns snapping off, and on again. |
+
+Snapping is to a 4-pixel grid and, in preference to it, to the edges and centres
+of the node's **siblings** — the only alignment that means anything when there is
+no layout engine. A guide is drawn on whatever it lined up with.
+
+**A drag is one edit.** The tree moves while the pointer does, so it can be seen;
+the file is written once, on release, as a targeted edit to that node's line. A
+press that never moved writes nothing at all, because it was a selection. That is
+what keeps a move to a one-line diff, and what will make it one undo step in
+[#94].
+
 ## What is here
 
 | | |
 |---|---|
 | **Palette** | Every widget the toolkit ships, from `widgets::all()`. This file names none of them, so a twenty-sixth appears without it changing. |
 | **Outline** | The nodes the open form named, and picking one selects it. |
-| **Canvas** | The form, drawn. |
+| **Canvas** | The form, drawn — and selected, moved, resized and deleted. |
 | **Inspector** | The selected node's properties, from the widget's own `Describe` — again, no list here. |
 | **Toolbar** | New, Open, Save, Save as. |
 
@@ -52,9 +83,13 @@ round trip the whole file format is built around, and there is a test for it.
 
 ## What is not here yet
 
-Dragging from the palette is [#91], moving and resizing on the canvas is [#92],
-editing a property is [#93], and undo is [#94]. The inspector reports; it does not
-yet edit.
+Dragging from the palette is [#91], editing a property is [#93], and undo is
+[#94] — the inspector reports, it does not yet edit, and there is **no undo**, so
+Delete is as final as the file.
+
+Three parts of [#92] are not done either: a rubber band over empty space, dropping
+a node onto a panel to reparent it, and bring-to-front and send-to-back. Each is
+its own mechanism rather than a corner of what is here.
 
 [#91]: https://github.com/bisand/denise/issues/91
 [#92]: https://github.com/bisand/denise/issues/92

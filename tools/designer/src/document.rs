@@ -15,7 +15,6 @@ use denise_forms::Form;
 /// the test that opens the reference form and saves it asserts exactly that.
 pub struct Document {
     path: Option<PathBuf>,
-    source: String,
     form: Form,
     dirty: bool,
 }
@@ -36,7 +35,6 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
         let form = Form::parse(&source).expect("the blank form is valid");
         Self {
             path: None,
-            source,
             form,
             dirty: false,
         }
@@ -50,7 +48,6 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
         let form = Form::parse(&source).map_err(|e| format!("{}:{e}", path.display()))?;
         Ok(Self {
             path: Some(path.to_path_buf()),
-            source,
             form,
             dirty: false,
         })
@@ -70,7 +67,7 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
         };
 
         let temporary = path.with_extension("dform.tmp");
-        std::fs::write(&temporary, &self.source)
+        std::fs::write(&temporary, self.form.text())
             .map_err(|e| format!("{}: {e}", temporary.display()))?;
         std::fs::rename(&temporary, &path).map_err(|e| {
             let _ = std::fs::remove_file(&temporary);
@@ -83,6 +80,30 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
     /// The parsed form.
     pub fn form(&self) -> &Form {
         &self.form
+    }
+
+    /// The form, to edit.
+    ///
+    /// Every edit goes through here rather than through the text, because the
+    /// text is a rendering of the document and the document is what is held.
+    pub fn form_mut(&mut self) -> &mut Form {
+        &mut self.form
+    }
+
+    /// Notes that the file on disk is now behind.
+    pub fn touch(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Re-reads the form from its own edited text.
+    ///
+    /// Needed when an edit changes the *shape* of the tree rather than a number
+    /// in it — a node removed, say — since the paths of everything after it move.
+    /// A rectangle changing needs none of this.
+    pub fn reparse(&mut self) -> Result<(), String> {
+        let text = self.form.text();
+        self.form = Form::parse(&text).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// The file this came from, if it came from one.

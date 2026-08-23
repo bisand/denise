@@ -5,7 +5,7 @@ mod build;
 mod error;
 mod form;
 
-pub use build::{Built, Handler, Picture, Wiring};
+pub use build::{Built, Handler, Picture, Placed, Wiring};
 pub use error::{At, Error, Reason};
 pub use form::{Form, FormKind, VERSION};
 

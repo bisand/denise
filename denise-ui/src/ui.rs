@@ -1095,6 +1095,21 @@ impl<M: 'static> Ui<M> {
         self.clamp_scroll_above(id);
     }
 
+    /// Whether this node is drawn and reachable.
+    ///
+    /// The counterpart to [`Ui::set_visible`]. A designer needs it: a hidden node
+    /// still has bounds — it may be shown again, and its children lay out
+    /// against them — so "what is under the pointer" has to ask, or clicking an
+    /// empty canvas would select the invisible sheet covering it.
+    pub fn visible(&self, id: NodeId) -> bool {
+        self.nodes.get(id).is_some_and(|node| node.visible)
+    }
+
+    /// This node's sort key among its siblings. See [`Ui::set_z`].
+    pub fn z(&self, id: NodeId) -> i32 {
+        self.nodes.get(id).map_or(0, |node| node.z)
+    }
+
     /// Which of its parent's edges this node keeps its distance from.
     pub fn anchors(&self, id: NodeId) -> Anchors {
         self.nodes.get(id).map_or(Anchors::TOP_LEFT, |n| n.anchors)
