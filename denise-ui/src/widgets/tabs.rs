@@ -8,6 +8,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
 /// A tab strip: a row of labels, one of them selected, with a rule underneath.
@@ -225,6 +228,13 @@ fn hit(bounds: Rect, tabs: &[Rect], point: Point) -> Option<usize> {
 }
 
 impl<M: 'static> Widget<M> for Tabs<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.labels.is_empty() {
@@ -330,6 +340,58 @@ impl<M: 'static> Widget<M> for Tabs<M> {
     /// An empty strip is not a tab stop: there is nothing for a key to do.
     fn focusable(&self) -> bool {
         !self.labels.is_empty()
+    }
+}
+
+impl<M> Describe for Tabs<M> {
+    const KIND: &'static str = "tabs";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "selected",
+            PropertyKind::Int {
+                min: 0,
+                max: i32::MAX,
+            },
+            "Index of the selected tab. A strip with tabs always has one, so this is never unset.",
+        ),
+        Property::new(
+            "on-change",
+            PropertyKind::Message(Payload::Index),
+            "Emitted with the newly selected tab's index.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role of the selected tab's underline, and only that.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "selected" => Value::Int(i32::try_from(self.selected).unwrap_or(i32::MAX)),
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter, which clamps into the labels: a tab strip has
+            // no way to show nothing selected.
+            "selected" => self.set_selected(value.as_index()?),
+            "on-change" => return Err(Mismatch::Supplied),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

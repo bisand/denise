@@ -4,6 +4,9 @@ use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
 use denise_render::Canvas;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{focus_ring, interactive_pair};
 
 /// A horizontal slider over `min..=max`.
@@ -259,6 +262,13 @@ fn fraction_at(bounds: Rect, diameter: i32, x: i32) -> f32 {
 }
 
 impl<M: 'static> Widget<M> for Slider<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -389,6 +399,98 @@ impl<M: 'static> Widget<M> for Slider<M> {
 
     fn focusable(&self) -> bool {
         true
+    }
+}
+
+impl<M> Describe for Slider<M> {
+    const KIND: &'static str = "slider";
+
+    // The bounds on `value` and `step` are the widest a float can be rather
+    // than a guess: what an editor should really offer is `min..=max`, and
+    // those are themselves properties here, so an inspector reads them from the
+    // widget instead of from a constant written before the range was known.
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "min",
+            PropertyKind::Float {
+                min: f32::MIN,
+                max: f32::MAX,
+            },
+            "The low end of the range.",
+        ),
+        Property::new(
+            "max",
+            PropertyKind::Float {
+                min: f32::MIN,
+                max: f32::MAX,
+            },
+            "The high end of the range; a range given the wrong way round is put in order rather than refused.",
+        ),
+        Property::new(
+            "value",
+            PropertyKind::Float {
+                min: f32::MIN,
+                max: f32::MAX,
+            },
+            "Where the knob sits, within the range and on a step if there is one.",
+        ),
+        Property::new(
+            "step",
+            PropertyKind::Float {
+                min: 0.0,
+                max: f32::MAX,
+            },
+            "Snaps to multiples of this from `min`; continuous without it.",
+        ),
+        Property::new(
+            "on-change",
+            PropertyKind::Message(Payload::Number),
+            "Emitted with the new value when a person moves the knob.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour of the filled portion and the knob.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "min" => Value::Float(self.min),
+            "max" => Value::Float(self.max),
+            "value" => Value::Float(self.value),
+            // A continuous slider has no step to report, so a file that never
+            // set one does not grow one.
+            "step" => Value::Float(self.step?),
+            "role" => Value::role(self.role),
+            // The message is the application's own type; see the `describe`
+            // module documentation.
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Both ends go through `set_range`, which puts them in order and
+            // settles the value afterwards — so a form that writes `max` before
+            // `min` ends up in the same place as one that writes them the other
+            // way round.
+            "min" => self.set_range(value.as_float()?, self.max),
+            "max" => self.set_range(self.min, value.as_float()?),
+            "value" => self.set_value(value.as_float()?),
+            "step" => {
+                // `with_step`'s rule: a step that is zero, negative or not a
+                // number is no step rather than something to divide by. Setting
+                // the value again is what puts it on the new grid.
+                let step = value.as_float()?;
+                self.step = (step.is_finite() && step > 0.0).then_some(step);
+                self.set_value(self.value);
+            }
+            "role" => self.role = value.as_role()?,
+            "on-change" => return Err(Mismatch::Supplied),
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

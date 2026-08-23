@@ -7,6 +7,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
 /// A checkbox with an optional label beside it.
@@ -214,6 +217,13 @@ fn draw_tick(canvas: &mut Canvas<'_>, area: Rect, color: denise::Color, thicknes
 }
 
 impl<M: 'static> Widget<M> for Checkbox<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let area = box_rect(ctx.bounds, ctx.theme);
         // Never more than a half-side, or the "rounded rect" is a circle with the
@@ -312,6 +322,57 @@ impl<M: 'static> Widget<M> for Checkbox<M> {
 
     fn focusable(&self) -> bool {
         true
+    }
+}
+
+impl<M> Describe for Checkbox<M> {
+    const KIND: &'static str = "checkbox";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new("text", PropertyKind::Text, "The label beside the box."),
+        Property::new("checked", PropertyKind::Bool, "Whether the box is ticked."),
+        Property::new(
+            "on-change",
+            PropertyKind::Message(Payload::Bool),
+            "The message built from the value the box changes to. Omitted, the checkbox is inert.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role of the filled box. The tick comes from the theme's pairing, so it stays readable whichever role is chosen.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Label text size in logical pixels. The box itself is a theme metric.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.label.as_str()),
+            "checked" => Value::Bool(self.checked),
+            // A `fn(bool) -> M` cannot be reported as a `Value`. See the
+            // `describe` module docs.
+            "on-change" => return None,
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "text" => self.label = value.as_text()?,
+            // Through the setter, which is the one that does not emit: a value
+            // a designer typed is not a person ticking the box.
+            "checked" => self.set_checked(value.as_bool()?),
+            "on-change" => return Err(Mismatch::Supplied),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

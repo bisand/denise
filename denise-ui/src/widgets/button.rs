@@ -8,6 +8,9 @@ use denise_render::icon::Icon;
 use denise_text::TextStyle;
 
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, RADII, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
 /// A button that emits a message when it is activated.
@@ -381,6 +384,13 @@ impl<M> Button<M> {
 }
 
 impl<M: Clone + 'static> Widget<M> for Button<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let (background, content) = interactive_pair(ctx.theme, self.role, ctx.state);
@@ -608,4 +618,132 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     fn preserves_focus(&self) -> bool {
         self.no_focus
     }
+}
+
+impl<M> Describe for Button<M> {
+    const KIND: &'static str = "button";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new("text", PropertyKind::Text, "The label."),
+        Property::new(
+            "on-press",
+            PropertyKind::Message(Payload::None),
+            "The message emitted on activation. Omitted, the button is inert — it draws and does not emit.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role. The label's colour comes from the theme's pairing, so it stays readable whichever role is chosen.",
+        ),
+        Property::new(
+            "radius",
+            PropertyKind::Enum(RADII),
+            "Corner rounding token. The theme decides the pixels.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+        Property::new(
+            "corner",
+            PropertyKind::Text,
+            "A small legend in the corner, as the keyboard's globe key carries its layout.",
+        ),
+        Property::new(
+            "no-focus",
+            PropertyKind::Bool,
+            "The button never takes focus, so pressing it does not steal the caret from a field.",
+        ),
+        Property::new(
+            "repeat-delay",
+            PropertyKind::Int {
+                min: 100,
+                max: 2000,
+            },
+            "Milliseconds held before the press repeats. Set without `repeat-interval`, the interval becomes this same value, so a lone half of the pair is a button that repeats steadily rather than one that ignores the setting.",
+        ),
+        Property::new(
+            "repeat-interval",
+            PropertyKind::Int { min: 10, max: 1000 },
+            "Milliseconds between repeats. Set without `repeat-delay`, the delay becomes this same value, by the rule `repeat-delay` describes.",
+        ),
+        Property::new(
+            "watch-hold",
+            PropertyKind::Bool,
+            "Report how long the button has been held, for a long-press.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.label.as_str()),
+            // The message is the application's, and this crate has never seen
+            // its type. See the `describe` module docs.
+            "on-press" => return None,
+            "role" => Value::role(self.role),
+            "radius" => Value::radius(self.radius),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            "corner" => Value::text(self.corner.as_str()),
+            "no-focus" => Value::Bool(self.no_focus),
+            // One field carries both halves, so a button that does not repeat
+            // reports neither rather than reporting a schedule it does not have.
+            "repeat-delay" => Value::Int(millis(self.repeat?.delay_ms)),
+            "repeat-interval" => Value::Int(millis(self.repeat?.interval_ms)),
+            "watch-hold" => Value::Bool(self.watches_hold),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "text" => self.label = value.as_text()?,
+            "on-press" => return Err(Mismatch::Supplied),
+            "role" => self.role = value.as_role()?,
+            "radius" => self.radius = value.as_radius()?,
+            "size" => self.style.size_px = value.as_size()?,
+            "corner" => self.corner = value.as_text()?,
+            "no-focus" => self.no_focus = value.as_bool()?,
+            // The two halves arrive one property at a time, and either may be
+            // the only one a file mentions. Whichever comes first supplies the
+            // other, so a lone `repeat-delay=400` is a button that repeats every
+            // 400 ms after 400 ms rather than one that quietly does not repeat.
+            "repeat-delay" => {
+                let delay_ms = value.as_millis()?;
+                self.repeat = Some(match self.repeat {
+                    Some(repeat) => Repeat { delay_ms, ..repeat },
+                    None => Repeat {
+                        delay_ms,
+                        interval_ms: delay_ms.max(1),
+                    },
+                });
+            }
+            "repeat-interval" => {
+                // Never zero, exactly as `with_repeat` insists: an interval of
+                // nothing is a repeat every frame forever.
+                let interval_ms = value.as_millis()?.max(1);
+                self.repeat = Some(match self.repeat {
+                    Some(repeat) => Repeat {
+                        interval_ms,
+                        ..repeat
+                    },
+                    None => Repeat {
+                        delay_ms: interval_ms,
+                        interval_ms,
+                    },
+                });
+            }
+            "watch-hold" => self.watches_hold = value.as_bool()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
+    }
+}
+
+/// A duration reported to an inspector, saturating rather than wrapping.
+///
+/// The schedule is `u64` because a clock is; an editor's spinbox is not, and a
+/// delay of half a million years is not worth a wider `Value` variant.
+fn millis(ms: u64) -> i32 {
+    i32::try_from(ms).unwrap_or(i32::MAX)
 }

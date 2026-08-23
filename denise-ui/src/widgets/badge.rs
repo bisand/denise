@@ -7,6 +7,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, interactive_pair};
 
 /// A count, a status, a short word, in a stadium of its role's colour.
@@ -153,6 +156,13 @@ const fn padding(size_px: u16) -> i32 {
 }
 
 impl<M: 'static> Widget<M> for Badge {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -181,6 +191,43 @@ impl<M: 'static> Widget<M> for Badge {
             &self.text,
             content,
         );
+    }
+}
+
+impl Describe for Badge {
+    const KIND: &'static str = "badge";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new("text", PropertyKind::Text, "The text."),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role the pill is filled with; the text takes its content colour.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.text.as_str()),
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "text" => self.text = value.as_text()?,
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

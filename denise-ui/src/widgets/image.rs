@@ -6,6 +6,9 @@ use denise::{Rect, Size};
 use denise_render::{Canvas, PixelView};
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, FITS, Mismatch, Property, PropertyKind, Value,
+};
 
 /// How a picture whose size disagrees with its box gets reconciled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -205,8 +208,60 @@ impl Image {
 }
 
 impl<M: 'static> Widget<M> for Image {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         self.paint_at(ctx.bounds, self.radius, canvas);
+    }
+}
+
+impl Describe for Image {
+    const KIND: &'static str = "image";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "src",
+            PropertyKind::Asset,
+            "The picture, as a path relative to the form file.",
+        ),
+        Property::new(
+            "fit",
+            PropertyKind::Enum(FITS),
+            "How a picture whose size disagrees with its box is reconciled.",
+        ),
+        Property::new(
+            "radius",
+            PropertyKind::Int { min: 0, max: 256 },
+            "Corner radius in pixels — a picture is cropped to a shape rather than themed into one.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            // The widget holds decoded pixels and never saw the path they came
+            // from, so there is nothing to report. See the `describe` module.
+            "src" => return None,
+            "fit" => Value::fit(self.fit),
+            "radius" => Value::Int(self.radius),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "src" => return Err(Mismatch::Supplied),
+            "fit" => self.fit = value.as_fit()?,
+            // Clamped exactly as `with_corner_radius` clamps it: a negative
+            // radius would reach `blit_rounded` as a shape it cannot mask.
+            "radius" => self.radius = value.as_int()?.max(0),
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

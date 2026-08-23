@@ -7,6 +7,9 @@ use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    ALIGNMENTS, Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned};
 
 /// A run of text drawn in a content colour, aligned inside its bounds.
@@ -107,10 +110,68 @@ impl Label {
 }
 
 impl<M: 'static> Widget<M> for Label {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let color = ctx.theme.color(self.role);
         draw_aligned(
             canvas, ctx.text, self.style, ctx.bounds, self.align, &self.text, color,
         );
+    }
+}
+
+impl Describe for Label {
+    const KIND: &'static str = "label";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new("text", PropertyKind::Text, "The text drawn."),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role. A `*Content` role draws on a surface; a surface role draws the text in that colour.",
+        ),
+        Property::new(
+            "align",
+            PropertyKind::Enum(ALIGNMENTS),
+            "Where the text sits horizontally in its box.",
+        ),
+        Property::new(
+            "valign",
+            PropertyKind::Enum(ALIGNMENTS),
+            "Where the text sits vertically in its box.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.text.as_str()),
+            "role" => Value::role(self.role),
+            "align" => Value::align(self.align.0),
+            "valign" => Value::align(self.align.1),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "text" => self.text = value.as_text()?,
+            "role" => self.role = value.as_role()?,
+            "align" => self.align.0 = value.as_align()?,
+            "valign" => self.align.1 = value.as_align()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }

@@ -148,7 +148,7 @@ form "Reference" name=reference version=1 kind=screen width=1024 height=600 them
     panel name=media-section x=640 y=416 w=376 h=176 fill=base-100 radius=box {
         image name=logo x=12 y=12 w=120 h=90 src="../assets/showcase.png" fit=contain radius=6
 
-        carousel name=shots x=140 y=12 w=224 h=90 on-change=shot-changed auto-advance-ms=4000 role=accent {
+        carousel name=shots x=140 y=12 w=224 h=90 selected=1 on-change=shot-changed auto-advance-ms=4000 role=accent {
             picture src="../assets/screenshots/hello-mac.png" fit=cover
             picture src="../assets/screenshots/gallery.png" fit=contain
             picture src="../assets/screenshots/browser-form.png"

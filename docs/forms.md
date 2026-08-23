@@ -541,8 +541,8 @@ Whether the file should nest a subtree per tab is
 |---|---|---|---|
 | `role` | [role](#roles) | `primary` | |
 | `thickness` | integer | derived | Derived from the node's size without it. |
-| `period-ms` | integer | `1000` | One full turn. |
-| `frame-ms` | integer | — | Snap to this step, for a ticking rather than sweeping hand. |
+| `period-ms` | integer | `1000` | One full turn. Floored at the default sampling interval: a revolution shorter than a frame looks stopped, or looks like it is going backwards. |
+| `frame-ms` | integer | — | This spinner's *own* sampling interval, overriding the tree's `Motion`. Almost no form should set it — the rate belongs to the whole panel — and reduced motion overrides it back. |
 
 #### `image`
 
@@ -624,8 +624,9 @@ hollow.
 
 | | Type | Default | |
 |---|---|---|---|
-| `on-change` | message (index) | — | |
-| `auto-advance-ms` | integer | — | Advance on the animation clock. |
+| `selected` | integer | `0` | The page showing when the form opens. |
+| `on-change` | message (index) | — | Emitted with the page a person lands on. The advance clock is silent: a message reports what somebody did. |
+| `auto-advance-ms` | integer | — | Advance on the animation clock. Floored at twice the slide duration — an interval the slide cannot keep up with is a carousel that never comes to rest. |
 | `role` | [role](#roles) | `primary` | The page dots. |
 
 Children: `picture src="one.png" fit=cover`.

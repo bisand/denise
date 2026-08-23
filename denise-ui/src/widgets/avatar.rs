@@ -8,6 +8,9 @@ use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, PRESENCES, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::image::{Fit, Image};
 use crate::widgets::style::{Align, draw_aligned, interactive_pair};
 
@@ -90,6 +93,15 @@ impl Presence {
 #[derive(Clone, Debug)]
 pub struct Avatar {
     picture: Option<Image>,
+    /// The name the initials were taken from, kept verbatim.
+    ///
+    /// `initials_of` is lossy and not idempotent — "Ada Lovelace" reduces to
+    /// "AL", and "AL" reduces again to "A" — so a widget that kept only the
+    /// reduction could not tell anybody what it was given. A property inspector
+    /// reading this back would show "AL" where the author typed a name, and
+    /// saving would write the reduction into the form file, losing a little more
+    /// of it every round. So the name is kept and the initials are derived.
+    name: String,
     initials: String,
     role: Option<Role>,
     /// `None` is a circle: half the shorter side, whatever that turns out to be.
@@ -108,6 +120,7 @@ impl Avatar {
     pub fn new(pixels: Vec<u32>, size: Size) -> Self {
         Self {
             picture: Some(Image::new(pixels, size).with_fit(Fit::Cover)),
+            name: String::new(),
             initials: String::new(),
             role: None,
             radius: None,
@@ -121,6 +134,7 @@ impl Avatar {
     pub fn initials(name: &str) -> Self {
         Self {
             picture: None,
+            name: name.into(),
             initials: initials_of(name),
             role: None,
             radius: None,
@@ -133,8 +147,23 @@ impl Avatar {
     /// Sets the initials shown when there is no picture, or the picture is
     /// broken. Taken from `name` the same way [`Avatar::initials`] takes them.
     pub fn with_initials(mut self, name: &str) -> Self {
-        self.initials = initials_of(name);
+        self.set_name(name);
         self
+    }
+
+    /// The name the initials were taken from, as it was given.
+    ///
+    /// Empty for an avatar built from a picture alone. See
+    /// [`initials_text`](Avatar::initials_text) for what is actually drawn.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Replaces the name, and the initials derived from it.
+    pub fn set_name(&mut self, name: &str) {
+        self.name.clear();
+        self.name.push_str(name);
+        self.initials = initials_of(name);
     }
 
     /// Overrides the colour derived from the initials.
@@ -278,6 +307,13 @@ fn role_for(initials: &str) -> Role {
 }
 
 impl<M: 'static> Widget<M> for Avatar {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let (square, radius) = self.square(ctx.bounds);
         if square.is_empty() {
@@ -325,6 +361,80 @@ impl<M: 'static> Widget<M> for Avatar {
             canvas.fill_circle(centre, dot, ctx.theme.color(Role::Base100));
             canvas.fill_circle(centre, (dot - ctx.theme.metrics.border).max(1), color);
         }
+    }
+}
+
+impl Describe for Avatar {
+    const KIND: &'static str = "avatar";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "src",
+            PropertyKind::Asset,
+            "A picture, as a path relative to the form file. Without one, the initials are drawn.",
+        ),
+        Property::new(
+            "initials",
+            PropertyKind::Text,
+            "A name; the widget takes its initials.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "The disc behind the initials — derived from the initials when unset, so a column of avatars is not one colour.",
+        ),
+        Property::new(
+            "radius",
+            PropertyKind::Int { min: 0, max: 256 },
+            "Corner radius in pixels; `0` is a square, unset is a circle.",
+        ),
+        Property::new("ring", PropertyKind::Enum(ROLES), "A ring around the disc."),
+        Property::new("presence", PropertyKind::Enum(PRESENCES), "The status dot."),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Initials' text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            // The widget holds decoded pixels and never saw the path they came
+            // from, so there is nothing to report. See the `describe` module.
+            "src" => return None,
+            // What comes back is the *initials*, not the name they were taken
+            // from — the name is not kept. Setting it again is a no-op, since
+            // `initials_of` leaves an already-reduced pair alone.
+            "initials" if self.name.is_empty() => return None,
+            "initials" => Value::text(self.name.as_str()),
+            // Each of these is unset until somebody sets it, and the widget has
+            // a real behaviour for unset — a derived colour, a circle, no ring,
+            // no dot — that no value in the file would say better.
+            "role" => Value::role(self.role?),
+            "radius" => Value::Int(self.radius?),
+            "ring" => Value::role(self.ring?),
+            "presence" => Value::presence(self.presence?),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "src" => return Err(Mismatch::Supplied),
+            // Reduced on the way in, exactly as `with_initials` reduces it: the
+            // field's invariant is that it already holds what gets drawn.
+            "initials" => self.set_name(&value.as_text()?),
+            "role" => self.role = Some(value.as_role()?),
+            // Clamped as `with_corner_radius` clamps it; `square` takes care of
+            // the upper bound, which depends on a size only paint knows.
+            "radius" => self.radius = Some(value.as_int()?.max(0)),
+            "ring" => self.ring = Some(value.as_role()?),
+            "presence" => self.presence = Some(value.as_presence()?),
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

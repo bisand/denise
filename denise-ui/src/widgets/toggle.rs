@@ -8,6 +8,9 @@ use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
 /// How long the knob takes to cross, in milliseconds.
@@ -256,6 +259,13 @@ fn knob_rect(track: Rect, position: i32) -> Rect {
 }
 
 impl<M: 'static> Widget<M> for Toggle<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let track = track_rect(ctx.bounds, ctx.theme);
         // A stadium: the radius is half the height, whatever the theme's selector
@@ -407,6 +417,59 @@ impl<M: 'static> Widget<M> for Toggle<M> {
 
     fn focusable(&self) -> bool {
         true
+    }
+}
+
+impl<M> Describe for Toggle<M> {
+    const KIND: &'static str = "toggle";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new("text", PropertyKind::Text, "The label beside the track."),
+        Property::new("checked", PropertyKind::Bool, "Whether the switch is on."),
+        Property::new(
+            "on-change",
+            PropertyKind::Message(Payload::Bool),
+            "The message built from the value the switch changes to. Omitted, the toggle is inert.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour role of the track when on. The knob comes from the theme's pairing, so it stays visible against it.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Label text size in logical pixels. The track itself is a theme metric.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.label.as_str()),
+            "checked" => Value::Bool(self.checked),
+            // A `fn(bool) -> M` cannot be reported as a `Value`. See the
+            // `describe` module docs.
+            "on-change" => return None,
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "text" => self.label = value.as_text()?,
+            // The setter, which lands the knob where the value says rather than
+            // sliding it there. Assigning `checked` alone would leave `from` at
+            // the other end, and a form that opened with three switches gliding
+            // into place would be animating a state nobody changed.
+            "checked" => self.set_checked(value.as_bool()?),
+            "on-change" => return Err(Mismatch::Supplied),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

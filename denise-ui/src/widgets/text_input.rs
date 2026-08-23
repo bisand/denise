@@ -8,6 +8,9 @@ use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, Value,
+};
 use crate::widgets::style::{Align, focus_ring, interactive_pair};
 
 /// Half-period of the caret blink, in milliseconds.
@@ -264,6 +267,13 @@ impl<M> Default for TextInput<M> {
 }
 
 impl<M: Clone + 'static> Widget<M> for TextInput<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let disabled = ctx.state.contains(VisualState::DISABLED);
@@ -461,5 +471,68 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
     /// regression dressed up as a preference.
     fn snap(&mut self, now_ms: u64) -> Animation {
         Widget::<M>::animate(self, now_ms)
+    }
+}
+
+impl<M> Describe for TextInput<M> {
+    const KIND: &'static str = "text-input";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new("text", PropertyKind::Text, "Initial contents."),
+        Property::new(
+            "placeholder",
+            PropertyKind::Text,
+            "Shown while the field is empty.",
+        ),
+        Property::new(
+            "on-submit",
+            PropertyKind::Message(Payload::None),
+            "The message emitted on Enter.",
+        ),
+        Property::new(
+            "max-chars",
+            PropertyKind::Int { min: 1, max: 4096 },
+            "How many characters the field will hold.",
+        ),
+        Property::new(
+            "password",
+            PropertyKind::Bool,
+            "Draw every character as `*`. The text is still stored in the clear.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.text.as_str()),
+            "placeholder" => Value::text(self.placeholder.as_str()),
+            // The message is the application's, and this crate has never seen
+            // its type. See the `describe` module docs.
+            "on-submit" => return None,
+            "max-chars" => Value::Int(i32::try_from(self.max_chars).unwrap_or(i32::MAX)),
+            "password" => Value::Bool(self.password),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter, which puts the caret at the end and resets the
+            // window: assigning the field would leave a caret pointing into text
+            // that is no longer there.
+            "text" => self.set_text(value.as_text()?),
+            "placeholder" => self.placeholder = value.as_text()?,
+            "on-submit" => return Err(Mismatch::Supplied),
+            "max-chars" => self.max_chars = value.as_index()?,
+            "password" => self.password = value.as_bool()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }

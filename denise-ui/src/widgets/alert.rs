@@ -7,6 +7,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::interactive_pair;
 
 /// An inline banner: `Info`, `Success`, `Warning` or `Error`, with a message.
@@ -153,6 +156,13 @@ const fn padding(size_px: u16) -> i32 {
 }
 
 impl<M: 'static> Widget<M> for Alert {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -198,6 +208,57 @@ impl<M: 'static> Widget<M> for Alert {
             ctx.text
                 .draw(canvas, self.style, Point::new(x, y), line, content);
         }
+    }
+}
+
+impl Describe for Alert {
+    const KIND: &'static str = "alert";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new("text", PropertyKind::Text, "The message."),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "The status this banner reports; an alert with no status is a label.",
+        ),
+        Property::new(
+            "icon",
+            PropertyKind::Text,
+            "A single character drawn before the text.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "text" => Value::text(self.text.as_str()),
+            "role" => Value::role(self.role),
+            // A banner without an icon has nothing to report, which is what
+            // keeps `icon` out of a file that never set one.
+            "icon" => Value::Text(self.icon?.to_string()),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "text" => self.text = value.as_text()?,
+            "role" => self.role = value.as_role()?,
+            // The field holds one character, so a longer string keeps its
+            // first: the property is described as a single character and a
+            // banner is not the place to reject a form over a stray one. An
+            // empty string removes the icon, which is the only way a file has
+            // of saying so.
+            "icon" => self.icon = value.as_text()?.chars().next(),
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

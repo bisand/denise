@@ -7,6 +7,9 @@ use denise_render::{Canvas, TURN};
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, interactive_pair};
 
 /// A determinate circular progress indicator, `0.0` to `1.0`.
@@ -249,6 +252,13 @@ fn sweep_of(value: f32, radius: i32) -> i32 {
 }
 
 impl<M: 'static> Widget<M> for RadialProgress {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -297,6 +307,67 @@ impl<M: 'static> Widget<M> for RadialProgress {
             &self.label,
             content,
         );
+    }
+}
+
+impl Describe for RadialProgress {
+    const KIND: &'static str = "radial-progress";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "value",
+            PropertyKind::Float { min: 0.0, max: 1.0 },
+            "How far round the ring is filled, from empty at `0.0` to a full turn at `1.0`.",
+        ),
+        Property::new(
+            "label",
+            PropertyKind::Text,
+            "Text drawn in the middle of the ring; the caller formats it, so the widget chooses neither decimals nor a locale.",
+        ),
+        Property::new(
+            "thickness",
+            PropertyKind::Int { min: 1, max: 64 },
+            "Ring width in pixels; derived from the radius without it.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour of the filled arc; `warning` or `error` for a ring that means something is running out.",
+        ),
+        Property::new(
+            "size",
+            PropertyKind::Int { min: 6, max: 96 },
+            "Text size in logical pixels.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "value" => Value::Float(self.value),
+            // An empty string is how this widget spells "no label", so there is
+            // nothing to report and nothing for a file to write.
+            "label" if !self.label.is_empty() => Value::text(self.label.as_str()),
+            "thickness" => Value::Int(self.thickness?),
+            "role" => Value::role(self.role),
+            "size" => Value::Int(i32::from(self.style.size_px)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter, which is where NaN and out of range are
+            // decided; the range above is only what an inspector offers.
+            "value" => self.set_value(value.as_float()?),
+            "label" => self.set_label(value.as_text()?),
+            // Stored as asked for and clamped to the radius at paint time by
+            // `thickness_for`, because the radius is not known until then.
+            "thickness" => self.thickness = Some(value.as_int()?),
+            "role" => self.role = value.as_role()?,
+            "size" => self.style.size_px = value.as_size()?,
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

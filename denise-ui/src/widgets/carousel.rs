@@ -7,6 +7,9 @@ use denise_render::Canvas;
 
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::image::{Fit, Image};
 use crate::widgets::style::{focus_ring, interactive_pair};
 
@@ -265,6 +268,13 @@ fn slide_fraction(fraction: i32, elapsed: u64) -> i32 {
 }
 
 impl<M: 'static> Widget<M> for Carousel<M> {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -547,6 +557,73 @@ impl<M: 'static> Widget<M> for Carousel<M> {
     /// display: neither is a tab stop.
     fn focusable(&self) -> bool {
         self.message.is_some() && self.pages.len() > 1
+    }
+}
+
+impl<M> Describe for Carousel<M> {
+    const KIND: &'static str = "carousel";
+
+    // The pictures are not here. They are child nodes of the form — one
+    // `picture` per page, loaded by the engine — because this crate decodes
+    // nothing and a property cannot hold a buffer of pixels.
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "selected",
+            PropertyKind::Int {
+                min: 0,
+                max: i32::MAX,
+            },
+            "Which page is showing when the form opens; the real upper bound is the number of pictures, which a descriptor cannot see.",
+        ),
+        Property::new(
+            "on-change",
+            PropertyKind::Message(Payload::Index),
+            "Emitted with the page a person lands on; the advance clock is silent, because a message reports what a person did.",
+        ),
+        Property::new(
+            "auto-advance-ms",
+            PropertyKind::Int {
+                min: 500,
+                max: 60_000,
+            },
+            "Advance to the next page this often, on the animation clock; without it the carousel only moves when someone moves it.",
+        ),
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour of the current page's dot and the focus ring.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "selected" => Value::Int(i32::try_from(self.current()).unwrap_or(i32::MAX)),
+            // No clock is nothing to report, so a file that never asked for one
+            // does not grow one.
+            "auto-advance-ms" => Value::Int(i32::try_from(self.advance_ms?).unwrap_or(i32::MAX)),
+            "role" => Value::role(self.role),
+            // The message is the application's own type; see the `describe`
+            // module documentation.
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            // Through the setter, so a page past the end clamps to the last one
+            // rather than leaving the carousel pointing at nothing.
+            "selected" => self.set_current(value.as_index()?),
+            // `auto_advance`'s floor, and it is not cosmetic: an interval the
+            // quarter-second slide cannot keep up with is a carousel that never
+            // comes to rest.
+            "auto-advance-ms" => {
+                self.advance_ms = Some(value.as_millis()?.max(SLIDE_MS * 2));
+            }
+            "role" => self.role = value.as_role()?,
+            "on-change" => return Err(Mismatch::Supplied),
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 

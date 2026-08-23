@@ -6,6 +6,9 @@ use denise_render::{Canvas, TURN};
 
 use crate::motion::{Motion, Wake};
 use crate::widget::{Animation, PaintCtx, Widget};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+};
 use crate::widgets::radial::{ring, ring_colors, thickness_for};
 
 /// How long one revolution takes by default.
@@ -192,6 +195,13 @@ fn angle_at(phase_ms: u64, period_ms: u64) -> i32 {
 }
 
 impl<M: 'static> Widget<M> for Spinner {
+    fn describe(&self) -> Option<&dyn DynDescribe> {
+        Some(self)
+    }
+
+    fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
+        Some(self)
+    }
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
@@ -260,6 +270,65 @@ impl<M: 'static> Widget<M> for Spinner {
     /// widget that is nothing but motion.
     fn snap(&mut self, _now_ms: u64) -> Animation {
         Animation::NONE
+    }
+}
+
+impl Describe for Spinner {
+    const KIND: &'static str = "spinner";
+
+    const PROPERTIES: &'static [Property] = &[
+        Property::new(
+            "role",
+            PropertyKind::Enum(ROLES),
+            "Colour of the moving arc. The faint track behind it is derived from the same role.",
+        ),
+        Property::new(
+            "thickness",
+            PropertyKind::Int { min: 1, max: 64 },
+            "Ring width in pixels. Derived from the node's size without it.",
+        ),
+        Property::new(
+            "period-ms",
+            // The floor is the clamp `set_period_ms` applies, named rather than
+            // repeated, so an editor cannot offer a period the widget refuses.
+            PropertyKind::Int {
+                min: MIN_PERIOD_MS as i32,
+                max: 10_000,
+            },
+            "How long one full turn takes, in milliseconds.",
+        ),
+        Property::new(
+            "frame-ms",
+            PropertyKind::Int { min: 1, max: 1_000 },
+            "This spinner's own sampling interval, overriding the tree's — a coarse one gives a ticking rather than a sweeping hand. Almost nothing should set it.",
+        ),
+    ];
+
+    fn get(&self, name: &str) -> Option<Value> {
+        Some(match name {
+            "role" => Value::role(self.role),
+            // Both of these are derived when unset, and a derived value is not
+            // one to write into a file as though somebody had chosen it.
+            "thickness" => Value::Int(self.thickness?),
+            "period-ms" => Value::Int(i32::try_from(self.period_ms).unwrap_or(i32::MAX)),
+            "frame-ms" => Value::Int(i32::try_from(self.frame_ms?).unwrap_or(i32::MAX)),
+            _ => return None,
+        })
+    }
+
+    fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
+        match name {
+            "role" => self.role = value.as_role()?,
+            // A ring thinner than a pixel is a ring nobody can see.
+            "thickness" => self.thickness = Some(value.as_int()?.max(1)),
+            // Through the setters, which hold the two clamps that keep a spinner
+            // watchable: a period shorter than a frame looks stopped or
+            // backwards, and an interval of zero is a busy loop.
+            "period-ms" => self.set_period_ms(value.as_millis()?),
+            "frame-ms" => self.set_frame_ms(Some(value.as_millis()?)),
+            _ => return Err(Mismatch::Unknown),
+        }
+        Ok(())
     }
 }
 
