@@ -73,6 +73,79 @@ impl FormKind {
 /// The themes a form may name.
 const THEMES: &[&str] = &["dark", "light", "high-contrast"];
 
+/// One reversible change to a form.
+///
+/// Applied with [`Form::apply`], which hands back the edit that undoes it. See
+/// there for why an inverse is always knowable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Edit {
+    /// Set a whole-number property, or take it away with `None`.
+    Number {
+        /// The node.
+        path: Vec<usize>,
+        /// The property.
+        name: String,
+        /// What to set it to, or `None` to remove it — which is what returning a
+        /// property to its default means, since a default is not written.
+        value: Option<i64>,
+    },
+    /// Put a node, written as form-file text, among a parent's children.
+    ///
+    /// The text is a whole node with its own formatting, which is what makes this
+    /// the inverse of a removal *and* what a paste from the clipboard is.
+    Insert {
+        /// The parent's path; empty for the form itself.
+        parent: Vec<usize>,
+        /// Where among its children.
+        index: usize,
+        /// The node.
+        text: String,
+    },
+    /// Take a node, and everything under it, out.
+    Remove {
+        /// The node.
+        path: Vec<usize>,
+    },
+    /// Several edits as one.
+    ///
+    /// Applied in order and undone in reverse, which is what makes a drag that
+    /// moved *and* resized a single step on an undo stack rather than four. If
+    /// any of them fails the ones already applied are put back, so a compound
+    /// edit either happens or does not.
+    Many(Vec<Edit>),
+    /// Swap a node for another, written as form-file text.
+    ///
+    /// The exact inverse of anything that cannot be undone by putting a value
+    /// back — taking a property *away* is the case: a property re-added by name
+    /// lands at the end of the line rather than where it was, so the values would
+    /// come back right and the line would not. Restoring the node's own text
+    /// restores its order too.
+    Replace {
+        /// The node.
+        path: Vec<usize>,
+        /// What to put there.
+        text: String,
+    },
+}
+
+impl Edit {
+    /// Sets or clears a whole-number property.
+    pub fn number(path: &[usize], name: &str, value: Option<i64>) -> Self {
+        Edit::Number {
+            path: path.to_vec(),
+            name: name.to_string(),
+            value,
+        }
+    }
+
+    /// Removes a node.
+    pub fn remove(path: &[usize]) -> Self {
+        Edit::Remove {
+            path: path.to_vec(),
+        }
+    }
+}
+
 /// A parsed form file.
 ///
 /// Holds the document rather than a value taken from it — comments, spacing and
@@ -404,7 +477,7 @@ impl Form {
     pub fn set_number(&mut self, path: &[usize], name: &str, value: i64) -> bool {
         match self.at_mut(path) {
             Some(node) => {
-                node.insert(name, KdlValue::Integer(i128::from(value)));
+                set_integer(node, name, value);
                 true
             }
             None => false,
@@ -444,6 +517,156 @@ impl Form {
         }
         parent.remove(last);
         true
+    }
+
+    /// Applies an edit, and hands back the edit that undoes it.
+    ///
+    /// The whole of undo, and the reason it is exact: because this crate holds
+    /// the **document** rather than a value taken from it, the inverse of an edit
+    /// is knowable at the moment it is made and is itself an ordinary edit. There
+    /// is no snapshot of anything — a stack of these is a stack of small,
+    /// reversible facts.
+    ///
+    /// ```
+    /// # use denise_forms::{Edit, Form};
+    /// let source = "form \"F\" version=1 width=9 height=9 {\n    \
+    ///                label \"hi\" x=1 y=2 w=3 h=4  // a note\n}\n";
+    /// let mut form = Form::parse(source)?;
+    ///
+    /// let undo = form.apply(Edit::number(&[0], "x", Some(40)))?;
+    /// assert!(form.text().contains("x=40"));
+    ///
+    /// form.apply(undo)?;
+    /// assert_eq!(form.text(), source, "byte for byte, comment and all");
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// When the path names no node, when the text of an insertion is not one
+    /// node, or when a property being replaced holds something other than a
+    /// whole number — which could not be put back, and so is refused rather than
+    /// silently made irreversible.
+    pub fn apply(&mut self, edit: Edit) -> Result<Edit, Error> {
+        match edit {
+            Edit::Number { path, name, value } => {
+                let node = self.at_mut(&path).ok_or_else(|| {
+                    Error::new(At::START, Reason::NoSuchNode { path: path.clone() })
+                })?;
+                let before = match node.get(name.as_str()) {
+                    None => None,
+                    Some(KdlValue::Integer(number)) => Some(i64::try_from(*number).unwrap_or(0)),
+                    Some(_) => {
+                        return Err(Error::new(At::START, Reason::NotANumber { name }));
+                    }
+                };
+                let Some(number) = value else {
+                    // Taking a property away cannot be undone by putting it back
+                    // by name: `insert` appends, so it would return to the end of
+                    // the line rather than to its place in it. The node's own
+                    // text is what carries the order.
+                    let text = node.to_string();
+                    let key = name.clone();
+                    node.retain(|entry| entry.name().map(|k| k.value()) != Some(&key));
+                    return Ok(Edit::Replace { path, text });
+                };
+                set_integer(node, name.as_str(), number);
+                Ok(Edit::Number {
+                    path,
+                    name,
+                    value: before,
+                })
+            }
+
+            Edit::Insert {
+                parent,
+                index,
+                text,
+            } => {
+                let node = one_node(&text)?;
+                let children = self.children_of_mut(&parent).ok_or_else(|| {
+                    Error::new(
+                        At::START,
+                        Reason::NoSuchNode {
+                            path: parent.clone(),
+                        },
+                    )
+                })?;
+                let index = index.min(children.len());
+                children.insert(index, node);
+                let mut path = parent;
+                path.push(index);
+                Ok(Edit::Remove { path })
+            }
+
+            Edit::Remove { path } => {
+                let (&last, above) = path.split_last().ok_or_else(|| {
+                    Error::new(At::START, Reason::NoSuchNode { path: Vec::new() })
+                })?;
+                let above = above.to_vec();
+                let children = self.children_of_mut(&above).ok_or_else(|| {
+                    Error::new(
+                        At::START,
+                        Reason::NoSuchNode {
+                            path: above.clone(),
+                        },
+                    )
+                })?;
+                if last >= children.len() {
+                    return Err(Error::new(At::START, Reason::NoSuchNode { path }));
+                }
+                // The node's own text carries its leading trivia — its
+                // indentation and any comment written above it — so putting it
+                // back puts all of that back too.
+                let text = children.remove(last).to_string();
+                Ok(Edit::Insert {
+                    parent: above,
+                    index: last,
+                    text,
+                })
+            }
+
+            Edit::Many(edits) => {
+                let mut inverses: Vec<Edit> = Vec::with_capacity(edits.len());
+                for edit in edits {
+                    match self.apply(edit) {
+                        Ok(inverse) => inverses.push(inverse),
+                        Err(error) => {
+                            // Put back what was already done, newest first, so a
+                            // refused compound leaves the document as it was.
+                            while let Some(inverse) = inverses.pop() {
+                                let _ = self.apply(inverse);
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
+                inverses.reverse();
+                Ok(Edit::Many(inverses))
+            }
+
+            Edit::Replace { path, text } => {
+                let node = one_node(&text)?;
+                let (&last, above) = path.split_last().ok_or_else(|| {
+                    Error::new(At::START, Reason::NoSuchNode { path: Vec::new() })
+                })?;
+                let above = above.to_vec();
+                let children = self.children_of_mut(&above).ok_or_else(|| {
+                    Error::new(
+                        At::START,
+                        Reason::NoSuchNode {
+                            path: above.clone(),
+                        },
+                    )
+                })?;
+                if last >= children.len() {
+                    return Err(Error::new(At::START, Reason::NoSuchNode { path }));
+                }
+                let was = children[last].to_string();
+                children[last] = node;
+                Ok(Edit::Replace { path, text: was })
+            }
+        }
     }
 
     /// The children of the node at `path`, or of the form itself for an empty one.
@@ -555,6 +778,51 @@ fn too_deep(source: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Parses form-file text that must be exactly one node.
+fn one_node(text: &str) -> Result<KdlNode, Error> {
+    let doc: KdlDocument = text.parse().map_err(|error: kdl::KdlError| {
+        let message = error
+            .diagnostics
+            .first()
+            .and_then(|d| d.message.clone())
+            .unwrap_or_else(|| String::from("this is not a node"));
+        Error::new(At::START, Reason::Syntax(message))
+    })?;
+    match doc.nodes() {
+        [only] => Ok(only.clone()),
+        other => Err(Error::new(
+            At::START,
+            Reason::Syntax(format!("this must be one node; it is {}", other.len())),
+        )),
+    }
+}
+
+/// Sets a whole-number property, keeping everything about the line but the number.
+///
+/// Two things here are not what the obvious code would do, and both were found by
+/// the test that asserts an edit undone is byte-for-byte what it was.
+///
+/// `KdlNode::insert` on a property that is already there **replaces the entry**,
+/// and the replacement carries default spacing — so a line whose properties were
+/// deliberately lined up in columns loses that the first time anything is
+/// dragged. Reaching for the existing entry keeps its leading whitespace.
+///
+/// And `KdlEntry::set_value` alone is a **silent no-op** for anything that came
+/// from a parse: the entry keeps the text it was written with, and renders that
+/// rather than the value it now holds. The cached representation has to be set
+/// too, which is why this is a function and not a line.
+fn set_integer(node: &mut KdlNode, name: &str, number: i64) {
+    let Some(entry) = node.entry_mut(name) else {
+        // Nothing there to keep the shape of; appending is right.
+        node.insert(name, KdlValue::Integer(i128::from(number)));
+        return;
+    };
+    entry.set_value(KdlValue::Integer(i128::from(number)));
+    if let Some(format) = entry.format_mut() {
+        format.value_repr = number.to_string();
+    }
 }
 
 #[cfg(test)]

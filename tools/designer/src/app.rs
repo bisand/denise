@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use denise::{
     ElementState, InputEvent, KeyCode, Point, PointerButton, Radius, Rect, Role, Size, theme,
 };
-use denise_forms::{Handler, Payload, Picture, Placed, Wiring};
+use denise_forms::{Edit, Handler, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{Button, Divider, Label, List, ListItem, Panel};
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
 use crate::canvas::{Drag, Grip, Guide, place, topmost};
 use crate::document::Document;
+use crate::history::History;
 use crate::settings::Settings;
 
 /// What the designer's own widgets emit.
@@ -28,6 +29,10 @@ pub enum Message {
     Palette(usize),
     /// A node picked in the outline.
     Outline(usize),
+    /// Put the last edit back.
+    Undo,
+    /// Do again what was put back.
+    Redo,
     /// A message the *form under design* emits.
     ///
     /// A designer cannot know an application's message type, so every name in an
@@ -53,6 +58,9 @@ struct Chrome {
     status: NodeId,
     /// The inspector column, which the inspector panel is rebuilt inside.
     right: NodeId,
+    /// The two buttons that go grey when there is nothing to put back.
+    undo_button: NodeId,
+    redo_button: NodeId,
     /// The palette's scrolling viewport.
     palette_view: NodeId,
     /// The outline's scrolling viewport.
@@ -86,22 +94,31 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     ui.set_dock(toolbar, Some(Dock::Top));
 
     let mut x = GAP;
+    let mut history_buttons = Vec::new();
     for (text, message) in [
         ("New", Message::New),
         ("Open…", Message::Open),
         ("Save", Message::Save),
         ("Save as…", Message::SaveAs),
+        ("Undo", Message::Undo),
+        ("Redo", Message::Redo),
     ] {
         let width = 8 * text.chars().count() as i32 + 24;
-        ui.add(
+        let id = ui.add(
             toolbar,
             Button::new(text, message)
                 .with_role(Role::Neutral)
                 .with_size(13),
             Rect::new(x, GAP, width, TOOLBAR - GAP * 2),
         );
+        if matches!(message, Message::Undo | Message::Redo)
+            && let Some(id) = id
+        {
+            history_buttons.push(id);
+        }
         x += width + 6;
     }
+    let (undo_button, redo_button) = (history_buttons[0], history_buttons[1]);
     let title = ui
         .add(
             toolbar,
@@ -214,6 +231,8 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         title,
         status,
         right,
+        undo_button,
+        redo_button,
         palette_view,
         outline_view,
         outline,
@@ -245,6 +264,10 @@ pub struct Designer {
     overlay: Vec<NodeId>,
     snapping: bool,
     grid: i32,
+    history: History,
+    /// Set when a close was refused because of unsaved work; a second ask goes
+    /// through.
+    warned: bool,
     status: String,
     exit: bool,
 }
@@ -270,6 +293,8 @@ impl Designer {
             overlay: Vec::new(),
             snapping: true,
             grid: 4,
+            history: History::new(),
+            warned: false,
             status: String::new(),
             exit: false,
         };
@@ -293,7 +318,21 @@ impl Designer {
     }
 
     /// Asks the loop to stop after this frame.
+    ///
+    /// Unsaved work stops it the first time and says so. A modal would be the
+    /// better question and needs a second window; asking twice is the honest
+    /// version of it until then, and it is at least impossible to lose a form to
+    /// one keystroke.
     pub fn request_exit(&mut self) {
+        if self.history.is_dirty() && !self.warned {
+            self.warned = true;
+            self.status = format!(
+                "{} has unsaved changes — Save, or ask again to discard them",
+                self.document.label()
+            );
+            self.refresh_labels();
+            return;
+        }
         self.exit = true;
     }
 
@@ -420,8 +459,19 @@ impl Designer {
             self.ui.set_z(id, 100);
         }
 
+        // The selection is held by path, so it survives a rebuild — but the
+        // `NodeId` behind it does not, and neither does the overlay drawn on it.
+        let surviving: Vec<Vec<usize>> = self
+            .selection
+            .iter()
+            .filter(|path| self.node_id(path).is_some())
+            .cloned()
+            .collect();
+        self.selection = surviving;
+        self.selected = self.selection.last().and_then(|path| self.node_id(path));
         self.refresh_outline();
         self.refresh_inspector();
+        self.refresh_overlay();
         self.refresh_labels();
     }
 
@@ -538,6 +588,11 @@ impl Designer {
     }
 
     fn refresh_labels(&mut self) {
+        // A button that cannot do anything says so, rather than doing nothing.
+        let (can_undo, can_redo) = (self.history.can_undo(), self.history.can_redo());
+        self.ui.set_enabled(self.chrome.undo_button, can_undo);
+        self.ui.set_enabled(self.chrome.redo_button, can_redo);
+
         let title = self.document.label();
         if let Some(label) = self.ui.widget_mut::<Label>(self.chrome.title) {
             label.set_text(title);
@@ -586,7 +641,7 @@ impl Designer {
                     state: ElementState::Down,
                     modifiers,
                     ..
-                } => self.key(*code, modifiers.contains(denise::Modifiers::SHIFT)),
+                } => self.key(*code, *modifiers),
                 _ => false,
             };
             if !mine {
@@ -639,6 +694,8 @@ impl Designer {
             self.selection = vec![path.clone()];
         }
         self.selected = self.node_id(&path);
+        // Working on something else ends the run, as leaving a field would.
+        self.history.separate();
         self.refresh_inspector();
 
         if let Some(bounds) = self.path_bounds(&path)
@@ -650,6 +707,8 @@ impl Designer {
     }
 
     fn begin(&mut self, grip: Grip, at: Point, path: Vec<usize>) {
+        // A drag is its own step, whatever was being nudged before it.
+        self.history.separate();
         let Some(origin) = self.node_id(&path).and_then(|id| self.ui.layout(id)) else {
             return;
         };
@@ -714,24 +773,84 @@ impl Designer {
         self.refresh_overlay();
     }
 
+    /// Applies an edit through the history, so it can be undone.
+    ///
+    /// The one door: nothing else in this crate touches the document, which is
+    /// what makes "undo works for everything" a property of the code rather than
+    /// a promise about remembering.
+    fn edit(&mut self, edit: Edit) {
+        match self.document.form_mut().apply(edit) {
+            Ok(inverse) => {
+                self.history.record(inverse);
+                self.document.set_dirty(self.history.is_dirty());
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+        self.refresh_labels();
+    }
+
     /// Writes a node's rectangle back to the document, and only what changed.
+    ///
+    /// One edit for the whole rectangle, so a drag that moved *and* resized is
+    /// one step. A single property on its own stays a single `Number`, which is
+    /// what lets a run of nudges coalesce.
     fn write_rect(&mut self, path: &[usize], rect: Rect, was: Rect) {
-        let form = self.document.form_mut();
-        for (name, new, old) in [
+        let mut edits: Vec<Edit> = [
             ("x", rect.x, was.x),
             ("y", rect.y, was.y),
             ("w", rect.width, was.width),
             ("h", rect.height, was.height),
-        ] {
-            if new != old {
-                form.set_number(path, name, i64::from(new));
-            }
+        ]
+        .into_iter()
+        .filter(|(_, new, old)| new != old)
+        .map(|(name, new, _)| Edit::number(path, name, Some(i64::from(new))))
+        .collect();
+
+        match edits.len() {
+            0 => {}
+            1 => self.edit(edits.remove(0)),
+            _ => self.edit(Edit::Many(edits)),
         }
-        self.document.touch();
-        self.refresh_labels();
     }
 
-    fn key(&mut self, code: KeyCode, shift: bool) -> bool {
+    /// Undoes one step, and rebuilds the canvas from what is left.
+    pub fn undo(&mut self) {
+        let outcome = self.history.undo(self.document.form_mut());
+        self.after_history(outcome, "nothing left to undo");
+    }
+
+    /// Redoes one step.
+    pub fn redo(&mut self) {
+        let outcome = self.history.redo(self.document.form_mut());
+        self.after_history(outcome, "nothing to redo");
+    }
+
+    fn after_history(&mut self, outcome: Result<bool, denise_forms::Error>, empty: &str) {
+        match outcome {
+            Ok(true) => {
+                self.document.set_dirty(self.history.is_dirty());
+                let (undone, redoable) = self.history.depth();
+                self.reload_from_document();
+                self.status = format!("{undone} to undo, {redoable} to redo");
+                self.refresh_labels();
+            }
+            Ok(false) => {
+                self.status = empty.to_string();
+                self.refresh_labels();
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                self.refresh_labels();
+            }
+        }
+    }
+
+    fn key(&mut self, code: KeyCode, modifiers: denise::Modifiers) -> bool {
+        let shift = modifiers.contains(denise::Modifiers::SHIFT);
+        // Control everywhere, and Command as well, which is what a hand on a Mac
+        // reaches for. Either counts, so one binding serves all three platforms.
+        let command = modifiers.contains(denise::Modifiers::CTRL)
+            || modifiers.contains(denise::Modifiers::SUPER);
         let step = if shift { self.grid * 2 } else { 1 };
         let nudge = match code {
             KeyCode::ArrowLeft => Some((-step, 0)),
@@ -749,8 +868,19 @@ impl Designer {
         }
         // A key that would also be a keystroke is only design mode's while
         // nothing in the designer's own chrome has the caret. Nothing does yet;
-        // the inspector's editors (#93) are what make this matter.
+        // the inspector's editors (#93) are what make this matter. Ctrl-Z is not
+        // among them: undo is undo wherever the caret is.
         let typing = self.ui.focused().is_some();
+        // Ctrl on every platform, and Command as well on a Mac, where it is what
+        // the fingers reach for.
+        if command && matches!(code, KeyCode::Z) {
+            if shift {
+                self.redo();
+            } else {
+                self.undo();
+            }
+            return true;
+        }
         match code {
             KeyCode::G if !typing => {
                 self.toggle_snapping();
@@ -800,12 +930,12 @@ impl Designer {
     /// still to go.
     pub fn delete_selection(&mut self) {
         let mut paths = self.selection.clone();
+        // Deepest and last first, so removing one does not shift the index of
+        // another still to go.
         paths.sort();
         paths.reverse();
-        for path in paths {
-            self.document.form_mut().remove_at(&path);
-        }
-        self.document.touch();
+        self.history.separate();
+        self.edit(Edit::Many(paths.iter().map(|p| Edit::remove(p)).collect()));
         self.selection.clear();
         self.reload_from_document();
     }
@@ -1018,6 +1148,8 @@ impl Designer {
         match message {
             Message::New => {
                 self.document = Document::blank();
+                self.history = History::new();
+                self.warned = false;
                 self.show_form();
             }
             Message::Open => {
@@ -1042,6 +1174,8 @@ impl Designer {
                 self.selected = self.outline.get(index).map(|(_, id)| *id);
                 self.refresh_inspector();
             }
+            Message::Undo => self.undo(),
+            Message::Redo => self.redo(),
             Message::Inert => {}
         }
     }
@@ -1051,6 +1185,8 @@ impl Designer {
         match Document::open(&path) {
             Ok(document) => {
                 self.document = document;
+                self.history = History::new();
+                self.warned = false;
                 self.show_form();
             }
             Err(error) => {
@@ -1062,7 +1198,12 @@ impl Designer {
 
     fn save(&mut self, to: Option<PathBuf>) {
         self.status = match self.document.save(to) {
-            Ok(()) => format!("saved {}", self.document.label()),
+            Ok(()) => {
+                self.history.saved();
+                self.document.set_dirty(false);
+                self.warned = false;
+                format!("saved {}", self.document.label())
+            }
             Err(error) => error,
         };
         self.refresh_labels();
@@ -1211,17 +1352,25 @@ mod tests {
     }
 
     fn press_key(designer: &mut Designer, code: KeyCode, shift: bool) {
+        press_with(
+            designer,
+            code,
+            if shift {
+                denise::Modifiers::SHIFT
+            } else {
+                denise::Modifiers::NONE
+            },
+        );
+    }
+
+    fn press_with(designer: &mut Designer, code: KeyCode, modifiers: denise::Modifiers) {
         feed(
             designer,
             &[InputEvent::Key {
                 code,
                 state: ElementState::Down,
                 repeat: false,
-                modifiers: if shift {
-                    denise::Modifiers::SHIFT
-                } else {
-                    denise::Modifiers::NONE
-                },
+                modifiers,
             }],
         );
     }
@@ -1526,6 +1675,163 @@ mod tests {
         designer.release();
         assert_eq!(designer.overlay.len(), settled);
         assert!(!designer.selection.is_empty());
+    }
+
+    // --------------------------------------------------------------- undo
+
+    const CTRL: denise::Modifiers = denise::Modifiers::CTRL;
+
+    fn ctrl_z(designer: &mut Designer, shift: bool) {
+        let modifiers = if shift {
+            denise::Modifiers::CTRL | denise::Modifiers::SHIFT
+        } else {
+            CTRL
+        };
+        press_with(designer, KeyCode::Z, modifiers);
+    }
+
+    #[test]
+    fn a_whole_drag_is_one_undo_and_puts_the_file_back_exactly() {
+        let mut designer = designer_on("forms/reference.dform");
+        designer.toggle_snapping();
+        let before = text(&designer);
+        let path = path_named(&designer, "volume");
+
+        // A drag that moves and resizes at once is still one step.
+        let from = middle(&designer, &path);
+        drag_from_to(&mut designer, from, Point::new(from.x + 24, from.y + 8));
+        assert_ne!(text(&designer), before);
+        assert_eq!(
+            designer.history.depth(),
+            (1, 0),
+            "a drag was more than one step"
+        );
+
+        ctrl_z(&mut designer, false);
+        assert_eq!(text(&designer), before, "undo did not restore the file");
+        assert_eq!(designer.history.depth(), (0, 1));
+    }
+
+    #[test]
+    fn a_run_of_nudges_is_one_undo() {
+        let mut designer = designer_on("forms/reference.dform");
+        let before = text(&designer);
+        let path = path_named(&designer, "volume");
+        let at = middle(&designer, &path);
+        click_at(&mut designer, at, false);
+
+        for _ in 0..10 {
+            press_key(&mut designer, KeyCode::ArrowRight, false);
+        }
+        assert!(text(&designer).contains("x=150"), "{}", text(&designer));
+        assert_eq!(designer.history.depth().0, 1, "ten nudges were ten steps");
+
+        ctrl_z(&mut designer, false);
+        assert_eq!(text(&designer), before);
+    }
+
+    #[test]
+    fn undoing_a_delete_brings_the_node_and_its_children_back() {
+        let mut designer = designer_on("forms/reference.dform");
+        let before = text(&designer);
+        let panel = path_named(&designer, "media-section");
+        let at = middle(&designer, &panel);
+        click_at(&mut designer, at, false);
+        designer.selection = vec![panel];
+
+        press_key(&mut designer, KeyCode::Delete, false);
+        assert!(!text(&designer).contains("name=shots"));
+
+        ctrl_z(&mut designer, false);
+        assert_eq!(
+            text(&designer),
+            before,
+            "undoing a delete did not restore the file byte for byte"
+        );
+        // And the canvas came back with it.
+        assert!(designer.outline_names().any(|n| n == "shots"));
+    }
+
+    #[test]
+    fn redo_puts_back_what_undo_took_and_a_new_edit_discards_it() {
+        let mut designer = designer_on("forms/reference.dform");
+        designer.toggle_snapping();
+        let path = path_named(&designer, "volume");
+        let at = middle(&designer, &path);
+        click_at(&mut designer, at, false);
+        press_key(&mut designer, KeyCode::ArrowRight, false);
+        let moved = text(&designer);
+
+        ctrl_z(&mut designer, false);
+        assert_ne!(text(&designer), moved);
+        ctrl_z(&mut designer, true);
+        assert_eq!(text(&designer), moved, "redo did not put it back");
+
+        // Undo, then do something else: the redo branch is gone.
+        ctrl_z(&mut designer, false);
+        assert!(designer.history.can_redo());
+        let other = path_named(&designer, "stars");
+        let at = middle(&designer, &other);
+        click_at(&mut designer, at, false);
+        press_key(&mut designer, KeyCode::ArrowDown, false);
+        assert!(!designer.history.can_redo());
+    }
+
+    #[test]
+    fn the_title_says_when_there_is_unsaved_work_and_stops_saying_it() {
+        let mut designer = designer_on("forms/reference.dform");
+        assert!(!designer.document.label().contains('•'));
+
+        let path = path_named(&designer, "volume");
+        let at = middle(&designer, &path);
+        click_at(&mut designer, at, false);
+        press_key(&mut designer, KeyCode::ArrowRight, false);
+        assert!(
+            designer.document.label().contains('•'),
+            "no modified marker: {}",
+            designer.document.label()
+        );
+
+        // Undoing back to where it was saved makes it clean again.
+        ctrl_z(&mut designer, false);
+        assert!(
+            !designer.document.label().contains('•'),
+            "still marked: {}",
+            designer.document.label()
+        );
+    }
+
+    #[test]
+    fn closing_with_unsaved_work_asks_before_it_goes() {
+        let mut designer = designer_on("forms/reference.dform");
+        designer.request_exit();
+        assert!(designer.exit_requested(), "a clean form closes at once");
+
+        let mut designer = designer_on("forms/reference.dform");
+        let path = path_named(&designer, "volume");
+        let at = middle(&designer, &path);
+        click_at(&mut designer, at, false);
+        press_key(&mut designer, KeyCode::ArrowRight, false);
+
+        designer.request_exit();
+        assert!(!designer.exit_requested(), "it left without asking");
+        assert!(designer.status.contains("unsaved"), "{}", designer.status);
+
+        designer.request_exit();
+        assert!(designer.exit_requested(), "asking twice did not go through");
+    }
+
+    #[test]
+    fn a_bare_z_is_not_undo() {
+        let mut designer = designer_on("forms/reference.dform");
+        let path = path_named(&designer, "volume");
+        let at = middle(&designer, &path);
+        click_at(&mut designer, at, false);
+        press_key(&mut designer, KeyCode::ArrowRight, false);
+        let moved = text(&designer);
+
+        press_key(&mut designer, KeyCode::Z, false);
+        assert_eq!(text(&designer), moved, "a bare Z undid something");
     }
 
     #[test]

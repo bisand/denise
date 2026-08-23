@@ -150,6 +150,20 @@ pub enum Reason {
         /// The limit, in bytes.
         limit: usize,
     },
+    /// An edit named a node that is not there.
+    NoSuchNode {
+        /// The child path that went nowhere.
+        path: Vec<usize>,
+    },
+    /// An edit would have replaced a value it could not have put back.
+    ///
+    /// Every edit has to be reversible or undo is a lie, and the inverse of
+    /// setting a number is setting the number that was there. A property holding
+    /// something else is refused rather than quietly made irreversible.
+    NotANumber {
+        /// The property.
+        name: String,
+    },
 }
 
 /// A failure, and where in the file it is.
@@ -261,6 +275,11 @@ impl fmt::Display for Error {
                     "a form file is at most {limit} bytes; this one is larger"
                 )
             }
+            Reason::NoSuchNode { path } => write!(f, "there is no node at {path:?}"),
+            Reason::NotANumber { name } => write!(
+                f,
+                "`{name}` does not hold a whole number, so setting one could not be undone"
+            ),
         }
     }
 }
