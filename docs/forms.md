@@ -474,6 +474,11 @@ Children: `option "Label"` — one per choice, in order.
 
 #### `select`
 
+`on-change` is **required**: `Select` holds a message of the application's type
+and has no inert constructor, so there is nothing a form file could put there
+instead. Same for [`collapse`](#collapse). Both are worth a `::inert` in
+`denise-ui` and do not have one yet.
+
 | | Type | Default | |
 |---|---|---|---|
 | `selected` | integer | — | Index; omitted, nothing is selected and the placeholder shows. |
@@ -747,7 +752,7 @@ separate problems that are easy to run together:
 | | | |
 |---|---|---|
 | **Scale** | Same design, more pixels. A 1024×600 form on a 2048×1200 panel, or on a 2× display. | [#111](https://github.com/bisand/denise/issues/111) — the engine multiplies on the way in, exactly as `hello` does by hand, and the form declares with `scaling=` whether it consents to being scaled at all. |
-| **Resize** | A window being dragged, a different aspect ratio, a panel turned to portrait. Scaling alone letterboxes or distorts. | **Done** — `anchor=` and `dock=` per node ([#110](https://github.com/bisand/denise/issues/110)): Delphi's and WinForms' own answer, one derived rectangle per child in the reflow pass the tree already runs. The toolkit has them; [#86](https://github.com/bisand/denise/issues/86) is what makes a `.dform` say so. |
+| **Resize** | A window being dragged, a different aspect ratio, a panel turned to portrait. Scaling alone letterboxes or distorts. | **Done** — `anchor=` and `dock=` per node ([#110](https://github.com/bisand/denise/issues/110)): Delphi's and WinForms' own answer, one derived rectangle per child in the reflow pass the tree already runs, and [#86](https://github.com/bisand/denise/issues/86) builds them from the file. |
 | **Content-driven sizing** | A label as wide as its text, a row that grows with what is in it. | [#112](https://github.com/bisand/denise/issues/112) — a real measure-and-arrange engine, in a crate of its own that an application opts into, so the core keeps costing nothing. |
 
 Both of the first two are **properties added to existing nodes**, which
@@ -776,7 +781,11 @@ Decided elsewhere, and deliberately not settled here:
   gallery's editor is nine seed colours and a name, which is a small file of its
   own rather than something to inline here.
 
-And one thing this document changes upstream of itself: the engine's resolver in
-[#86](https://github.com/bisand/denise/issues/86) is written as
-`Fn(&str) -> Option<M>`, which the [payload table](#messages) shows is not enough
-for a checkbox or a slider. It needs the payload.
+One thing this document changed upstream of itself, now settled: the engine's
+resolver was written in [#86](https://github.com/bisand/denise/issues/86) as
+`Fn(&str) -> Option<M>`, and the [payload table](#messages) showed that could not
+build a checkbox or a slider. It turned out not to be enough even with the
+payload — those widgets hold a `fn(bool) -> M`, a **function pointer**, which no
+closure built from a name can be. `denise-forms` asks for a `Handler<M>` instead,
+and an application answers with its own enum's tuple variant, which already is
+one.
