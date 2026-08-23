@@ -319,6 +319,7 @@ framebuffer.
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
 | [`denise-image`](https://crates.io/crates/denise-image) | PNG/JPEG/GIF/BMP decoding into premultiplied pixels | `std` |
 | [`denise-layout`](https://crates.io/crates/denise-layout) | Keyboard layouts, dead keys, the system's configured layout | `std` |
+| [`denise-forms`](https://crates.io/crates/denise-forms) | Loads a `.dform` file into a widget tree at runtime | `std` |
 | [`denise-keyboard`](https://crates.io/crates/denise-keyboard) | On-screen keyboard: a shelf of keys that emits what hardware emits | `std` |
 | [`denise-video`](https://crates.io/crates/denise-video) | V4L2 hardware decode onto a DRM plane, zero-copy | Linux |
 | [`denise-drm`](https://crates.io/crates/denise-drm) | Linux DRM/KMS — the primary target | Linux |
@@ -463,7 +464,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/design.md](docs/design.md) | How it is built and why — architecture, rasteriser, text, keyboards, theming, and the milestone history |
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
-| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all sixteen share one number, and what each guard is for |
+| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all seventeen share one number, and what each guard is for |
 | [docs/forms.md](docs/forms.md) | The `.dform` file: why KDL, the version 1 schema, and what a form file deliberately will not do |
 
 ## Constraints

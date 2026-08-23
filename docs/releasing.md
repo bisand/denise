@@ -1,6 +1,6 @@
 # Releasing
 
-All sixteen crates share one version and go to crates.io together.
+All seventeen crates share one version and go to crates.io together.
 
 ## Doing it
 
@@ -58,7 +58,7 @@ It also means the notes are written by a person before the irreversible step rat
 
 Because the version number is worth more as a compatibility statement than as a change log. Under independent versioning you get `denise-ui 0.3.1` requiring `denise-render 0.2.4` within about three releases, and from then on "which versions work together" needs a table somebody maintains and readers have to find. Sharing one number makes the answer "the matching ones", permanently.
 
-These sixteen crates are one product split up for compilation reasons — nobody uses `denise-render` without `denise` — so that is the property worth keeping. The cost is that a crate gets a new version when nothing in it changed, which matters to somebody depending on exactly one of them. Nobody does yet.
+These seventeen crates are one product split up for compilation reasons — nobody uses `denise-render` without `denise` — so that is the property worth keeping. The cost is that a crate gets a new version when nothing in it changed, which matters to somebody depending on exactly one of them. Nobody does yet.
 
 **When to revisit.** Approaching 1.0, a breaking change in `denise-drm` forcing `denise` to a major it did not earn stops being noise and becomes a semver lie. At `0.0.x` it is noise.
 
@@ -71,7 +71,7 @@ The workflow fails closed at four points, because an upload cannot be taken back
 | **The release tag matches the manifest** | True by construction now that the workflow writes the version from the tag — and asserted anyway, because if the bump path ever grows a bug, this is what stops one version being published under another's name |
 | **CI passes on the exact commit being published** | The workflow waits for CI's verdict on the bump commit — per check *name*, from its most recent run, so a rerun or a duplicate cannot wedge it. A red check fails the release before anything is uploaded |
 | **`--locked`** | A version bump that did not refresh `Cargo.lock` fails in rehearsal instead of halfway through an upload |
-| **A full dry run first** | Packages and verifies all sixteen before anything real goes |
+| **A full dry run first** | Packages and verifies all seventeen before anything real goes |
 
 Since the release waits on CI *by check name*, every job in `ci.yml` is a release
 guard whether or not it was added as one. The `advisories` job is the case worth

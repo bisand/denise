@@ -1,0 +1,33 @@
+[package]
+name = "denise-forms"
+description = "Loads a DeniseUI form file into a widget tree at runtime: the engine behind .dform."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std"] }
+
+# The document, kept rather than consumed. `serde` is off because nothing here
+# deserialises into a struct — that is the whole point, and it is what lets the
+# designer edit a form without rewriting the parts it did not touch. `span` is
+# what turns a parse failure into a line and a column.
+kdl = { workspace = true }
+
+thiserror = { workspace = true, features = ["std"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
