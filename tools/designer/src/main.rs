@@ -27,19 +27,18 @@
 //!
 //! # What is here, and what is not
 //!
-//! This is the skeleton: the panes, a form opened and drawn, an outline that
-//! selects, an inspector that reports, and a save that writes back what was read.
-//! Dragging from the palette is [#91], moving things on the canvas is [#92], and
-//! editing a property is [#93].
+//! A form opens, draws, selects, moves, resizes, deletes and undoes, and its
+//! properties are edited in the right pane. Dragging a new widget out of the
+//! palette is [#91], and it is the last thing between this and a designer
+//! somebody could build a form in from nothing.
 //!
 //! [#91]: https://github.com/bisand/denise/issues/91
-//! [#92]: https://github.com/bisand/denise/issues/92
-//! [#93]: https://github.com/bisand/denise/issues/93
 
 mod app;
 mod canvas;
 mod document;
 mod history;
+mod inspector;
 mod settings;
 
 use std::time::{Duration, Instant};
@@ -173,6 +172,11 @@ impl DeniseApp for Main {
         for message in messages {
             self.designer.handle(message);
         }
+
+        // Last, so a keystroke that has just reached a field is applied in the
+        // same frame it was typed in. Nothing in the inspector emits a message;
+        // see `Designer::poll`.
+        self.designer.poll();
 
         if self.designer.ui.needs_paint() {
             let pending = self.designer.ui.pending_damage();

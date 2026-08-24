@@ -167,21 +167,103 @@ impl Built {
     }
 }
 
+const ANCHOR_EDGES: &[&str] = &["left", "top", "right", "bottom"];
+const DOCK_SIDES: &[&str] = &["top", "bottom", "left", "right", "fill"];
+
+/// Anywhere on a form's surface, and then some.
+///
+/// A rectangle is advice to an editor, not a rule: a node may sit outside its
+/// parent and the tree will clip it, which is occasionally what somebody means.
+const ANYWHERE: PropertyKind = PropertyKind::Int {
+    min: -8192,
+    max: 8192,
+};
+
 /// The properties the *tree* owns rather than the widget.
 ///
 /// Geometry, visibility, ordering, placement. A widget's descriptor never
 /// mentions them, so they are checked against this list before a widget is asked
 /// whether it has heard of them.
-const NODE_PROPERTIES: &[&str] = &[
-    "name", "x", "y", "w", "h", "visible", "enabled", "z", "tooltip", "scroll", "stack", "focus",
-    "anchor", "dock",
+///
+/// Described the same way a widget describes its own, and for the same reason:
+/// the designer's inspector draws an editor per [`Property`] and has no table of
+/// its own, so `x` and `dock` get one from here exactly as `role` gets one from
+/// the widget.
+pub const NODE_PROPERTIES: &[Property] = &[
+    Property::new(
+        "name",
+        PropertyKind::Text,
+        "What the application calls this node. Unique within the form.",
+    ),
+    Property::new("x", ANYWHERE, "Left edge, relative to the parent."),
+    Property::new("y", ANYWHERE, "Top edge, relative to the parent."),
+    Property::new(
+        "w",
+        PropertyKind::Int { min: 0, max: 8192 },
+        "Width in pixels.",
+    ),
+    Property::new(
+        "h",
+        PropertyKind::Int { min: 0, max: 8192 },
+        "Height in pixels.",
+    ),
+    Property::new(
+        "visible",
+        PropertyKind::Bool,
+        "Drawn and able to be touched, or neither.",
+    ),
+    Property::new(
+        "enabled",
+        PropertyKind::Bool,
+        "Takes input, or is greyed out and does not.",
+    ),
+    Property::new(
+        "z",
+        PropertyKind::Int {
+            min: -1000,
+            max: 1000,
+        },
+        "Paint order among siblings; higher is nearer the front.",
+    ),
+    Property::new(
+        "tooltip",
+        PropertyKind::Text,
+        "What resting the pointer on this node says.",
+    ),
+    Property::new(
+        "scroll",
+        PropertyKind::Bool,
+        "Whether children reaching past this node can be scrolled to.",
+    ),
+    Property::new(
+        "stack",
+        PropertyKind::Int { min: 0, max: 1000 },
+        "Stacks the children down the node with this many pixels between them.",
+    ),
+    Property::new(
+        "focus",
+        PropertyKind::Bool,
+        "Whether this node holds the caret when the form opens. One per form.",
+    ),
+    Property::new(
+        "anchor",
+        PropertyKind::Text,
+        "Edges held as the parent resizes: any of left, top, right, bottom.",
+    ),
+    Property::new(
+        "dock",
+        PropertyKind::Enum(DOCK_SIDES),
+        "An edge of the parent this node takes for itself, before the rest are placed.",
+    ),
 ];
+
+/// The tree-owned property of this name, if there is one.
+pub fn node_property(name: &str) -> Option<&'static Property> {
+    NODE_PROPERTIES.iter().find(|p| p.name == name)
+}
 
 /// Child nodes that are a parent's *content* rather than nodes of their own.
 const COLLECTIONS: &[&str] = &["option", "item", "column", "row", "event", "picture", "tab"];
-
-const ANCHOR_EDGES: &[&str] = &["left", "top", "right", "bottom"];
-const DOCK_SIDES: &[&str] = &["top", "bottom", "left", "right", "fill"];
 
 impl Form {
     /// Builds this form into `ui` under `parent`.
@@ -320,7 +402,7 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 continue;
             };
             let name = name.value();
-            if NODE_PROPERTIES.contains(&name) || info.property(name).is_some() {
+            if node_property(name).is_some() || info.property(name).is_some() {
                 continue;
             }
             return Err(Error::new(

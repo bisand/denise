@@ -50,16 +50,14 @@ impl History {
     pub fn record(&mut self, inverse: Edit) {
         self.redo.clear();
 
-        // A run of edits to one property of one node is one step.
+        // A run of edits to one property of one node is one step, and so is a
+        // run of edits to one node's argument — which is what a person typing
+        // into an inspector field is doing.
         if self.open
-            && let (Some(top), Edit::Number { path, name, .. }) = (self.undo.last(), &inverse)
-            && let Edit::Number {
-                path: at,
-                name: key,
-                ..
-            } = top
-            && at == path
-            && key == name
+            && self
+                .undo
+                .last()
+                .is_some_and(|top| same_target(top, &inverse))
         {
             // Keep the older inverse: it holds the value from before the run
             // began, which is where undo has to go back to.
@@ -137,6 +135,29 @@ impl History {
     /// How many steps are on each stack, for a status line and for tests.
     pub fn depth(&self) -> (usize, usize) {
         (self.undo.len(), self.redo.len())
+    }
+}
+
+/// Whether two edits are the same person doing the same thing.
+///
+/// Only the small, repeatable edits coalesce. A removal or an insertion is
+/// always its own step: nobody holds a key down deleting the same node twice.
+fn same_target(a: &Edit, b: &Edit) -> bool {
+    match (a, b) {
+        (
+            Edit::Property {
+                path: one,
+                name: first,
+                ..
+            },
+            Edit::Property {
+                path: other,
+                name: second,
+                ..
+            },
+        ) => one == other && first == second,
+        (Edit::Argument { path: one, .. }, Edit::Argument { path: other, .. }) => one == other,
+        _ => false,
     }
 }
 

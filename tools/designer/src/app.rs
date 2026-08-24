@@ -5,13 +5,16 @@ use std::path::PathBuf;
 use denise::{
     ElementState, InputEvent, KeyCode, Point, PointerButton, Radius, Rect, Role, Size, theme,
 };
-use denise_forms::{Edit, Handler, Payload, Picture, Placed, Wiring};
-use denise_ui::widgets::{Button, Divider, Label, List, ListItem, Panel};
+use denise_forms::{Edit, Handler, Literal, Payload, Picture, Placed, Wiring};
+use denise_ui::widgets::{
+    Button, Divider, Label, List, ListItem, Panel, Property, PropertyKind, Value, open_select,
+};
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
 use crate::canvas::{Drag, Grip, Guide, place, topmost};
 use crate::document::Document;
 use crate::history::History;
+use crate::inspector::{Editor, Field, Inspector, show_value};
 use crate::settings::Settings;
 
 /// What the designer's own widgets emit.
@@ -33,6 +36,19 @@ pub enum Message {
     Undo,
     /// Do again what was put back.
     Redo,
+    /// Take an inspector row's property out of the file, so its default stands.
+    Reset(usize),
+    /// Open an inspector row's dropdown.
+    ///
+    /// A `Select` holds the message itself, so the row can name itself here.
+    /// Choosing cannot: the open list reports through a `fn(usize) -> M`, which
+    /// carries the option and not the row, so the designer remembers which
+    /// dropdown it opened.
+    OpenChoice(usize),
+    /// An option chosen in whichever dropdown is open.
+    Chose(usize),
+    /// Find a picture for an inspector row, through the platform's dialog.
+    Browse(usize),
     /// A message the *form under design* emits.
     ///
     /// A designer cannot know an application's message type, so every name in an
@@ -56,8 +72,6 @@ const GAP: i32 = 8;
 struct Chrome {
     title: NodeId,
     status: NodeId,
-    /// The inspector column, which the inspector panel is rebuilt inside.
-    right: NodeId,
     /// The two buttons that go grey when there is nothing to put back.
     undo_button: NodeId,
     redo_button: NodeId,
@@ -67,8 +81,9 @@ struct Chrome {
     outline_view: NodeId,
     /// The outline's list, replaced whenever a form is opened.
     outline: NodeId,
-    /// The inspector's panel, replaced whenever the selection changes.
-    inspector: NodeId,
+    /// The inspector's scrolling viewport. The pane inside it is replaced
+    /// whenever the selection changes; this outlives every form.
+    inspector_view: NodeId,
     /// The node the form is built under, replaced whenever a form is opened.
     stage: NodeId,
     /// The canvas's scrolling viewport, which the stage is centred in.
@@ -217,10 +232,13 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         )
         .expect("outline viewport");
 
-    let inspector = ui
+    // A form node with twenty properties of its own and fourteen the tree owns
+    // is taller than any pane, so the rows go in a viewport that scrolls.
+    let inspector_view = ui
         .add(right, Panel::default(), Rect::new(0, 0, settings.right, 0))
         .expect("right");
-    ui.set_dock(inspector, Some(Dock::Fill));
+    ui.set_dock(inspector_view, Some(Dock::Fill));
+    ui.set_scrollable(inspector_view, true);
 
     // Replaced by the first `show_form`; a node has to exist for it to remove.
     let stage = ui
@@ -230,13 +248,12 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     Chrome {
         title,
         status,
-        right,
         undo_button,
         redo_button,
         palette_view,
         outline_view,
         outline,
-        inspector,
+        inspector_view,
         stage,
         canvas,
     }
@@ -264,6 +281,19 @@ pub struct Designer {
     overlay: Vec<NodeId>,
     snapping: bool,
     grid: i32,
+    /// The right pane, rebuilt whenever the selection changes.
+    inspector: Option<Inspector>,
+    /// The row whose dropdown is open, and the popup it opened.
+    choosing: Option<(usize, NodeId)>,
+    /// Whether the canvas is behind the file.
+    ///
+    /// Some edits cannot be shown by setting something on a widget — a property
+    /// taken away has to come back as the widget's own default, and a message
+    /// name is not a value any `Value` can carry. Those are written to the file
+    /// and the form is rebuilt from it, which cannot happen mid-keystroke
+    /// without taking the caret out of the field being typed in. So it happens
+    /// when the caret leaves.
+    stale: bool,
     history: History,
     /// Set when a close was refused because of unsaved work; a second ask goes
     /// through.
@@ -293,6 +323,9 @@ impl Designer {
             overlay: Vec::new(),
             snapping: true,
             grid: 4,
+            inspector: None,
+            choosing: None,
+            stale: false,
             history: History::new(),
             warned: false,
             status: String::new(),
@@ -441,6 +474,12 @@ impl Designer {
             }
         }
 
+        // A form may ask for the caret with `focus=#true`, and a form under
+        // design must not have it: the caret is behaviour, design mode is the
+        // absence of behaviour, and the first thing typed belongs to the
+        // inspector rather than to a field in the form being drawn.
+        self.ui.focus(None);
+
         // The scrim: an invisible sheet over the form that absorbs every press
         // and leaves the focus alone. It is what makes the canvas *design mode*
         // rather than a live form, and preview mode (#99) is hiding it.
@@ -501,90 +540,220 @@ impl Designer {
 
     /// Redraws the inspector for whatever is selected.
     ///
-    /// Read-only: the editors are #93. What it proves today is that the property
-    /// descriptors from #85 reach a running application without the designer
-    /// naming a single widget — every line here comes from the widget itself.
+    /// Every row here comes from a descriptor — the widget's own for what the
+    /// widget holds, and [`denise_forms::NODE_PROPERTIES`] for what the tree
+    /// holds. This file names no widget and no property, which is what keeps a
+    /// twenty-sixth widget from needing a line of it.
     fn refresh_inspector(&mut self) {
-        // Rebuilt rather than updated: there is no state in it worth keeping, and
-        // a selection change replaces every row anyway.
-        self.ui.remove(self.chrome.inspector);
-        let inspector = self
-            .ui
-            .add(
-                self.chrome.right,
-                Panel::default(),
-                Rect::new(0, 0, self.settings.right, 0),
-            )
-            .expect("the right pane is there");
-        self.ui.set_dock(inspector, Some(Dock::Fill));
-        self.chrome.inspector = inspector;
+        // Rebuilt rather than reconciled: a selection change replaces every row,
+        // and a row holds no state worth carrying across one.
+        if let Some(inspector) = self.inspector.take() {
+            self.ui.remove(inspector.content);
+        }
+        self.close_choice();
+        let width = self.settings.right;
+        let paths = self.selection.clone();
+        let ids: Vec<NodeId> = paths.iter().filter_map(|path| self.node_id(path)).collect();
 
-        let width = self.settings.right - GAP * 2;
-        let mut y = GAP;
-        let mut line = |ui: &mut Ui<Message>, text: String, role: Role, size: u16, height: i32| {
-            ui.add(
-                inspector,
-                Label::new(text).with_role(role).with_size(size),
-                Rect::new(GAP, y, width, height),
-            );
-            y += height + 2;
-        };
-
-        let Some(id) = self.selected() else {
-            line(
-                &mut self.ui,
-                String::from("Nothing selected"),
-                Role::BaseContent,
-                13,
-                18,
-            );
-            line(
-                &mut self.ui,
-                String::from("Pick a node in the outline."),
-                Role::Base300,
-                11,
-                16,
-            );
-            return;
-        };
-
-        let kind = self.ui.kind(id).unwrap_or("node");
-        line(&mut self.ui, kind.to_string(), Role::Primary, 15, 20);
-
-        if let Some(bounds) = self.ui.layout(id) {
-            line(
-                &mut self.ui,
-                format!(
-                    "x {} y {} w {} h {}",
-                    bounds.x, bounds.y, bounds.width, bounds.height
+        if ids.is_empty() {
+            let header = [
+                (String::from("Nothing selected"), Role::BaseContent, 13),
+                (
+                    String::from("Pick a node on the canvas or in the outline."),
+                    Role::Base300,
+                    11,
                 ),
-                Role::Base300,
-                11,
-                16,
-            );
+            ];
+            self.inspector = Some(Inspector::build(
+                &mut self.ui,
+                self.chrome.inspector_view,
+                width,
+                &header,
+                &[],
+            ));
+            return;
         }
 
-        // Straight from the widget's own descriptor. The designer has no table.
-        let properties = self.ui.properties(id);
-        for property in properties {
-            let value = match self.ui.get_property(id, property.name) {
-                Some(value) => format!("{value:?}"),
-                None if property.is_settable() => String::from("—"),
-                None => String::from("(supplied when built)"),
-            };
-            let role = if property.is_settable() {
-                Role::BaseContent
-            } else {
-                Role::Base300
-            };
-            line(
-                &mut self.ui,
-                format!("{}   {value}", property.name),
-                role,
-                11,
-                16,
-            );
+        let header = if ids.len() == 1 {
+            let node = self.placed.iter().find(|p| p.path == paths[0]);
+            let kind = node.map_or("node", |p| p.kind);
+            let name = node
+                .and_then(|p| p.name.clone())
+                .unwrap_or_else(|| String::from("(this node has no name)"));
+            [
+                (kind.to_string(), Role::Primary, 15),
+                // The node's own name, which is worth reading: it is what the
+                // application will ask the form for.
+                (name, Role::BaseContent, 11),
+            ]
+        } else {
+            [
+                (format!("{} selected", ids.len()), Role::Primary, 15),
+                (
+                    String::from("What they have in common; an edit goes to all of them."),
+                    Role::Base300,
+                    11,
+                ),
+            ]
+        };
+
+        let fields = self.fields(&paths, &ids);
+        self.inspector = Some(Inspector::build(
+            &mut self.ui,
+            self.chrome.inspector_view,
+            width,
+            &header,
+            &fields,
+        ));
+    }
+
+    /// A row per property the selection has in common.
+    ///
+    /// With several selected that is the *intersection*, so an edit is never
+    /// offered that only some of them could take.
+    fn fields(&self, paths: &[Vec<usize>], ids: &[NodeId]) -> Vec<Field> {
+        let used = self.message_names();
+        let hint = (!used.is_empty()).then(|| format!("Used in this form: {}", used.join(", ")));
+
+        let mut fields: Vec<Field> = denise_forms::NODE_PROPERTIES
+            .iter()
+            .map(|property| self.field(paths, ids, property, true, None))
+            .collect();
+
+        for property in self.ui.properties(ids[0]) {
+            let shared = ids[1..].iter().all(|id| {
+                self.ui
+                    .properties(*id)
+                    .iter()
+                    .any(|p| p.name == property.name)
+            });
+            if !shared {
+                continue;
+            }
+            // A message field cannot offer a dropdown — a name not used yet is
+            // exactly what somebody is usually typing — so what the form
+            // already uses goes in the tooltip instead.
+            let hint = matches!(property.kind, PropertyKind::Message(_))
+                .then(|| hint.clone())
+                .flatten();
+            fields.push(self.field(paths, ids, property, false, hint));
         }
+        fields
+    }
+
+    /// One row: what to show in it, and whether the file wrote it.
+    fn field(
+        &self,
+        paths: &[Vec<usize>],
+        ids: &[NodeId],
+        property: &'static Property,
+        node: bool,
+        hint: Option<String>,
+    ) -> Field {
+        let mut value: Option<String> = None;
+        let mut agreed = true;
+        let mut written = true;
+        let mut resettable = true;
+
+        for (path, id) in paths.iter().zip(ids) {
+            let mine = self.value_of(path, *id, property, node);
+            let entry = self.document.form().property(path, property.name).is_some();
+            resettable &= entry;
+            written &= entry || self.argument_for(path, *id, property, node).is_some();
+            match &value {
+                None => value = Some(mine),
+                Some(seen) if *seen != mine => agreed = false,
+                Some(_) => {}
+            }
+        }
+
+        Field {
+            property,
+            node,
+            // Several nodes disagreeing is an empty editor rather than one of
+            // their values, which would be a lie about the other.
+            value: agreed.then_some(value).flatten(),
+            written,
+            resettable,
+            hint,
+        }
+    }
+
+    /// What one node's property currently is, as a field shows it.
+    fn value_of(&self, path: &[usize], id: NodeId, property: &Property, node: bool) -> String {
+        if node {
+            // The rectangle comes from the tree rather than the file, so the
+            // four fields follow a drag on the canvas as it happens.
+            if let Some(axis) = axis_of(property.name) {
+                let rect = self.ui.layout(id).unwrap_or(Rect::ZERO);
+                return [rect.x, rect.y, rect.width, rect.height][axis].to_string();
+            }
+            return self
+                .document
+                .form()
+                .property(path, property.name)
+                .unwrap_or_else(|| String::from(node_default(property.name)));
+        }
+        match property.kind {
+            // The widget holds neither: a message is a value of the
+            // application's own type and an asset is decoded pixels. The file
+            // is where both are written, so the file is what the row shows.
+            PropertyKind::Message(_) | PropertyKind::Asset => self
+                .document
+                .form()
+                .property(path, property.name)
+                .unwrap_or_default(),
+            _ => self
+                .ui
+                .get_property(id, property.name)
+                .map(|value| show_value(&value))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The node's positional argument, when *that* is what supplies a property.
+    ///
+    /// `label "Heading"` carries its text as an argument, which is how every
+    /// form in this repo is written. Editing that text has to change the
+    /// argument: adding `text="…"` beside it would leave the file saying one
+    /// thing and the screen showing another.
+    fn argument_for(
+        &self,
+        path: &[usize],
+        id: NodeId,
+        property: &Property,
+        node: bool,
+    ) -> Option<String> {
+        if node
+            || !matches!(property.kind, PropertyKind::Text)
+            || self.document.form().property(path, property.name).is_some()
+        {
+            return None;
+        }
+        let argument = self.document.form().argument(path)?;
+        // Only when the widget agrees that this is where its value came from,
+        // which is exact: nothing else could have set it.
+        let held = self.ui.get_property(id, property.name)?;
+        (show_value(&held) == argument).then_some(argument)
+    }
+
+    /// Every message name this form already uses.
+    fn message_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for placed in &self.placed {
+            for property in self.ui.properties(placed.id) {
+                if !matches!(property.kind, PropertyKind::Message(_)) {
+                    continue;
+                }
+                if let Some(name) = self.document.form().property(&placed.path, property.name)
+                    && !names.contains(&name)
+                {
+                    names.push(name);
+                }
+            }
+        }
+        names.sort();
+        names
     }
 
     fn refresh_labels(&mut self) {
@@ -600,6 +769,270 @@ impl Designer {
         let status = self.status.clone();
         if let Some(label) = self.ui.widget_mut::<Label>(self.chrome.status) {
             label.set_text(status);
+        }
+    }
+
+    // -------------------------------------------------------------- inspector
+
+    /// Applies whatever has been typed, ticked or dragged in the inspector.
+    ///
+    /// Called once a frame, after the tree has seen the events. Nothing in the
+    /// pane emits a message per keystroke — this toolkit's widgets take
+    /// `fn(T) -> M` function pointers, which cannot carry a row index — so the
+    /// pane is asked what it holds instead, and a difference from what it was
+    /// given is somebody having edited it.
+    pub fn poll(&mut self) {
+        let Some(mut inspector) = self.inspector.take() else {
+            return;
+        };
+        let changed = inspector.changed(&self.ui);
+        self.inspector = Some(inspector);
+        for (row, text) in changed {
+            self.commit(row, text);
+        }
+        self.settle();
+    }
+
+    /// Rebuilds the canvas from the file, once the caret is out of the way.
+    ///
+    /// See [`Designer::stale`] for what is waiting and why it has to.
+    fn settle(&mut self) {
+        if !self.stale {
+            return;
+        }
+        let typing = self.ui.focused().is_some_and(|id| {
+            self.inspector.as_ref().is_some_and(|pane| {
+                pane.rows.iter().any(|row| {
+                    matches!(row.editor, Editor::Field(_) | Editor::Slid { .. })
+                        && row.editor.focusable() == id
+                })
+            })
+        });
+        if typing {
+            return;
+        }
+        self.stale = false;
+        self.reload_from_document();
+    }
+
+    /// Writes one inspector row to every selected node.
+    ///
+    /// The canvas follows as it is typed, through the same `set` the engine
+    /// calls when it loads a form — so the inspector cannot show something the
+    /// engine could not load, and a value the widget refuses is reported and
+    /// not written.
+    fn commit(&mut self, row: usize, text: String) {
+        let Some((property, node, deferred)) = self.inspector.as_ref().and_then(|pane| {
+            let row = pane.rows.get(row)?;
+            Some((
+                row.property,
+                row.node,
+                matches!(row.editor, Editor::Field(_) | Editor::Slid { .. }),
+            ))
+        }) else {
+            return;
+        };
+
+        let paths = self.selection.clone();
+        if paths.is_empty() {
+            return;
+        }
+
+        // An empty editor means "no value", and no value is what a default is:
+        // the schema does not write one, so clearing the field takes the
+        // property out of the file.
+        let Ok(written) = (!text.trim().is_empty())
+            .then(|| self.interpret(property, &text))
+            .transpose()
+        else {
+            return;
+        };
+
+        let mut live = true;
+        let mut edits: Vec<Edit> = Vec::new();
+        for path in &paths {
+            let Some(id) = self.node_id(path) else {
+                continue;
+            };
+            match &written {
+                None => {
+                    edits.push(Edit::property(path, property.name, None));
+                    live = false;
+                }
+                Some((literal, value)) => {
+                    // The node's own argument, where that is what supplies this
+                    // property. See `argument_for`.
+                    if self.argument_for(path, id, property, node).is_some() {
+                        edits.push(Edit::Argument {
+                            path: path.clone(),
+                            value: literal.clone(),
+                        });
+                    } else {
+                        edits.push(Edit::property(path, property.name, Some(literal.clone())));
+                    }
+                    match value {
+                        Some(value) if !node => {
+                            if let Some(Err(refused)) =
+                                self.ui.set_property(id, property.name, value.clone())
+                            {
+                                self.complain(&refused.to_string());
+                                return;
+                            }
+                        }
+                        // The tree owns its geometry through typed calls rather
+                        // than a property bag, and `x` is the one worth wiring
+                        // by hand: a node that did not move as its `x` was typed
+                        // would be a strange thing to look at.
+                        _ if node => live &= self.place(id, property.name, &text),
+                        _ => live = false,
+                    }
+                }
+            }
+        }
+
+        self.complain("");
+        match edits.len() {
+            0 => return,
+            1 => self.edit(edits.remove(0)),
+            _ => self.edit(Edit::Many(edits)),
+        }
+
+        if live {
+            self.refresh_overlay();
+            return;
+        }
+        // Deferred for a field, because rebuilding would take the caret out of
+        // it; at once for a box or a dropdown, where there is no caret to lose.
+        if deferred {
+            self.stale = true;
+        } else {
+            self.reload_from_document();
+        }
+    }
+
+    /// Puts a tree-owned property on the node, reporting whether it could.
+    ///
+    /// Only the rectangle. Everything else the tree owns — docking, anchoring,
+    /// stacking, the name — changes where *other* nodes go as well, so it is
+    /// written to the file and the form is rebuilt from it, which is the only
+    /// thing that gets all of them right.
+    fn place(&mut self, id: NodeId, name: &str, text: &str) -> bool {
+        let (Some(axis), Ok(value)) = (axis_of(name), text.parse::<i32>()) else {
+            return false;
+        };
+        let Some(was) = self.ui.layout(id) else {
+            return false;
+        };
+        let mut axes = [was.x, was.y, was.width, was.height];
+        axes[axis] = value;
+        self.ui
+            .set_layout(id, Rect::new(axes[0], axes[1], axes[2], axes[3]));
+        true
+    }
+
+    /// What a row's text means, as the file writes it and as the widget takes
+    /// it.
+    ///
+    /// The second half is `None` for a message and for an asset, which no
+    /// `Value` can carry, and for everything the tree owns.
+    #[allow(clippy::type_complexity)]
+    fn interpret(
+        &mut self,
+        property: &Property,
+        text: &str,
+    ) -> Result<(Literal, Option<Value>), ()> {
+        let refuse = |designer: &mut Self, why: String| {
+            designer.complain(&why);
+            Err(())
+        };
+        match property.kind {
+            PropertyKind::Text | PropertyKind::Color => {
+                Ok((Literal::text(text), Some(Value::text(text))))
+            }
+            PropertyKind::Bool => {
+                let flag = text == "#true";
+                Ok((Literal::Flag(flag), Some(Value::Bool(flag))))
+            }
+            PropertyKind::Int { .. } => match text.trim().parse::<i64>() {
+                Ok(number) => Ok((
+                    Literal::Int(number),
+                    Some(Value::Int(
+                        number.clamp(i32::MIN.into(), i32::MAX.into()) as i32
+                    )),
+                )),
+                Err(_) => refuse(self, format!("`{}` takes a whole number", property.name)),
+            },
+            PropertyKind::Float { .. } => match text.trim().parse::<f64>() {
+                // Written the way it was typed: somebody who types `70` into a
+                // float means `value=70`, and a file that answered `value=70.0`
+                // would be editing a line they did not.
+                Ok(number) => Ok((
+                    if number.fract() == 0.0 && number.abs() < 1e15 {
+                        Literal::Int(number as i64)
+                    } else {
+                        Literal::Float(number)
+                    },
+                    Some(Value::Float(number as f32)),
+                )),
+                Err(_) => refuse(self, format!("`{}` takes a number", property.name)),
+            },
+            PropertyKind::Enum(names) => match names.iter().find(|name| **name == text) {
+                Some(name) => Ok((Literal::name(*name), Some(Value::Enum(name)))),
+                None => refuse(
+                    self,
+                    format!("`{}` is one of: {}", property.name, names.join(", ")),
+                ),
+            },
+            // A message name is written bare, as `on-press=save`; a path is a
+            // string. Neither is something a widget can be handed.
+            PropertyKind::Message(_) => Ok((Literal::name(text), None)),
+            PropertyKind::Asset => Ok((Literal::text(text), None)),
+            _ => refuse(
+                self,
+                format!("`{}` is a kind this pane cannot edit yet", property.name),
+            ),
+        }
+    }
+
+    /// Says why a value was refused, in the pane and in the status line.
+    fn complain(&mut self, why: &str) {
+        if let Some(mut pane) = self.inspector.take() {
+            pane.complain(&mut self.ui, why);
+            self.inspector = Some(pane);
+        }
+        if !why.is_empty() {
+            self.status = why.to_string();
+            self.refresh_labels();
+        }
+    }
+
+    /// Puts the rectangle on screen into the four fields that show it.
+    ///
+    /// A drag writes to the tree and not to the file until the button comes up,
+    /// so the pane is told directly rather than rebuilt — and told in a way that
+    /// does not count as somebody having typed it.
+    fn sync_rect(&mut self) {
+        let (Some(mut pane), Some(id)) = (self.inspector.take(), self.selected()) else {
+            return;
+        };
+        if let Some(rect) = self.ui.layout(id) {
+            let axes = [rect.x, rect.y, rect.width, rect.height];
+            for index in 0..pane.rows.len() {
+                let name = pane.rows[index].property.name;
+                if pane.rows[index].node
+                    && let Some(axis) = axis_of(name)
+                {
+                    pane.show(&mut self.ui, index, axes[axis].to_string());
+                }
+            }
+        }
+        self.inspector = Some(pane);
+    }
+
+    /// Closes an open dropdown, if one is open.
+    fn close_choice(&mut self) {
+        if self.choosing.take().is_some() {
+            self.ui.close_popup();
         }
     }
 
@@ -742,6 +1175,7 @@ impl Designer {
         // to a one-line diff and will make it one undo step.
         self.ui.set_layout(id, placement.rect);
         self.refresh_overlay_with(&placement.guides, &drag.path);
+        self.sync_rect();
         self.status = format!(
             "{} {},{} {}x{}",
             self.placed
@@ -922,6 +1356,7 @@ impl Designer {
             self.write_rect(&path, rect, was);
         }
         self.refresh_overlay();
+        self.sync_rect();
     }
 
     /// Takes the selection out of the form.
@@ -1171,13 +1606,126 @@ impl Designer {
                 self.refresh_labels();
             }
             Message::Outline(index) => {
-                self.selected = self.outline.get(index).map(|(_, id)| *id);
+                // By path, like every other way of selecting: the inspector and
+                // the overlay both work from the selection rather than from a
+                // `NodeId`, because a path survives the rebuild an edit causes.
+                let Some(id) = self.outline.get(index).map(|(_, id)| *id) else {
+                    return;
+                };
+                let Some(path) = self
+                    .placed
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.path.clone())
+                else {
+                    return;
+                };
+                self.history.separate();
+                self.selection = vec![path];
+                self.selected = Some(id);
                 self.refresh_inspector();
+                self.refresh_overlay();
             }
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
+            Message::Reset(row) => self.reset(row),
+            Message::OpenChoice(row) => self.open_choice(row),
+            Message::Chose(option) => self.chose(option),
+            Message::Browse(row) => self.browse(row),
             Message::Inert => {}
         }
+    }
+
+    /// Takes a property out of the file, so the widget's own default stands.
+    pub fn reset(&mut self, row: usize) {
+        let Some(name) = self
+            .inspector
+            .as_ref()
+            .and_then(|pane| pane.rows.get(row))
+            .map(|row| row.property.name)
+        else {
+            return;
+        };
+        let edits: Vec<Edit> = self
+            .selection
+            .iter()
+            .map(|path| Edit::property(path, name, None))
+            .collect();
+        if edits.is_empty() {
+            return;
+        }
+        self.history.separate();
+        self.edit(Edit::Many(edits));
+        // A default is only knowable by building the widget again.
+        self.reload_from_document();
+    }
+
+    /// Drops a row's list of names open.
+    pub fn open_choice(&mut self, row: usize) {
+        self.close_choice();
+        let Some(select) = self
+            .inspector
+            .as_ref()
+            .and_then(|pane| pane.rows.get(row))
+            .map(|row| row.editor.focusable())
+        else {
+            return;
+        };
+        if let Some(popup) = open_select(&mut self.ui, select, Message::Chose) {
+            self.choosing = Some((row, popup));
+        }
+    }
+
+    /// Applies an option chosen in whichever dropdown is open.
+    ///
+    /// The row's `Select` is set rather than the property written: the next
+    /// poll sees the dropdown holding something new and commits it, which is
+    /// the same path a typed value takes.
+    pub fn chose(&mut self, option: usize) {
+        let Some((row, _)) = self.choosing else {
+            return;
+        };
+        self.close_choice();
+        let Some(pane) = self.inspector.take() else {
+            return;
+        };
+        if let Some(Editor::Choice { select, options }) = pane.rows.get(row).map(|r| &r.editor) {
+            let (select, chosen) = (*select, options.get(option).copied());
+            if let (Some(widget), Some(_)) = (
+                self.ui
+                    .widget_mut::<denise_ui::widgets::Select<Message>>(select),
+                chosen,
+            ) {
+                widget.set_selected(Some(option));
+            }
+        }
+        self.inspector = Some(pane);
+    }
+
+    /// Finds a picture for an asset row, through the platform's dialog.
+    ///
+    /// The path written is relative to the form file, because that is what the
+    /// engine resolves it against — a form carried to another machine with its
+    /// pictures beside it goes on working.
+    pub fn browse(&mut self, row: usize) {
+        let Some(chosen) = pick_picture() else {
+            return;
+        };
+        let base = self.document.base();
+        let relative = chosen
+            .strip_prefix(&base)
+            .unwrap_or(&chosen)
+            .to_string_lossy()
+            .into_owned();
+        let Some(mut pane) = self.inspector.take() else {
+            return;
+        };
+        pane.show(&mut self.ui, row, String::new());
+        self.inspector = Some(pane);
+        self.commit(row, relative);
+        // A field was written to, so nothing will settle on its own.
+        self.stale = false;
+        self.reload_from_document();
     }
 
     /// Opens a path, reporting a failure in the status line rather than exiting.
@@ -1210,10 +1758,43 @@ impl Designer {
     }
 }
 
+/// Which of a rectangle's four numbers a tree-owned property is, if it is one.
+const fn axis_of(name: &str) -> Option<usize> {
+    Some(match name.as_bytes() {
+        b"x" => 0,
+        b"y" => 1,
+        b"w" => 2,
+        b"h" => 3,
+        _ => return None,
+    })
+}
+
+/// What a tree-owned property means when the file does not write it.
+///
+/// The widget-owned ones report their own defaults through `Describe::get`.
+/// These have nobody to ask: the tree applies them from the file and a file
+/// that says nothing means the tree was never told.
+const fn node_default(name: &str) -> &'static str {
+    match name.as_bytes() {
+        b"visible" | b"enabled" => "#true",
+        b"scroll" | b"focus" => "#false",
+        b"z" => "0",
+        // `name`, `tooltip`, `stack`, `anchor`, `dock`: nothing at all.
+        _ => "",
+    }
+}
+
 fn pick_open() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .add_filter("Denise form", &["dform"])
         .set_title("Open a form")
+        .pick_file()
+}
+
+fn pick_picture() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Picture", &["png", "jpg", "jpeg", "gif"])
+        .set_title("Find a picture")
         .pick_file()
 }
 
@@ -1677,6 +2258,416 @@ mod tests {
         assert!(!designer.selection.is_empty());
     }
 
+    // ---------------------------------------------------------- the inspector
+
+    /// The pane's row for a property, by name.
+    fn row(designer: &Designer, name: &str) -> usize {
+        let pane = designer.inspector.as_ref().expect("a pane");
+        pane.rows
+            .iter()
+            .position(|row| row.property.name == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no `{name}` row among {:?}",
+                    pane.rows
+                        .iter()
+                        .map(|r| r.property.name)
+                        .collect::<Vec<_>>()
+                )
+            })
+    }
+
+    /// Puts text in a row's field, as a keystroke would, and lets the frame run.
+    fn write(designer: &mut Designer, name: &str, text: &str) {
+        let index = row(designer, name);
+        let pane = designer.inspector.as_ref().expect("a pane");
+        let field = match pane.rows[index].editor {
+            Editor::Field(id) | Editor::Slid { field: id, .. } => id,
+            ref other => panic!("`{name}` is edited by {other:?}, not a field"),
+        };
+        designer
+            .ui
+            .widget_mut::<denise_ui::widgets::TextInput<Message>>(field)
+            .expect("a field")
+            .set_text(text);
+        designer.poll();
+    }
+
+    /// Ticks or unticks a row's box.
+    fn tick(designer: &mut Designer, name: &str, on: bool) {
+        let index = row(designer, name);
+        let pane = designer.inspector.as_ref().expect("a pane");
+        let Editor::Flag(id) = pane.rows[index].editor else {
+            panic!("`{name}` is not a box");
+        };
+        designer
+            .ui
+            .widget_mut::<denise_ui::widgets::Checkbox<Message>>(id)
+            .expect("a box")
+            .set_checked(on);
+        designer.poll();
+    }
+
+    /// What a row is showing.
+    fn showing(designer: &Designer, name: &str) -> String {
+        let index = row(designer, name);
+        designer.inspector.as_ref().expect("a pane").rows[index]
+            .shown
+            .clone()
+    }
+
+    fn select(designer: &mut Designer, name: &str) {
+        assert!(designer.select_named(name), "no node called `{name}`");
+    }
+
+    #[test]
+    fn every_property_the_widget_declares_gets_a_row_and_so_does_every_one_the_tree_owns() {
+        // The whole point of #85 reaching an application: this file names no
+        // widget and no property, so a form full of different widgets produces
+        // the right rows without a table anywhere in the designer.
+        let mut designer = designer_on("forms/reference.dform");
+        for name in ["volume", "notify", "full-name", "stream", "records"] {
+            select(&mut designer, name);
+            let id = designer.selected().expect("selected");
+            let pane = designer.inspector.as_ref().expect("a pane");
+            let rows: Vec<&str> = pane.rows.iter().map(|r| r.property.name).collect();
+
+            for property in designer.ui.properties(id) {
+                assert!(
+                    rows.contains(&property.name),
+                    "`{name}` has no row for `{}`: {rows:?}",
+                    property.name
+                );
+            }
+            for property in denise_forms::NODE_PROPERTIES {
+                assert!(
+                    rows.contains(&property.name),
+                    "`{name}` has no row for the tree's `{}`",
+                    property.name
+                );
+            }
+            assert_eq!(
+                rows.len(),
+                designer.ui.properties(id).len() + denise_forms::NODE_PROPERTIES.len(),
+                "`{name}` grew a row from somewhere: {rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_kind_of_property_gets_the_editor_it_calls_for() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "volume");
+        let pane = designer.inspector.as_ref().expect("a pane");
+        let editor = |name: &str| {
+            let index = pane
+                .rows
+                .iter()
+                .position(|r| r.property.name == name)
+                .unwrap_or_else(|| panic!("no `{name}`"));
+            &pane.rows[index].editor
+        };
+
+        // A string, a box and a dropdown.
+        assert!(matches!(editor("tooltip"), Editor::Field(_)));
+        assert!(matches!(editor("visible"), Editor::Flag(_)));
+        assert!(matches!(editor("role"), Editor::Choice { .. }));
+        // A slider's own `value` runs between its own `min` and `max`, whatever
+        // those turn out to be, so it is a field like any other number. `x`,
+        // between -8192 and 8192, is a field for the opposite reason: a hundred
+        // pixels over sixteen thousand units cannot be aimed.
+        assert!(matches!(editor("value"), Editor::Field(_)));
+        assert!(matches!(editor("x"), Editor::Field(_)));
+
+        // A rating's `value` is between nought and five, which is what a slider
+        // is for.
+        select(&mut designer, "stars");
+        let pane = designer.inspector.as_ref().expect("a pane");
+        let index = pane
+            .rows
+            .iter()
+            .position(|r| r.property.name == "value")
+            .expect("a rating has a value");
+        assert!(matches!(pane.rows[index].editor, Editor::Slid { .. }));
+    }
+
+    #[test]
+    fn typing_changes_the_widget_on_the_canvas_before_anything_is_pressed() {
+        // The "done when" of #93, taken literally: characters go into the field
+        // one at a time and the button on the canvas says the new thing, with
+        // no Enter and no message in between.
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "retry");
+        let button = designer.selected().expect("selected");
+        let index = row(&designer, "text");
+        let Editor::Field(field) = designer.inspector.as_ref().unwrap().rows[index].editor else {
+            panic!("`text` is not a field");
+        };
+
+        designer.ui.focus(Some(field));
+        for character in "Go".chars() {
+            feed(&mut designer, &[InputEvent::Text { ch: character }]);
+            designer.poll();
+        }
+
+        assert_eq!(
+            designer.ui.get_property(button, "text"),
+            Some(denise_ui::widgets::Value::text("⟲Go")),
+            "the canvas did not follow the keystrokes"
+        );
+        assert!(
+            text(&designer).contains(r#"button "⟲Go""#),
+            "{}",
+            text(&designer)
+        );
+    }
+
+    #[test]
+    fn a_labels_text_is_written_where_the_file_already_writes_it() {
+        // `button "⟲"` carries its text as an argument. Adding `text="…"` beside
+        // it would leave the file saying one thing and the screen showing
+        // another, so the argument is what changes.
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "retry");
+        write(&mut designer, "text", "Again");
+
+        let after = text(&designer);
+        assert!(after.contains(r#"button "Again" name=retry"#), "{after}");
+        let line = after
+            .lines()
+            .find(|line| line.contains("name=retry"))
+            .expect("the button is still there");
+        assert!(
+            !line.contains("text="),
+            "it added a property instead: {line}"
+        );
+        denise_forms::Form::parse(&after).expect("still a form");
+    }
+
+    #[test]
+    fn a_value_the_field_cannot_mean_never_reaches_the_file() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "volume");
+        let before = text(&designer);
+
+        write(&mut designer, "x", "over there");
+        assert_eq!(text(&designer), before, "nonsense reached the file");
+        assert!(
+            designer.status.contains("whole number"),
+            "it did not say why: {}",
+            designer.status
+        );
+
+        // And the next thing typed, which does mean something, goes through.
+        write(&mut designer, "x", "200");
+        assert!(text(&designer).contains("x=200"), "{}", text(&designer));
+    }
+
+    #[test]
+    fn a_number_typed_into_a_row_moves_the_node_and_writes_one_line() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "volume");
+        let before = text(&designer);
+        let id = designer.selected().expect("selected");
+
+        write(&mut designer, "y", "300");
+        assert_eq!(
+            designer.ui.layout(id).expect("laid out").y,
+            300,
+            "the canvas did not follow"
+        );
+        let changed = diff(&before, &text(&designer));
+        assert_eq!(changed.len(), 1, "{changed:#?}");
+        assert!(changed[0].contains("y=300"), "{}", changed[0]);
+    }
+
+    #[test]
+    fn a_run_of_keystrokes_in_one_field_is_one_undo() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "volume");
+        let before = text(&designer);
+
+        for value in ["1", "12", "123"] {
+            write(&mut designer, "x", value);
+        }
+        assert!(text(&designer).contains("x=123"), "{}", text(&designer));
+        assert_eq!(
+            designer.history.depth().0,
+            1,
+            "three keystrokes, three steps"
+        );
+
+        designer.undo();
+        assert_eq!(text(&designer), before, "one undo did not put the run back");
+    }
+
+    #[test]
+    fn a_box_writes_a_flag_and_a_dropdown_writes_a_bare_name() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "notify");
+        tick(&mut designer, "checked", false);
+        assert!(
+            text(&designer).contains("checked=#false"),
+            "{}",
+            text(&designer)
+        );
+
+        select(&mut designer, "notify");
+        let index = row(&designer, "role");
+        designer.open_choice(index);
+        let options = match designer.inspector.as_ref().unwrap().rows[index].editor {
+            Editor::Choice { options, .. } => options,
+            _ => panic!("`role` is not a dropdown"),
+        };
+        let accent = options.iter().position(|o| *o == "accent").expect("a role");
+        designer.chose(accent);
+        designer.poll();
+
+        // Bare, as a form file writes a name — not `role="accent"`.
+        assert!(
+            text(&designer).contains("role=accent"),
+            "{}",
+            text(&designer)
+        );
+        denise_forms::Form::parse(&text(&designer)).expect("still a form");
+    }
+
+    #[test]
+    fn a_default_is_dimmed_and_resetting_one_takes_it_out_of_the_file() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "volume");
+
+        // The slider writes `role=success`; it does not write `tooltip`.
+        assert_eq!(showing(&designer, "role"), "success");
+        let fields = {
+            let paths = designer.selection.clone();
+            let ids: Vec<NodeId> = paths.iter().filter_map(|p| designer.node_id(p)).collect();
+            designer.fields(&paths, &ids)
+        };
+        let written = |name: &str| {
+            fields
+                .iter()
+                .find(|f| f.property.name == name)
+                .map(|f| f.written)
+                .expect(name)
+        };
+        assert!(written("role"), "the file writes it");
+        assert!(!written("tooltip"), "the file does not write it");
+
+        designer.reset(row(&designer, "role"));
+        let after = text(&designer);
+        let line = after
+            .lines()
+            .find(|line| line.contains("name=volume"))
+            .expect("the slider is still there")
+            .to_string();
+        assert!(
+            !line.contains("role="),
+            "the property is still written: {line}"
+        );
+        assert!(
+            line.contains("min=0 max=100 value=70 step=5"),
+            "it took the rest of the line: {line}"
+        );
+
+        // And the widget went back to what it is without one, which is only
+        // knowable by building it again.
+        select(&mut designer, "volume");
+        assert_eq!(
+            designer
+                .ui
+                .get_property(designer.selected().expect("selected"), "role"),
+            Some(denise_ui::widgets::Value::role(Role::Primary)),
+            "a slider with no role in the file is a primary one"
+        );
+    }
+
+    #[test]
+    fn the_four_rectangle_rows_follow_a_drag_on_the_canvas() {
+        let mut designer = designer_on("forms/reference.dform");
+        designer.toggle_snapping();
+        select(&mut designer, "volume");
+        assert_eq!(showing(&designer, "x"), "140");
+
+        designer.drag_selection(24, 8);
+        assert_eq!(showing(&designer, "x"), "164", "the field did not follow");
+        assert_eq!(showing(&designer, "y"), "396");
+        // And the drag is still one step when it is let go of.
+        designer.release();
+        assert_eq!(designer.history.depth().0, 1);
+    }
+
+    #[test]
+    fn several_selected_shows_what_they_share_and_edits_all_of_them() {
+        let mut designer = designer_on("forms/reference.dform");
+        let (first, second) = (
+            path_named(&designer, "notify"),
+            path_named(&designer, "dark"),
+        );
+        designer.selection = vec![first, second];
+        designer.selected = designer.node_id(&designer.selection[1].clone());
+        designer.refresh_inspector();
+
+        // A checkbox and a toggle: `checked` is common, and the checkbox's
+        // `size` is too. Both are ticked, so the row agrees.
+        assert_eq!(showing(&designer, "checked"), "#true");
+        // `y` differs between them, so the row is blank rather than one of them.
+        assert_eq!(showing(&designer, "y"), "");
+
+        tick(&mut designer, "checked", false);
+        let after = text(&designer);
+        assert_eq!(
+            after.matches("checked=#false").count(),
+            2,
+            "only some of them changed: {after}"
+        );
+        assert_eq!(designer.history.depth().0, 1, "one edit, one step");
+    }
+
+    #[test]
+    fn nothing_selected_is_a_pane_that_says_so_rather_than_an_empty_one() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "volume");
+        assert!(!designer.inspector.as_ref().unwrap().rows.is_empty());
+
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert!(designer.inspector.as_ref().unwrap().rows.is_empty());
+        // And polling an empty pane is not a crash.
+        designer.poll();
+    }
+
+    #[test]
+    fn an_empty_field_puts_a_property_back_to_its_default() {
+        let mut designer = designer_on("forms/reference.dform");
+        select(&mut designer, "volume");
+        write(&mut designer, "step", "5");
+        assert!(text(&designer).contains("step=5"), "{}", text(&designer));
+
+        // With the caret in the field, as it is for somebody deleting what is
+        // in it.
+        let index = row(&designer, "step");
+        let field = designer.inspector.as_ref().unwrap().rows[index]
+            .editor
+            .focusable();
+        designer.ui.focus(Some(field));
+
+        write(&mut designer, "step", "");
+        // The file does not wait; the canvas does, because rebuilding it would
+        // take the caret out of the field being typed in.
+        assert!(!text(&designer).contains("step=5"), "{}", text(&designer));
+        assert!(designer.stale, "nothing is waiting to be rebuilt");
+
+        designer.ui.focus(None);
+        designer.poll();
+        assert!(!designer.stale, "it never caught up");
+        let slider = designer.selected().expect("selected");
+        assert_eq!(
+            designer.ui.get_property(slider, "step"),
+            None,
+            "the slider kept a step the file no longer gives it"
+        );
+    }
+
     // --------------------------------------------------------------- undo
 
     const CTRL: denise::Modifiers = denise::Modifiers::CTRL;
@@ -1934,14 +2925,21 @@ mod tests {
         let mut designer = designer_on("forms/reference.dform");
         let index = designer
             .outline_names()
-            .position(|name| name == "retry")
-            .expect("the retry button is named");
+            .position(|name| name == "notify")
+            .expect("the checkbox is named");
         designer.handle(Message::Outline(index));
-        let button = designer.selected().expect("selected");
-        let bounds = designer.ui.bounds(button).expect("laid out");
+        let box_ = designer.selected().expect("selected");
+        let bounds = designer.ui.bounds(box_).expect("laid out");
         let middle = Point::new(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        // Over the canvas, and not over a pane beside it: a press that missed
+        // the form would prove nothing about the scrim.
+        let canvas = designer
+            .ui
+            .bounds(designer.chrome.canvas)
+            .expect("a canvas");
+        assert!(canvas.contains(middle), "{middle:?} is not over {canvas:?}");
 
-        // A press right on a button in the form under design.
+        // A press right on a checkbox in the form under design.
         designer
             .ui
             .handle(&[InputEvent::PointerMoved { position: middle }]);
