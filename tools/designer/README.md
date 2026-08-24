@@ -90,6 +90,44 @@ held, so banding into one is never a one-way door.
 
 Nothing here touches the file. A selection is not an edit.
 
+## With several selected
+
+![The arrange bar: captions reading align, size, space and group, with short buttons under each — L C R T M B for aligning, W H WH for sizing, - and | for spacing, and two group buttons, of which ungroup is greyed out because three nodes are selected rather than one panel](../../assets/screenshots/designer-arrange.png)
+
+A strip under the toolbar: align, same size, space evenly, group and ungroup.
+It is always there rather than appearing when it applies — a command nobody can
+see is a command nobody knows about — and its buttons go grey one at a time,
+each saying in its **tooltip** what it wants instead of what it does. The
+labels are one or two characters because the font this toolkit ships is ASCII
+and Latin-1, and the arrows and boxes an icon would want are not in it: they
+would draw as empty squares, which is worse than a letter.
+
+Move and nudge act on everything selected — one drag, one arrow key, one undo
+step, however many nodes went with it.
+
+**Siblings only.** A rectangle in a form file is relative to its parent and
+there is no layout engine, so "line these up" only has an answer when they are
+measured from the same corner. Two nodes in different panels have no shared
+space to be aligned in: the numbers would have to be translated through both
+parents, and the answer would stop being true the moment either panel moved. So
+the commands go grey rather than doing something that looks right once.
+
+**The anchor is the one wearing the handles** — the primary selection, the last
+one taken. [The issue](https://github.com/bisand/denise/issues/95) asked for the
+*first* selected, the way Delphi did, but a rubber band has no first-clicked
+node to point at: it takes what it encloses in file order, and neither end of
+that list means anything to the person who drew it. The one wearing the handles
+is the one that can be seen, and it is what the inspector, the name tag and the
+outline already mean by "selected".
+
+Everything here is settled after one go: giving the same command twice is the
+same as giving it once, because the anchor never moves.
+
+**Group** puts the selection inside a new panel that takes their bounding box,
+with every rectangle translated so that nothing appears to move; **ungroup** is
+the reverse, and takes the panel away with it. Both are one step to undo, and
+both go through the same `Edit::Move` as every other change of parent.
+
 ## Dropping a node onto a panel
 
 ![An avatar being dragged over the form's sidebar panel: the sidebar outlined in accent as the container that would take the drop, the avatar carrying its handles and its name tag, and the status line naming the panel it would land in](../../assets/screenshots/designer-drop.png)
@@ -312,6 +350,7 @@ out of the field being typed in.
 | **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
 | **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, and the theme being simulated. |
+| **Arrange** | Align, same size, space evenly, group and ungroup — greyed one button at a time, each saying in its tooltip what it wants. |
 | **Log** | While previewing: the messages the form has fired, by name. |
 
 Open a form, save it, and `git diff` is empty: the document is what is held, not a
