@@ -147,6 +147,19 @@ fn to_grid(value: i32, grid: i32) -> i32 {
     }
 }
 
+/// Rounds a whole rectangle onto the grid.
+///
+/// Where a widget dropped from the palette lands: the same rule a drag follows,
+/// so a placed node and a moved one line up with each other.
+pub fn snap(rect: Rect, grid: i32) -> Rect {
+    Rect::new(
+        to_grid(rect.x, grid),
+        to_grid(rect.y, grid),
+        to_grid(rect.width, grid).max(grid.max(1)),
+        to_grid(rect.height, grid).max(grid.max(1)),
+    )
+}
+
 /// The interesting positions on one axis of a rectangle: both edges and the
 /// middle.
 fn stops(low: i32, extent: i32) -> [i32; 3] {

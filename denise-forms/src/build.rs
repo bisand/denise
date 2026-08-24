@@ -265,6 +265,114 @@ pub fn node_property(name: &str) -> Option<&'static Property> {
 /// Child nodes that are a parent's *content* rather than nodes of their own.
 const COLLECTIONS: &[&str] = &["option", "item", "column", "row", "event", "picture", "tab"];
 
+/// Whether a widget of this kind can hold nodes of their own.
+///
+/// Two do. Everything else either has no children or has *content* — a `select`
+/// holds `option`s, a `table` holds `column`s — which is not the same thing: a
+/// designer dropping a button on a `select` has missed, and dropping one on a
+/// `panel` means it.
+pub fn owns_children(kind: &str) -> bool {
+    matches!(kind, "panel" | "collapse")
+}
+
+/// The kinds that carry their text as the node's argument.
+///
+/// `label "Heading"` rather than `label text="Heading"`. Both build the same
+/// thing; the first is how every form in this repository is written, and is what
+/// [`seed`] produces.
+const ARGUMENT: &[&str] = &[
+    "label", "badge", "divider", "alert", "button", "checkbox", "toggle", "collapse",
+];
+
+/// How big a new widget of this kind should start out.
+///
+/// **Authoring defaults, not intrinsic sizes.** This toolkit has no layout engine
+/// and nothing here has a size of its own: a button is whatever rectangle the
+/// form gives it. These are the rectangles that make a dropped widget look like
+/// what it is, so that somebody can see what they placed before they resize it —
+/// which is a question about writing forms, and so this crate's, rather than a
+/// question about widgets.
+pub fn default_size(kind: &str) -> Size {
+    let (width, height) = match kind {
+        "alert" => (320, 36),
+        "avatar" => (40, 40),
+        "badge" => (60, 20),
+        "button" => (100, 32),
+        "carousel" => (224, 120),
+        "checkbox" | "toggle" => (200, 24),
+        "collapse" => (224, 40),
+        "divider" => (160, 16),
+        "image" => (120, 90),
+        "list" => (200, 160),
+        "panel" => (200, 120),
+        "progress" => (200, 8),
+        "radial-progress" => (48, 48),
+        "radio-group" => (220, 76),
+        "rating" => (140, 24),
+        "select" | "text-input" => (220, 34),
+        "slider" => (200, 24),
+        "spinner" => (24, 24),
+        "table" => (320, 180),
+        "tabs" => (320, 36),
+        "timeline" => (220, 140),
+        "video" => (160, 90),
+        // `label`, and anything this list has not heard of.
+        _ => (120, 20),
+    };
+    Size::new(width, height)
+}
+
+/// The smallest node of this kind that a form can actually hold, as file text.
+///
+/// What a designer writes when somebody drops a widget on the canvas. A rectangle
+/// is the most of it — but "a rect and nothing else" is not true of every widget,
+/// because five of them have a property the builder *requires*: an `alert` has no
+/// colour to draw itself in without a `role`, a `slider` has no range without
+/// `min` and `max`, and `select` and `collapse` have no inert constructor to fall
+/// back on. A node missing one of those parses and then will not build, so a
+/// designer that wrote one would place a widget and break the form.
+///
+/// This lives beside the code that raises those requirements, so the two cannot
+/// drift; a test seeds every widget in [`all`](denise_ui::widgets::all), builds
+/// the result, and fails if a new one needs something this does not give it.
+///
+/// ```
+/// # use denise_forms::{seed, Form};
+/// use denise::Rect;
+///
+/// assert_eq!(
+///     seed("button", Rect::new(16, 24, 100, 32)),
+///     r#"button "button" x=16 y=24 w=100 h=32"#,
+/// );
+/// ```
+pub fn seed(kind: &str, rect: Rect) -> String {
+    let mut node = String::from(kind);
+    if ARGUMENT.contains(&kind) {
+        // The kind, as a placeholder. A label dropped with nothing to say draws
+        // nothing, and a widget you cannot see is a widget you cannot find
+        // again the moment you click somewhere else.
+        node.push_str(&format!(" {:?}", kind));
+    }
+    node.push_str(&format!(
+        " x={} y={} w={} h={}",
+        rect.x, rect.y, rect.width, rect.height
+    ));
+    node.push_str(match kind {
+        "alert" => " role=info",
+        "slider" => " min=0 max=100",
+        // Neither has an inert constructor: both hold a plain message, and there
+        // is no message a form file could invent. The name is a placeholder the
+        // application will rename.
+        "select" => " on-change=changed",
+        "collapse" => " on-toggle=toggled",
+        // A path that is not there yet. An engine that cannot load it says so;
+        // a designer draws a hole and carries on.
+        "image" => " src=\"picture.png\"",
+        _ => "",
+    });
+    node
+}
+
 impl Form {
     /// Builds this form into `ui` under `parent`.
     ///
@@ -372,7 +480,7 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
         // Children that are not the parent's own content are nodes in their own
         // right. A widget that cannot lay children out says so.
         if let Some(children) = node.children() {
-            let owns_children = kind == "panel" || kind == "collapse";
+            let owns_children = owns_children(kind);
             for (index, child) in children.nodes().iter().enumerate() {
                 let name = child.name().value();
                 if COLLECTIONS.contains(&name) {

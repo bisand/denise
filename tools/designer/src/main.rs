@@ -27,12 +27,15 @@
 //!
 //! # What is here, and what is not
 //!
-//! A form opens, draws, selects, moves, resizes, deletes and undoes, and its
-//! properties are edited in the right pane. Dragging a new widget out of the
-//! palette is [#91], and it is the last thing between this and a designer
-//! somebody could build a form in from nothing.
+//! A form opens, draws, selects, moves, resizes, deletes and undoes; its
+//! properties are edited in the right pane; and a widget is dragged out of the
+//! palette or drawn on the canvas. That is a form built from nothing.
 //!
-//! [#91]: https://github.com/bisand/denise/issues/91
+//! The palette is a flat list of names, because the registry carries a name and
+//! a property list and nothing that says what a widget *is* — grouping it and
+//! giving each row a tooltip is [#126].
+//!
+//! [#126]: https://github.com/bisand/denise/issues/126
 
 mod app;
 mod canvas;
@@ -58,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Review aids for `--snapshot`, which has no pointer to select or drag with.
     let mut select: Option<String> = None;
     let mut drag: Option<(i32, i32)> = None;
+    let mut carry: Option<(String, i32, i32)> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -69,13 +73,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some((dx.trim().parse().ok()?, dy.trim().parse().ok()?))
                 });
             }
+            "--carry" => {
+                carry = rest.next().and_then(|value| {
+                    let mut parts = value.split(',');
+                    let kind = parts.next()?.trim().to_string();
+                    let x = parts
+                        .next()
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(120);
+                    let y = parts
+                        .next()
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(120);
+                    Some((kind, x, y))
+                });
+            }
             "-h" | "--help" => {
                 println!(
                     "denise-designer [form.dform]\n\n\
                      A visual form designer for DeniseUI.\n\n\
                      \x20 --snapshot <out.ppm>   draw one frame and exit, with no window\n\
                      \x20 --select <name>        snapshot: select this node first\n\
-                     \x20 --drag <dx>,<dy>       snapshot: and drag it, so the guides show"
+                     \x20 --drag <dx>,<dy>       snapshot: and drag it, so the guides show\n\
+                     \x20 --carry <kind>[,x,y]   snapshot: hold this widget over the form"
                 );
                 return Ok(());
             }
@@ -106,6 +126,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some((dx, dy)) = drag {
             designer.drag_selection(dx, dy);
+        }
+        if let Some((kind, x, y)) = carry
+            && !designer.carry(&kind, denise::Point::new(x, y))
+        {
+            eprintln!("denise-designer: there is no widget called `{kind}`");
         }
         return write_snapshot(&mut designer, size, &out).map_err(Into::into);
     }

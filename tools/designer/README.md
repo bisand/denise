@@ -57,6 +57,7 @@ is skipped, so an invisible sheet over the whole form does not eat every click.
 | Delete | Takes the node and everything under it out of the file. |
 | G | Turns snapping off, and on again. |
 | Ctrl/Cmd-Z | Undo. With Shift: redo. |
+| Enter | Puts down whatever the palette has armed. Escape gives it up. |
 
 Snapping is to a 4-pixel grid and, in preference to it, to the edges and centres
 of the node's **siblings** — the only alignment that means anything when there is
@@ -87,6 +88,37 @@ away again.
 Closing with unsaved work stops once and says so; ask again and it goes. A modal
 would be the better question and needs a second window — this is the honest
 version until then, and it is at least impossible to lose a form to one keystroke.
+
+## The palette
+
+Every widget the toolkit ships, from `widgets::all()` — this crate names none of
+them, so a twenty-sixth appears without it changing. The field above filters.
+
+Two ways to put one on the form, and they share their machinery:
+
+- **Drag** a row onto the canvas. A ghost follows the pointer the whole way,
+  across from one pane to the other, and the widget lands where it is let go of
+  at whatever size it usually starts at.
+- **Click** a row, then **drag a rectangle** on the canvas, the WinForms way — or
+  press **Enter** and one goes down without drawing anything, stepping clear of
+  whatever is already there so the second does not hide under the first.
+
+![A button being dragged out of the palette: the palette on the left with a filter above it, and a ghost outline labelled `button` following the pointer over the form on the canvas](../../assets/screenshots/designer-place.png)
+
+Either way it is **parented to whatever container it was dropped in** — which is a
+`panel` or a `collapse`, because those are the two that lay children out. A
+`select` holds options and a `table` holds columns; dropping a button on one of
+those has missed, and it goes on the form instead. The rectangle written to the
+file is relative to the parent, which is the only space a form file knows.
+
+What lands is the least the file can say: a rectangle, and for five widgets one
+thing more, because an `alert` has no colour to draw itself in without a `role`
+and a `slider` has no range without `min` and `max`. That comes from
+`denise_forms::seed`, which lives next to the code that raises those
+requirements so the two cannot drift.
+
+The new node is selected the moment it lands, so the inspector is already
+describing it, and the whole placement is one undo.
 
 ## The inspector
 
@@ -129,7 +161,7 @@ out of the field being typed in.
 
 | | |
 |---|---|
-| **Palette** | Every widget the toolkit ships, from `widgets::all()`. This file names none of them, so a twenty-sixth appears without it changing. |
+| **Palette** | Every widget the toolkit ships, from `widgets::all()`, filtered by the field above — dragged or clicked onto the canvas. |
 | **Outline** | The nodes the open form named, and picking one selects it. |
 | **Canvas** | The form, drawn — and selected, moved, resized and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
@@ -141,9 +173,11 @@ round trip the whole file format is built around, and there is a test for it.
 
 ## What is not here yet
 
-Dragging a widget out of the palette is [#91], and it is the last thing between
-this and a designer you could build a form in from nothing: today the palette
-says what it would place.
+The palette is a flat list. Grouping it, and giving each row an icon and a
+tooltip saying what the widget *is*, wants somewhere for that to come from: the
+registry carries a name and a property list and nothing else, and a table of
+descriptions in this crate is exactly what the registry exists to avoid. That
+wants a line of documentation on each widget's `Describe`, which is [#126].
 
 Three parts of [#92] are not done either: a rubber band over empty space, dropping
 a node onto a panel to reparent it, and bring-to-front and send-to-back. Each is
@@ -157,12 +191,14 @@ A message field is a field, not a combo box: the name being typed is usually one
 the form has not used yet, and this toolkit has no widget that is both. What the
 form *does* already use is in the row's tooltip.
 
-[#91]: https://github.com/bisand/denise/issues/91
 [#92]: https://github.com/bisand/denise/issues/92
+[#126]: https://github.com/bisand/denise/issues/126
 
 ## Elsewhere
 
-`--snapshot out.ppm` draws one frame and exits, with no window — the same
+`--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
+`--drag` and `--carry` to pose it, since a snapshot has no pointer to select,
+drag or carry anything with — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 
