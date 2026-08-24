@@ -155,6 +155,15 @@ impl Widget<Message> for Swatch {
 struct Clock {
     /// The drawing is a label's; only the knowing-when is this widget's.
     face: Label,
+    /// A time to show instead of the world's.
+    ///
+    /// For the two damage tests, which paint one tree and then another moments
+    /// later and compare the pixels. A clock that reads the wall between those
+    /// two paints is a difference in the *world* rather than in the damage
+    /// tracker, and a test that fails for that reason teaches whoever is
+    /// cutting a release to re-run CI until it is green — which is the habit
+    /// that lets a real stale-pixel regression through.
+    fixed: Option<String>,
 }
 
 impl Clock {
@@ -164,11 +173,19 @@ impl Clock {
                 .with_style(style)
                 .with_role(Role::Base300)
                 .with_align(Align::Center, Align::Center),
+            fixed: None,
         }
     }
 
     /// Reads the clock and asks to be woken when the second turns.
     fn tick(&mut self, now_ms: u64) -> Animation {
+        // Held still, if somebody has asked. See the field.
+        if let Some(text) = self.fixed.clone() {
+            return Animation {
+                repaint: self.face.update(&text),
+                next: Wake::Never,
+            };
+        }
         let Some(now) = clock::now() else {
             return Animation::NONE;
         };
@@ -213,6 +230,8 @@ struct Nodes {
     level_ring: NodeId,
     stars: NodeId,
     spinner: NodeId,
+    /// The wall clock, so a test can hold it still. See [`Clock::fixed`].
+    clock: NodeId,
     tab_body: NodeId,
     mode_select: NodeId,
     grid_caption: NodeId,
@@ -257,6 +276,26 @@ pub struct App {
 }
 
 impl App {
+    /// Holds the wall clock still, at a time of the caller's choosing.
+    ///
+    /// For the two damage tests. Each of them paints one tree and then paints
+    /// another moments later, and compares the pixels: everything else about
+    /// the two is driven by the same events at the same `now_ms`, and the wall
+    /// clock is the one input neither of them controls. If the second turns
+    /// between the two paints the clock's label differs, and the test reports
+    /// stale pixels that are nothing of the kind.
+    ///
+    /// Rarer than the harness bug this was found next to — microseconds of
+    /// exposure per run — and worth closing for the same reason: a release
+    /// guard that fails at random teaches whoever is cutting the release to
+    /// re-run until it is green.
+    #[cfg(test)]
+    fn stop_the_clock(&mut self) {
+        if let Some(clock) = self.ui.widget_mut::<Clock>(self.nodes.clock) {
+            clock.fixed = Some(String::from("2026-01-01 00:00:00"));
+        }
+    }
+
     /// Builds the tree for a surface of `size` **physical** pixels at `scale`.
     ///
     /// The layout below is written in logical pixels and multiplied here, once —
@@ -337,6 +376,7 @@ impl App {
                 level_ring: NodeId::default(),
                 stars: NodeId::default(),
                 spinner: NodeId::default(),
+                clock: NodeId::default(),
                 tab_body: NodeId::default(),
                 mode_select: NodeId::default(),
                 grid_caption: NodeId::default(),
@@ -409,6 +449,7 @@ impl App {
         // Nothing else will ask on its behalf: a widget joins the animating set
         // by requesting it, and this one has no event to request it from.
         self.ui.request_animation(clock);
+        self.nodes.clock = clock;
 
         self.nodes.theme_name = self.add(
             root,
@@ -2254,6 +2295,14 @@ mod tests {
         struct Swapped {
             buffers: [Vec<u32>; 2],
             frame: u64,
+            /// Which buffer the panel is showing.
+            ///
+            /// Carried across calls rather than worked out afresh in each one.
+            /// A settle that finds nothing to paint still has to answer with the
+            /// buffer that is *on the screen*, and that is whichever one the
+            /// previous call left there — not buffer zero, which is where this
+            /// started and is why the popup case failed about once in forty.
+            shown: usize,
         }
 
         impl Swapped {
@@ -2262,11 +2311,10 @@ mod tests {
             /// would be showing. Capped, so a tree that never settles fails
             /// here rather than hanging.
             fn settle(&mut self, ui: &mut Ui<Message>, now_ms: u64) -> &[u32] {
-                let mut shown = 0;
                 for _ in 0..64 {
                     ui.tick(now_ms);
                     if !ui.needs_paint() {
-                        return &self.buffers[shown];
+                        return &self.buffers[self.shown];
                     }
                     // The first pass over the buffers has nothing to be old
                     // relative to, which is what `Undefined` means and what the
@@ -2276,8 +2324,8 @@ mod tests {
                     } else {
                         denise::BufferAge::Frames(2)
                     };
-                    shown = (self.frame % 2) as usize;
-                    paint_into(ui, &mut self.buffers[shown], age);
+                    self.shown = (self.frame % 2) as usize;
+                    paint_into(ui, &mut self.buffers[self.shown], age);
                     self.frame += 1;
                 }
                 panic!("the tree never came to rest");
@@ -2286,14 +2334,17 @@ mod tests {
 
         let mut app = App::new(SIZE, 1.0, None, Motion::default());
         let mut reference = App::new(SIZE, 1.0, None, Motion::default());
-        // The one legitimate insomniac; see the test below.
+        // The one legitimate insomniac; see the test below. And the wall clock,
+        // which is the one input the two trees would not otherwise share.
         for tree in [&mut app, &mut reference] {
             tree.on_message(Message::Spin(false));
+            tree.stop_the_clock();
         }
 
         let mut swap = Swapped {
             buffers: [blank(), blank()],
             frame: 0,
+            shown: 0,
         };
         let mut truth = blank();
 
@@ -2358,6 +2409,23 @@ mod tests {
                 1_000 + step as u64 * 1_000,
                 &format!("hovering stop {step} at {position:?}"),
             );
+            // And a frame in which nothing happens. A settle that finds nothing
+            // to paint still has to answer with the buffer the panel is
+            // *showing* — the one the settle before it left there. Answering
+            // with buffer zero is right half the time, and the other half
+            // reports a difference that looks exactly like stale pixels, in the
+            // one test whose whole job is telling those apart. Done after every
+            // stop because which half you land on depends on how many frames
+            // the gesture before it took.
+            check(
+                &mut app,
+                &mut reference,
+                &mut swap,
+                &mut truth,
+                &[],
+                1_000 + step as u64 * 1_000,
+                &format!("nothing happening after stop {step}"),
+            );
         }
 
         // And a popup, which is the case with the most to go wrong: a scene
@@ -2392,6 +2460,22 @@ mod tests {
             }],
             6_000,
             "after the popup closed",
+        );
+
+        // And a frame in which *nothing happens*, which is the case the harness
+        // above used to get wrong: a settle that finds nothing to paint has to
+        // answer with the buffer the panel is actually showing, and answering
+        // with buffer zero is right only half the time. It reported the
+        // difference as stale pixels — which is what a real damage bug looks
+        // like, in the one test whose whole job is telling those apart.
+        check(
+            &mut app,
+            &mut reference,
+            &mut swap,
+            &mut truth,
+            &[],
+            7_000,
+            "with nothing happening at all",
         );
     }
 
@@ -2432,6 +2516,11 @@ mod tests {
 
         let mut app = App::new(SIZE, 1.0, None, Motion::default());
         let mut reference = App::new(SIZE, 1.0, None, Motion::default());
+        // The wall clock, which is the one input the two trees would not
+        // otherwise share. See `App::stop_the_clock`.
+        for tree in [&mut app, &mut reference] {
+            tree.stop_the_clock();
+        }
 
         let mut buffers = [vec![0u32; PIXELS], vec![0u32; PIXELS]];
         let mut truth = vec![0u32; PIXELS];
