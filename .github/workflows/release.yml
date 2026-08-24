@@ -193,3 +193,16 @@ jobs:
                        | "- [\(.name) \(.version)](https://crates.io/crates/\(.name)/\(.version))"' \
               | sort
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The downloads, after the upload that cannot be taken back. A binary that
+  # fails to build cannot un-publish a crate, so this runs last and can be
+  # re-run on its own from the Actions tab — see .github/workflows/binaries.yml.
+  binaries:
+    name: attach the downloads to the release
+    needs: publish
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/binaries.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}

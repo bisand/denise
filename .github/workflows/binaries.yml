@@ -1,0 +1,381 @@
+name: Binaries
+
+# The designer and the `.dform` CLI, built for the platforms people actually sit
+# in front of, and attached to a release as downloads.
+#
+# # Why this is hand-written rather than cargo-dist
+#
+# `cargo-dist` does all of this and generates the installer scripts too — but it
+# wants to *own* the release flow: it plans from a tag push, creates the release
+# object itself, and expects to be the thing that decides what happens when.
+# This repository's flow is deliberately the other way round (the release is
+# published first, by a person, and everything follows from its tag — see
+# docs/releasing.md), so adopting it would mean rewriting the one part of the
+# process that is written down and understood. What is left once you do not need
+# its opinions is this file, which is short enough to read in one sitting.
+#
+# # Runnable on its own
+#
+# A failed binary build cannot un-publish anything, so it runs after the publish
+# rather than before it, and it can be re-run by hand for a tag whose release
+# already exists. Run it for a tag with *no* release and the artifacts come back
+# as workflow artifacts instead — which is how to rehearse it without publishing
+# anything.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag to build, and the release to attach to.
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to build, e.g. v0.19.0. With no release of that name the artifacts stay in the workflow.
+        required: true
+        type: string
+  # Changing this file builds all four platforms on the pull request, from
+  # whatever the branch says, and leaves the archives as the run's artifacts.
+  # A release workflow that is only exercised by releasing is a release workflow
+  # nobody has tested.
+  pull_request:
+    paths:
+      - .github/workflows/binaries.yml
+
+permissions:
+  contents: write # attaching assets to the release
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not deny the other three their downloads:
+      # each is uploaded on its own and this is re-runnable per platform.
+      fail-fast: false
+      matrix:
+        include:
+          # Built on the oldest runner still supported rather than the newest:
+          # a binary is linked against the glibc it was built against and will
+          # not start on anything older, so building on 24.04 would ship
+          # something a Debian 12 desktop cannot run.
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            slug: x86_64-unknown-linux-gnu
+          # Native rather than cross-compiled. Cross-compiling this needs arm64
+          # builds of the X11, Wayland and xkbcommon development packages on an
+          # x86 runner, which is a multiarch apt dance; a runner that is already
+          # arm64 needs none of it.
+          - name: Linux aarch64
+            os: ubuntu-22.04-arm
+            slug: aarch64-unknown-linux-gnu
+          - name: Windows x86_64
+            os: windows-latest
+            slug: x86_64-pc-windows-msvc
+          # One file for both Apple architectures, `lipo`'d together: a person
+          # downloading a Mac application should not have to know which Mac they
+          # have.
+          - name: macOS universal
+            os: macos-latest
+            slug: universal-apple-darwin
+
+    steps:
+      # The tag when there is one; on a pull request, whatever the branch says.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.slug == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      # The same packages the publish job installs, and for the same reason:
+      # `denise-winit` pulls in winit, which links against these.
+      - name: Install winit build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+
+      # The version is the tag's, because the tree at that tag was bumped to it
+      # before anything was published — which is also what makes it worth
+      # checking against what the binaries say. With no tag (a pull request)
+      # the tree's own number stands, and there is nothing to check it against.
+      - name: What version this is
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG" ]; then
+            echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            cargo metadata --format-version 1 --no-deps \
+              | python3 -c 'import json,sys; print("number=" + next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "denise"))' \
+              >> "$GITHUB_OUTPUT"
+          fi
+
+      # `--locked` deliberately: the downloads are built from the same
+      # dependency versions the crates were published against, or they are not
+      # the same software.
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          crates="-p denise-designer -p denise-forms --features denise-forms/cli"
+          if [ "${{ matrix.slug }}" = "universal-apple-darwin" ]; then
+            cargo build --release --locked $crates --target aarch64-apple-darwin
+            cargo build --release --locked $crates --target x86_64-apple-darwin
+          else
+            cargo build --release --locked $crates
+          fi
+
+      # Every archive carries both programs, the licence, the designer's own
+      # README and the form files — a designer that opens with nothing to open
+      # is a blank page, and the reference form is the file every part of the
+      # format is exercised by.
+      #
+      # The pictures come from the forms themselves rather than from a list
+      # here, at the paths the forms name them by, so the reference form opens
+      # as itself rather than as five missing pictures — and so that this step
+      # does not have to be remembered the next time one of them changes.
+      - name: Lay out what ships
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp LICENSE stage/
+          cp tools/designer/README.md stage/README-designer.md
+          cp -r forms stage/forms
+          python3 - <<'PACK'
+          import pathlib, re, shutil
+
+          root = pathlib.Path(".").resolve()
+          stage = pathlib.Path("stage")
+          for form in sorted(pathlib.Path("forms").glob("*.dform")):
+              for src in re.findall(r'src="([^"]+)"', form.read_text(encoding="utf-8")):
+                  want = (form.parent / src).resolve()
+                  if not want.is_file():
+                      continue
+                  try:
+                      where = want.relative_to(root)
+                  except ValueError:
+                      continue
+                  (stage / where).parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(want, stage / where)
+                  print("packed", where)
+          PACK
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          SLUG: ${{ matrix.slug }}
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          cp target/release/denise-designer target/release/denise-forms stage/
+          name="denise-$VERSION-$SLUG"
+          mv stage "$name"
+          tar -czf "$name.tar.gz" "$name"
+          mkdir -p out && mv "$name.tar.gz" out/
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          SLUG: ${{ matrix.slug }}
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          cp target/release/denise-designer.exe target/release/denise-forms.exe stage/
+          name="denise-$VERSION-$SLUG"
+          mv stage "$name"
+          7z a -tzip "$name.zip" "$name" > /dev/null
+          mkdir -p out && mv "$name.zip" out/
+
+      # A `.app` so that it is a Mac application rather than a file that opens a
+      # terminal, and **ad-hoc signed** because an arm64 Mac will not run an
+      # unsigned binary at all — `lipo` throws away whatever signature the
+      # halves had, so it has to be put back. Ad-hoc costs nothing and needs no
+      # account; it is not Gatekeeper's idea of signed, which is what the
+      # release notes say out loud.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          SLUG: ${{ matrix.slug }}
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          app="stage/Denise Designer.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          lipo -create -output "$app/Contents/MacOS/denise-designer" \
+            target/aarch64-apple-darwin/release/denise-designer \
+            target/x86_64-apple-darwin/release/denise-designer
+          lipo -create -output stage/denise-forms \
+            target/aarch64-apple-darwin/release/denise-forms \
+            target/x86_64-apple-darwin/release/denise-forms
+
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Denise Designer</string>
+            <key>CFBundleDisplayName</key><string>Denise Designer</string>
+            <key>CFBundleIdentifier</key><string>net.biseth.denise.designer</string>
+            <key>CFBundleExecutable</key><string>denise-designer</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>$VERSION</string>
+            <key>CFBundleShortVersionString</key><string>$VERSION</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          codesign --force --sign - --timestamp=none "$app/Contents/MacOS/denise-designer"
+          codesign --force --sign - --timestamp=none stage/denise-forms
+          codesign --force --sign - --timestamp=none "$app"
+
+          name="denise-$VERSION-$SLUG"
+          mv stage "$name"
+          mkdir -p out
+          hdiutil create -volname "Denise $VERSION" -srcfolder "$name" \
+            -ov -format UDZO "out/$name.dmg" > /dev/null
+
+      # Every artifact is run before anybody is offered it: the designer opens
+      # the reference form and draws a frame, and the CLI reads it. `--snapshot`
+      # needs no display on any of the three platforms, so this is the same test
+      # everywhere rather than three approximations of one.
+      - name: The binaries run, and say the version the tag says
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.number }}
+          SLUG: ${{ matrix.slug }}
+        run: |
+          set -euo pipefail
+          name="denise-$VERSION-$SLUG"
+          case "${{ runner.os }}" in
+            Windows) designer="$name/denise-designer.exe"; forms="$name/denise-forms.exe" ;;
+            macOS)   designer="$name/Denise Designer.app/Contents/MacOS/denise-designer"; forms="$name/denise-forms" ;;
+            *)       designer="$name/denise-designer"; forms="$name/denise-forms" ;;
+          esac
+
+          said=$("$designer" --version)
+          echo "$said"
+          [ "$said" = "denise-designer $VERSION" ] || {
+            echo "::error::the binary says '$said', the version being built is $VERSION"
+            exit 1
+          }
+          "$forms" --version
+          "$designer" "$name/forms/reference.dform" --snapshot frame.ppm
+          test -s frame.ppm
+          "$forms" check "$name/forms/reference.dform"
+
+      - name: Checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd out
+          for file in *; do
+            if command -v shasum > /dev/null; then
+              shasum -a 256 "$file" > "$file.sha256"
+            else
+              sha256sum "$file" > "$file.sha256"
+            fi
+          done
+          cat ./*.sha256
+
+      # Kept whatever happens next, so a rehearsal on a tag with no release —
+      # and a release upload that fails — still leaves something to download.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: denise-${{ matrix.slug }}
+          path: out/*
+          if-no-files-found: error
+
+      # Only when the tag actually has a release. `--clobber` so a re-run
+      # replaces its own earlier attempt rather than failing on it.
+      - name: Attach to the release
+        if: inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+            echo "attached to $TAG"
+          else
+            echo "::notice::no release called $TAG — the build is in this run's artifacts instead."
+          fi
+
+  # The release page tells people the downloads exist and how to open them,
+  # because a `.dmg` from an unsigned developer needs one sentence of
+  # explanation or it looks broken. Appended once, under a marker, so a re-run
+  # does not say it twice and whatever a person wrote above it is left alone.
+  notes:
+    name: say how to get it, on the release page
+    needs: build
+    if: inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the download section to the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::notice::no release called $TAG — nothing to write notes on."
+            exit 0
+          fi
+
+          marker="<!-- downloads -->"
+          body=$(gh release view "$TAG" --json body --jq .body)
+          if printf '%s' "$body" | grep -qF "$marker"; then
+            echo "the notes already say this"
+            exit 0
+          fi
+
+          base="https://github.com/$REPO/releases/download/$TAG"
+          {
+            printf '%s\n' "$body"
+            cat <<NOTES
+
+          $marker
+          ## Download the designer
+
+          A visual form designer for DeniseUI, and the \`.dform\` command line tool. No
+          Rust toolchain needed.
+
+          | | |
+          |---|---|
+          | macOS (Intel and Apple silicon) | [\`denise-$version-universal-apple-darwin.dmg\`]($base/denise-$version-universal-apple-darwin.dmg) |
+          | Windows x86-64 | [\`denise-$version-x86_64-pc-windows-msvc.zip\`]($base/denise-$version-x86_64-pc-windows-msvc.zip) |
+          | Linux x86-64 | [\`denise-$version-x86_64-unknown-linux-gnu.tar.gz\`]($base/denise-$version-x86_64-unknown-linux-gnu.tar.gz) |
+          | Linux aarch64 | [\`denise-$version-aarch64-unknown-linux-gnu.tar.gz\`]($base/denise-$version-aarch64-unknown-linux-gnu.tar.gz) |
+
+          Each has a \`.sha256\` beside it. Every archive carries the reference form, so
+          there is something to open.
+
+          **These are not signed.** There is no Apple Developer account behind this
+          project and no Windows code-signing certificate, so the first launch needs one
+          extra step: on macOS, right-click the app and choose **Open**; on Windows,
+          **More info** then **Run anyway**. Linux does not care.
+          NOTES
+          } > notes.md
+
+          gh release edit "$TAG" --notes-file notes.md
+          echo "the release page now says where the downloads are"

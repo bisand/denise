@@ -10,6 +10,37 @@ cargo run -p denise-designer -- forms/reference.dform
 It reads and writes [`.dform` files](../../docs/forms.md), which are text, and
 which [`denise-forms`](../../denise-forms) loads on the panel.
 
+## Getting it without a Rust toolchain
+
+Every [release](https://github.com/bisand/denise/releases/latest) carries a
+build for each platform, holding the designer, the `denise-forms` command line
+tool, and the reference form to open:
+
+| | |
+|---|---|
+| macOS | a `.dmg` with **Denise Designer.app**, universal for Intel and Apple silicon |
+| Windows | a `.zip` with the `.exe` |
+| Linux | a `.tar.gz` each for x86-64 and aarch64 |
+
+Each has a `.sha256` beside it.
+
+**They are not signed.** There is no Apple Developer account behind this project
+and no Windows code-signing certificate, and saying so is cheaper than pretending
+otherwise:
+
+- **macOS** — right-click *Denise Designer.app* and choose **Open**, then
+  **Open** again. macOS remembers, and every launch after that is a double-click.
+  Double-clicking it the first time gives "cannot be opened because Apple cannot
+  check it for malicious software", which is Gatekeeper working as designed.
+- **Windows** — SmartScreen offers **More info**, then **Run anyway**.
+- **Linux** — `tar xzf` and run it. Linux does not care.
+
+Or build it, which is three words and needs no explanation:
+
+```bash
+cargo run -p denise-designer
+```
+
 ## It is a Denise application
 
 Not Tauri, not egui, not a web page. The canvas draws the form with **the same
