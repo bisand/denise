@@ -1110,6 +1110,21 @@ impl<M: 'static> Ui<M> {
         self.nodes.get(id).map_or(0, |node| node.z)
     }
 
+    /// Whether this node takes input and paints as live. See [`Ui::set_enabled`].
+    ///
+    /// A node whose *parent* is disabled still answers `true` here: this is what
+    /// was asked of the node itself, which is what a caller wanting to put it
+    /// back needs to know.
+    pub fn enabled(&self, id: NodeId) -> bool {
+        self.nodes.get(id).is_some_and(|node| node.enabled)
+    }
+
+    /// The text this node shows on a dwell, if it was given one. See
+    /// [`Ui::set_tooltip`].
+    pub fn tooltip(&self, id: NodeId) -> Option<&str> {
+        self.nodes.get(id).and_then(|node| node.tooltip.as_deref())
+    }
+
     /// Which of its parent's edges this node keeps its distance from.
     pub fn anchors(&self, id: NodeId) -> Anchors {
         self.nodes.get(id).map_or(Anchors::TOP_LEFT, |n| n.anchors)

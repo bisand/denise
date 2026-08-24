@@ -12,6 +12,7 @@ use denise_ui::widgets::{
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
+use crate::arrange::{self, Command, Needs};
 use crate::canvas::{Band, Drag, Grip, Guide, between, place, snap, topmost};
 use crate::document::Document;
 use crate::history::History;
@@ -59,6 +60,8 @@ pub enum Message {
     Chose(usize),
     /// Find a picture for an inspector row, through the platform's dialog.
     Browse(usize),
+    /// One of the arrange commands: align, size, space, group.
+    Arrange(Command),
     /// Turns preview mode on, or off again.
     Preview,
     /// The next theme along.
@@ -92,6 +95,8 @@ const PALETTE_ROWS: i32 = PALETTE_ROW * 11;
 const FILTER: i32 = 26;
 /// How far a press has to travel before it is a drag rather than a click.
 const THRESHOLD: i32 = 4;
+/// The strip of arrange commands, under the toolbar.
+const ARRANGE: i32 = 30;
 const HEADER: i32 = 22;
 const GAP: i32 = 8;
 /// The message log, while previewing. Nothing at all while designing.
@@ -225,6 +230,9 @@ struct Chrome {
     log: NodeId,
     /// The lines inside it, replaced whenever one arrives.
     log_lines: NodeId,
+    /// The arrange commands, in the order [`Command::ALL`] gives them. Greyed
+    /// out one at a time, because they do not all need the same selection.
+    arrange_buttons: Vec<(Command, NodeId)>,
     /// The button that says which mode it is.
     preview_button: NodeId,
     /// The button that says which theme is being simulated.
@@ -302,6 +310,53 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
             Rect::new(x + GAP, GAP, 420, TOOLBAR - GAP * 2),
         )
         .expect("toolbar");
+
+    // A second strip under the toolbar: what to do with more than one node
+    // selected. Always there rather than appearing when it applies — a command
+    // nobody can see is a command nobody knows about — and greyed out one
+    // button at a time, each saying in its tooltip what it wants instead.
+    let arrange_bar = ui
+        .add(
+            root,
+            Panel::filled(Role::Base200),
+            Rect::new(0, 0, 0, ARRANGE),
+        )
+        .expect("root");
+    ui.set_dock(arrange_bar, Some(Dock::Top));
+
+    let mut x = GAP;
+    let caption = |ui: &mut Ui<Message>, x: &mut i32, text: &str| {
+        let width = 7 * text.chars().count() as i32 + 6;
+        ui.add(
+            arrange_bar,
+            Label::new(text).with_size(11).with_role(Role::Base300),
+            Rect::new(*x, 0, width, ARRANGE),
+        );
+        *x += width;
+    };
+    let mut arrange_buttons: Vec<(Command, NodeId)> = Vec::new();
+    for command in Command::ALL {
+        match command {
+            Command::Left => caption(ui, &mut x, "align"),
+            Command::SameWidth => caption(ui, &mut x, "size"),
+            Command::SpaceAcross => caption(ui, &mut x, "space"),
+            Command::Group => caption(ui, &mut x, "group"),
+            _ => {}
+        }
+        let label = command.label();
+        let width = (8 * label.chars().count() as i32 + 16).max(24);
+        if let Some(id) = ui.add(
+            arrange_bar,
+            Button::new(label, Message::Arrange(command))
+                .with_role(Role::Neutral)
+                .with_size(12),
+            Rect::new(x, 4, width, ARRANGE - 8),
+        ) {
+            ui.set_tooltip(id, command.what());
+            arrange_buttons.push((command, id));
+        }
+        x += width + 4;
+    }
 
     let status_bar = ui
         .add(
@@ -435,6 +490,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         columns: [left, right],
         log,
         log_lines,
+        arrange_buttons,
         preview_button,
         theme_button,
         scrim: None,
@@ -475,6 +531,10 @@ pub struct Designer {
     drag: Option<Drag>,
     /// A rubber band being drawn over the canvas.
     band: Option<Band>,
+    /// The rest of the selection while one of them is being dragged, with the
+    /// rectangle each had when the drag began. A drag moves all of them by the
+    /// same amount, and writes all of them as one edit.
+    carrying: Vec<(Vec<usize>, Rect)>,
     /// The container a drag would drop into, while one is in flight. Drawn on
     /// the canvas so a reparent is never a surprise.
     dropping: Option<Vec<usize>>,
@@ -541,6 +601,7 @@ impl Designer {
             selection: Vec::new(),
             drag: None,
             band: None,
+            carrying: Vec::new(),
             dropping: None,
             overlay: Vec::new(),
             snapping: true,
@@ -672,6 +733,7 @@ impl Designer {
         self.placed.clear();
         self.drag = None;
         self.band = None;
+        self.carrying.clear();
         self.dropping = None;
         self.outline_drag = None;
 
@@ -1064,6 +1126,22 @@ impl Designer {
             .widget_mut::<Button<Message>>(self.chrome.theme_button)
         {
             button.set_label(theme);
+        }
+
+        // Each arrange command wants a different selection, so they go grey one
+        // at a time — and each says in its tooltip what it wants instead of
+        // what it does.
+        for (command, id) in self.chrome.arrange_buttons.clone() {
+            let on = self.can_arrange(command);
+            self.ui.set_enabled(id, on);
+            self.ui.set_tooltip(
+                id,
+                if on {
+                    command.what()
+                } else {
+                    command.needs().why()
+                },
+            );
         }
 
         let title = self.document.label();
@@ -2177,15 +2255,15 @@ impl Designer {
     /// missed. A `collapse` does hold children, so a drop into one lands in it
     /// — closed or open, since what is drawn is not what the file says.
     ///
-    /// `skip` is a subtree to look straight through: a node being dragged is
+    /// `skip` names subtrees to look straight through: a node being dragged is
     /// under the pointer by definition, and a node cannot be dropped into
     /// itself.
-    fn container_at(&self, at: Point, skip: &[usize]) -> Option<Vec<usize>> {
+    fn container_at(&self, at: Point, skip: &[Vec<usize>]) -> Option<Vec<usize>> {
         let containers: Vec<Placed> = self
             .placed
             .iter()
             .filter(|node| denise_forms::owns_children(node.kind))
-            .filter(|node| skip.is_empty() || !node.path.starts_with(skip))
+            .filter(|node| !skip.iter().any(|path| node.path.starts_with(path)))
             .cloned()
             .collect();
         topmost(
@@ -2317,6 +2395,21 @@ impl Designer {
         let Some(origin) = self.node_id(&path).and_then(|id| self.ui.layout(id)) else {
             return;
         };
+        // Everything else selected comes along, at the offset it already has.
+        // Only for a move: a resize takes hold of one node's edge, and there is
+        // no sense in which several nodes share one.
+        self.carrying = if matches!(grip, Grip::Move) {
+            self.selection
+                .iter()
+                .filter(|other| **other != path)
+                .filter_map(|other| {
+                    let was = self.node_id(other).and_then(|id| self.ui.layout(id))?;
+                    Some((other.clone(), was))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.drag = Some(Drag {
             grip,
             from: at,
@@ -2353,6 +2446,18 @@ impl Designer {
         // the button comes up: one drag is one edit, which is what keeps a move
         // to a one-line diff and will make it one undo step.
         self.ui.set_layout(id, placement.rect);
+        let (dx, dy) = (
+            placement.rect.x - drag.origin.x,
+            placement.rect.y - drag.origin.y,
+        );
+        for (path, origin) in self.carrying.clone() {
+            if let Some(id) = self.node_id(&path) {
+                self.ui.set_layout(
+                    id,
+                    Rect::new(origin.x + dx, origin.y + dy, origin.width, origin.height),
+                );
+            }
+        }
         self.refresh_overlay_with(&placement.guides, &drag.path);
         self.sync_rect();
         let landing = match self.dropping.clone() {
@@ -2395,13 +2500,20 @@ impl Designer {
         if matches!(drag.grip, Grip::Move)
             && let Some(parent) = self.reparent_target(drag.to, &drag.path)
         {
-            self.reparent(&drag.path, parent);
+            self.reparent(parent);
             return;
         }
-        let Some(rect) = self.node_id(&drag.path).and_then(|id| self.ui.layout(id)) else {
-            return;
-        };
-        self.write_rect(&drag.path, rect, drag.origin);
+        // The primary and everything it carried, as one edit: one gesture is
+        // one step to put back.
+        let mut moved: Vec<(Vec<usize>, Rect, Rect)> = Vec::new();
+        for (path, was) in std::iter::once((drag.path.clone(), drag.origin))
+            .chain(std::mem::take(&mut self.carrying))
+        {
+            if let Some(rect) = self.node_id(&path).and_then(|id| self.ui.layout(id)) {
+                moved.push((path, rect, was));
+            }
+        }
+        self.write_rects(&moved);
         self.refresh_overlay();
     }
 
@@ -2544,58 +2656,64 @@ impl Designer {
         if !stage.contains(at) {
             return None;
         }
+        // With several selected they all go, which only has an answer when they
+        // all came from the same place: see [`Self::move_into`].
+        let going = self.siblings_selected()?;
         // A node dragged out over nothing lands on the form itself.
-        let to = self.container_at(at, from).unwrap_or_default();
+        let to = self.container_at(at, &going).unwrap_or_default();
         let (_, parent) = from.split_last()?;
         (parent != to.as_slice()).then_some(to)
     }
 
-    /// Moves a node into another container, without letting it appear to move.
+    /// Moves the selection into another container, without letting it appear
+    /// to move.
     ///
     /// The rectangle in the file is relative to the parent, so a node that keeps
-    /// its place on screen has to be given different numbers — which is the
-    /// whole of why this is two edits and not one, and why they are applied as
-    /// one [`Edit::Many`] so that undo puts both back together.
-    fn reparent(&mut self, from: &[usize], to: Vec<usize>) {
-        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
-        let Some(bounds) = self.path_bounds(from) else {
+    /// its place on screen has to be given different numbers — which is why this
+    /// is two edits per node and not one, and why they all go in as a single
+    /// [`Edit::Many`] so that undo puts the whole drop back at once.
+    fn reparent(&mut self, to: Vec<usize>) {
+        let Some(paths) = self.siblings_selected() else {
             return;
         };
+        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
         let origin = if to.is_empty() {
             stage
         } else {
             self.path_bounds(&to).unwrap_or(stage)
         };
-        let mut rect = Rect::new(
-            bounds.x - origin.x,
-            bounds.y - origin.y,
-            bounds.width,
-            bounds.height,
-        );
-        if self.snapping {
-            rect = snap(rect, self.grid);
-        }
 
-        // Last of its new siblings, which is the front: a node dropped onto a
-        // panel is put on top of it and not under it.
-        let index = self.child_count(&to);
-        let mut landed = denise_forms::after_removing(&to, from).unwrap_or_else(|| to.clone());
-        landed.push(index);
-
-        let mut edits = vec![Edit::Move {
-            from: from.to_vec(),
-            to,
-            index,
-        }];
-        for (name, value) in [("x", rect.x), ("y", rect.y)] {
-            if self.document.form().property(from, name).as_deref() != Some(&value.to_string()) {
-                edits.push(Edit::number(&landed, name, Some(i64::from(value))));
+        let mut moves: Vec<(Vec<usize>, Rect)> = Vec::new();
+        for path in &paths {
+            let Some(bounds) = self.path_bounds(path) else {
+                return;
+            };
+            let mut rect = Rect::new(
+                bounds.x - origin.x,
+                bounds.y - origin.y,
+                bounds.width,
+                bounds.height,
+            );
+            if self.snapping {
+                rect = snap(rect, self.grid);
             }
+            moves.push((path.clone(), rect));
         }
+
+        // Last of their new siblings, which is the front: a node dropped onto a
+        // panel is put on top of it and not under it.
+        let held = self.child_count(&to);
+        let (edits, landing) = self.move_into(&moves, &to);
 
         self.history.separate();
         self.edit(Edit::Many(edits));
-        self.selection = vec![landed];
+        self.selection = (0..moves.len())
+            .map(|step| {
+                let mut path = landing.clone();
+                path.push(held + step);
+                path
+            })
+            .collect();
         self.dropping = None;
         self.reload_from_document();
         self.say_selection();
@@ -2617,26 +2735,22 @@ impl Designer {
         self.refresh_labels();
     }
 
-    /// Writes a node's rectangle back to the document, and only what changed.
+    /// Writes rectangles back to the document, all of them as **one** edit.
     ///
     /// One edit for the whole rectangle, so a drag that moved *and* resized is
-    /// one step. A single property on its own stays a single `Number`, which is
-    /// what lets a run of nudges coalesce.
-    fn write_rect(&mut self, path: &[usize], rect: Rect, was: Rect) {
-        let mut edits: Vec<Edit> = [
-            ("x", rect.x, was.x),
-            ("y", rect.y, was.y),
-            ("w", rect.width, was.width),
-            ("h", rect.height, was.height),
-        ]
-        .into_iter()
-        .filter(|(_, new, old)| new != old)
-        .map(|(name, new, _)| Edit::number(path, name, Some(i64::from(new))))
-        .collect();
-
+    /// one step; and one edit for the whole selection, because a group move and
+    /// a nudge with several selected are one gesture. Per-node edits would be
+    /// one step each, and putting a move back would take as many presses as
+    /// there were nodes. A single property on its own stays a single `Number`,
+    /// which is what lets a run of nudges coalesce.
+    fn write_rects(&mut self, rects: &[(Vec<usize>, Rect, Rect)]) {
+        let edits: Vec<Edit> = rects
+            .iter()
+            .flat_map(|(path, rect, was)| rect_edits(path, *rect, *was))
+            .collect();
         match edits.len() {
             0 => {}
-            1 => self.edit(edits.remove(0)),
+            1 => self.edit(edits.into_iter().next().expect("one")),
             _ => self.edit(Edit::Many(edits)),
         }
     }
@@ -2774,6 +2888,7 @@ impl Designer {
     /// A nudge is deliberately not a drag: there is no release to commit on, so
     /// each press of the key is its own edit.
     pub fn nudge(&mut self, dx: i32, dy: i32) {
+        let mut moved: Vec<(Vec<usize>, Rect, Rect)> = Vec::new();
         for path in self.selection.clone() {
             let Some(id) = self.node_id(&path) else {
                 continue;
@@ -2783,8 +2898,9 @@ impl Designer {
             };
             let rect = Rect::new(was.x + dx, was.y + dy, was.width, was.height);
             self.ui.set_layout(id, rect);
-            self.write_rect(&path, rect, was);
+            moved.push((path, rect, was));
         }
+        self.write_rects(&moved);
         self.refresh_overlay();
         self.sync_rect();
     }
@@ -2803,6 +2919,248 @@ impl Designer {
         self.edit(Edit::Many(paths.iter().map(|p| Edit::remove(p)).collect()));
         self.selection.clear();
         self.reload_from_document();
+    }
+
+    // ---------------------------------------------------------- arranging
+
+    /// Everything selected, in file order, when they all share one parent.
+    ///
+    /// `None` when they do not, which is when none of the arrange commands mean
+    /// anything: see [`crate::arrange`] for why that is a property of having no
+    /// layout engine rather than a shortcut.
+    fn siblings_selected(&self) -> Option<Vec<Vec<usize>>> {
+        let (_, parent) = self.selection.first()?.split_last()?;
+        let parent = parent.to_vec();
+        let same = self
+            .selection
+            .iter()
+            .all(|path| path.split_last().is_some_and(|(_, above)| above == parent));
+        if !same {
+            return None;
+        }
+        let mut paths = self.selection.clone();
+        paths.sort();
+        Some(paths)
+    }
+
+    /// Whether a command can be given now.
+    fn can_arrange(&self, command: Command) -> bool {
+        if self.preview {
+            return false;
+        }
+        match command.needs() {
+            Needs::Several => self.siblings_selected().is_some_and(|it| it.len() >= 2),
+            Needs::Spread => self.siblings_selected().is_some_and(|it| it.len() >= 3),
+            Needs::Holder => match self.selection.as_slice() {
+                [one] => self.is_container(one) && self.child_count(one) > 0,
+                _ => false,
+            },
+        }
+    }
+
+    /// Gives one of the arrange commands.
+    pub fn arrange(&mut self, command: Command) {
+        if !self.can_arrange(command) {
+            self.status = String::from(command.needs().why());
+            self.refresh_labels();
+            return;
+        }
+        // Group and ungroup move nodes in the tree; everything else changes
+        // four numbers and is the same shape of edit as a drag.
+        if command.is_structural() {
+            if command == Command::Group {
+                self.group();
+            } else {
+                self.ungroup();
+            }
+            return;
+        }
+
+        let (Some(paths), Some(primary)) =
+            (self.siblings_selected(), self.selection.last().cloned())
+        else {
+            return;
+        };
+        // The anchor is the one wearing the handles, wherever it sits in file
+        // order — see [`crate::arrange`] for why it is that one and not the
+        // first.
+        let anchor = paths.iter().position(|path| *path == primary).unwrap_or(0);
+        let rects: Vec<Rect> = paths
+            .iter()
+            .filter_map(|path| self.node_id(path).and_then(|id| self.ui.layout(id)))
+            .collect();
+        if rects.len() != paths.len() {
+            return;
+        }
+
+        let placed = arrange::arrange(command, &rects, anchor);
+        let moved: Vec<(Vec<usize>, Rect, Rect)> = paths
+            .iter()
+            .zip(&rects)
+            .zip(&placed)
+            .map(|((path, was), now)| (path.clone(), *now, *was))
+            .collect();
+        if moved.iter().all(|(_, now, was)| now == was) {
+            self.status = format!("already {}", command.done());
+            self.refresh_labels();
+            return;
+        }
+
+        self.history.separate();
+        self.write_rects(&moved);
+        self.reload_from_document();
+        self.status = format!("{} — {} nodes", command.done(), paths.len());
+        self.refresh_labels();
+    }
+
+    /// Edits that move a set of siblings into `to`, appended in file order,
+    /// each landing with the rectangle given for it.
+    ///
+    /// Also hands back where `to` itself ended up: taking a node out from in
+    /// front of it moves it, and every edit after this one has to name it by
+    /// where it is *then*. `moves` must be in file order, which is what makes
+    /// the shifting arithmetic here a matter of counting rather than guessing.
+    fn move_into(&self, moves: &[(Vec<usize>, Rect)], to: &[usize]) -> (Vec<Edit>, Vec<usize>) {
+        let mut edits = Vec::new();
+        let mut landing = to.to_vec();
+        let held = self.child_count(to);
+        let mut sources: Vec<Vec<usize>> = moves.iter().map(|(path, _)| path.clone()).collect();
+
+        for (step, (_, rect)) in moves.iter().enumerate() {
+            let from = sources[step].clone();
+            let index = held + step;
+            edits.push(Edit::Move {
+                from: from.clone(),
+                to: landing.clone(),
+                index,
+            });
+            landing = denise_forms::after_removing(&landing, &from).unwrap_or(landing);
+            let mut landed = landing.clone();
+            landed.push(index);
+            for (name, value) in [("x", rect.x), ("y", rect.y)] {
+                edits.push(Edit::number(&landed, name, Some(i64::from(value))));
+            }
+            // Everything still to come was shifted by that removal too.
+            for later in sources.iter_mut().skip(step + 1) {
+                *later =
+                    denise_forms::after_removing(later, &from).unwrap_or_else(|| later.clone());
+            }
+        }
+        (edits, landing)
+    }
+
+    /// Puts the selection inside a new panel that takes their bounding box.
+    fn group(&mut self) {
+        let Some(paths) = self.siblings_selected() else {
+            return;
+        };
+        let Some((_, parent)) = paths[0].split_last() else {
+            return;
+        };
+        let parent = parent.to_vec();
+        let rects: Vec<Rect> = paths
+            .iter()
+            .filter_map(|path| self.node_id(path).and_then(|id| self.ui.layout(id)))
+            .collect();
+        if rects.len() != paths.len() {
+            return;
+        }
+
+        let all = arrange::bounds(&rects);
+        // Last of its siblings, so putting it there shifts nothing that is
+        // about to be named. It ends up further forward than the nodes it will
+        // hold, which is where a container of them belongs.
+        let index = self.child_count(&parent);
+        let mut panel = parent.clone();
+        panel.push(index);
+
+        let moves: Vec<(Vec<usize>, Rect)> = paths
+            .iter()
+            .zip(&rects)
+            .map(|(path, rect)| {
+                (
+                    path.clone(),
+                    Rect::new(rect.x - all.x, rect.y - all.y, rect.width, rect.height),
+                )
+            })
+            .collect();
+
+        let mut edits = vec![Edit::Insert {
+            parent,
+            index,
+            text: denise_forms::seed("panel", all),
+        }];
+        let (moving, landed) = self.move_into(&moves, &panel);
+        edits.extend(moving);
+
+        self.history.separate();
+        self.edit(Edit::Many(edits));
+        self.selection = vec![landed];
+        self.reload_from_document();
+        self.status = format!("{} {} nodes", Command::Group.done(), paths.len());
+        self.refresh_labels();
+    }
+
+    /// Takes the selected panel's children out of it, and the panel away.
+    fn ungroup(&mut self) {
+        let Some(panel) = self.selection.last().cloned() else {
+            return;
+        };
+        let Some((&index, parent)) = panel.split_last() else {
+            return;
+        };
+        let parent = parent.to_vec();
+        let Some(origin) = self.node_id(&panel).and_then(|id| self.ui.layout(id)) else {
+            return;
+        };
+        let held = self.child_count(&panel);
+        let rects: Vec<Rect> = (0..held)
+            .filter_map(|child| {
+                let mut path = panel.clone();
+                path.push(child);
+                self.node_id(&path).and_then(|id| self.ui.layout(id))
+            })
+            .collect();
+        if rects.len() != held {
+            return;
+        }
+
+        let mut edits = Vec::new();
+        for (step, rect) in rects.iter().enumerate() {
+            // Always the first one still inside: the ones before it have left.
+            let mut from = panel.clone();
+            from.push(0);
+            let at = index + 1 + step;
+            edits.push(Edit::Move {
+                from,
+                to: parent.clone(),
+                index: at,
+            });
+            let mut landed = parent.clone();
+            landed.push(at);
+            for (name, value) in [("x", rect.x + origin.x), ("y", rect.y + origin.y)] {
+                edits.push(Edit::number(&landed, name, Some(i64::from(value))));
+            }
+        }
+        // The panel is empty now, and an empty panel is all that is left of the
+        // grouping. Taking it out shifts everything that landed after it back
+        // over the hole it leaves.
+        let mut gone = parent.clone();
+        gone.push(index);
+        edits.push(Edit::remove(&gone));
+
+        self.history.separate();
+        self.edit(Edit::Many(edits));
+        self.selection = (0..held)
+            .map(|step| {
+                let mut path = parent.clone();
+                path.push(index + step);
+                path
+            })
+            .collect();
+        self.reload_from_document();
+        self.status = format!("{} {} nodes", Command::Ungroup.done(), held);
+        self.refresh_labels();
     }
 
     /// Puts the selected node in front of its siblings, or behind them.
@@ -3180,6 +3538,7 @@ impl Designer {
                 }
             }
             Message::Renamed => self.finish_rename(),
+            Message::Arrange(command) => self.arrange(command),
             Message::Preview => self.toggle_preview(),
             Message::Theme => self.cycle_theme(),
             Message::Key(code) => {
@@ -3325,6 +3684,23 @@ impl Designer {
 }
 
 /// The rectangle between two corners, whichever way round they were given.
+/// The edits that turn one rectangle into another, and only for what changed.
+///
+/// One edit per number, so a run of nudges along one axis still coalesces into
+/// a single step; a caller with several of these wraps them in one [`Edit::Many`].
+fn rect_edits(path: &[usize], rect: Rect, was: Rect) -> Vec<Edit> {
+    [
+        ("x", rect.x, was.x),
+        ("y", rect.y, was.y),
+        ("w", rect.width, was.width),
+        ("h", rect.height, was.height),
+    ]
+    .into_iter()
+    .filter(|(_, new, old)| new != old)
+    .map(|(name, new, _)| Edit::number(path, name, Some(i64::from(new))))
+    .collect()
+}
+
 /// Which of a rectangle's four numbers a tree-owned property is, if it is one.
 const fn axis_of(name: &str) -> Option<usize> {
     Some(match name.as_bytes() {
@@ -5485,12 +5861,19 @@ mod tests {
             .expect("a canvas");
 
         assert_eq!(canvas.x, settings.left, "the left column is not docked");
-        assert_eq!(canvas.y, TOOLBAR, "the toolbar is not docked");
+        assert_eq!(
+            canvas.y,
+            TOOLBAR + ARRANGE,
+            "the toolbar and the arrange bar are not both docked"
+        );
         assert_eq!(
             canvas.width,
             WINDOW.width as i32 - settings.left - settings.right
         );
-        assert_eq!(canvas.height, WINDOW.height as i32 - TOOLBAR - STATUS);
+        assert_eq!(
+            canvas.height,
+            WINDOW.height as i32 - TOOLBAR - ARRANGE - STATUS
+        );
     }
 
     #[test]
@@ -5507,7 +5890,7 @@ mod tests {
             .bounds(designer.chrome.canvas)
             .expect("a canvas");
         assert_eq!(canvas.width, 1600 - settings.left - settings.right);
-        assert_eq!(canvas.height, 1000 - TOOLBAR - STATUS);
+        assert_eq!(canvas.height, 1000 - TOOLBAR - ARRANGE - STATUS);
 
         // The outline's *viewport* is anchored top and bottom, so it grew with
         // the window. The list inside it is sized to its own rows, which is what
@@ -6015,5 +6398,366 @@ mod tests {
         assert_ne!(text(&designer), before);
         designer.undo();
         assert_eq!(text(&designer), before);
+    }
+
+    // ------------------------------------------------------- more than one
+
+    /// Three labels of different sizes and a panel to drop them in. The same
+    /// three rectangles `arrange`'s own tests use.
+    fn three() -> Designer {
+        scratch(
+            "three",
+            concat!(
+                "form \"Three\" version=1 width=400 height=300 {\n",
+                "    label \"a\" name=a x=10 y=10 w=40 h=20\n",
+                "    label \"b\" name=b x=100 y=50 w=60 h=40\n",
+                "    label \"c\" name=c x=60 y=90 w=20 h=10\n",
+                "    panel name=box x=200 y=150 w=150 h=120\n",
+                "}\n",
+            ),
+        )
+    }
+
+    /// Clicks each of them in turn, holding shift after the first — so the last
+    /// named is the one wearing the handles.
+    fn pick(designer: &mut Designer, names: &[&str]) {
+        // From nothing: a plain click on something already held keeps the whole
+        // selection — which is what lets a group be dragged — so starting over
+        // has to actually start over.
+        press_key(designer, KeyCode::Escape, false);
+        for (nth, name) in names.iter().enumerate() {
+            let path = path_named(designer, name);
+            let at = middle(designer, &path);
+            click_at(designer, at, nth > 0);
+        }
+        assert_eq!(
+            designer.selection.len(),
+            names.len(),
+            "picking {names:?} gave {:?}",
+            selected_names(designer)
+        );
+    }
+
+    /// The rectangle the file gives a node, by name.
+    fn rect_of(designer: &Designer, name: &str) -> Rect {
+        let path = path_named(designer, name);
+        let number = |what: &str| {
+            designer
+                .document
+                .form()
+                .property(&path, what)
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or_default()
+        };
+        Rect::new(number("x"), number("y"), number("w"), number("h"))
+    }
+
+    #[test]
+    fn aligning_moves_the_others_onto_the_one_wearing_the_handles() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "b", "c"]);
+        let before = text(&designer);
+        designer.arrange(Command::Left);
+
+        // `c` was picked last, so `c` is the anchor and `c` does not move.
+        assert_eq!(rect_of(&designer, "c"), Rect::new(60, 90, 20, 10));
+        assert_eq!(rect_of(&designer, "a"), Rect::new(60, 10, 40, 20));
+        assert_eq!(rect_of(&designer, "b"), Rect::new(60, 50, 60, 40));
+        assert!(
+            designer.status.starts_with("aligned left"),
+            "{}",
+            designer.status
+        );
+
+        // One gesture, one step.
+        assert_eq!(designer.history.depth().0, 1);
+        designer.undo();
+        assert_eq!(
+            text(&designer),
+            before,
+            "undoing the alignment was not exact"
+        );
+    }
+
+    #[test]
+    fn the_same_size_is_the_anchors_and_nothing_moves() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "c", "b"]);
+        designer.arrange(Command::SameSize);
+        for name in ["a", "b", "c"] {
+            let rect = rect_of(&designer, name);
+            assert_eq!((rect.width, rect.height), (60, 40), "{name}");
+        }
+        assert_eq!(rect_of(&designer, "a").x, 10, "it moved as well as resized");
+    }
+
+    #[test]
+    fn spacing_evenly_writes_the_one_in_the_middle_and_leaves_the_ends() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "b", "c"]);
+        let before = text(&designer);
+        designer.arrange(Command::SpaceDown);
+
+        // Top edges 10, 50, 90 with heights 20, 40, 10: 90 of span, 70 of it
+        // occupied, so 20 to share over two gaps.
+        assert_eq!(rect_of(&designer, "a").y, 10, "the top one moved");
+        assert_eq!(rect_of(&designer, "b").y, 40);
+        assert_eq!(rect_of(&designer, "c").y, 90, "the bottom one moved");
+        assert_eq!(
+            diff(&before, &text(&designer)),
+            vec!["    label \"b\" name=b x=100 y=40 w=60 h=40"],
+            "only the one in the middle should have moved"
+        );
+    }
+
+    #[test]
+    fn a_command_that_would_change_nothing_says_so_and_writes_nothing() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "b", "c"]);
+        designer.arrange(Command::Left);
+        let settled = text(&designer);
+        let steps = designer.history.depth().0;
+        designer.arrange(Command::Left);
+        assert_eq!(text(&designer), settled);
+        assert_eq!(designer.history.depth().0, steps, "it wrote a second step");
+        assert_eq!(designer.status, "already aligned left");
+    }
+
+    #[test]
+    fn a_command_needs_the_selection_it_says_it_needs() {
+        let mut designer = three();
+        // Nothing selected: none of them.
+        for command in Command::ALL {
+            assert!(!designer.can_arrange(command), "{command:?} with nothing");
+        }
+        // One: still nothing, and `box` is a panel with nothing in it.
+        select(&mut designer, "box");
+        for command in Command::ALL {
+            assert!(!designer.can_arrange(command), "{command:?} with one");
+        }
+        // Two: everything but spacing and ungrouping.
+        pick(&mut designer, &["a", "b"]);
+        for command in Command::ALL {
+            let wanted = !matches!(
+                command,
+                Command::SpaceAcross | Command::SpaceDown | Command::Ungroup
+            );
+            assert_eq!(
+                designer.can_arrange(command),
+                wanted,
+                "{command:?} with two"
+            );
+        }
+        // Three: everything but ungrouping.
+        pick(&mut designer, &["a", "b", "c"]);
+        for command in Command::ALL {
+            let wanted = command != Command::Ungroup;
+            assert_eq!(
+                designer.can_arrange(command),
+                wanted,
+                "{command:?} with three"
+            );
+        }
+    }
+
+    #[test]
+    fn nodes_in_different_panels_have_no_shared_space_to_be_lined_up_in() {
+        let mut designer = two_panels();
+        pick(&mut designer, &["loose", "inside"]);
+        assert!(designer.siblings_selected().is_none());
+        for command in Command::ALL {
+            assert!(!designer.can_arrange(command), "{command:?}");
+        }
+        // And the button says what it wants instead of what it does.
+        let (_, id) = designer
+            .chrome
+            .arrange_buttons
+            .iter()
+            .find(|(command, _)| *command == Command::Left)
+            .copied()
+            .expect("an align-left button");
+        assert!(!designer.ui.enabled(id), "the button is still live");
+        assert_eq!(
+            designer.ui.tooltip(id),
+            Some(Needs::Several.why()),
+            "the tooltip does not say why"
+        );
+    }
+
+    #[test]
+    fn giving_a_command_that_cannot_be_given_says_what_it_wanted() {
+        let mut designer = three();
+        select(&mut designer, "a");
+        let before = text(&designer);
+        designer.arrange(Command::Left);
+        assert_eq!(designer.status, Needs::Several.why());
+        assert_eq!(text(&designer), before);
+    }
+
+    #[test]
+    fn grouping_puts_them_in_a_new_panel_at_their_bounding_box() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "b", "c"]);
+        let before = text(&designer);
+        designer.arrange(Command::Group);
+
+        let after = text(&designer);
+        // The bounding box of the three, and their rectangles translated into
+        // it so that nothing appears to have moved.
+        assert!(after.contains("panel x=10 y=10 w=150 h=90 {"), "{after}");
+        assert_eq!(rect_of(&designer, "a"), Rect::new(0, 0, 40, 20));
+        assert_eq!(rect_of(&designer, "b"), Rect::new(90, 40, 60, 40));
+        assert_eq!(rect_of(&designer, "c"), Rect::new(50, 80, 20, 10));
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:panel box",
+                "0:panel",
+                "1:label a",
+                "1:label b",
+                "1:label c"
+            ]
+        );
+        // The new panel is what is selected, which is what makes the next thing
+        // you do be to it.
+        assert_eq!(designer.selection, vec![vec![1]]);
+        denise_forms::Form::parse(&after).expect("still a form");
+
+        assert_eq!(designer.history.depth().0, 1, "grouping is one step");
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing the group was not exact");
+    }
+
+    #[test]
+    fn grouping_does_not_move_anything_on_the_screen() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "b", "c"]);
+        let was: Vec<Rect> = ["a", "b", "c"]
+            .iter()
+            .map(|name| {
+                let path = path_named(&designer, name);
+                designer.path_bounds(&path).expect("laid out")
+            })
+            .collect();
+
+        designer.arrange(Command::Group);
+
+        for (name, before) in ["a", "b", "c"].iter().zip(&was) {
+            let path = path_named(&designer, name);
+            let now = designer.path_bounds(&path).expect("laid out");
+            assert_eq!(now, *before, "`{name}` moved on the screen");
+        }
+    }
+
+    #[test]
+    fn ungrouping_takes_them_out_and_the_panel_away() {
+        let mut designer = two_panels();
+        select(&mut designer, "left");
+        let before = text(&designer);
+        designer.arrange(Command::Ungroup);
+
+        let after = text(&designer);
+        assert!(
+            !after.contains("name=left"),
+            "the panel is still there: {after}"
+        );
+        // Out of the panel and into the panel's own space: it was at 4,30 and
+        // the label was at 4,4 inside it.
+        assert_eq!(rect_of(&designer, "inside"), Rect::new(8, 34, 80, 20));
+        assert_eq!(
+            shown_rows(&designer),
+            vec!["0:label loose", "0:label inside", "0:panel right"]
+        );
+        assert_eq!(selected_names(&designer), vec!["inside"]);
+        denise_forms::Form::parse(&after).expect("still a form");
+
+        assert_eq!(designer.history.depth().0, 1, "ungrouping is one step");
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing the ungroup was not exact");
+    }
+
+    #[test]
+    fn grouping_and_ungrouping_puts_every_rectangle_back_where_it_was() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "b", "c"]);
+        let was: Vec<Rect> = ["a", "b", "c"]
+            .iter()
+            .map(|name| rect_of(&designer, name))
+            .collect();
+
+        designer.arrange(Command::Group);
+        designer.arrange(Command::Ungroup);
+
+        for (name, before) in ["a", "b", "c"].iter().zip(&was) {
+            assert_eq!(
+                rect_of(&designer, name),
+                *before,
+                "`{name}` came back wrong"
+            );
+        }
+        assert!(
+            !text(&designer).contains("panel x=10"),
+            "the panel survived: {}",
+            text(&designer)
+        );
+    }
+
+    #[test]
+    fn dragging_one_of_several_takes_them_all_and_is_one_step() {
+        let mut designer = three();
+        designer.toggle_snapping();
+        pick(&mut designer, &["a", "b", "c"]);
+        let before = text(&designer);
+
+        let path = path_named(&designer, "b");
+        let from = middle(&designer, &path);
+        drag_from_to(&mut designer, from, Point::new(from.x + 12, from.y + 30));
+
+        assert_eq!(rect_of(&designer, "a"), Rect::new(22, 40, 40, 20));
+        assert_eq!(rect_of(&designer, "b"), Rect::new(112, 80, 60, 40));
+        assert_eq!(rect_of(&designer, "c"), Rect::new(72, 120, 20, 10));
+        assert_eq!(designer.history.depth().0, 1, "one drag, one step");
+        designer.undo();
+        assert_eq!(text(&designer), before);
+    }
+
+    #[test]
+    fn nudging_several_is_one_step_and_not_one_each() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "b", "c"]);
+        let before = text(&designer);
+        press_key(&mut designer, KeyCode::ArrowRight, false);
+
+        assert_eq!(rect_of(&designer, "a").x, 11);
+        assert_eq!(rect_of(&designer, "b").x, 101);
+        assert_eq!(rect_of(&designer, "c").x, 61);
+        assert_eq!(designer.history.depth().0, 1);
+        designer.undo();
+        assert_eq!(text(&designer), before);
+    }
+
+    #[test]
+    fn dropping_several_onto_a_panel_reparents_all_of_them() {
+        let mut designer = three();
+        designer.toggle_snapping();
+        pick(&mut designer, &["a", "b"]);
+        let before = text(&designer);
+
+        // Onto the empty panel, which is at 200,150 and 150 by 120.
+        let path = path_named(&designer, "b");
+        let from = middle(&designer, &path);
+        let onto = Point::new(from.x + 150, from.y + 150);
+        drag_from_to(&mut designer, from, onto);
+
+        assert_eq!(
+            shown_rows(&designer),
+            vec!["0:label c", "0:panel box", "1:label a", "1:label b"],
+            "{}",
+            text(&designer)
+        );
+        denise_forms::Form::parse(&text(&designer)).expect("still a form");
+        assert_eq!(designer.history.depth().0, 1, "one drop, one step");
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing the drop was not exact");
     }
 }

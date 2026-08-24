@@ -487,6 +487,41 @@ fn disabling_a_parent_disables_its_children() {
     assert_eq!(ui.hit_test(Point::new(70, 60)), Some(button));
 }
 
+#[test]
+fn what_was_asked_of_a_node_can_be_asked_back() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let panel = ui
+        .add(root, Panel::default(), Rect::new(20, 20, 280, 160))
+        .expect("panel");
+    let button = ui
+        .add(
+            panel,
+            Probe::interactive(Role::Primary),
+            Rect::new(20, 20, 100, 40),
+        )
+        .expect("button");
+
+    assert!(ui.enabled(button), "a node starts live");
+    assert_eq!(ui.tooltip(button), None, "a node starts without one");
+
+    ui.set_tooltip(button, "Write the form to disk");
+    assert_eq!(ui.tooltip(button), Some("Write the form to disk"));
+
+    ui.set_enabled(button, false);
+    assert!(!ui.enabled(button));
+
+    // Disabling the *parent* greys the child without changing what was asked of
+    // the child, which is what a caller putting it back needs to know.
+    ui.set_enabled(button, true);
+    ui.set_enabled(panel, false);
+    assert!(!ui.enabled(panel));
+    assert!(ui.enabled(button), "the child was never disabled itself");
+
+    ui.clear_tooltip(button);
+    assert_eq!(ui.tooltip(button), None);
+}
+
 // ------------------------------------------- the damage-equals-truth tests
 
 #[test]
