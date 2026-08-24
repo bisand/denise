@@ -593,3 +593,206 @@ fn dropping_the_first_node_on_a_form_with_no_children_at_all_works() {
     form.apply(undo).expect("undone");
     assert_eq!(form.text(), source);
 }
+
+// -------------------------------------------------------------------- moving
+
+/// A form with two panels, so a node has somewhere to go.
+const NESTED: &str = "\
+form \"Moves\" version=1 width=400 height=300 {
+    label \"one\" x=0 y=0 w=10 h=10
+    panel name=left x=0 y=20 w=100 h=100 {
+        label \"two\" x=1 y=1 w=10 h=10
+        label \"three\" x=1 y=20 w=10 h=10
+    }
+    panel name=right x=120 y=20 w=100 h=100 {
+        label \"four\" x=1 y=1 w=10 h=10
+    }
+    label \"five\" x=0 y=140 w=10 h=10
+}
+";
+
+#[test]
+fn reordering_among_siblings_undoes_exactly() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    // The last label to the front.
+    let undo = form.apply(Edit::move_to(&[3], &[], 0)).expect("moved");
+
+    let after = form.text();
+    let order: Vec<&str> = after
+        .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("label") || line.trim_start().starts_with("panel")
+        })
+        .collect();
+    assert!(order[0].contains("\"five\""), "{after}");
+    assert!(order[1].contains("\"one\""), "{after}");
+    Form::parse(&after).expect("still a form");
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED);
+}
+
+#[test]
+fn a_node_that_changes_depth_is_reindented_and_undone_back() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    // The top-level `one` into the left panel.
+    let undo = form.apply(Edit::move_to(&[0], &[1], 2)).expect("moved");
+
+    let after = form.text();
+    assert!(
+        after.contains("        label \"three\" x=1 y=20 w=10 h=10\n        label \"one\""),
+        "it did not land indented in the panel:\n{after}"
+    );
+    let back = Form::parse(&after).expect("still a form");
+    assert_eq!(
+        back.text(),
+        after,
+        "what it wrote does not read back the same"
+    );
+    // And the panel it left has one fewer.
+    assert_eq!(
+        after.matches("label").count(),
+        NESTED.matches("label").count()
+    );
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED, "moving it back was not exact");
+}
+
+#[test]
+fn a_node_moved_out_of_a_panel_loses_the_indentation_it_had_there() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    let undo = form.apply(Edit::move_to(&[1, 0], &[], 0)).expect("moved");
+
+    let after = form.text();
+    assert!(
+        after.contains("{\n    label \"two\" x=1 y=1 w=10 h=10\n"),
+        "it kept the panel's indentation:\n{after}"
+    );
+    Form::parse(&after).expect("still a form");
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED);
+}
+
+#[test]
+fn a_panel_moved_into_another_takes_its_children_with_it() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    // `left`, with both its labels, into `right`.
+    let undo = form.apply(Edit::move_to(&[1], &[2], 1)).expect("moved");
+
+    let after = form.text();
+    assert!(after.contains("        panel name=left"), "{after}");
+    assert!(
+        after.contains("            label \"two\""),
+        "a child did not follow its parent's depth:\n{after}"
+    );
+    let built = Form::parse(&after).expect("still a form");
+    assert_eq!(built.text(), after);
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED);
+}
+
+#[test]
+fn a_destination_after_the_source_is_still_the_right_destination() {
+    // Taking node [1] out moves [2] to [1]. A move that named [2] as its
+    // destination has to end up in the panel it meant, not the one that slid
+    // into its place.
+    let mut form = Form::parse(NESTED).expect("parses");
+    let undo = form.apply(Edit::move_to(&[1], &[2], 0)).expect("moved");
+
+    let after = form.text();
+    let right = after
+        .find("panel name=right")
+        .expect("`right` is still there");
+    let left = after
+        .find("panel name=left")
+        .expect("`left` is still there");
+    assert!(left > right, "`left` did not go inside `right`:\n{after}");
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED);
+}
+
+#[test]
+fn a_node_cannot_be_moved_inside_itself() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    let before = form.text();
+    for (from, to) in [(vec![1], vec![1]), (vec![1], vec![1, 0]), (vec![], vec![1])] {
+        let error = form
+            .apply(Edit::Move {
+                from: from.clone(),
+                to: to.clone(),
+                index: 0,
+            })
+            .expect_err("a tree cannot contain its own root");
+        assert!(error.to_string().contains("inside itself"), "{error}");
+    }
+    assert_eq!(form.text(), before, "a refused move changed the file");
+}
+
+#[test]
+fn a_node_moved_into_a_panel_that_has_no_braces_makes_them_and_undoes_them_away() {
+    let source = "form \"F\" version=1 width=99 height=99 {\n    \
+                  label \"a\" x=1 y=2 w=3 h=4\n    \
+                  panel name=empty x=0 y=0 w=50 h=50\n}\n";
+    let mut form = Form::parse(source).expect("parses");
+    let undo = form.apply(Edit::move_to(&[0], &[1], 0)).expect("moved");
+
+    let after = form.text();
+    assert!(
+        after.contains("panel name=empty x=0 y=0 w=50 h=50 {\n        label \"a\""),
+        "{after}"
+    );
+    Form::parse(&after).expect("still a form");
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), source, "the braces outlived the move");
+}
+
+#[test]
+fn any_sequence_of_moves_undone_in_order_restores_the_file_exactly() {
+    let mut total = 0;
+    for seed in 1..=40u64 {
+        let mut form = Form::parse(NESTED).expect("parses");
+        let mut rolls = Rolls(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let mut undo: Vec<Edit> = Vec::new();
+        let mut applied = 0;
+
+        for _ in 0..12 {
+            let depth = 1 + rolls.upto(2);
+            let from: Vec<usize> = (0..depth).map(|_| rolls.upto(4)).collect();
+            let to: Vec<usize> = (0..rolls.upto(3)).map(|_| rolls.upto(4)).collect();
+            let before = form.text();
+            match form.apply(Edit::move_to(&from, &to, rolls.upto(4))) {
+                Ok(inverse) => {
+                    undo.push(inverse);
+                    applied += 1;
+                    // Every move leaves something that still loads, which is the
+                    // other half of reversible.
+                    Form::parse(&form.text()).unwrap_or_else(|e| {
+                        panic!("seed {seed}: {from:?} -> {to:?} made something unloadable: {e}")
+                    });
+                }
+                Err(_) => assert_eq!(
+                    form.text(),
+                    before,
+                    "seed {seed}: a refused move changed the file"
+                ),
+            }
+        }
+        total += applied;
+
+        while let Some(inverse) = undo.pop() {
+            form.apply(inverse)
+                .unwrap_or_else(|e| panic!("seed {seed}: an inverse would not apply: {e}"));
+        }
+        assert_eq!(
+            form.text(),
+            NESTED,
+            "seed {seed}: {applied} moves undone did not restore the file"
+        );
+    }
+    assert!(total > 100, "the sweep only applied {total} moves");
+}

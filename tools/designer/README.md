@@ -58,6 +58,7 @@ is skipped, so an invisible sheet over the whole form does not eat every click.
 | G | Turns snapping off, and on again. |
 | Ctrl/Cmd-Z | Undo. With Shift: redo. |
 | Enter | Puts down whatever the palette has armed. Escape gives it up. |
+| F2 | Renames the selected node, in the outline, in place. |
 
 Snapping is to a 4-pixel grid and, in preference to it, to the edges and centres
 of the node's **siblings** — the only alignment that means anything when there is
@@ -120,6 +121,46 @@ requirements so the two cannot drift.
 The new node is selected the moment it lands, so the inspector is already
 describing it, and the whole placement is one undo.
 
+## The outline
+
+Every node of the form, indented, in file order — not only the ones with names.
+That is what the pane is *for*: the canvas cannot show a node behind another, one
+clipped out of its parent, one sized to nothing, or the ninetieth identical row of
+a table, and all of those have to be reachable.
+
+```
+- panel header          o
+    label               o
+    badge               o
+    spinner busy        .
+- panel sidebar         o
+    list nav            o
+```
+
+The kind, then the name. A `-` or `+` folds a subtree. The mark on the right is an
+**eye**: press it and the node is hidden *in the designer only* — `x` — which is
+how you reach what is sitting behind it. Nothing about that is written to the
+file, and the form is not marked as modified. A node the **file** hides, with
+`visible=#false`, shows a `.` instead: the eye did not do that and cannot undo it,
+and the inspector's `visible` row is where it is changed.
+
+Selection is shared with the canvas both ways: click a row and the canvas draws
+handles round it; click the canvas and the row highlights.
+
+**Drag a row** to reorder it among its siblings or to reparent it — dropping on
+the middle of a `panel` or a `collapse` puts it inside, dropping on an edge puts
+it beside. A marker shows which. That is one `denise_forms::Edit::Move`, so it is
+one undo step, and the node is **re-indented** for its new depth, children and
+all, because a file whose nesting and whose indentation disagree is one somebody
+has to fix by hand.
+
+**F2** renames the selected node in place. Enter keeps it, Escape does not.
+
+`-` and `+` and `o` rather than triangles and an eye glyph because the built-in
+5×7 font covers ASCII and Latin-1 and nothing else, and a `▾` draws the
+missing-character box. Which is what every tree control drew before it had the
+glyphs for anything better.
+
 ## The inspector
 
 Select something and its properties fill the right pane, each with an editor
@@ -162,7 +203,7 @@ out of the field being typed in.
 | | |
 |---|---|
 | **Palette** | Every widget the toolkit ships, from `widgets::all()`, filtered by the field above — dragged or clicked onto the canvas. |
-| **Outline** | The nodes the open form named, and picking one selects it. |
+| **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
 | **Canvas** | The form, drawn — and selected, moved, resized and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
 | **Toolbar** | New, Open, Save, Save as, Undo, Redo. |
@@ -179,9 +220,15 @@ registry carries a name and a property list and nothing else, and a table of
 descriptions in this crate is exactly what the registry exists to avoid. That
 wants a line of documentation on each widget's `Describe`, which is [#126].
 
-Three parts of [#92] are not done either: a rubber band over empty space, dropping
-a node onto a panel to reparent it, and bring-to-front and send-to-back. Each is
-its own mechanism rather than a corner of what is here.
+Three parts of [#92] are not done: a rubber band over empty space, dropping a node
+onto a panel **on the canvas** to reparent it, and bring-to-front and send-to-back.
+The reparent edit itself is here — the outline drives it — so the canvas drag is
+the gesture and not the mechanism.
+
+The outline remembers what is folded and what is hidden **by path**, so an edit
+that shifts a path leaves those pointing at whatever moved into its place. A form
+is small and a click puts it right; the alternative is giving every node an
+identity the file does not have.
 
 The **form's own** properties — its title, its size, its theme — are not in the
 pane: it shows the selected *node*, and the form node cannot be selected. Its

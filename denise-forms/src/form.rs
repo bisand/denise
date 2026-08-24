@@ -233,6 +233,24 @@ pub enum Edit {
         /// What to put there.
         value: Literal,
     },
+    /// Take a node out and put it back under another parent.
+    ///
+    /// Reordering among siblings and reparenting are the same edit: both take a
+    /// node out and put it back somewhere, and doing it as one keeps it to one
+    /// step on an undo stack.
+    ///
+    /// A node that changes depth is **re-indented** — every line of it, so the
+    /// children come along — because a file whose nesting and whose indentation
+    /// disagree is a file somebody has to fix by hand. Moving it back re-indents
+    /// it back, so an undo is still byte-for-byte.
+    Move {
+        /// The node now.
+        from: Vec<usize>,
+        /// The parent it goes under; empty for the form itself.
+        to: Vec<usize>,
+        /// Where among that parent's children.
+        index: usize,
+    },
     /// Take a node, and everything under it, out.
     Remove {
         /// The node.
@@ -283,6 +301,16 @@ impl Edit {
         Edit::Argument {
             path: path.to_vec(),
             value: Literal::Text(text.into()),
+        }
+    }
+
+    /// Moves a node under another parent, or to another place among its
+    /// siblings.
+    pub fn move_to(from: &[usize], to: &[usize], index: usize) -> Self {
+        Edit::Move {
+            from: from.to_vec(),
+            to: to.to_vec(),
+            index,
         }
     }
 
@@ -865,6 +893,60 @@ impl Form {
                 Ok(Edit::Argument { path, value: was })
             }
 
+            Edit::Move { from, to, index } => {
+                // A node cannot go inside itself, and the form is the document
+                // rather than a node in it.
+                if from.is_empty() || to.starts_with(&from) {
+                    return Err(Error::new(At::START, Reason::IntoItself { path: from }));
+                }
+                let node = self.node_at(&from).ok_or_else(|| {
+                    Error::new(At::START, Reason::NoSuchNode { path: from.clone() })
+                })?;
+                let text = node.to_string();
+                let old = indent_of(node);
+
+                // Where it is going, once taking it out has shifted whatever
+                // came after it — the case that is easy to miss: removing `[1]`
+                // moves `[2]` to `[1]`, so a move that named `[2]` as its
+                // destination has to be told.
+                let landing = after_removing(&to, &from).ok_or_else(|| {
+                    Error::new(At::START, Reason::IntoItself { path: from.clone() })
+                })?;
+                let step = self.indent_step();
+                let new = match self.node_at(&to) {
+                    Some(parent) if !to.is_empty() => indent_of(parent) + &step,
+                    Some(_) => step,
+                    None => {
+                        return Err(Error::new(At::START, Reason::NoSuchNode { path: to }));
+                    }
+                };
+
+                // How many children the landing will have once the node has
+                // left it, which decides both where the index can reach and
+                // whether it becomes the first — the one position that carries
+                // the newline after the brace.
+                let held = self
+                    .node_at(&to)
+                    .and_then(KdlNode::children)
+                    .map_or(0, |block| block.nodes().len());
+                let leaving = from.len() == to.len() + 1 && from.starts_with(&to);
+                let index = index.min(held - usize::from(leaving && held > 0));
+
+                let text = reindent(&text, &old, &new, index == 0);
+                // Two edits as one, so the inverse is the pair reversed: put the
+                // node back where it came from, with the text it had there, and
+                // take away any braces this had to make. `Many` already does all
+                // of that, and doing it by hand would be doing it again.
+                self.apply(Edit::Many(vec![
+                    Edit::Remove { path: from },
+                    Edit::Insert {
+                        parent: landing,
+                        index,
+                        text,
+                    },
+                ]))
+            }
+
             Edit::Remove { path } => {
                 let (&last, above) = path.split_last().ok_or_else(|| {
                     Error::new(At::START, Reason::NoSuchNode { path: Vec::new() })
@@ -881,15 +963,52 @@ impl Form {
                 if last >= children.len() {
                     return Err(Error::new(At::START, Reason::NoSuchNode { path }));
                 }
+                // Taking the *first* node out of a block leaves the next one
+                // holding the line the brace opened, and it was not written to
+                // carry the newline that starts it. Putting that right changes a
+                // line nobody asked about, so the inverse restores the parent's
+                // whole text rather than reasoning about which newline went
+                // where — the same answer this file gives every time an edit
+                // cannot be undone by putting one value back.
+                // Two shapes of removal cannot be undone by putting the node
+                // back on its own, and both are answered the same way this file
+                // answers every such case — with the parent's own text, which
+                // carries the shape as well as the contents.
+                //
+                // Taking the *first* node out leaves the next one holding the
+                // line the brace opened, and it was not written to carry the
+                // newline that starts it. Taking the *last* one out leaves an
+                // empty `{ }` that nobody typed.
+                let opener = last == 0 && children.len() > 1;
+                let emptied = children.len() == 1;
+                let was = (opener || emptied).then(|| {
+                    self.node_at(&above)
+                        .map_or_else(String::new, |node| node.to_string())
+                });
+
+                let children = self.children_of_mut(&above).expect("just found");
                 // The node's own text carries its leading trivia — its
                 // indentation and any comment written above it — so putting it
                 // back puts all of that back too.
                 let text = children.remove(last).to_string();
-                Ok(Edit::Insert {
-                    parent: above,
-                    index: last,
-                    text,
-                })
+                if opener && let Some(first) = children.first_mut() {
+                    let mut format = first.format().cloned().unwrap_or_default();
+                    if !format.leading.starts_with('\n') {
+                        format.leading.insert(0, '\n');
+                        first.set_format(format);
+                    }
+                }
+                if emptied {
+                    self.drop_block(&above);
+                }
+                match was {
+                    Some(text) => Ok(Edit::Replace { path: above, text }),
+                    None => Ok(Edit::Insert {
+                        parent: above,
+                        index: last,
+                        text,
+                    }),
+                }
             }
 
             Edit::Many(edits) => {
@@ -944,6 +1063,37 @@ impl Form {
                 children[last] = node;
                 Ok(Edit::Replace { path, text: was })
             }
+        }
+    }
+
+    /// One step of indentation, as this file writes it.
+    ///
+    /// Read from the form's own first child rather than assumed to be four
+    /// spaces, so a file written with two stays written with two.
+    fn indent_step(&self) -> String {
+        self.doc
+            .nodes()
+            .first()
+            .and_then(KdlNode::children)
+            .and_then(|block| block.nodes().first())
+            .map(indent_of)
+            .filter(|indent| !indent.is_empty())
+            .unwrap_or_else(|| String::from("    "))
+    }
+
+    /// Takes away the children block of the node at `path`.
+    ///
+    /// So that there is no such thing as an empty one: `panel name=card` and
+    /// `panel name=card { }` mean the same to the engine, and only the first is
+    /// what somebody would have written.
+    fn drop_block(&mut self, path: &[usize]) {
+        let holder = if path.is_empty() {
+            self.doc.nodes_mut().first_mut()
+        } else {
+            self.at_mut(path)
+        };
+        if let Some(node) = holder {
+            *node.children_mut() = None;
         }
     }
 
@@ -1083,6 +1233,80 @@ fn one_node(text: &str) -> Result<KdlNode, Error> {
             Reason::Syntax(format!("this must be one node; it is {}", other.len())),
         )),
     }
+}
+
+/// A path as it stands once `removed` has been taken out.
+///
+/// `None` when the path was inside what was removed. The interesting case is the
+/// quiet one: taking node `[1]` out moves `[3]` to `[2]`, so anything holding a
+/// path across a removal has to be told — a move that names a destination
+/// *after* its source, and an editor holding a selection.
+///
+/// ```
+/// # use denise_forms::after_removing;
+/// // The node after the one taken out slides up.
+/// assert_eq!(after_removing(&[3], &[1]), Some(vec![2]));
+/// // One before it does not, and neither does one in another parent.
+/// assert_eq!(after_removing(&[0], &[1]), Some(vec![0]));
+/// assert_eq!(after_removing(&[5, 3], &[1]), Some(vec![4, 3]));
+/// // And a path inside what was removed is nowhere at all.
+/// assert_eq!(after_removing(&[1, 0], &[1]), None);
+/// ```
+pub fn after_removing(path: &[usize], removed: &[usize]) -> Option<Vec<usize>> {
+    if path.starts_with(removed) {
+        return None;
+    }
+    let (index, ancestors) = removed.split_last()?;
+    let mut out = path.to_vec();
+    if out.len() > ancestors.len() && out.starts_with(ancestors) && out[ancestors.len()] > *index {
+        out[ancestors.len()] -= 1;
+    }
+    Some(out)
+}
+
+/// A node's text, moved from one depth to another.
+///
+/// Every line that begins with the old indentation gets the new one instead, so
+/// the node's children move with it and keep their shape relative to it. `first`
+/// says whether it is becoming the first node in its block, which is the one
+/// position that also carries the newline after the brace.
+fn reindent(text: &str, old: &str, new: &str, first: bool) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for (index, line) in text
+        .trim_start_matches('\n')
+        .split_inclusive('\n')
+        .enumerate()
+    {
+        if old.is_empty() {
+            // Nothing to swap: indent what is there rather than every blank line.
+            if !line.trim().is_empty() {
+                out.push_str(new);
+            }
+            out.push_str(line);
+            continue;
+        }
+        match line.strip_prefix(old) {
+            Some(rest) => {
+                out.push_str(new);
+                out.push_str(rest);
+            }
+            // A line shallower than the node itself can only be part of its
+            // leading trivia, and a blank line has nothing to indent.
+            None if index == 0 => {
+                out.push_str(new);
+                out.push_str(line.trim_start());
+            }
+            None => out.push_str(line),
+        }
+    }
+    // Where it is going decides this, not where it came from: only the first
+    // node in a block carries the newline that follows the brace, and a node
+    // that was first and is landing third would otherwise leave a blank line
+    // behind it.
+    if first {
+        out.insert(0, '\n');
+    }
+    out
 }
 
 /// The whitespace a node is written after, on its own line.

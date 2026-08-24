@@ -155,6 +155,15 @@ pub enum Reason {
         /// The child path that went nowhere.
         path: Vec<usize>,
     },
+    /// A move would have put a node inside itself.
+    ///
+    /// Or would have moved the form, which is the document rather than a node in
+    /// it. Both are the same mistake — a tree cannot contain its own root — and
+    /// both come from a drag that ended where it should not have been allowed to.
+    IntoItself {
+        /// The node the move named.
+        path: Vec<usize>,
+    },
     /// An edit set the positional argument of a node written without one.
     ///
     /// An argument comes before every property, and no edit puts something at
@@ -291,6 +300,9 @@ impl fmt::Display for Error {
                 )
             }
             Reason::NoSuchNode { path } => write!(f, "there is no node at {path:?}"),
+            Reason::IntoItself { path } => {
+                write!(f, "a node cannot go inside itself; {path:?} was asked to")
+            }
             Reason::NoArgument => write!(
                 f,
                 "this node is written without an argument; set the property instead"
