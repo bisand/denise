@@ -56,6 +56,8 @@ is skipped, so an invisible sheet over the whole form does not eat every click.
 | Drag empty space | A rubber band. Shift keeps what was already held. |
 | Arrow keys | One pixel. With Shift, twice the grid. |
 | PageUp/PageDown | To the front of its siblings, or to the back — by reordering the file. |
+| Ctrl/Cmd-C, X, V | Copy, cut and paste — as `.dform` source, on the system clipboard. |
+| Ctrl/Cmd-D | Another one of it, beside it. |
 | Delete | Takes the node and everything under it out of the file. |
 | G | Turns snapping off, and on again. |
 | Ctrl/Cmd-Z | Undo. With Shift: redo. |
@@ -150,6 +152,43 @@ panes agree about what reparenting means rather than agreeing by care. Because
 the rectangle in a form file is relative to the parent, keeping a node still on
 the screen means giving it different numbers — so a reparent is two edits applied
 as one, and undone as one.
+
+## The clipboard carries source
+
+Copy puts the selected nodes on the system clipboard as **`.dform` text**, not a
+private encoding. That is Delphi's trick and it is worth stealing: paste into a
+text editor and you have the source, paste from a text editor and you have the
+nodes, and copying between two running designers is free because there was never
+a second format to agree on.
+
+```
+panel name=left x=4 y=30 w=120 h=120 {
+    label "in-left" name=inside x=4 y=4 w=80 h=20
+}
+```
+
+That is what a copied panel looks like on the clipboard — its children with it,
+and a comment written above it too, because a node's leading trivia is part of
+the node.
+
+Paste lands **inside the selected container**, or beside the selected node, or
+on the form, offset by twice the grid so the copy is not hidden exactly behind
+what it came from. Every `name=` in the arriving subtree that the form already
+uses gets a number until it does not clash — `card` becomes `card2`, and `nav2`
+becomes `nav3` rather than `nav22`. `Ctrl/Cmd-D` duplicates in place, beside and
+never inside: duplicating a panel means wanting a second one, not one nested in
+the first. Cut is copy and delete, in one step.
+
+**Text that is not form source is reported rather than ignored.** The schema
+lives with the builder — which widgets exist, which properties each has — so the
+only honest way to ask is to build it: the fragment goes into a tree nobody will
+ever draw, and the answer comes back with the line the trouble is on. Nothing is
+written to the file until it has built once.
+
+The clipboard is `arboard`, in this tool and never in a library crate: a
+`no_std` widget library has no business knowing what a desktop is. A test run
+never reaches for the machine's own — a `cargo test` that clobbered whatever you
+had copied would be a rude test suite.
 
 ## Front and back
 
@@ -347,7 +386,7 @@ out of the field being typed in.
 |---|---|
 | **Palette** | Every widget the toolkit ships, from `widgets::all()`, filtered by the field above — dragged or clicked onto the canvas. |
 | **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
-| **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, and deleted. |
+| **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, copied, pasted and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
 | **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, and the theme being simulated. |
 | **Arrange** | Align, same size, space evenly, group and ungroup — greyed one button at a time, each saying in its tooltip what it wants. |

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use denise::{
     ElementState, InputEvent, KeyCode, Point, PointerButton, Radius, Rect, Role, Size, theme,
 };
-use denise_forms::{Edit, Handler, Literal, Payload, Picture, Placed, Wiring};
+use denise_forms::{Edit, Form, Handler, Literal, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{
     Button, Divider, Label, List, ListItem, Panel, Property, PropertyKind, TextInput, Value,
     open_select,
@@ -14,6 +14,7 @@ use denise_ui::{Anchors, Dock, NodeId, Ui};
 
 use crate::arrange::{self, Command, Needs};
 use crate::canvas::{Band, Drag, Grip, Guide, between, place, snap, topmost};
+use crate::clipboard::Clipboard;
 use crate::document::Document;
 use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
@@ -531,6 +532,8 @@ pub struct Designer {
     drag: Option<Drag>,
     /// A rubber band being drawn over the canvas.
     band: Option<Band>,
+    /// Where copied nodes go, as `.dform` source.
+    clipboard: Clipboard,
     /// The rest of the selection while one of them is being dragged, with the
     /// rectangle each had when the drag began. A drag moves all of them by the
     /// same amount, and writes all of them as one edit.
@@ -601,6 +604,7 @@ impl Designer {
             selection: Vec::new(),
             drag: None,
             band: None,
+            clipboard: Clipboard::new(),
             carrying: Vec::new(),
             dropping: None,
             overlay: Vec::new(),
@@ -2823,6 +2827,31 @@ impl Designer {
             }
             return true;
         }
+        // The clipboard is the *nodes'*, not the caret's: while something in the
+        // designer's own chrome is being typed into, these belong to the field
+        // and this build has nothing to give it. Better to do nothing than to
+        // copy a node somebody was not looking at.
+        if command && !typing {
+            match code {
+                KeyCode::C => {
+                    self.copy();
+                    return true;
+                }
+                KeyCode::X => {
+                    self.cut();
+                    return true;
+                }
+                KeyCode::V => {
+                    self.paste();
+                    return true;
+                }
+                KeyCode::D => {
+                    self.duplicate();
+                    return true;
+                }
+                _ => {}
+            }
+        }
         match code {
             KeyCode::Enter | KeyCode::NumpadEnter
                 if matches!(self.placing, Placing::Armed { .. }) =>
@@ -2919,6 +2948,186 @@ impl Designer {
         self.edit(Edit::Many(paths.iter().map(|p| Edit::remove(p)).collect()));
         self.selection.clear();
         self.reload_from_document();
+    }
+
+    // ------------------------------------------------- the clipboard
+
+    /// Puts the selection on the clipboard, as `.dform` source.
+    pub fn copy(&mut self) {
+        let Some(text) = self.selection_text() else {
+            self.status = String::from("nothing selected to copy");
+            self.refresh_labels();
+            return;
+        };
+        let lines = self.selection.len();
+        self.clipboard.put(&text);
+        self.status = format!("copied {lines} node(s) as form source");
+        self.refresh_labels();
+    }
+
+    /// Copies the selection and takes it out of the file.
+    ///
+    /// One step, because the delete is one step and the copy writes nothing.
+    pub fn cut(&mut self) {
+        if self.selection.is_empty() {
+            self.status = String::from("nothing selected to cut");
+            self.refresh_labels();
+            return;
+        }
+        let taken = self.selection.len();
+        self.copy();
+        self.delete_selection();
+        self.status = format!("cut {taken} node(s)");
+        self.refresh_labels();
+    }
+
+    /// Puts whatever is on the clipboard into the form.
+    ///
+    /// Under the selected container, or beside the selected node, or on the
+    /// form — and offset, so that a copy of something is not hidden exactly
+    /// behind it.
+    pub fn paste(&mut self) {
+        let Some(text) = self.clipboard.take() else {
+            self.status = String::from("there is nothing on the clipboard");
+            self.refresh_labels();
+            return;
+        };
+        let parent = match self.selection.last() {
+            Some(path) if self.is_container(path) => path.clone(),
+            Some(path) => path
+                .split_last()
+                .map_or_else(Vec::new, |(_, up)| up.to_vec()),
+            None => Vec::new(),
+        };
+        self.put_fragment(&text, parent, "pasted");
+    }
+
+    /// Another one of whatever is selected, beside it.
+    ///
+    /// Beside and not inside, even for a panel: duplicating a container means
+    /// wanting a second one, not wanting one nested in the first.
+    pub fn duplicate(&mut self) {
+        let Some(text) = self.selection_text() else {
+            self.status = String::from("nothing selected to duplicate");
+            self.refresh_labels();
+            return;
+        };
+        let parent = self
+            .selection
+            .last()
+            .and_then(|path| path.split_last())
+            .map_or_else(Vec::new, |(_, up)| up.to_vec());
+        self.put_fragment(&text, parent, "duplicated");
+    }
+
+    /// The selection as `.dform` source, in file order.
+    fn selection_text(&self) -> Option<String> {
+        if self.selection.is_empty() {
+            return None;
+        }
+        let mut paths = self.selection.clone();
+        paths.sort();
+        let mut out = String::new();
+        for path in &paths {
+            out.push_str(&self.document.form().node_text(path)?);
+        }
+        (!out.trim().is_empty()).then_some(out)
+    }
+
+    /// Whether a fragment would build, and the fragment as a form if it would.
+    ///
+    /// The schema lives with the builder — which widgets exist, which properties
+    /// each has — so the only honest way to ask "is this form source?" is to
+    /// build it. Into a tree nobody will ever draw, thrown away with the answer.
+    /// What comes back is the fragment as a [`Form`], which is where the
+    /// rectangles it wants are read from.
+    fn check_fragment(&self, text: &str) -> Result<Form, denise_forms::Error> {
+        let source = format!(
+            "form \"\" version={} width=1 height=1 {{\n{text}\n}}\n",
+            denise_forms::VERSION
+        );
+        // The wrapper puts one line above the fragment, so every complaint would
+        // otherwise point one line too far down.
+        let lower = |mut error: denise_forms::Error| {
+            error.at.line = error.at.line.saturating_sub(1).max(1);
+            error
+        };
+        let form = Form::parse(&source).map_err(lower)?;
+
+        let mut scratch: Ui<Message> = Ui::new(Size::new(1, 1), theme::DARK);
+        let root = scratch.root();
+        let mut wiring = Design {
+            base: self.document.base(),
+            missing: Vec::new(),
+            names: Vec::new(),
+        };
+        form.build(&mut scratch, root, &mut wiring).map_err(lower)?;
+        Ok(form)
+    }
+
+    /// Puts a fragment of form source into the document, as one edit.
+    fn put_fragment(&mut self, text: &str, parent: Vec<usize>, what: &str) {
+        let checked = match self.check_fragment(text) {
+            Ok(form) => form,
+            Err(error) => {
+                self.status = format!("that is not form source: {error}");
+                self.refresh_labels();
+                return;
+            }
+        };
+
+        // Every name the document already uses, so the arrivals get their own.
+        let mut taken: Vec<String> = self
+            .placed
+            .iter()
+            .filter_map(|node| node.name.clone())
+            .collect();
+        let nodes = match denise_forms::fragment(text, &mut taken) {
+            Ok(nodes) => nodes,
+            Err(error) => {
+                self.status = format!("that is not form source: {error}");
+                self.refresh_labels();
+                return;
+            }
+        };
+        if nodes.is_empty() {
+            self.status = String::from("there was nothing in that to paste");
+            self.refresh_labels();
+            return;
+        }
+
+        // Far enough to be seen behind what it came from, and on the grid so it
+        // still lines up with everything else.
+        let step = self.grid.max(1) * 2;
+        let held = self.child_count(&parent);
+        let mut edits = Vec::new();
+        let mut landed = Vec::new();
+        for (nth, node) in nodes.iter().enumerate() {
+            let index = held + nth;
+            let mut path = parent.clone();
+            path.push(index);
+            edits.push(Edit::Insert {
+                parent: parent.clone(),
+                index,
+                text: node.clone(),
+            });
+            for (name, axis) in [("x", "x"), ("y", "y")] {
+                if let Some(was) = checked
+                    .property(&[nth], axis)
+                    .and_then(|value| value.parse::<i64>().ok())
+                {
+                    edits.push(Edit::number(&path, name, Some(was + i64::from(step))));
+                }
+            }
+            landed.push(path);
+        }
+
+        self.history.separate();
+        self.edit(Edit::Many(edits));
+        self.selection = landed;
+        self.reload_from_document();
+        self.status = format!("{what} {} node(s)", nodes.len());
+        self.refresh_labels();
     }
 
     // ---------------------------------------------------------- arranging
@@ -6759,5 +6968,302 @@ mod tests {
         assert_eq!(designer.history.depth().0, 1, "one drop, one step");
         designer.undo();
         assert_eq!(text(&designer), before, "undoing the drop was not exact");
+    }
+
+    // ------------------------------------------------------- the clipboard
+
+    /// Ctrl-something, which is Cmd-something on a Mac and either here.
+    fn press_command(designer: &mut Designer, code: KeyCode) {
+        press_with(designer, code, denise::Modifiers::CTRL);
+    }
+
+    #[test]
+    fn copying_a_panel_and_pasting_it_gains_the_whole_subtree_with_names_of_its_own() {
+        let mut designer = two_panels();
+        select(&mut designer, "left");
+        let before = text(&designer);
+        designer.copy();
+        assert!(
+            designer.status.starts_with("copied 1"),
+            "{}",
+            designer.status
+        );
+
+        // Nothing selected, so it lands on the form itself.
+        press_key(&mut designer, KeyCode::Escape, false);
+        designer.paste();
+
+        let after = text(&designer);
+        // Offset by twice the grid so the copy is not hidden behind what it
+        // came from, and every name in it is one nobody had.
+        assert!(
+            after.contains(concat!(
+                "    panel name=left2 x=12 y=38 w=120 h=120 {\n",
+                "        label \"in-left\" name=inside2 x=4 y=4 w=80 h=20\n",
+                "    }\n",
+            )),
+            "{after}"
+        );
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel left",
+                "1:label inside",
+                "0:panel right",
+                "0:panel left2",
+                "1:label inside2"
+            ]
+        );
+        denise_forms::Form::parse(&after).expect("still a form");
+
+        assert_eq!(designer.history.depth().0, 1, "a paste is one step");
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing the paste was not exact");
+    }
+
+    #[test]
+    fn what_goes_on_the_clipboard_is_form_source_and_reads_as_form_source() {
+        let mut designer = two_panels();
+        select(&mut designer, "left");
+        designer.copy();
+        assert_eq!(
+            designer.clipboard.take().as_deref(),
+            Some(concat!(
+                "panel name=left x=4 y=30 w=120 h=120 {\n",
+                "    label \"in-left\" name=inside x=4 y=4 w=80 h=20\n",
+                "}\n",
+            )),
+            "the clipboard is not holding the source somebody could read"
+        );
+    }
+
+    #[test]
+    fn form_source_somebody_typed_somewhere_else_pastes_in() {
+        let mut designer = two_panels();
+        designer
+            .clipboard
+            .put("button \"Go\" name=go x=10 y=10 w=60 h=24 on-press=go\n");
+        press_key(&mut designer, KeyCode::Escape, false);
+        designer.paste();
+
+        assert!(
+            text(&designer).contains("button \"Go\" name=go x=18 y=18 w=60 h=24 on-press=go"),
+            "{}",
+            text(&designer)
+        );
+        assert_eq!(designer.status, "pasted 1 node(s)");
+    }
+
+    #[test]
+    fn nonsense_on_the_clipboard_is_reported_rather_than_pasted() {
+        let mut designer = two_panels();
+        let before = text(&designer);
+
+        // A widget this engine does not have.
+        designer.clipboard.put("banana x=0 y=0 w=10 h=10\n");
+        designer.paste();
+        assert!(designer.status.contains("banana"), "{}", designer.status);
+        assert_eq!(text(&designer), before, "it pasted anyway");
+
+        // A widget it does have, with a property it does not.
+        designer
+            .clipboard
+            .put("label \"a\" x=0 y=0 w=10 h=10 flavour=salt\n");
+        designer.paste();
+        assert!(designer.status.contains("flavour"), "{}", designer.status);
+        assert_eq!(text(&designer), before);
+
+        // And not KDL at all.
+        designer.clipboard.put("}}} nope\n");
+        designer.paste();
+        assert!(
+            designer.status.starts_with("that is not form source"),
+            "{}",
+            designer.status
+        );
+        assert_eq!(text(&designer), before);
+        assert_eq!(
+            designer.history.depth().0,
+            0,
+            "a refused paste wrote a step"
+        );
+    }
+
+    #[test]
+    fn an_empty_clipboard_says_so_rather_than_doing_nothing() {
+        let mut designer = two_panels();
+        designer.paste();
+        assert_eq!(designer.status, "there is nothing on the clipboard");
+    }
+
+    #[test]
+    fn pasting_twice_gives_two_copies_and_not_two_clashes() {
+        let mut designer = two_panels();
+        select(&mut designer, "loose");
+        designer.copy();
+        press_key(&mut designer, KeyCode::Escape, false);
+        designer.paste();
+        press_key(&mut designer, KeyCode::Escape, false);
+        designer.paste();
+
+        let after = text(&designer);
+        assert!(after.contains("name=loose2"), "{after}");
+        assert!(after.contains("name=loose3"), "{after}");
+        denise_forms::Form::parse(&after).expect("two of the same name would not load");
+    }
+
+    #[test]
+    fn a_paste_lands_inside_a_selected_panel_and_beside_a_selected_label() {
+        let mut designer = two_panels();
+        select(&mut designer, "loose");
+        designer.copy();
+
+        // A panel is somewhere to put things.
+        select(&mut designer, "right");
+        designer.paste();
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel left",
+                "1:label inside",
+                "0:panel right",
+                "1:label loose2"
+            ]
+        );
+
+        // A label is not, so its parent takes it.
+        select(&mut designer, "inside");
+        designer.paste();
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel left",
+                "1:label inside",
+                "1:label loose3",
+                "0:panel right",
+                "1:label loose2"
+            ]
+        );
+    }
+
+    #[test]
+    fn cut_takes_it_out_and_puts_it_where_a_paste_can_find_it() {
+        let mut designer = two_panels();
+        select(&mut designer, "left");
+        let before = text(&designer);
+        designer.cut();
+
+        assert!(
+            !text(&designer).contains("name=left"),
+            "{}",
+            text(&designer)
+        );
+        assert_eq!(designer.status, "cut 1 node(s)");
+        assert_eq!(designer.history.depth().0, 1, "a cut is one step");
+
+        designer.paste();
+        assert!(
+            text(&designer).contains("name=left"),
+            "it did not come back"
+        );
+        // The name is free again, so it comes back as itself.
+        assert!(
+            !text(&designer).contains("name=left2"),
+            "{}",
+            text(&designer)
+        );
+
+        designer.undo();
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing the cut was not exact");
+    }
+
+    #[test]
+    fn duplicate_puts_another_one_beside_it_rather_than_inside_it() {
+        let mut designer = two_panels();
+        select(&mut designer, "left");
+        designer.duplicate();
+
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel left",
+                "1:label inside",
+                "0:panel right",
+                "0:panel left2",
+                "1:label inside2"
+            ],
+            "a duplicated panel went inside itself: {}",
+            text(&designer)
+        );
+        assert_eq!(designer.status, "duplicated 1 node(s)");
+        // And the copy is what is selected, which is what makes the next thing
+        // you do be to it.
+        assert_eq!(selected_names(&designer), vec!["left2"]);
+    }
+
+    #[test]
+    fn several_selected_copy_and_paste_as_several() {
+        let mut designer = three();
+        pick(&mut designer, &["a", "c"]);
+        designer.copy();
+        press_key(&mut designer, KeyCode::Escape, false);
+        designer.paste();
+
+        let after = text(&designer);
+        assert!(after.contains("name=a2"), "{after}");
+        assert!(after.contains("name=c2"), "{after}");
+        assert!(
+            !after.contains("name=b2"),
+            "it took one nobody picked: {after}"
+        );
+        assert_eq!(designer.status, "pasted 2 node(s)");
+        assert_eq!(designer.history.depth().0, 1, "one paste, one step");
+        assert_eq!(selected_names(&designer), vec!["a2", "c2"]);
+    }
+
+    #[test]
+    fn the_keys_are_wired_to_the_same_things_the_methods_are() {
+        let mut designer = two_panels();
+        select(&mut designer, "loose");
+        press_command(&mut designer, KeyCode::C);
+        assert!(designer.status.starts_with("copied"), "{}", designer.status);
+
+        press_key(&mut designer, KeyCode::Escape, false);
+        press_command(&mut designer, KeyCode::V);
+        assert!(text(&designer).contains("name=loose2"));
+
+        select(&mut designer, "loose");
+        press_command(&mut designer, KeyCode::D);
+        assert!(
+            designer.status.starts_with("duplicated"),
+            "{}",
+            designer.status
+        );
+
+        select(&mut designer, "loose");
+        press_command(&mut designer, KeyCode::X);
+        assert!(designer.status.starts_with("cut"), "{}", designer.status);
+    }
+
+    #[test]
+    fn a_copy_with_nothing_selected_says_so_and_leaves_the_clipboard_alone() {
+        let mut designer = two_panels();
+        select(&mut designer, "loose");
+        designer.copy();
+        press_key(&mut designer, KeyCode::Escape, false);
+        designer.copy();
+        assert_eq!(designer.status, "nothing selected to copy");
+        assert!(
+            designer
+                .clipboard
+                .take()
+                .is_some_and(|it| it.contains("loose")),
+            "an empty copy wiped the clipboard"
+        );
     }
 }
