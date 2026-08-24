@@ -27,11 +27,12 @@
 //!
 //! # What is here, and what is not
 //!
-//! A form opens, draws, selects, moves, resizes, deletes and undoes; its
-//! properties are edited in the right pane; a widget is dragged out of the
-//! palette or drawn on the canvas; and the outline shows the tree as a tree,
-//! with folding, renaming, reparenting, and an eye that hides a node here
-//! without the file learning of it. That is a form built from nothing.
+//! A form opens, draws, selects — one at a time or by rubber band — moves,
+//! resizes, reparents by dropping a node on a panel, reorders front to back,
+//! deletes and undoes; its properties are edited in the right pane; a widget is
+//! dragged out of the palette or drawn on the canvas; and the outline shows the
+//! tree as a tree, with folding, renaming, reparenting, and an eye that hides a
+//! node here without the file learning of it. That is a form built from nothing.
 //!
 //! F5 runs it: the scrim goes, the events become the form's, and the strip along
 //! the bottom names every message it fires.
@@ -69,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut drag: Option<(i32, i32)> = None;
     let mut carry: Option<(String, i32, i32)> = None;
     let mut preview = false;
+    let mut band: Option<denise::Rect> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -81,6 +83,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
             "--preview" => preview = true,
+            "--band" => {
+                band = rest.next().and_then(|value| {
+                    let mut parts = value.split(',').map(|part| part.trim().parse::<i32>());
+                    let mut next = || parts.next().and_then(Result::ok);
+                    Some(denise::Rect::new(next()?, next()?, next()?, next()?))
+                });
+            }
             "--carry" => {
                 carry = rest.next().and_then(|value| {
                     let mut parts = value.split(',');
@@ -104,7 +113,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --select <name>        snapshot: select this node first\n\
                      \x20 --drag <dx>,<dy>       snapshot: and drag it, so the guides show\n\
                      \x20 --carry <kind>[,x,y]   snapshot: hold this widget over the form\n\
-                     \x20 --preview              snapshot: run the form rather than draw it"
+                     \x20 --preview              snapshot: run the form rather than draw it\n\
+                     \x20 --band <x,y,w,h>       snapshot: draw a rubber band over the form"
                 );
                 return Ok(());
             }
@@ -138,6 +148,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if preview {
             designer.toggle_preview();
+        }
+        if let Some(rect) = band {
+            designer.band_over(rect);
         }
         if let Some((kind, x, y)) = carry
             && !designer.carry(&kind, denise::Point::new(x, y))
