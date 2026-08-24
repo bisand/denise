@@ -24,6 +24,21 @@ impl Document {
     ///
     /// The kinds and the rest of the form's properties are #90's; this is the one
     /// a `New` button makes until then.
+    /// A form of a chosen kind and size, with nothing in it yet.
+    ///
+    /// What *File → New* makes once it has asked. The source is
+    /// [`denise_forms::seed_form`]'s, so what a new file writes is the format's
+    /// decision rather than this crate's.
+    pub fn of(kind: denise_forms::FormKind, size: denise::Size) -> Self {
+        let source = denise_forms::seed_form("Untitled", kind, size);
+        let form = Form::parse(&source).expect("a seeded form is valid");
+        Self {
+            path: None,
+            form,
+            dirty: false,
+        }
+    }
+
     pub fn blank() -> Self {
         let source = "\
 // A new form.
