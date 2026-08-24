@@ -6,12 +6,12 @@ mod error;
 mod form;
 
 pub use build::{
-    Built, Handler, NODE_PROPERTIES, Picture, Placed, Wiring, default_size, node_property,
-    owns_children, seed,
+    Built, FORM_PROPERTIES, Handler, NODE_PROPERTIES, Picture, Placed, Wiring, default_size,
+    form_property, kind_properties, node_property, owns_children, seed, seed_form,
 };
 pub use error::{At, Error, Reason};
 pub use form::{
-    Edit, Form, FormKind, Literal, MAX_DEPTH, MAX_SOURCE, VERSION, after_removing, fragment,
+    Edit, Form, FormKind, Literal, MAX_DEPTH, MAX_SOURCE, THEMES, VERSION, after_removing, fragment,
 };
 
 pub use denise_ui::widgets::Payload;

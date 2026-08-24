@@ -957,3 +957,57 @@ fn any_sequence_of_moves_undone_in_order_restores_the_file_exactly() {
     }
     assert!(total > 100, "the sweep only applied {total} moves");
 }
+
+// ------------------------------------------------------- the form node itself
+
+#[test]
+fn the_forms_own_properties_are_edited_by_the_same_door_as_everything_else() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    assert_eq!(form.size(), denise::Size::new(400, 300));
+
+    // The empty path is the form node.
+    let undo = form
+        .apply(Edit::number(&[], "width", Some(1024)))
+        .expect("resized");
+    assert_eq!(form.size(), denise::Size::new(1024, 300));
+    assert!(form.text().contains("width=1024"), "{}", form.text());
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED, "undoing the resize was not exact");
+}
+
+#[test]
+fn a_form_property_that_was_not_there_is_undone_by_taking_it_away_again() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    let undo = form
+        .apply(Edit::property(
+            &[],
+            "name",
+            Some(Literal::Name(String::from("moves"))),
+        ))
+        .expect("named");
+    assert_eq!(form.name(), Some("moves"));
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED);
+    assert_eq!(form.name(), None);
+}
+
+#[test]
+fn the_forms_title_is_its_argument_and_edits_like_one() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    assert_eq!(form.title(), "Moves");
+    let undo = form
+        .apply(Edit::argument(&[], "Renamed"))
+        .expect("retitled");
+    assert_eq!(form.title(), "Renamed");
+    assert!(form.text().contains("\"Renamed\""), "{}", form.text());
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED);
+}
+
+#[test]
+fn a_form_cannot_be_removed_by_naming_the_path_that_addresses_it() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    assert!(form.apply(Edit::remove(&[])).is_err());
+    assert_eq!(form.text(), NESTED);
+}

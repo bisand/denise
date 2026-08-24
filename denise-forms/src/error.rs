@@ -89,6 +89,19 @@ pub enum Reason {
         /// Everything that widget does accept.
         accepted: &'static [Property],
     },
+    /// A property the `form` node does not carry — often one that belongs to a
+    /// different kind of form.
+    ///
+    /// Separate from [`Reason::UnknownProperty`] because what a form accepts
+    /// depends on its kind, so the list has to be built rather than pointed at.
+    UnknownFormProperty {
+        /// What kind of form it said it was.
+        kind: &'static str,
+        /// What the file said.
+        found: String,
+        /// Everything a form of that kind does accept.
+        accepted: Vec<&'static str>,
+    },
     /// The property exists; the value was not the shape it takes.
     WrongType {
         /// The node's kind.
@@ -254,6 +267,17 @@ impl fmt::Display for Error {
             } => {
                 let names = listing(accepted.iter().map(|p| p.name));
                 write!(f, "`{kind}` has no property `{found}`; it accepts {names}")
+            }
+            Reason::UnknownFormProperty {
+                kind,
+                found,
+                accepted,
+            } => {
+                let names = listing(accepted.iter());
+                write!(
+                    f,
+                    "a `{kind}` form has no property `{found}`; it accepts {names}"
+                )
             }
             Reason::WrongType { kind, name, wanted } => {
                 write!(f, "`{name}` on `{kind}` takes {wanted}")

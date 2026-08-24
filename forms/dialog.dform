@@ -1,0 +1,16 @@
+// A modal, and the one property only a dialog carries.
+//
+// `dim` is how dark the backdrop behind it is: `Ui::push_scene` takes exactly
+// this number on a panel, and a desktop draws its own. The engine reports the
+// kind and opens nothing — whether this is a pushed scene or a modal window is
+// the application's decision, and it differs by machine.
+
+form "Discard changes?" name=discard version=1 kind=dialog width=380 height=170 dim=200 theme=dark background=base-100 {
+
+    label "Discard changes?" x=24 y=24 w=332 h=26 size=18
+
+    label "The form has unsaved work. This cannot be undone." x=24 y=58 w=332 h=36 size=13 role=base-content
+
+    button "Keep editing" x=104 y=112 w=124 h=36 on-press=cancel
+    button "Discard" x=240 y=112 w=116 h=36 role=error on-press=discard
+}

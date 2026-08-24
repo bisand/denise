@@ -10,7 +10,8 @@
 //
 // One thing it cannot cover: a form has exactly one `kind`, so the properties
 // that only a window, dialog, drawer or shelf carries are not exercised here.
-// Those want a small file each, and #90 is where they arrive.
+// Those have a small file each beside this one — window.dform, dialog.dform,
+// drawer.dform and shelf.dform — and CI checks every one of them.
 
 form "Reference" name=reference version=1 kind=screen width=1024 height=600 theme=dark background=base-200 {
 
