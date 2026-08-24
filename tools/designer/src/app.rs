@@ -7,11 +7,12 @@ use denise::{
 };
 use denise_forms::{Edit, Handler, Literal, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{
-    Button, Divider, Label, List, ListItem, Panel, Property, PropertyKind, Value, open_select,
+    Button, Divider, Label, List, ListItem, Panel, Property, PropertyKind, TextInput, Value,
+    open_select,
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
-use crate::canvas::{Drag, Grip, Guide, place, topmost};
+use crate::canvas::{Drag, Grip, Guide, place, snap, topmost};
 use crate::document::Document;
 use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
@@ -62,11 +63,85 @@ pub enum Message {
 const TOOLBAR: i32 = 44;
 const STATUS: i32 = 26;
 const PALETTE_ROW: i32 = 24;
-/// Twelve rows exactly, so the viewport never cuts one in half.
-const PALETTE_ROWS: i32 = PALETTE_ROW * 12;
+/// Eleven rows exactly, so the viewport never cuts one in half.
+const PALETTE_ROWS: i32 = PALETTE_ROW * 11;
+/// The field that filters the palette.
+const FILTER: i32 = 26;
+/// How far a press has to travel before it is a drag rather than a click.
+const THRESHOLD: i32 = 4;
 const OUTLINE_ROW: i32 = 22;
 const HEADER: i32 = 22;
 const GAP: i32 = 8;
+
+/// A widget on its way from the palette onto the canvas.
+///
+/// Two ways in, and they share most of their machinery: dragging one across, and
+/// clicking the palette and then drawing a rectangle where it goes. A press on a
+/// palette row is both until the pointer moves — which is what makes the two a
+/// state machine rather than two code paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placing {
+    /// Nothing is being placed.
+    Idle,
+    /// A press went down on a palette row and has not travelled yet.
+    Pressed {
+        /// What it was on.
+        kind: &'static str,
+        /// Where it went down.
+        from: Point,
+    },
+    /// A ghost is following the pointer across to the canvas.
+    Carrying {
+        /// What is being carried.
+        kind: &'static str,
+        /// The outline drawn at the pointer.
+        ghost: NodeId,
+    },
+    /// A palette row was clicked: the next drag on the canvas draws the
+    /// rectangle, and Enter puts one down without drawing anything.
+    Armed {
+        /// What is armed.
+        kind: &'static str,
+    },
+    /// Drawing the rectangle for an armed widget.
+    Drawing {
+        /// What is being drawn.
+        kind: &'static str,
+        /// The corner the pointer went down on.
+        from: Point,
+        /// The outline drawn between there and the pointer.
+        ghost: NodeId,
+    },
+}
+
+impl Placing {
+    /// What is being placed, if anything is.
+    const fn kind(self) -> Option<&'static str> {
+        match self {
+            Placing::Idle => None,
+            Placing::Pressed { kind, .. }
+            | Placing::Carrying { kind, .. }
+            | Placing::Armed { kind }
+            | Placing::Drawing { kind, .. } => Some(kind),
+        }
+    }
+
+    /// The outline being drawn for it, if one is.
+    const fn ghost(self) -> Option<NodeId> {
+        match self {
+            Placing::Carrying { ghost, .. } | Placing::Drawing { ghost, .. } => Some(ghost),
+            _ => None,
+        }
+    }
+
+    /// Whether the pointer is currently carrying or drawing something.
+    const fn moving(self) -> bool {
+        matches!(
+            self,
+            Placing::Pressed { .. } | Placing::Carrying { .. } | Placing::Drawing { .. }
+        )
+    }
+}
 
 /// The designer's own chrome: the nodes that outlive whatever form is open.
 struct Chrome {
@@ -77,6 +152,10 @@ struct Chrome {
     redo_button: NodeId,
     /// The palette's scrolling viewport.
     palette_view: NodeId,
+    /// The field that filters the palette.
+    filter: NodeId,
+    /// The palette's list, replaced whenever the filter changes.
+    palette: NodeId,
     /// The outline's scrolling viewport.
     outline_view: NodeId,
     /// The outline's list, replaced whenever a form is opened.
@@ -192,7 +271,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         Label::new("Palette").with_size(11).with_role(Role::Primary),
         Rect::new(GAP, GAP, width, HEADER),
     );
-    let split = GAP + HEADER + PALETTE_ROWS + GAP;
+    let split = GAP + HEADER + FILTER + PALETTE_ROWS + GAP;
     ui.add(left, Divider::new(), Rect::new(GAP, split, width, 8));
     ui.add(
         left,
@@ -203,14 +282,29 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     // three hundred pixels, and a form names as many nodes as it likes. So each
     // is a list at its full height inside a viewport that scrolls, rather than a
     // list quietly cut off at the bottom.
+    let filter = ui
+        .add(
+            left,
+            TextInput::<Message>::new()
+                .with_placeholder("filter")
+                .with_size(12)
+                .with_max_chars(32),
+            Rect::new(GAP, GAP + HEADER, width, FILTER - 2),
+        )
+        .expect("left");
     let palette_view = ui
         .add(
             left,
             Panel::filled(Role::Base100),
-            Rect::new(GAP, GAP + HEADER, width, PALETTE_ROWS),
+            Rect::new(GAP, GAP + HEADER + FILTER, width, PALETTE_ROWS),
         )
         .expect("left");
     ui.set_scrollable(palette_view, true);
+    // Replaced by the first `fill_palette`; a node has to exist for it to
+    // remove.
+    let palette = ui
+        .add(palette_view, Panel::default(), Rect::new(0, 0, 1, 1))
+        .expect("palette viewport");
 
     let outline_top = split + 12 + HEADER;
     let outline_view = ui
@@ -251,6 +345,8 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         undo_button,
         redo_button,
         palette_view,
+        filter,
+        palette,
         outline_view,
         outline,
         inspector_view,
@@ -267,6 +363,12 @@ pub struct Designer {
     settings: Settings,
     /// Every widget the toolkit ships, in the order the palette lists them.
     palette: Vec<&'static str>,
+    /// The ones the filter is letting through, as indices into `palette`.
+    shown: Vec<usize>,
+    /// What the filter field last held.
+    filter: String,
+    /// A widget on its way onto the canvas.
+    placing: Placing,
     /// The named nodes of the open form, in the order the outline lists them.
     outline: Vec<(String, NodeId)>,
     selected: Option<NodeId>,
@@ -315,6 +417,9 @@ impl Designer {
             document,
             settings,
             palette,
+            shown: Vec::new(),
+            filter: String::new(),
+            placing: Placing::Idle,
             outline: Vec::new(),
             selected: None,
             placed: Vec::new(),
@@ -379,23 +484,50 @@ impl Designer {
         self.selected
     }
 
+    /// Redraws the palette for whatever the filter is letting through.
+    ///
+    /// Built from the catalogue and never from a list here: a widget added to
+    /// `denise-ui` appears without this file learning its name. Given its full
+    /// height inside the viewport, so the wheel reaches the rest.
     fn fill_palette(&mut self) {
-        let items: Vec<ListItem> = self
+        let needle = self.filter.trim().to_lowercase();
+        self.shown = self
             .palette
             .iter()
-            .map(|kind| ListItem::new(*kind))
+            .enumerate()
+            .filter(|(_, kind)| needle.is_empty() || kind.contains(&needle))
+            .map(|(index, _)| index)
             .collect();
-        let rows = items.len() as i32;
-        let list = List::new(items, Message::Palette).with_row_height(PALETTE_ROW);
-        // Built once from the catalogue and never changed: a widget added to
-        // `denise-ui` appears here without this file learning its name. Given its
-        // full height inside the viewport, so the wheel reaches the rest.
+
+        let items: Vec<ListItem> = self
+            .shown
+            .iter()
+            .map(|index| ListItem::new(self.palette[*index]))
+            .collect();
+        let rows = items.len().max(1) as i32;
+        let armed = self
+            .placing
+            .kind()
+            .and_then(|kind| self.shown.iter().position(|i| self.palette[*i] == kind));
+        let list = List::new(items, Message::Palette)
+            .with_row_height(PALETTE_ROW)
+            .with_selected(armed);
+
         let width = self.settings.left - GAP * 2;
-        self.ui.add(
-            self.chrome.palette_view,
-            list,
-            Rect::new(0, 0, width, rows * PALETTE_ROW),
-        );
+        self.ui.remove(self.chrome.palette);
+        self.chrome.palette = self
+            .ui
+            .add(
+                self.chrome.palette_view,
+                list,
+                Rect::new(0, 0, width, rows * PALETTE_ROW),
+            )
+            .expect("the palette viewport is there");
+    }
+
+    /// The kind a palette row stands for.
+    fn palette_kind(&self, row: usize) -> Option<&'static str> {
+        self.shown.get(row).map(|index| self.palette[*index])
     }
 
     /// Rebuilds the canvas from the open document.
@@ -782,6 +914,18 @@ impl Designer {
     /// pane is asked what it holds instead, and a difference from what it was
     /// given is somebody having edited it.
     pub fn poll(&mut self) {
+        // The filter is read the same way and for the same reason: a
+        // `TextInput` reports nothing as it is typed into, so it is asked.
+        let filter = self
+            .ui
+            .widget::<TextInput<Message>>(self.chrome.filter)
+            .map(|field| field.text().to_string())
+            .unwrap_or_default();
+        if filter != self.filter {
+            self.filter = filter;
+            self.fill_palette();
+        }
+
         let Some(mut inspector) = self.inspector.take() else {
             return;
         };
@@ -1046,42 +1190,353 @@ impl Designer {
     /// toolbar, the palette, the outline — passes through untouched, which is
     /// why the panes go on working while the form does not.
     pub fn input(&mut self, events: &[InputEvent]) -> Vec<InputEvent> {
-        let canvas = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
         let mut forward = Vec::with_capacity(events.len());
-
         for event in events {
-            let mine = match event {
-                InputEvent::PointerButton {
-                    button: PointerButton::Left,
-                    state,
-                    position,
-                    modifiers,
-                } if canvas.contains(*position) || self.drag.is_some() => {
-                    match state {
-                        ElementState::Down => {
-                            self.press(*position, modifiers.contains(denise::Modifiers::SHIFT))
-                        }
-                        ElementState::Up => self.release(),
-                    }
-                    true
-                }
-                InputEvent::PointerMoved { position } if self.drag.is_some() => {
-                    self.drag_to(*position);
-                    true
-                }
-                InputEvent::Key {
-                    code,
-                    state: ElementState::Down,
-                    modifiers,
-                    ..
-                } => self.key(*code, *modifiers),
-                _ => false,
-            };
-            if !mine {
+            if !self.claim(event) {
                 forward.push(event.clone());
             }
         }
         forward
+    }
+
+    /// Whether design mode took this event.
+    fn claim(&mut self, event: &InputEvent) -> bool {
+        let canvas = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
+        let palette = self
+            .ui
+            .bounds(self.chrome.palette_view)
+            .unwrap_or(Rect::ZERO);
+
+        match event {
+            InputEvent::PointerButton {
+                button: PointerButton::Left,
+                state: ElementState::Down,
+                position,
+                modifiers,
+            } => {
+                // The palette's own presses are design mode's: a row has to be
+                // able to start a drag, and a `List` that saw the press would
+                // have selected on it and swallowed the rest.
+                if palette.contains(*position) {
+                    self.press_palette(*position);
+                    return true;
+                }
+                if !canvas.contains(*position) {
+                    // A press anywhere else — the inspector, the toolbar —
+                    // gives up whatever the palette had armed.
+                    self.cancel_placing();
+                    return false;
+                }
+                if let Placing::Armed { kind } = self.placing {
+                    self.begin_drawing(kind, *position);
+                    return true;
+                }
+                self.press(*position, modifiers.contains(denise::Modifiers::SHIFT));
+                true
+            }
+            InputEvent::PointerButton {
+                button: PointerButton::Left,
+                state: ElementState::Up,
+                position,
+                ..
+            } => {
+                if self.placing.moving() {
+                    self.drop_at(*position);
+                    return true;
+                }
+                if canvas.contains(*position) || self.drag.is_some() {
+                    self.release();
+                    return true;
+                }
+                false
+            }
+            InputEvent::PointerMoved { position } => {
+                if self.placing.moving() {
+                    self.carry_to(*position);
+                    return true;
+                }
+                if self.drag.is_some() {
+                    self.drag_to(*position);
+                    return true;
+                }
+                false
+            }
+            InputEvent::Key {
+                code,
+                state: ElementState::Down,
+                modifiers,
+                ..
+            } => self.key(*code, *modifiers),
+            _ => false,
+        }
+    }
+
+    // --------------------------------------------------------------- placing
+
+    /// A press on a palette row: a click until the pointer travels.
+    fn press_palette(&mut self, at: Point) {
+        let view = self
+            .ui
+            .bounds(self.chrome.palette_view)
+            .unwrap_or(Rect::ZERO);
+        let scroll = self.ui.scroll(self.chrome.palette_view);
+        let row = (at.y - view.y + scroll.y) / PALETTE_ROW;
+        let Some(kind) = usize::try_from(row).ok().and_then(|r| self.palette_kind(r)) else {
+            self.cancel_placing();
+            return;
+        };
+        self.placing = Placing::Pressed { kind, from: at };
+    }
+
+    /// The pointer moved while something was being placed.
+    fn carry_to(&mut self, at: Point) {
+        match self.placing {
+            Placing::Pressed { kind, from } => {
+                if (at.x - from.x).abs() + (at.y - from.y).abs() < THRESHOLD {
+                    return;
+                }
+                let size = denise_forms::default_size(kind);
+                let rect = Rect::new(at.x, at.y, size.width as i32, size.height as i32);
+                let Some(ghost) = self.add_ghost(kind, rect) else {
+                    return;
+                };
+                self.placing = Placing::Carrying { kind, ghost };
+            }
+            Placing::Carrying { kind, ghost } => {
+                let size = denise_forms::default_size(kind);
+                let rect = Rect::new(at.x, at.y, size.width as i32, size.height as i32);
+                self.ui.set_layout(ghost, self.to_client(rect));
+            }
+            Placing::Drawing { from, ghost, .. } => {
+                let rect = self.to_client(between(from, at));
+                self.ui.set_layout(ghost, rect);
+            }
+            Placing::Idle | Placing::Armed { .. } => {}
+        }
+    }
+
+    /// A press on the canvas with a palette row armed: the WinForms way.
+    fn begin_drawing(&mut self, kind: &'static str, at: Point) {
+        let Some(ghost) = self.add_ghost(kind, Rect::new(at.x, at.y, 0, 0)) else {
+            return;
+        };
+        self.placing = Placing::Drawing {
+            kind,
+            from: at,
+            ghost,
+        };
+    }
+
+    /// The pointer came up on whatever was being placed.
+    fn drop_at(&mut self, at: Point) {
+        let placing = std::mem::replace(&mut self.placing, Placing::Idle);
+        if let Some(ghost) = placing.ghost() {
+            self.ui.remove(ghost);
+        }
+        match placing {
+            // Never travelled, so it was a click: arm it, and the next drag on
+            // the canvas draws where it goes.
+            Placing::Pressed { kind, .. } => {
+                self.placing = Placing::Armed { kind };
+                self.status = format!(
+                    "`{kind}` — drag a rectangle on the canvas, or press Enter to put one down"
+                );
+                self.fill_palette();
+                self.refresh_labels();
+            }
+            Placing::Carrying { kind, .. } => {
+                let size = denise_forms::default_size(kind);
+                self.insert_widget(
+                    kind,
+                    Rect::new(at.x, at.y, size.width as i32, size.height as i32),
+                );
+            }
+            Placing::Drawing { kind, from, .. } => {
+                let drawn = between(from, at);
+                // A press that never travelled is not a rectangle; it means
+                // "one of these, here, at whatever size it usually is".
+                let size = denise_forms::default_size(kind);
+                let rect = if drawn.width < THRESHOLD || drawn.height < THRESHOLD {
+                    Rect::new(from.x, from.y, size.width as i32, size.height as i32)
+                } else {
+                    drawn
+                };
+                self.insert_widget(kind, rect);
+            }
+            Placing::Idle | Placing::Armed { .. } => {}
+        }
+    }
+
+    /// Gives up whatever was armed or being carried.
+    fn cancel_placing(&mut self) {
+        let placing = std::mem::replace(&mut self.placing, Placing::Idle);
+        if let Some(ghost) = placing.ghost() {
+            self.ui.remove(ghost);
+        }
+        if placing != Placing::Idle {
+            self.fill_palette();
+        }
+    }
+
+    /// The outline that follows the pointer while something is being placed.
+    ///
+    /// On the **root**, above every pane, because a drag that starts in the
+    /// palette and ends on the canvas crosses two subtrees and a ghost inside
+    /// either would be clipped by it.
+    fn add_ghost(&mut self, kind: &'static str, rect: Rect) -> Option<NodeId> {
+        let outline = Panel {
+            fill: None,
+            border: Some(Role::Accent),
+            border_width: 1,
+            radius: Radius::Box,
+            backdrop: false,
+        };
+        let root = self.ui.root();
+        let ghost = self.ui.add(root, outline, self.to_client(rect))?;
+        self.ui.set_z(ghost, 1000);
+        self.ui.add(
+            ghost,
+            Label::new(kind).with_size(11).with_role(Role::Accent),
+            Rect::new(2, 2, 200, 14),
+        );
+        Some(ghost)
+    }
+
+    /// A screen rectangle in the coordinates a child of the root is placed in.
+    ///
+    /// Docking leaves a **client area** — what is left once the toolbar, the
+    /// status line and the two columns have taken their edges — and a child of
+    /// the root that is not itself docked is placed inside that, which is the
+    /// same rule WinForms follows. The `Dock::Fill` canvas *is* that area, so
+    /// its origin is the offset.
+    fn to_client(&self, rect: Rect) -> Rect {
+        let client = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
+        Rect::new(
+            rect.x - client.x,
+            rect.y - client.y,
+            rect.width,
+            rect.height,
+        )
+    }
+
+    /// Puts a new widget in the form, at a rectangle in screen coordinates.
+    ///
+    /// The parent is whatever container the top-left corner landed in, and the
+    /// rectangle written to the file is relative to it — which is the only space
+    /// a form file knows.
+    pub fn insert_widget(&mut self, kind: &'static str, screen: Rect) {
+        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
+        let corner = Point::new(screen.x, screen.y);
+        if !stage.contains(corner) {
+            self.status = format!("`{kind}` goes on the form; that is beside it");
+            self.refresh_labels();
+            return;
+        }
+
+        let parent = self.container_at(corner);
+        let origin = parent
+            .as_ref()
+            .and_then(|path| self.path_bounds(path))
+            .unwrap_or(stage);
+        let mut rect = Rect::new(
+            screen.x - origin.x,
+            screen.y - origin.y,
+            screen.width,
+            screen.height,
+        );
+        if self.snapping {
+            rect = snap(rect, self.grid);
+        }
+
+        let parent = parent.unwrap_or_default();
+        let index = self.child_count(&parent);
+        let text = denise_forms::seed(kind, rect);
+
+        self.history.separate();
+        self.edit(Edit::Insert {
+            parent: parent.clone(),
+            index,
+            text,
+        });
+
+        // Selected the moment it lands, so the inspector is describing the thing
+        // that was just put down. The path survives the rebuild; the `NodeId`
+        // would not.
+        let mut path = parent;
+        path.push(index);
+        self.selection = vec![path];
+        self.reload_from_document();
+        // One click, one widget: the row stops being armed once it has been
+        // put down, which is what a hand expects and what stops a stray press
+        // on the canvas placing a second one.
+        self.fill_palette();
+        self.status = format!("placed a `{kind}`");
+        self.refresh_labels();
+    }
+
+    /// The deepest node under a point that can hold children of its own.
+    ///
+    /// `None` for the form itself. What counts as a container is
+    /// [`denise_forms::owns_children`] and not a list here: a `select` holds
+    /// options and a `table` holds columns, and dropping a button on either has
+    /// missed.
+    fn container_at(&self, at: Point) -> Option<Vec<usize>> {
+        let containers: Vec<Placed> = self
+            .placed
+            .iter()
+            .filter(|node| denise_forms::owns_children(node.kind))
+            .cloned()
+            .collect();
+        topmost(
+            &containers,
+            |p| {
+                self.ui
+                    .bounds(p.id)
+                    .map(|r| (r, self.ui.visible(p.id), self.ui.z(p.id)))
+            },
+            at,
+        )
+        .map(|node| node.path.clone())
+    }
+
+    /// How many children a node has, so a new one goes after them.
+    fn child_count(&self, parent: &[usize]) -> usize {
+        self.placed
+            .iter()
+            .filter(|node| node.path.len() == parent.len() + 1 && node.path.starts_with(parent))
+            .count()
+    }
+
+    /// Puts an armed widget down without drawing a rectangle for it.
+    ///
+    /// For the keyboard, and for anybody who wants one of something at whatever
+    /// size it usually is. Steps down and across until it is not exactly on top
+    /// of something already there, so pressing Enter twice gives two widgets
+    /// rather than one hiding another.
+    pub fn place_armed(&mut self) {
+        let Placing::Armed { kind } = self.placing else {
+            return;
+        };
+        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
+        let size = denise_forms::default_size(kind);
+        let step = self.grid.max(1) * 2;
+        let mut at = Point::new(stage.x + step, stage.y + step);
+        while self
+            .placed
+            .iter()
+            .filter_map(|node| self.ui.bounds(node.id))
+            .any(|bounds| bounds.x == at.x && bounds.y == at.y)
+        {
+            at = Point::new(at.x + step, at.y + step);
+            if !stage.contains(at) {
+                at = Point::new(stage.x + step, stage.y + step);
+                break;
+            }
+        }
+        self.insert_widget(
+            kind,
+            Rect::new(at.x, at.y, size.width as i32, size.height as i32),
+        );
     }
 
     fn press(&mut self, at: Point, add: bool) {
@@ -1316,6 +1771,18 @@ impl Designer {
             return true;
         }
         match code {
+            KeyCode::Enter | KeyCode::NumpadEnter
+                if matches!(self.placing, Placing::Armed { .. }) =>
+            {
+                self.place_armed();
+                true
+            }
+            KeyCode::Escape if self.placing != Placing::Idle => {
+                self.cancel_placing();
+                self.status = String::from("nothing armed");
+                self.refresh_labels();
+                true
+            }
             KeyCode::G if !typing => {
                 self.toggle_snapping();
                 true
@@ -1416,6 +1883,27 @@ impl Designer {
             String::from("snapping off")
         };
         self.refresh_labels();
+    }
+
+    /// Picks a widget up from the palette and holds it over the form.
+    ///
+    /// For `--snapshot`, which has no pointer: a ghost exists only while a drag
+    /// is happening, so a picture of one has to be taken mid-flight. Nothing is
+    /// placed, because nothing was let go of.
+    pub fn carry(&mut self, kind: &str, over: Point) -> bool {
+        let Some(kind) = self.palette.iter().find(|name| **name == kind).copied() else {
+            return false;
+        };
+        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
+        let from = self
+            .ui
+            .bounds(self.chrome.palette_view)
+            .map_or(Point::new(0, 0), |view| {
+                Point::new(view.x + view.width / 2, view.y + PALETTE_ROW / 2)
+            });
+        self.placing = Placing::Pressed { kind, from };
+        self.carry_to(Point::new(stage.x + over.x, stage.y + over.y));
+        matches!(self.placing, Placing::Carrying { .. })
     }
 
     /// Selects a node by the name the form gave it.
@@ -1598,12 +2086,18 @@ impl Designer {
                     self.save(Some(path));
                 }
             }
-            Message::Palette(index) => {
-                // Placing one is #91. Saying which is picked is what a skeleton
-                // can honestly do, and it proves the catalogue reaches the pane.
-                let kind = self.palette.get(index).copied().unwrap_or("?");
-                self.status = format!("`{kind}` — dropping one on the canvas is #91");
-                self.refresh_labels();
+            Message::Palette(row) => {
+                // Only reachable from the keyboard: design mode takes the
+                // palette's presses so that a row can start a drag. Arming it
+                // is what a click means, and this is the same thing.
+                if let Some(kind) = self.palette_kind(row) {
+                    self.placing = Placing::Armed { kind };
+                    self.status = format!(
+                        "`{kind}` — drag a rectangle on the canvas, or press Enter to put one down"
+                    );
+                    self.fill_palette();
+                    self.refresh_labels();
+                }
             }
             Message::Outline(index) => {
                 // By path, like every other way of selecting: the inspector and
@@ -1758,6 +2252,16 @@ impl Designer {
     }
 }
 
+/// The rectangle between two corners, whichever way round they were given.
+fn between(from: Point, to: Point) -> Rect {
+    Rect::new(
+        from.x.min(to.x),
+        from.y.min(to.y),
+        (to.x - from.x).abs(),
+        (to.y - from.y).abs(),
+    )
+}
+
 /// Which of a rectangle's four numbers a tree-owned property is, if it is one.
 const fn axis_of(name: &str) -> Option<usize> {
     Some(match name.as_bytes() {
@@ -1789,6 +2293,30 @@ fn pick_open() -> Option<PathBuf> {
         .add_filter("Denise form", &["dform"])
         .set_title("Open a form")
         .pick_file()
+}
+
+/// What stands in for a picture that would not load.
+///
+/// A checkerboard, which is what every tool that has ever had to draw "there
+/// is supposed to be an image here" draws. Sixteen pixels, scaled by whatever
+/// rectangle the form gave it.
+fn missing_picture() -> Picture {
+    const LIGHT: u32 = 0xFF45_475A;
+    const DARK: u32 = 0xFF1E_1E2E;
+    let mut pixels = Vec::with_capacity(16 * 16);
+    for y in 0..16 {
+        for x in 0..16 {
+            pixels.push(if (x / 8 + y / 8) % 2 == 0 {
+                LIGHT
+            } else {
+                DARK
+            });
+        }
+    }
+    Picture {
+        pixels,
+        size: Size::new(16, 16),
+    }
 }
 
 fn pick_picture() -> Option<PathBuf> {
@@ -1828,20 +2356,27 @@ impl Wiring<Message> for Design {
         })
     }
 
+    /// Loads a picture, and draws a hole rather than refusing the form.
+    ///
+    /// Answering `None` fails the *whole build*: a picture is not optional to an
+    /// `Image`, so a path that has moved would mean a form the designer could
+    /// not open at all. A designer is exactly where a missing picture has to be
+    /// survivable — it is usually being pointed at a file that does not exist
+    /// yet — so what comes back is a placeholder, and the status line says how
+    /// many.
     fn asset(&mut self, path: &str) -> Option<Picture> {
         let full = self.base.join(path);
-        let bytes = std::fs::read(&full).ok().or_else(|| {
-            self.missing.push(path.to_string());
-            None
-        })?;
-        match denise_image::decode(&bytes) {
-            Ok(picture) => {
+        let decoded = std::fs::read(&full)
+            .ok()
+            .and_then(|bytes| denise_image::decode(&bytes).ok());
+        match decoded {
+            Some(picture) => {
                 let (pixels, size) = picture.into_parts();
                 Some(Picture { pixels, size })
             }
-            Err(_) => {
+            None => {
                 self.missing.push(path.to_string());
-                None
+                Some(missing_picture())
             }
         }
     }
@@ -2256,6 +2791,322 @@ mod tests {
         designer.release();
         assert_eq!(designer.overlay.len(), settled);
         assert!(!designer.selection.is_empty());
+    }
+
+    // ------------------------------------------------------------- placing
+
+    /// Types into the palette's filter and lets the frame run.
+    fn set_filter(designer: &mut Designer, text: &str) {
+        designer
+            .ui
+            .widget_mut::<TextInput<Message>>(designer.chrome.filter)
+            .expect("a filter field")
+            .set_text(text);
+        designer.poll();
+    }
+
+    /// The middle of the palette row a kind is on, filtering to reach it.
+    fn palette_point(designer: &mut Designer, kind: &str) -> Point {
+        set_filter(designer, kind);
+        let row = (0..designer.shown.len())
+            .find(|row| designer.palette_kind(*row) == Some(kind))
+            .unwrap_or_else(|| panic!("`{kind}` is not in the filtered palette"));
+        let view = designer
+            .ui
+            .bounds(designer.chrome.palette_view)
+            .expect("a palette");
+        Point::new(
+            view.x + view.width / 2,
+            view.y + row as i32 * PALETTE_ROW + PALETTE_ROW / 2,
+        )
+    }
+
+    /// The middle of the form on the canvas.
+    fn stage_point(designer: &Designer) -> Point {
+        let stage = designer.ui.bounds(designer.chrome.stage).expect("a stage");
+        Point::new(stage.x + stage.width / 2, stage.y + stage.height / 2)
+    }
+
+    #[test]
+    fn the_filter_narrows_the_palette_and_giving_it_up_puts_it_back() {
+        let mut designer = designer_on("forms/hello.dform");
+        let all = designer.shown.len();
+        assert_eq!(all, denise_ui::widgets::all().len());
+
+        set_filter(&mut designer, "prog");
+        let shown: Vec<&str> = (0..designer.shown.len())
+            .filter_map(|row| designer.palette_kind(row))
+            .collect();
+        assert_eq!(shown, vec!["progress", "radial-progress"]);
+
+        set_filter(&mut designer, "nothing called this");
+        assert!(designer.shown.is_empty());
+
+        set_filter(&mut designer, "");
+        assert_eq!(designer.shown.len(), all);
+    }
+
+    #[test]
+    fn every_widget_that_ships_can_be_dragged_out_of_the_palette() {
+        // Both ways in, for all twenty-five, against the file each time: what
+        // the palette offers has to be what the designer can actually place.
+        for widget in denise_ui::widgets::all() {
+            let kind = widget.kind;
+            let mut designer = designer_on("forms/hello.dform");
+            let before = text(&designer);
+
+            let from = palette_point(&mut designer, kind);
+            let to = stage_point(&designer);
+            drag_from_to(&mut designer, from, to);
+
+            let after = text(&designer);
+            assert_ne!(after, before, "dragging `{kind}` wrote nothing");
+            let form = denise_forms::Form::parse(&after).unwrap_or_else(|e| {
+                panic!("dragging `{kind}` made a file that will not parse: {e}")
+            });
+            assert!(
+                designer.placed.iter().any(|p| p.kind == kind),
+                "`{kind}` is in the file and not on the canvas: {after}"
+            );
+            assert!(
+                !designer.status.contains("will not load"),
+                "`{kind}`: {}",
+                designer.status
+            );
+            let _ = form;
+
+            // Selected the moment it lands, and the inspector is describing it.
+            let selected = designer.selected().expect("nothing was selected");
+            assert_eq!(designer.ui.kind(selected), Some(kind));
+            assert_eq!(
+                designer.inspector.as_ref().expect("a pane").rows.len(),
+                designer.ui.properties(selected).len() + denise_forms::NODE_PROPERTIES.len(),
+                "`{kind}`'s rows"
+            );
+
+            // And it is one step, which puts the file back exactly.
+            assert_eq!(designer.history.depth().0, 1, "`{kind}` was not one step");
+            designer.undo();
+            assert_eq!(text(&designer), before, "undoing `{kind}` was not exact");
+        }
+    }
+
+    #[test]
+    fn every_widget_that_ships_can_be_drawn_the_winforms_way() {
+        for widget in denise_ui::widgets::all() {
+            let kind = widget.kind;
+            let mut designer = designer_on("forms/hello.dform");
+            let before = text(&designer);
+
+            // Click the row, then drag a rectangle where it goes.
+            let row = palette_point(&mut designer, kind);
+            click_at(&mut designer, row, false);
+            assert_eq!(
+                designer.placing,
+                Placing::Armed { kind },
+                "clicking `{kind}` armed nothing"
+            );
+
+            let corner = stage_point(&designer);
+            drag_from_to(
+                &mut designer,
+                corner,
+                Point::new(corner.x + 60, corner.y + 40),
+            );
+
+            let after = text(&designer);
+            assert_ne!(after, before, "drawing `{kind}` wrote nothing");
+            denise_forms::Form::parse(&after).unwrap_or_else(|e| {
+                panic!("drawing `{kind}` made a file that will not parse: {e}")
+            });
+            assert!(designer.placed.iter().any(|p| p.kind == kind), "{after}");
+            // The rectangle drawn is the rectangle written, snapped to the grid.
+            let rect = designer
+                .ui
+                .layout(designer.selected().expect("selected"))
+                .expect("laid out");
+            assert_eq!((rect.width, rect.height), (60, 40), "`{kind}`: {rect:?}");
+            // And the row is no longer armed: one click, one widget.
+            assert_eq!(designer.placing, Placing::Idle);
+        }
+    }
+
+    #[test]
+    fn a_press_on_a_palette_row_shows_a_ghost_once_it_travels() {
+        let mut designer = designer_on("forms/hello.dform");
+        let from = palette_point(&mut designer, "button");
+        feed(&mut designer, &[button(ElementState::Down, from)]);
+        assert!(
+            matches!(designer.placing, Placing::Pressed { .. }),
+            "a press is a click until it travels"
+        );
+
+        // A pixel is not a drag.
+        let nudged = Point::new(from.x + 1, from.y);
+        feed(
+            &mut designer,
+            &[InputEvent::PointerMoved { position: nudged }],
+        );
+        assert!(matches!(designer.placing, Placing::Pressed { .. }));
+
+        let away = Point::new(from.x + 40, from.y + 20);
+        feed(
+            &mut designer,
+            &[InputEvent::PointerMoved { position: away }],
+        );
+        let Placing::Carrying { ghost, .. } = designer.placing else {
+            panic!("no ghost: {:?}", designer.placing);
+        };
+        // Drawn where the pointer is, on the root and above every pane: the
+        // drag starts in one subtree and ends in another, and a ghost inside
+        // either would be cut off at its edge.
+        let bounds = designer.ui.bounds(ghost).expect("the ghost is laid out");
+        assert_eq!((bounds.x, bounds.y), (away.x, away.y));
+
+        // Letting go beside the form places nothing and says so.
+        let before = text(&designer);
+        feed(&mut designer, &[button(ElementState::Up, away)]);
+        assert_eq!(designer.placing, Placing::Idle);
+        assert!(!designer.ui.contains(ghost), "the ghost outlived the drag");
+        assert_eq!(text(&designer), before);
+        assert!(designer.status.contains("beside it"), "{}", designer.status);
+    }
+
+    #[test]
+    fn a_widget_dropped_on_a_panel_becomes_a_child_of_it() {
+        let mut designer = designer_on("forms/reference.dform");
+        let panel = path_named(&designer, "form-section");
+        let at = middle(&designer, &panel);
+
+        let from = palette_point(&mut designer, "badge");
+        drag_from_to(&mut designer, from, at);
+
+        // The one just placed, which is the one selected — `reference.dform`
+        // already has a badge of its own, inside the header.
+        let path = designer.selection.last().expect("nothing selected").clone();
+        assert_eq!(
+            designer.ui.kind(designer.selected().expect("selected")),
+            Some("badge")
+        );
+        assert_eq!(
+            path[..path.len() - 1],
+            panel[..],
+            "it went into the wrong parent"
+        );
+        // Written relative to the panel, which is the only space a form knows.
+        let line = text(&designer)
+            .lines()
+            .find(|line| line.contains("badge \"badge\""))
+            .expect("the badge is in the file")
+            .to_string();
+        assert!(
+            line.starts_with("        "),
+            "it landed unindented: {line:?}"
+        );
+    }
+
+    #[test]
+    fn a_widget_dropped_where_nothing_can_hold_it_goes_on_the_form() {
+        let mut designer = designer_on("forms/hello.dform");
+        // A `select` holds options, not nodes: dropping on one has missed.
+        let stage = designer.ui.bounds(designer.chrome.stage).expect("a stage");
+        let corner = Point::new(stage.x + 8, stage.y + stage.height - 8);
+
+        let from = palette_point(&mut designer, "spinner");
+        drag_from_to(&mut designer, from, corner);
+
+        let placed = designer
+            .placed
+            .iter()
+            .find(|p| p.kind == "spinner")
+            .expect("placed");
+        assert_eq!(placed.path.len(), 1, "it went inside something");
+    }
+
+    #[test]
+    fn an_armed_row_puts_one_down_on_enter_and_the_next_one_beside_it() {
+        let mut designer = designer_on("forms/hello.dform");
+        let row = palette_point(&mut designer, "badge");
+        click_at(&mut designer, row, false);
+
+        press_key(&mut designer, KeyCode::Enter, false);
+        let first = designer
+            .ui
+            .bounds(designer.selected().expect("selected"))
+            .expect("laid out");
+
+        let row = palette_point(&mut designer, "badge");
+        click_at(&mut designer, row, false);
+        press_key(&mut designer, KeyCode::Enter, false);
+        let second = designer
+            .ui
+            .bounds(designer.selected().expect("selected"))
+            .expect("laid out");
+
+        assert_ne!(first, second, "the second one hid under the first");
+        // Both read `x=8 y=8`, and they are not in the same place: the first
+        // landed on the form and the second, stepped clear of it, landed inside
+        // the card — which is what a rectangle relative to its parent means.
+        assert_eq!(
+            text(&designer).matches("badge \"badge\"").count(),
+            2,
+            "{}",
+            text(&designer)
+        );
+    }
+
+    #[test]
+    fn escape_gives_up_an_armed_row_and_a_press_elsewhere_does_too() {
+        let mut designer = designer_on("forms/hello.dform");
+        let row = palette_point(&mut designer, "button");
+        click_at(&mut designer, row, false);
+        assert!(designer.placing.kind().is_some());
+
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert_eq!(designer.placing, Placing::Idle);
+
+        // And a press on the inspector rather than the canvas.
+        click_at(&mut designer, row, false);
+        assert!(designer.placing.kind().is_some());
+        let pane = designer
+            .ui
+            .bounds(designer.chrome.inspector_view)
+            .expect("a pane");
+        let before = text(&designer);
+        click_at(
+            &mut designer,
+            Point::new(pane.x + pane.width / 2, pane.y + pane.height - 20),
+            false,
+        );
+        assert_eq!(designer.placing, Placing::Idle);
+        assert_eq!(
+            text(&designer),
+            before,
+            "a press beside the canvas placed one"
+        );
+    }
+
+    #[test]
+    fn a_form_whose_picture_has_moved_still_opens() {
+        // Answering `None` to a missing asset fails the whole build, so a
+        // designer that did would refuse a form whose picture had been renamed —
+        // which is exactly the form somebody opens a designer to fix.
+        let source = "form \"P\" version=1 width=200 height=200 {\n                          image x=8 y=8 w=64 h=64 src=\"gone.png\"\n}\n";
+        let path = std::env::temp_dir().join("denise-designer-missing.dform");
+        std::fs::write(&path, source).expect("writing");
+
+        let mut designer = designer_on("forms/hello.dform");
+        designer.open(path);
+        assert!(
+            designer.placed.iter().any(|p| p.kind == "image"),
+            "it refused the form: {}",
+            designer.status
+        );
+        assert!(
+            designer.status.contains("could not be loaded"),
+            "it said nothing about the picture: {}",
+            designer.status
+        );
     }
 
     // ---------------------------------------------------------- the inspector

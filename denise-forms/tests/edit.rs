@@ -509,3 +509,87 @@ fn what_the_file_writes_is_what_it_reports() {
     assert_eq!(form.property(&[0], "z"), None);
     assert_eq!(form.property(&[9], "x"), None, "no such node");
 }
+
+// --------------------------------------------------------------- insertion
+
+#[test]
+fn a_dropped_node_lands_indented_like_the_ones_around_it() {
+    let mut form = Form::parse(SOURCE).expect("parses");
+    let undo = form
+        .apply(Edit::Insert {
+            parent: Vec::new(),
+            index: 4,
+            text: denise_forms::seed("button", denise::Rect::new(8, 8, 100, 32)),
+        })
+        .expect("dropped");
+
+    let after = form.text();
+    assert!(
+        after.contains("\n    button \"button\" x=8 y=8 w=100 h=32\n}"),
+        "it did not land on its own indented line:\n{after}"
+    );
+    Form::parse(&after).expect("still a form");
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), SOURCE, "undoing a drop was not exact");
+}
+
+#[test]
+fn a_drop_into_a_panel_that_has_no_braces_yet_makes_them_and_undoes_them_away() {
+    // The case a designer hits the moment somebody places a panel and then
+    // places something in it. Undoing has to take the braces back too, or the
+    // file keeps an empty pair nobody typed.
+    let source = "form \"F\" version=1 width=99 height=99 {\n    \
+                  panel name=card x=1 y=2 w=90 h=80\n}\n";
+    let mut form = Form::parse(source).expect("parses");
+
+    let undo = form
+        .apply(Edit::Insert {
+            parent: vec![0],
+            index: 0,
+            text: denise_forms::seed("label", denise::Rect::new(4, 4, 120, 20)),
+        })
+        .expect("dropped into the panel");
+
+    let after = form.text();
+    assert!(
+        after.contains("panel name=card x=1 y=2 w=90 h=80 {\n        label"),
+        "the block is not where it should be:\n{after}"
+    );
+    assert!(
+        after.contains("\n    }\n}"),
+        "the brace did not line up:\n{after}"
+    );
+    let back = Form::parse(&after).expect("still a form");
+    assert_eq!(
+        back.text(),
+        after,
+        "what it wrote does not read back the same"
+    );
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), source, "the braces outlived the node");
+}
+
+#[test]
+fn dropping_the_first_node_on_a_form_with_no_children_at_all_works() {
+    let source = "form \"F\" version=1 width=99 height=99\n";
+    let mut form = Form::parse(source).expect("parses");
+
+    let undo = form
+        .apply(Edit::Insert {
+            parent: Vec::new(),
+            index: 0,
+            text: denise_forms::seed("panel", denise::Rect::new(0, 0, 40, 40)),
+        })
+        .expect("dropped on an empty form");
+    let after = form.text();
+    assert!(
+        after.contains("{\n    panel x=0 y=0 w=40 h=40\n}"),
+        "{after}"
+    );
+    Form::parse(&after).expect("still a form");
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), source);
+}

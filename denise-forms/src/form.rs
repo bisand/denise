@@ -771,8 +771,8 @@ impl Form {
                 index,
                 text,
             } => {
-                let node = one_node(&text)?;
-                let children = self.children_of_mut(&parent).ok_or_else(|| {
+                let mut node = one_node(&text)?;
+                let holder = self.node_at(&parent).ok_or_else(|| {
                     Error::new(
                         At::START,
                         Reason::NoSuchNode {
@@ -780,11 +780,68 @@ impl Form {
                         },
                     )
                 })?;
-                let index = index.min(children.len());
-                children.insert(index, node);
-                let mut path = parent;
-                path.push(index);
-                Ok(Edit::Remove { path })
+                // A parent written without a `{ }` gets one — which is every
+                // panel a designer has just placed. Undoing that has to take the
+                // block away with the node, or an undone drop would leave an
+                // empty pair of braces behind; the parent's own text is what
+                // carries both, so the inverse replaces the parent rather than
+                // removing the child.
+                let empty = holder.children().is_none();
+                let was = empty.then(|| holder.to_string());
+                let indent = indent_of(holder);
+
+                let bare = node.format().is_none_or(|format| format.leading.is_empty());
+                let children = self.block_mut(&parent).ok_or_else(|| {
+                    Error::new(
+                        At::START,
+                        Reason::NoSuchNode {
+                            path: parent.clone(),
+                        },
+                    )
+                })?;
+                let index = index.min(children.nodes().len());
+
+                // Trivia the caller gave stands: a removal's inverse carries the
+                // node's own indentation and the comment written above it, and
+                // putting that back is the whole of an exact undo. Text with
+                // none — a designer's freshly seeded node — is laid out here,
+                // because this is what knows how deep it is going.
+                //
+                // Every node ends in a newline, and its indentation is its own;
+                // only the first in a block also carries the newline that
+                // follows the brace, because nothing before it did.
+                if bare {
+                    let mut format = node.format().cloned().unwrap_or_default();
+                    format.leading = if index == 0 {
+                        format!("\n{indent}    ")
+                    } else {
+                        format!("{indent}    ")
+                    };
+                    format.terminator = String::from("\n");
+                    node.set_format(format);
+                }
+                children.nodes_mut().insert(index, node);
+                if empty {
+                    // The closing brace lines up under the node that opened it,
+                    // and there is a space before the one that opens it.
+                    let mut format = children.format().cloned().unwrap_or_default();
+                    format.trailing = indent.clone();
+                    children.set_format(format);
+                }
+                if empty && let Some(holder) = self.at_mut(&parent) {
+                    let mut format = holder.format().cloned().unwrap_or_default();
+                    format.before_children = String::from(" ");
+                    holder.set_format(format);
+                }
+
+                match was {
+                    Some(text) => Ok(Edit::Replace { path: parent, text }),
+                    None => {
+                        let mut path = parent;
+                        path.push(index);
+                        Ok(Edit::Remove { path })
+                    }
+                }
             }
 
             Edit::Argument { path, value } => {
@@ -856,9 +913,21 @@ impl Form {
 
             Edit::Replace { path, text } => {
                 let node = one_node(&text)?;
-                let (&last, above) = path.split_last().ok_or_else(|| {
-                    Error::new(At::START, Reason::NoSuchNode { path: Vec::new() })
-                })?;
+                let Some((&last, above)) = path.split_last() else {
+                    // The form itself, which is the whole document: an insertion
+                    // into a form written without a `{ }` undoes to this.
+                    let root = self
+                        .doc
+                        .nodes_mut()
+                        .first_mut()
+                        .ok_or_else(|| Error::new(At::START, Reason::NoSuchNode { path }))?;
+                    let was = root.to_string();
+                    *root = node;
+                    return Ok(Edit::Replace {
+                        path: Vec::new(),
+                        text: was,
+                    });
+                };
                 let above = above.to_vec();
                 let children = self.children_of_mut(&above).ok_or_else(|| {
                     Error::new(
@@ -876,6 +945,14 @@ impl Form {
                 Ok(Edit::Replace { path, text: was })
             }
         }
+    }
+
+    /// The children block of the node at `path`, made if it has none.
+    fn block_mut(&mut self, path: &[usize]) -> Option<&mut KdlDocument> {
+        if path.is_empty() {
+            return Some(self.doc.nodes_mut().first_mut()?.ensure_children());
+        }
+        Some(self.at_mut(path)?.ensure_children())
     }
 
     /// The children of the node at `path`, or of the form itself for an empty one.
@@ -1006,6 +1083,17 @@ fn one_node(text: &str) -> Result<KdlNode, Error> {
             Reason::Syntax(format!("this must be one node; it is {}", other.len())),
         )),
     }
+}
+
+/// The whitespace a node is written after, on its own line.
+///
+/// What an inserted child is indented one step past. Read from the file rather
+/// than counted from the depth, so a form written with two spaces stays written
+/// with two spaces.
+fn indent_of(node: &KdlNode) -> String {
+    let leading = node.format().map_or("", |format| format.leading.as_str());
+    let line = leading.rsplit('\n').next().unwrap_or("");
+    line.chars().filter(|c| c.is_whitespace()).collect()
 }
 
 /// Parses form-file text that must be exactly one value.

@@ -679,3 +679,71 @@ fn every_node_is_placed_with_a_path_that_points_back_at_it() {
     assert!(nested.parent.is_some());
     assert_eq!(nested.kind, "slider");
 }
+
+// ----------------------------------------------------------------- seeding
+
+/// Every widget a designer could drop, dropped.
+///
+/// The test that makes [`denise_forms::seed`] impossible to let drift: a
+/// twenty-sixth widget with a property the builder requires fails here until
+/// `seed` learns to give it one, rather than failing in a designer that places
+/// the widget and breaks the form.
+#[test]
+fn every_widget_that_ships_seeds_a_node_that_builds() {
+    for widget in denise_ui::widgets::all() {
+        let size = denise_forms::default_size(widget.kind);
+        assert!(
+            size.width > 0 && size.height > 0,
+            "`{}` starts out with no rectangle",
+            widget.kind
+        );
+
+        let rect = denise::Rect::new(8, 16, size.width as i32, size.height as i32);
+        let node = denise_forms::seed(widget.kind, rect);
+        let source = format!("form \"S\" version=1 width=400 height=300 {{\n    {node}\n}}\n");
+
+        let (_, built) = build_str::<Void>(&source, &mut Anything).unwrap_or_else(|error| {
+            panic!(
+                "`{}` seeded a node that will not build: {error}\n{node}",
+                widget.kind
+            )
+        });
+        let placed = built
+            .at(&[0])
+            .unwrap_or_else(|| panic!("`{}` built nothing", widget.kind));
+        assert_eq!(placed.kind, widget.kind);
+    }
+}
+
+#[test]
+fn a_seeded_node_lands_where_it_was_dropped_and_says_nothing_else() {
+    let rect = denise::Rect::new(40, 60, 100, 32);
+    let node = denise_forms::seed("button", rect);
+    assert_eq!(node, r#"button "button" x=40 y=60 w=100 h=32"#);
+
+    // A rect and nothing else, wherever a rect is enough.
+    assert_eq!(
+        denise_forms::seed("panel", rect),
+        "panel x=40 y=60 w=100 h=32"
+    );
+    // And the least more than that, where it is not: without a range a slider
+    // parses and then will not build.
+    assert_eq!(
+        denise_forms::seed("slider", rect),
+        "slider x=40 y=60 w=100 h=32 min=0 max=100"
+    );
+}
+
+#[test]
+fn only_the_two_kinds_that_lay_children_out_own_children() {
+    assert!(denise_forms::owns_children("panel"));
+    assert!(denise_forms::owns_children("collapse"));
+    // Content is not children: a `select` holds options, and dropping a button
+    // on one has missed.
+    for kind in ["select", "table", "carousel", "list", "label", "tabs"] {
+        assert!(
+            !denise_forms::owns_children(kind),
+            "`{kind}` claimed children"
+        );
+    }
+}
