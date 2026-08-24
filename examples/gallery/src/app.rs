@@ -276,6 +276,15 @@ pub struct App {
 }
 
 impl App {
+    /// The scrolling column of sections — the viewport `--scroll-bench` moves.
+    ///
+    /// Exposed for the measurement in `main.rs` rather than for the application:
+    /// [#46](https://github.com/bisand/denise/issues/46) is a number about *this*
+    /// tree at 1080p, and a synthetic one would not reproduce it.
+    pub fn content_viewport(&self) -> NodeId {
+        self.nodes.content
+    }
+
     /// Holds the wall clock still, at a time of the caller's choosing.
     ///
     /// For the two damage tests. Each of them paints one tree and then paints

@@ -7,6 +7,7 @@
 //! cargo run -p gallery -- --motion off         # reduced motion
 //! cargo run -p gallery -- --snapshot shot.ppm
 //! cargo run -p gallery -- --snapshot 2x.ppm --size 2560x1600 --scale 2
+//! cargo run -p gallery --release -- --scroll-bench --size 1920x1080
 //! cargo run -p gallery -- --keyboard          # the on-screen keyboard, up
 //! cargo run -p gallery --no-default-features --features kiosk     # the display
 //! cargo run -p gallery --no-default-features --features kiosk -- --present vsync
@@ -60,6 +61,7 @@ const WINDOW: Size = Size::new(1280, 800);
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut font: Option<String> = None;
     let mut snapshot: Option<String> = None;
+    let mut scroll_bench: Option<usize> = None;
     let mut keyboard = false;
     // Kiosk builds have no window to close, so a run length is the way out.
     // Zero means "until Escape".
@@ -89,6 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "gallery.ppm".into())),
+            // The measurement behind #46, so that anybody can take it again.
+            "--scroll-bench" => {
+                scroll_bench = Some(args.next().and_then(|s| s.parse().ok()).unwrap_or(60));
+            }
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--keyboard" => keyboard = true,
             "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
@@ -118,6 +124,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let font = system_font::load(font.as_deref());
 
+    if let Some(rounds) = scroll_bench {
+        scroll_bench_run(size, scale, font, motion, rounds);
+        return Ok(());
+    }
+
     if let Some(out) = snapshot {
         let mut app = App::new(size, scale, font, motion);
         if keyboard {
@@ -133,6 +144,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return write_snapshot(&mut app, size, &out).map_err(Into::into);
     }
     backend::run(font, size, seconds, motion, vsync, keyboard)
+}
+
+/// Times `Ui::paint` alone, on a scrolled frame, with no display attached.
+///
+/// The measurement [#46](https://github.com/bisand/denise/issues/46) is about.
+/// Nothing here waits for a vblank, reads an input device or copies a buffer to
+/// a screen: the number is the cost of *rasterising* one scrolled frame of a
+/// real tree, which is the thing that does not fit in a Pi's frame budget at
+/// 1080p.
+///
+/// ```text
+/// gallery --scroll-bench            # 60 scrolled frames at the default size
+/// gallery --scroll-bench 200 --size 1920x1080
+/// ```
+fn scroll_bench_run(size: Size, scale: f32, font: Font, motion: Motion, rounds: usize) {
+    let mut app = App::new(size, scale, font, motion);
+    // The spinner and the clock would both ask for frames of their own, and
+    // this is a measurement of scrolling.
+    app.on_message(Message::Spin(false));
+
+    let mut pixels = vec![0u32; (size.width * size.height) as usize];
+    let mut paint = |app: &mut App, age| {
+        let mut frame = denise::Frame::new(
+            &mut pixels,
+            size,
+            size.width,
+            denise::PixelFormat::Xrgb8888,
+            age,
+        )
+        .expect("frame");
+        let started = std::time::Instant::now();
+        app.ui.paint(&mut frame);
+        let took = started.elapsed();
+        drop(frame);
+        app.ui.presented();
+        took
+    };
+
+    // Settle first, so what is timed below is the scrolled frame alone.
+    for _ in 0..8 {
+        app.ui.tick(0);
+        paint(&mut app, denise::BufferAge::Undefined);
+    }
+
+    let content = app.content_viewport();
+    let viewport = app.ui.bounds(content).unwrap_or(denise::Rect::ZERO);
+    let surface = i64::from(size.width) * i64::from(size.height);
+    let covered = i64::from(viewport.width) * i64::from(viewport.height);
+
+    let mut took: Vec<u128> = Vec::with_capacity(rounds);
+    let mut rects = 0usize;
+    for round in 0..rounds {
+        // Down, then back up when it runs out, so a long run keeps scrolling
+        // rather than sitting at the bottom repainting nothing.
+        let dy = if (round / 40) % 2 == 0 { 20 } else { -20 };
+        app.ui.scroll_by(content, 0, dy);
+        rects = rects.max(app.ui.pending_damage().len());
+        app.ui.tick(1_000 + round as u64 * 16);
+        took.push(paint(&mut app, denise::BufferAge::Frames(2)).as_micros());
+    }
+    took.sort_unstable();
+
+    println!("gallery --scroll-bench, {rounds} scrolled frames");
+    println!("  surface   {}x{}", size.width, size.height);
+    println!(
+        "  viewport  {}x{} at {},{} — {}% of the surface",
+        viewport.width,
+        viewport.height,
+        viewport.x,
+        viewport.y,
+        covered * 100 / surface.max(1)
+    );
+    println!("  damage    {rects} rect(s) per scroll");
+    println!(
+        "  paint     median {:.2} ms   min {:.2}   max {:.2}",
+        took[took.len() / 2] as f64 / 1000.0,
+        took[0] as f64 / 1000.0,
+        took[took.len() - 1] as f64 / 1000.0,
+    );
 }
 
 /// Draws one frame into a PPM, with no window and no event loop.
