@@ -16,6 +16,7 @@ use crate::canvas::{Drag, Grip, Guide, place, snap, topmost};
 use crate::document::Document;
 use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
+use crate::outline::{self, Outline};
 use crate::settings::Settings;
 
 /// What the designer's own widgets emit.
@@ -31,8 +32,8 @@ pub enum Message {
     SaveAs,
     /// A widget picked in the palette.
     Palette(usize),
-    /// A node picked in the outline.
-    Outline(usize),
+    /// A rename in the outline was finished with Enter.
+    Renamed,
     /// Put the last edit back.
     Undo,
     /// Do again what was put back.
@@ -69,7 +70,6 @@ const PALETTE_ROWS: i32 = PALETTE_ROW * 11;
 const FILTER: i32 = 26;
 /// How far a press has to travel before it is a drag rather than a click.
 const THRESHOLD: i32 = 4;
-const OUTLINE_ROW: i32 = 22;
 const HEADER: i32 = 22;
 const GAP: i32 = 8;
 
@@ -158,8 +158,7 @@ struct Chrome {
     palette: NodeId,
     /// The outline's scrolling viewport.
     outline_view: NodeId,
-    /// The outline's list, replaced whenever a form is opened.
-    outline: NodeId,
+
     /// The inspector's scrolling viewport. The pane inside it is replaced
     /// whenever the selection changes; this outlives every form.
     inspector_view: NodeId,
@@ -318,14 +317,6 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     // Held top and bottom, so the outline takes whatever height the window has.
     ui.set_anchors(outline_view, Anchors::new(true, true, true, true));
 
-    let outline = ui
-        .add(
-            outline_view,
-            List::<Message>::inert([] as [&str; 0]),
-            Rect::new(0, 0, width, 0),
-        )
-        .expect("outline viewport");
-
     // A form node with twenty properties of its own and fourteen the tree owns
     // is taller than any pane, so the rows go in a viewport that scrolls.
     let inspector_view = ui
@@ -348,7 +339,6 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         filter,
         palette,
         outline_view,
-        outline,
         inspector_view,
         stage,
         canvas,
@@ -369,8 +359,15 @@ pub struct Designer {
     filter: String,
     /// A widget on its way onto the canvas.
     placing: Placing,
-    /// The named nodes of the open form, in the order the outline lists them.
-    outline: Vec<(String, NodeId)>,
+    /// The lower-left pane, rebuilt whenever the tree or the selection changes.
+    outline: Option<Outline>,
+    /// The subtrees drawn shut, by path.
+    folded: Vec<Vec<usize>>,
+    /// The nodes hidden **in the designer only**, by path. The file never learns
+    /// about these: they are how something behind something else is reached.
+    hidden: Vec<Vec<usize>>,
+    /// A row being dragged in the outline.
+    outline_drag: Option<outline::Drag>,
     selected: Option<NodeId>,
     /// Every node of the open form, and where in the file it came from.
     placed: Vec<Placed>,
@@ -420,7 +417,10 @@ impl Designer {
             shown: Vec::new(),
             filter: String::new(),
             placing: Placing::Idle,
-            outline: Vec::new(),
+            outline: None,
+            folded: Vec::new(),
+            hidden: Vec::new(),
+            outline_drag: None,
             selected: None,
             placed: Vec::new(),
             selection: Vec::new(),
@@ -474,9 +474,9 @@ impl Designer {
         self.exit = true;
     }
 
-    /// The names the outline is showing, for tests and for #97.
+    /// Every name the open form gave a node, in file order.
     pub fn outline_names(&self) -> impl Iterator<Item = &str> {
-        self.outline.iter().map(|(name, _)| name.as_str())
+        self.placed.iter().filter_map(|node| node.name.as_deref())
     }
 
     /// The node the inspector is describing.
@@ -540,9 +540,9 @@ impl Designer {
         }
         self.ui.remove(self.chrome.stage);
         self.selected = None;
-        self.outline.clear();
         self.placed.clear();
         self.drag = None;
+        self.outline_drag = None;
 
         let size = self.document.form().size();
         // Centred in the viewport if it fits, and at the margin if it does not —
@@ -574,19 +574,10 @@ impl Designer {
             .build(&mut self.ui, stage, &mut wiring)
             .map(|built| {
                 self.placed = built.placed().to_vec();
-                let mut names: Vec<(String, NodeId)> = built
-                    .names()
-                    .map(|(name, id)| (name.to_string(), id))
-                    .collect();
-                // A stable order, since `Built` is a map. File order is what #97
-                // wants and what a real outline will show.
-                names.sort_by(|a, b| a.0.cmp(&b.0));
-                names
             });
 
         match outcome {
-            Ok(names) => {
-                self.outline = names;
+            Ok(()) => {
                 let missing = wiring.missing.len();
                 let extra = if missing == 0 {
                     String::new()
@@ -640,34 +631,51 @@ impl Designer {
             .collect();
         self.selection = surviving;
         self.selected = self.selection.last().and_then(|path| self.node_id(path));
+        self.apply_hidden();
         self.refresh_outline();
         self.refresh_inspector();
         self.refresh_overlay();
         self.refresh_labels();
     }
 
+    /// Redraws the outline for the tree as it now stands.
+    ///
+    /// Every node, not only the named ones: the canvas cannot show a node behind
+    /// another, clipped out of its parent or sized to nothing, and this is where
+    /// those are reached.
     fn refresh_outline(&mut self) {
-        let items: Vec<ListItem> = self
-            .outline
-            .iter()
-            // The name alone. A trailing kind is what the eye wants and what the
-            // pane has no room for: at this width the two run into each other,
-            // and an outline that cannot be read is worse than one that says
-            // less. The kind is a line down in the inspector.
-            .map(|(name, _)| ListItem::new(name.as_str()))
-            .collect();
-        let rows = items.len() as i32;
-        let list = List::new(items, Message::Outline).with_row_height(OUTLINE_ROW);
+        if let Some(pane) = self.outline.take() {
+            self.ui.remove(pane.content);
+        }
+        let hides = |path: &[usize]| {
+            self.document
+                .form()
+                .property(path, "visible")
+                .is_some_and(|value| value == "#false")
+        };
+        let rows = outline::rows(&self.placed, &self.folded, &self.hidden, hides);
         let width = self.settings.left - GAP * 2;
-        self.ui.remove(self.chrome.outline);
-        self.chrome.outline = self
-            .ui
-            .add(
-                self.chrome.outline_view,
-                list,
-                Rect::new(0, 0, width, rows * OUTLINE_ROW),
-            )
-            .expect("the outline viewport is there");
+        let view = outline::View {
+            rows: &rows,
+            selection: &self.selection,
+            drag: self.outline_drag.as_ref(),
+            width,
+        };
+        self.outline = Some(Outline::build(&mut self.ui, self.chrome.outline_view, view));
+    }
+
+    /// Applies the designer's own hiding to the tree it has just built.
+    ///
+    /// Nothing here is written to the file. Design mode's hit test already skips
+    /// what is not drawn, so hiding a sheet that covers the form is how whatever
+    /// is under it gets clicked on.
+    fn apply_hidden(&mut self) {
+        let hidden = self.hidden.clone();
+        for path in hidden {
+            if let Some(id) = self.node_id(&path) {
+                self.ui.set_visible(id, false);
+            }
+        }
     }
 
     /// Redraws the inspector for whatever is selected.
@@ -886,6 +894,17 @@ impl Designer {
         }
         names.sort();
         names
+    }
+
+    /// Redraws everything that follows the selection.
+    ///
+    /// Three panes show it — the outline highlights it, the inspector describes
+    /// it, the canvas draws handles round it — so changing it is one call rather
+    /// than three that can be forgotten one at a time.
+    fn reselected(&mut self) {
+        self.refresh_outline();
+        self.refresh_inspector();
+        self.refresh_overlay();
     }
 
     fn refresh_labels(&mut self) {
@@ -1206,6 +1225,10 @@ impl Designer {
             .ui
             .bounds(self.chrome.palette_view)
             .unwrap_or(Rect::ZERO);
+        let outline = self
+            .ui
+            .bounds(self.chrome.outline_view)
+            .unwrap_or(Rect::ZERO);
 
         match event {
             InputEvent::PointerButton {
@@ -1219,6 +1242,15 @@ impl Designer {
                 // have selected on it and swallowed the rest.
                 if palette.contains(*position) {
                     self.press_palette(*position);
+                    return true;
+                }
+                if outline.contains(*position) {
+                    // The outline's presses are design mode's for the same
+                    // reason the palette's are: a row has three things to press,
+                    // and a widget that saw the press would decide for itself
+                    // which one it was.
+                    self.cancel_placing();
+                    self.press_outline(*position, modifiers.contains(denise::Modifiers::SHIFT));
                     return true;
                 }
                 if !canvas.contains(*position) {
@@ -1244,6 +1276,10 @@ impl Designer {
                     self.drop_at(*position);
                     return true;
                 }
+                if self.outline_drag.is_some() {
+                    self.drop_row();
+                    return true;
+                }
                 if canvas.contains(*position) || self.drag.is_some() {
                     self.release();
                     return true;
@@ -1253,6 +1289,10 @@ impl Designer {
             InputEvent::PointerMoved { position } => {
                 if self.placing.moving() {
                     self.carry_to(*position);
+                    return true;
+                }
+                if self.outline_drag.is_some() {
+                    self.drag_row_to(*position);
                     return true;
                 }
                 if self.drag.is_some() {
@@ -1269,6 +1309,287 @@ impl Designer {
             } => self.key(*code, *modifiers),
             _ => false,
         }
+    }
+
+    // --------------------------------------------------------------- outline
+
+    /// Which row of the outline a point is on, and where in it.
+    fn outline_hit(&self, at: Point) -> Option<(usize, outline::Hit)> {
+        let view = self.ui.bounds(self.chrome.outline_view)?;
+        let scroll = self.ui.scroll(self.chrome.outline_view);
+        let row = usize::try_from((at.y - view.y + scroll.y) / outline::ROW).ok()?;
+        let pane = self.outline.as_ref()?;
+        let held = pane.rows.get(row)?;
+        let width = self.settings.left - GAP * 2;
+        Some((row, outline::hit(at.x - view.x + scroll.x, width, held)))
+    }
+
+    /// A press in the outline.
+    fn press_outline(&mut self, at: Point, add: bool) {
+        self.cancel_rename();
+        let Some((row, hit)) = self.outline_hit(at) else {
+            return;
+        };
+        let Some(path) = self
+            .outline
+            .as_ref()
+            .and_then(|pane| pane.rows.get(row))
+            .map(|held| held.path.clone())
+        else {
+            return;
+        };
+
+        match hit {
+            outline::Hit::Fold => {
+                if let Some(index) = self.folded.iter().position(|shut| *shut == path) {
+                    self.folded.remove(index);
+                } else {
+                    self.folded.push(path);
+                }
+                self.refresh_outline();
+            }
+            outline::Hit::Eye => self.toggle_hidden(&path),
+            outline::Hit::Body => {
+                self.history.separate();
+                if add {
+                    if let Some(already) = self.selection.iter().position(|held| *held == path) {
+                        self.selection.remove(already);
+                    } else {
+                        self.selection.push(path.clone());
+                    }
+                } else {
+                    self.selection = vec![path.clone()];
+                }
+                self.selected = self.node_id(&path);
+                self.outline_drag = Some(outline::Drag {
+                    path,
+                    from: at,
+                    moved: false,
+                    onto: None,
+                    into: false,
+                });
+                self.reselected();
+            }
+        }
+    }
+
+    /// Hides a node in the designer, or shows it again.
+    ///
+    /// Not written to the file — the eye is the designer's own, and a form that
+    /// remembered what somebody had folded away while working on it would be
+    /// carrying the designer's state to the panel. Design mode's hit test
+    /// already skips what is not drawn, so this is how a sheet covering the
+    /// whole form stops eating every click.
+    pub fn toggle_hidden(&mut self, path: &[usize]) {
+        if let Some(index) = self.hidden.iter().position(|held| held == path) {
+            self.hidden.remove(index);
+            if let Some(id) = self.node_id(path) {
+                // Back to whatever the *file* says, which may still be hidden.
+                let by_file = self
+                    .document
+                    .form()
+                    .property(path, "visible")
+                    .is_some_and(|value| value == "#false");
+                self.ui.set_visible(id, !by_file);
+            }
+        } else {
+            self.hidden.push(path.to_vec());
+            if let Some(id) = self.node_id(path) {
+                self.ui.set_visible(id, false);
+            }
+        }
+        self.refresh_outline();
+        self.refresh_overlay();
+    }
+
+    /// The pointer moved while a row was being dragged.
+    fn drag_row_to(&mut self, at: Point) {
+        let Some(drag) = self.outline_drag.as_mut() else {
+            return;
+        };
+        if !drag.moved && (at.y - drag.from.y).abs() + (at.x - drag.from.x).abs() < THRESHOLD {
+            return;
+        }
+        drag.moved = true;
+        let from = drag.path.clone();
+        let (onto, into) = self.landing(at, &from);
+        let Some(drag) = self.outline_drag.as_mut() else {
+            return;
+        };
+        drag.onto = onto;
+        drag.into = into;
+        self.refresh_outline();
+    }
+
+    /// Where a drop at `at` would put the node now at `from`.
+    ///
+    /// Beside the row under the pointer, or *inside* it when the pointer is over
+    /// the middle of something that can hold children — the same distinction the
+    /// canvas draws, and with the same [`denise_forms::owns_children`].
+    fn landing(&self, at: Point, from: &[usize]) -> (Option<(Vec<usize>, usize)>, bool) {
+        let Some(view) = self.ui.bounds(self.chrome.outline_view) else {
+            return (None, false);
+        };
+        let scroll = self.ui.scroll(self.chrome.outline_view);
+        let y = at.y - view.y + scroll.y;
+        let Some(pane) = self.outline.as_ref() else {
+            return (None, false);
+        };
+        if pane.rows.is_empty() {
+            return (None, false);
+        }
+
+        let row = (y / outline::ROW).clamp(0, pane.rows.len() as i32 - 1) as usize;
+        let within = y - row as i32 * outline::ROW;
+        let target = &pane.rows[row];
+
+        // A node cannot go inside itself, so there is nothing to draw.
+        if target.path.starts_with(from) {
+            return (None, false);
+        }
+
+        // The middle half of a container means *into* it; the edges mean beside.
+        let inside = denise_forms::owns_children(target.kind)
+            && within > outline::ROW / 4
+            && within < outline::ROW * 3 / 4;
+        if inside {
+            return (
+                Some((target.path.clone(), self.child_count(&target.path))),
+                true,
+            );
+        }
+
+        let Some((&index, parent)) = target.path.split_last() else {
+            return (None, false);
+        };
+        let after = within >= outline::ROW / 2;
+        (Some((parent.to_vec(), index + usize::from(after))), false)
+    }
+
+    /// The pointer came up on a row being dragged.
+    fn drop_row(&mut self) {
+        let Some(drag) = self.outline_drag.take() else {
+            return;
+        };
+        let Some((parent, index)) = drag.onto.clone().filter(|_| drag.moved) else {
+            // A press that never travelled was a selection.
+            self.refresh_outline();
+            return;
+        };
+        // Already there: nothing to do, and nothing to write.
+        if let Some((&was, above)) = drag.path.split_last()
+            && above == parent.as_slice()
+            && (index == was || index == was + 1)
+        {
+            self.refresh_outline();
+            return;
+        }
+
+        // Where it will be: taking it out shifts everything after it, the
+        // destination included.
+        let mut landed =
+            denise_forms::after_removing(&parent, &drag.path).unwrap_or(parent.clone());
+        landed.push(index);
+
+        self.history.separate();
+        self.edit(Edit::Move {
+            from: drag.path,
+            to: parent,
+            index,
+        });
+        // The node is somewhere else now, so the selection follows it there.
+        self.selection = vec![landed];
+        self.reload_from_document();
+    }
+
+    /// Renames the selected node, in the outline, in place.
+    pub fn begin_rename(&mut self) {
+        self.cancel_rename();
+        let Some(path) = self.selection.last().cloned() else {
+            return;
+        };
+        let Some((row, depth, content)) = self.outline.as_ref().and_then(|pane| {
+            let row = pane.row_of(&path)?;
+            Some((row, pane.rows[row].depth as i32, pane.content))
+        }) else {
+            return;
+        };
+
+        let width = self.settings.left - GAP * 2;
+        let x = depth * 10 + 13;
+        let Some(id) = self.ui.add(
+            content,
+            TextInput::<Message>::new()
+                .with_size(11)
+                .with_max_chars(64)
+                .with_placeholder("name")
+                .with_submit(Message::Renamed),
+            Rect::new(x, row as i32 * outline::ROW, width - x, outline::ROW),
+        ) else {
+            return;
+        };
+        let current = self.document.form().property(&path, "name");
+        if let Some(input) = self.ui.widget_mut::<TextInput<Message>>(id) {
+            input.set_text(current.unwrap_or_default());
+        }
+        self.ui.focus(Some(id));
+        if let Some(pane) = self.outline.as_mut() {
+            pane.renaming = Some((row, id));
+        }
+        self.status = String::from("type a name; Enter keeps it, Escape does not");
+        self.refresh_labels();
+    }
+
+    /// Writes what was typed into the rename field.
+    fn finish_rename(&mut self) {
+        let Some((row, field)) = self.outline.as_mut().and_then(|pane| pane.renaming.take()) else {
+            return;
+        };
+        let text = self
+            .ui
+            .widget::<TextInput<Message>>(field)
+            .map(|input| input.text().trim().to_string())
+            .unwrap_or_default();
+        let path = self
+            .outline
+            .as_ref()
+            .and_then(|pane| pane.rows.get(row))
+            .map(|held| held.path.clone());
+        self.ui.remove(field);
+        self.ui.focus(None);
+        let Some(path) = path else {
+            return;
+        };
+
+        let was = self.document.form().property(&path, "name");
+        let now = (!text.is_empty()).then_some(text);
+        if was == now {
+            self.refresh_outline();
+            return;
+        }
+        self.history.separate();
+        self.edit(Edit::property(
+            &path,
+            "name",
+            now.map(denise_forms::Literal::name),
+        ));
+        // A name is what the tree knows a node by, so it has to be built again.
+        self.reload_from_document();
+    }
+
+    /// Gives up a rename without writing it.
+    fn cancel_rename(&mut self) {
+        if let Some((_, field)) = self.outline.as_mut().and_then(|pane| pane.renaming.take()) {
+            self.ui.remove(field);
+            self.ui.focus(None);
+        }
+    }
+
+    /// Whether a rename is being typed.
+    fn renaming(&self) -> bool {
+        self.outline
+            .as_ref()
+            .is_some_and(|pane| pane.renaming.is_some())
     }
 
     // --------------------------------------------------------------- placing
@@ -1566,8 +1887,7 @@ impl Designer {
             if !add {
                 self.selection.clear();
                 self.selected = None;
-                self.refresh_inspector();
-                self.refresh_overlay();
+                self.reselected();
             }
             return;
         };
@@ -1584,7 +1904,7 @@ impl Designer {
         self.selected = self.node_id(&path);
         // Working on something else ends the run, as leaving a field would.
         self.history.separate();
-        self.refresh_inspector();
+        self.reselected();
 
         if let Some(bounds) = self.path_bounds(&path)
             && let Some(grip) = Grip::at(bounds, at)
@@ -1749,7 +2069,7 @@ impl Designer {
             _ => None,
         };
         if let Some((dx, dy)) = nudge {
-            if self.selection.is_empty() {
+            if self.selection.is_empty() || self.renaming() {
                 return false;
             }
             self.nudge(dx, dy);
@@ -1777,6 +2097,15 @@ impl Designer {
                 self.place_armed();
                 true
             }
+            KeyCode::F2 if !self.selection.is_empty() => {
+                self.begin_rename();
+                true
+            }
+            KeyCode::Escape if self.renaming() => {
+                self.cancel_rename();
+                self.refresh_outline();
+                true
+            }
             KeyCode::Escape if self.placing != Placing::Idle => {
                 self.cancel_placing();
                 self.status = String::from("nothing armed");
@@ -1790,8 +2119,7 @@ impl Designer {
             KeyCode::Escape if !self.selection.is_empty() => {
                 self.selection.clear();
                 self.selected = None;
-                self.refresh_inspector();
-                self.refresh_overlay();
+                self.reselected();
                 true
             }
             KeyCode::Delete | KeyCode::Backspace if !self.selection.is_empty() && !typing => {
@@ -1859,8 +2187,7 @@ impl Designer {
         };
         self.selection = vec![self.placed[next].path.clone()];
         self.selected = Some(self.placed[next].id);
-        self.refresh_inspector();
-        self.refresh_overlay();
+        self.reselected();
     }
 
     /// Rebuilds the canvas from the document, which an edit has changed.
@@ -1921,8 +2248,7 @@ impl Designer {
         };
         self.selection = vec![path.clone()];
         self.selected = self.node_id(&path);
-        self.refresh_inspector();
-        self.refresh_overlay();
+        self.reselected();
         true
     }
 
@@ -2099,27 +2425,7 @@ impl Designer {
                     self.refresh_labels();
                 }
             }
-            Message::Outline(index) => {
-                // By path, like every other way of selecting: the inspector and
-                // the overlay both work from the selection rather than from a
-                // `NodeId`, because a path survives the rebuild an edit causes.
-                let Some(id) = self.outline.get(index).map(|(_, id)| *id) else {
-                    return;
-                };
-                let Some(path) = self
-                    .placed
-                    .iter()
-                    .find(|p| p.id == id)
-                    .map(|p| p.path.clone())
-                else {
-                    return;
-                };
-                self.history.separate();
-                self.selection = vec![path];
-                self.selected = Some(id);
-                self.refresh_inspector();
-                self.refresh_overlay();
-            }
+            Message::Renamed => self.finish_rename(),
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
             Message::Reset(row) => self.reset(row),
@@ -2791,6 +3097,398 @@ mod tests {
         designer.release();
         assert_eq!(designer.overlay.len(), settled);
         assert!(!designer.selection.is_empty());
+    }
+
+    // ------------------------------------------------------------- outline
+
+    /// The rows the outline is showing, as `depth:kind name`.
+    fn shown_rows(designer: &Designer) -> Vec<String> {
+        designer
+            .outline
+            .as_ref()
+            .expect("an outline")
+            .rows
+            .iter()
+            .map(|row| match &row.name {
+                Some(name) => format!("{}:{} {name}", row.depth, row.kind),
+                None => format!("{}:{}", row.depth, row.kind),
+            })
+            .collect()
+    }
+
+    /// A point inside a row of the outline, in one of its three zones.
+    ///
+    /// Scrolls the row into view first, which is what the wheel is for: a form
+    /// has more nodes than the pane has rows, and a press below the pane is a
+    /// press on nothing.
+    fn outline_point(designer: &mut Designer, path: &[usize], part: outline::Hit) -> Point {
+        let pane = designer.outline.as_ref().expect("an outline");
+        let row = pane
+            .row_of(path)
+            .unwrap_or_else(|| panic!("{path:?} is not showing"));
+        let depth = pane.rows[row].depth as i32;
+
+        // Only when it is not already showing, so two points taken one after
+        // the other — the ends of a drag — are in the same coordinates.
+        let view = designer.chrome.outline_view;
+        let bounds = designer.ui.bounds(view).expect("a viewport");
+        let top = row as i32 * outline::ROW;
+        let scroll = designer.ui.scroll(view);
+        if top < scroll.y || top + outline::ROW > scroll.y + bounds.height {
+            designer.ui.set_scroll(view, Point::new(0, top));
+        }
+        let scroll = designer.ui.scroll(view);
+        let bounds = designer.ui.bounds(view).expect("a viewport");
+
+        let width = Settings::default().left - GAP * 2;
+        let x = match part {
+            outline::Hit::Fold => depth * 10 + 4,
+            outline::Hit::Eye => width - 4,
+            outline::Hit::Body => depth * 10 + 40,
+        };
+        Point::new(
+            bounds.x + x,
+            bounds.y + row as i32 * outline::ROW - scroll.y + outline::ROW / 2,
+        )
+    }
+
+    #[test]
+    fn the_outline_lists_every_node_indented_and_not_only_the_named_ones() {
+        let designer = designer_on("forms/hello.dform");
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:panel card",
+                "1:label",
+                "1:label",
+                "1:text-input who",
+                "1:button",
+                "1:label greeting",
+            ],
+            "the canvas cannot show what this pane is for"
+        );
+    }
+
+    #[test]
+    fn the_triangle_folds_a_subtree_away_and_back() {
+        let mut designer = designer_on("forms/hello.dform");
+        let card = path_named(&designer, "card");
+        assert_eq!(shown_rows(&designer).len(), 6);
+
+        let at = outline_point(&mut designer, &card, outline::Hit::Fold);
+        click_at(&mut designer, at, false);
+        assert_eq!(shown_rows(&designer), vec!["0:panel card"]);
+        // Folding is not selecting: the press was on the triangle.
+        assert!(designer.selection.is_empty(), "{:?}", designer.selection);
+
+        click_at(&mut designer, at, false);
+        assert_eq!(shown_rows(&designer).len(), 6);
+    }
+
+    #[test]
+    fn selecting_in_either_pane_selects_in_the_other() {
+        let mut designer = designer_on("forms/reference.dform");
+        let volume = path_named(&designer, "volume");
+
+        // Canvas to outline.
+        let at = middle(&designer, &volume);
+        click_at(&mut designer, at, false);
+        let pane = designer.outline.as_ref().expect("an outline");
+        assert!(
+            pane.row_of(&volume).is_some(),
+            "the row is not even showing"
+        );
+
+        // Outline to canvas: a different node, picked in the pane.
+        let stars = path_named(&designer, "stars");
+        let at = outline_point(&mut designer, &stars, outline::Hit::Body);
+        click_at(&mut designer, at, false);
+        assert_eq!(designer.selection, vec![stars.clone()]);
+        assert_eq!(
+            designer.ui.kind(designer.selected().unwrap()),
+            Some("rating")
+        );
+        // And the canvas drew handles round it, which is the other half of
+        // "selection is shared".
+        assert_eq!(designer.overlay.len(), 10, "the canvas did not follow");
+    }
+
+    #[test]
+    fn shift_in_the_outline_adds_to_the_selection() {
+        let mut designer = designer_on("forms/reference.dform");
+        let first = path_named(&designer, "notify");
+        let second = path_named(&designer, "dark");
+
+        let at = outline_point(&mut designer, &first, outline::Hit::Body);
+        click_at(&mut designer, at, false);
+        let at = outline_point(&mut designer, &second, outline::Hit::Body);
+        click_at(&mut designer, at, true);
+        assert_eq!(designer.selection.len(), 2, "{:?}", designer.selection);
+    }
+
+    #[test]
+    fn the_eye_hides_a_node_here_and_the_file_never_learns() {
+        let mut designer = designer_on("forms/reference.dform");
+        let field = path_named(&designer, "full-name");
+        let panel = path_named(&designer, "form-section");
+        let before = text(&designer);
+
+        // Clicking the canvas there finds the field.
+        let at = middle(&designer, &field);
+        click_at(&mut designer, at, false);
+        assert_eq!(designer.selection, vec![field.clone()]);
+
+        let eye = outline_point(&mut designer, &field, outline::Hit::Eye);
+        click_at(&mut designer, eye, false);
+        assert!(!designer.ui.visible(designer.node_id(&field).unwrap()));
+        assert_eq!(text(&designer), before, "the eye wrote to the file");
+        assert!(
+            !designer.history.is_dirty(),
+            "the eye made the form modified"
+        );
+
+        // And now the same press reaches what was behind it.
+        click_at(&mut designer, at, false);
+        assert_eq!(designer.selection, vec![panel], "{:?}", designer.selection);
+
+        // Opening the eye again puts it back.
+        let eye = outline_point(&mut designer, &field, outline::Hit::Eye);
+        click_at(&mut designer, eye, false);
+        assert!(designer.ui.visible(designer.node_id(&field).unwrap()));
+        click_at(&mut designer, at, false);
+        assert_eq!(designer.selection, vec![field]);
+    }
+
+    #[test]
+    fn the_eye_does_not_reveal_what_the_file_itself_hides() {
+        let mut designer = designer_on("forms/reference.dform");
+        let scrim = path_named(&designer, "scrim");
+        assert!(!designer.ui.visible(designer.node_id(&scrim).unwrap()));
+
+        // Hiding and showing it again leaves it as the file left it.
+        designer.toggle_hidden(&scrim);
+        designer.toggle_hidden(&scrim);
+        assert!(
+            !designer.ui.visible(designer.node_id(&scrim).unwrap()),
+            "the eye overrode `visible=#false`"
+        );
+    }
+
+    /// A small form: two panels and a label, so every row fits the pane at once.
+    fn two_panels() -> Designer {
+        let source = concat!(
+            "form \"Two\" version=1 width=300 height=200 {\n",
+            "    label \"loose\" name=loose x=4 y=4 w=80 h=20\n",
+            "    panel name=left x=4 y=30 w=120 h=120 {\n",
+            "        label \"in-left\" name=inside x=4 y=4 w=80 h=20\n",
+            "    }\n",
+            "    panel name=right x=140 y=30 w=120 h=120\n",
+            "}\n",
+        );
+        let path = std::env::temp_dir().join("denise-designer-two.dform");
+        std::fs::write(&path, source).expect("writing");
+        let document = Document::open(&path).expect("the form opens");
+        Designer::new(WINDOW, 1.0, Settings::default(), document)
+    }
+
+    #[test]
+    fn dragging_a_row_onto_a_panel_reparents_it() {
+        let mut designer = two_panels();
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel left",
+                "1:label inside",
+                "0:panel right"
+            ]
+        );
+        let loose = path_named(&designer, "loose");
+        let right = path_named(&designer, "right");
+        let before = text(&designer);
+
+        let from = outline_point(&mut designer, &loose, outline::Hit::Body);
+        let onto = outline_point(&mut designer, &right, outline::Hit::Body);
+        drag_from_to(&mut designer, from, onto);
+
+        let after = text(&designer);
+        assert_ne!(after, before, "the drag wrote nothing");
+        // Inside the panel, indented for its new depth, and the panel grew the
+        // braces it did not have.
+        assert!(
+            after.contains("panel name=right x=140 y=30 w=120 h=120 {\n        label \"loose\""),
+            "{after}"
+        );
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:panel left",
+                "1:label inside",
+                "0:panel right",
+                "1:label loose"
+            ]
+        );
+        // And it is what is selected, so the inspector followed it.
+        assert_eq!(designer.selection, vec![path_named(&designer, "loose")]);
+        denise_forms::Form::parse(&after).expect("still a form");
+
+        // One step, and exact.
+        assert_eq!(designer.history.depth().0, 1);
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing the move was not exact");
+    }
+
+    #[test]
+    fn dragging_a_row_out_of_a_panel_puts_it_on_the_form() {
+        let mut designer = two_panels();
+        let inside = path_named(&designer, "inside");
+        let loose = path_named(&designer, "loose");
+        let before = text(&designer);
+
+        // Above the first row, which is the form's own first child.
+        let from = outline_point(&mut designer, &inside, outline::Hit::Body);
+        let onto = outline_point(&mut designer, &loose, outline::Hit::Body);
+        let above = Point::new(onto.x, onto.y - outline::ROW / 2 + 2);
+        drag_from_to(&mut designer, from, above);
+
+        let after = text(&designer);
+        assert!(
+            after.contains("{\n    label \"in-left\""),
+            "it kept the panel's indentation:\n{after}"
+        );
+        // The panel it left has no children now, so it has no braces either.
+        assert!(
+            after.contains("panel name=left x=4 y=30 w=120 h=120\n"),
+            "an empty pair of braces was left behind:\n{after}"
+        );
+        denise_forms::Form::parse(&after).expect("still a form");
+
+        designer.undo();
+        assert_eq!(text(&designer), before);
+    }
+
+    #[test]
+    fn dragging_a_row_between_two_others_reorders_them() {
+        let mut designer = two_panels();
+        let before = text(&designer);
+        let right = path_named(&designer, "right");
+        let loose = path_named(&designer, "loose");
+
+        // The last of the form's children to the front of them.
+        let from = outline_point(&mut designer, &right, outline::Hit::Body);
+        let onto = outline_point(&mut designer, &loose, outline::Hit::Body);
+        let above = Point::new(onto.x, onto.y - outline::ROW / 2 + 2);
+        drag_from_to(&mut designer, from, above);
+
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:panel right",
+                "0:label loose",
+                "0:panel left",
+                "1:label inside"
+            ],
+            "{}",
+            text(&designer)
+        );
+        denise_forms::Form::parse(&text(&designer)).expect("still a form");
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing a reorder was not exact");
+    }
+
+    #[test]
+    fn a_row_cannot_be_dragged_into_itself() {
+        let mut designer = two_panels();
+        let left = path_named(&designer, "left");
+        let inside = path_named(&designer, "inside");
+        let before = text(&designer);
+
+        let from = outline_point(&mut designer, &left, outline::Hit::Body);
+        let onto = outline_point(&mut designer, &inside, outline::Hit::Body);
+        drag_from_to(&mut designer, from, onto);
+
+        assert_eq!(text(&designer), before, "a panel went inside its own child");
+        assert!(designer.outline_drag.is_none(), "the drag is still going");
+    }
+
+    #[test]
+    fn f2_renames_a_node_and_escape_leaves_it_alone() {
+        let mut designer = designer_on("forms/hello.dform");
+        assert!(designer.select_named("who"));
+        let before = text(&designer);
+
+        press_key(&mut designer, KeyCode::F2, false);
+        let (_, field) = designer
+            .outline
+            .as_ref()
+            .expect("an outline")
+            .renaming
+            .expect("a field over the row");
+        assert_eq!(
+            designer
+                .ui
+                .widget::<TextInput<Message>>(field)
+                .unwrap()
+                .text(),
+            "who",
+            "the field did not start with the name it has"
+        );
+
+        // Escape writes nothing.
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert!(designer.outline.as_ref().unwrap().renaming.is_none());
+        assert_eq!(text(&designer), before);
+
+        // Enter does.
+        press_key(&mut designer, KeyCode::F2, false);
+        let (_, field) = designer.outline.as_ref().unwrap().renaming.unwrap();
+        designer
+            .ui
+            .widget_mut::<TextInput<Message>>(field)
+            .unwrap()
+            .set_text("visitor");
+        designer.handle(Message::Renamed);
+
+        let after = text(&designer);
+        assert!(after.contains("name=visitor"), "{after}");
+        assert!(!after.contains("name=who"), "{after}");
+        assert!(designer.outline_names().any(|name| name == "visitor"));
+        assert_eq!(designer.history.depth().0, 1);
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing a rename was not exact");
+    }
+
+    #[test]
+    fn a_node_with_no_name_can_be_given_one() {
+        let mut designer = designer_on("forms/hello.dform");
+        let button = vec![0, 3];
+        let at = outline_point(&mut designer, &button, outline::Hit::Body);
+        click_at(&mut designer, at, false);
+
+        press_key(&mut designer, KeyCode::F2, false);
+        let (_, field) = designer.outline.as_ref().unwrap().renaming.unwrap();
+        assert_eq!(
+            designer
+                .ui
+                .widget::<TextInput<Message>>(field)
+                .unwrap()
+                .text(),
+            "",
+            "it offered a name to a node that has none"
+        );
+        designer
+            .ui
+            .widget_mut::<TextInput<Message>>(field)
+            .unwrap()
+            .set_text("greet");
+        designer.handle(Message::Renamed);
+
+        let line = text(&designer)
+            .lines()
+            .find(|line| line.contains("\"Greet\""))
+            .expect("the button")
+            .to_string();
+        assert!(line.contains("name=greet"), "{line}");
     }
 
     // ------------------------------------------------------------- placing
@@ -3746,11 +4444,7 @@ mod tests {
     #[test]
     fn the_inspector_reports_a_selected_node_from_the_widgets_own_descriptor() {
         let mut designer = designer_on("forms/reference.dform");
-        let index = designer
-            .outline_names()
-            .position(|name| name == "volume")
-            .expect("the slider is named");
-        designer.handle(Message::Outline(index));
+        assert!(designer.select_named("volume"));
 
         let selected = designer.selected().expect("something is selected");
         assert_eq!(designer.ui.kind(selected), Some("slider"));
@@ -3774,11 +4468,7 @@ mod tests {
     #[test]
     fn the_scrim_keeps_the_form_from_behaving_while_it_is_being_designed() {
         let mut designer = designer_on("forms/reference.dform");
-        let index = designer
-            .outline_names()
-            .position(|name| name == "notify")
-            .expect("the checkbox is named");
-        designer.handle(Message::Outline(index));
+        assert!(designer.select_named("notify"));
         let box_ = designer.selected().expect("selected");
         let bounds = designer.ui.bounds(box_).expect("laid out");
         let middle = Point::new(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);

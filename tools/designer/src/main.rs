@@ -28,8 +28,10 @@
 //! # What is here, and what is not
 //!
 //! A form opens, draws, selects, moves, resizes, deletes and undoes; its
-//! properties are edited in the right pane; and a widget is dragged out of the
-//! palette or drawn on the canvas. That is a form built from nothing.
+//! properties are edited in the right pane; a widget is dragged out of the
+//! palette or drawn on the canvas; and the outline shows the tree as a tree,
+//! with folding, renaming, reparenting, and an eye that hides a node here
+//! without the file learning of it. That is a form built from nothing.
 //!
 //! The palette is a flat list of names, because the registry carries a name and
 //! a property list and nothing that says what a widget *is* — grouping it and
@@ -42,6 +44,7 @@ mod canvas;
 mod document;
 mod history;
 mod inspector;
+mod outline;
 mod settings;
 
 use std::time::{Duration, Instant};
