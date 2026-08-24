@@ -12,7 +12,7 @@ use denise_ui::widgets::{
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
-use crate::canvas::{Drag, Grip, Guide, place, snap, topmost};
+use crate::canvas::{Band, Drag, Grip, Guide, between, place, snap, topmost};
 use crate::document::Document;
 use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
@@ -473,6 +473,11 @@ pub struct Designer {
     /// rebuild, and every edit rebuilds.
     selection: Vec<Vec<usize>>,
     drag: Option<Drag>,
+    /// A rubber band being drawn over the canvas.
+    band: Option<Band>,
+    /// The container a drag would drop into, while one is in flight. Drawn on
+    /// the canvas so a reparent is never a surprise.
+    dropping: Option<Vec<usize>>,
     /// The selection outline, its handles and any alignment guides. Rebuilt
     /// whenever any of them moves, and removed before the form is.
     overlay: Vec<NodeId>,
@@ -535,6 +540,8 @@ impl Designer {
             placed: Vec::new(),
             selection: Vec::new(),
             drag: None,
+            band: None,
+            dropping: None,
             overlay: Vec::new(),
             snapping: true,
             grid: 4,
@@ -664,6 +671,8 @@ impl Designer {
         self.selected = None;
         self.placed.clear();
         self.drag = None;
+        self.band = None;
+        self.dropping = None;
         self.outline_drag = None;
 
         let size = self.document.form().size();
@@ -1445,7 +1454,7 @@ impl Designer {
                     self.drop_row();
                     return true;
                 }
-                if canvas.contains(*position) || self.drag.is_some() {
+                if canvas.contains(*position) || self.drag.is_some() || self.band.is_some() {
                     self.release();
                     return true;
                 }
@@ -1462,6 +1471,10 @@ impl Designer {
                 }
                 if self.drag.is_some() {
                     self.drag_to(*position);
+                    return true;
+                }
+                if self.band.is_some() {
+                    self.band_to(*position);
                     return true;
                 }
                 false
@@ -2115,7 +2128,7 @@ impl Designer {
             return;
         }
 
-        let parent = self.container_at(corner);
+        let parent = self.container_at(corner, &[]);
         let origin = parent
             .as_ref()
             .and_then(|path| self.path_bounds(path))
@@ -2161,12 +2174,18 @@ impl Designer {
     /// `None` for the form itself. What counts as a container is
     /// [`denise_forms::owns_children`] and not a list here: a `select` holds
     /// options and a `table` holds columns, and dropping a button on either has
-    /// missed.
-    fn container_at(&self, at: Point) -> Option<Vec<usize>> {
+    /// missed. A `collapse` does hold children, so a drop into one lands in it
+    /// — closed or open, since what is drawn is not what the file says.
+    ///
+    /// `skip` is a subtree to look straight through: a node being dragged is
+    /// under the pointer by definition, and a node cannot be dropped into
+    /// itself.
+    fn container_at(&self, at: Point, skip: &[usize]) -> Option<Vec<usize>> {
         let containers: Vec<Placed> = self
             .placed
             .iter()
             .filter(|node| denise_forms::owns_children(node.kind))
+            .filter(|node| skip.is_empty() || !node.path.starts_with(skip))
             .cloned()
             .collect();
         topmost(
@@ -2244,14 +2263,31 @@ impl Designer {
             at,
         )
         .map(|p| p.path.clone());
-        let Some(path) = hit else {
-            if !add {
+
+        // A press with nothing to take hold of draws a band instead: the bare
+        // canvas, or the background of a container that is *already* held. A
+        // panel is a thing before it is a surface — the first press takes hold
+        // of it, and once it is held its background is somewhere to band over.
+        let banding = match &hit {
+            None => Some(Vec::new()),
+            Some(path) if self.is_container(path) && self.selection.contains(path) => {
+                Some(path.clone())
+            }
+            _ => None,
+        };
+        if let Some(scope) = banding {
+            // An empty canvas gives up the selection at once, as it always has.
+            // A band inside a container waits until it has travelled, so a press
+            // that goes nowhere leaves the container held.
+            if hit.is_none() && !add {
                 self.selection.clear();
                 self.selected = None;
                 self.reselected();
             }
+            self.begin_band(scope, at, add);
             return;
-        };
+        }
+        let path = hit.expect("anything else drew a band");
 
         if add {
             if let Some(already) = self.selection.iter().position(|p| *p == path) {
@@ -2284,6 +2320,7 @@ impl Designer {
         self.drag = Some(Drag {
             grip,
             from: at,
+            to: at,
             origin,
             path,
             moved: false,
@@ -2298,6 +2335,7 @@ impl Designer {
             return;
         }
         drag.moved = true;
+        drag.to = to;
         let drag = drag.clone();
         let Some(id) = self.node_id(&drag.path) else {
             return;
@@ -2305,6 +2343,11 @@ impl Designer {
 
         let siblings = self.siblings_of(&drag.path);
         let placement = place(&drag, to, &siblings, self.grid, self.snapping);
+        // Where it would land if the button came up here. Worked out on every
+        // step so the canvas can draw it: a reparent is never a surprise.
+        self.dropping = matches!(drag.grip, Grip::Move)
+            .then(|| self.reparent_target(to, &drag.path))
+            .flatten();
 
         // The tree moves so the person can see it. The *file* does not, until
         // the button comes up: one drag is one edit, which is what keeps a move
@@ -2312,8 +2355,13 @@ impl Designer {
         self.ui.set_layout(id, placement.rect);
         self.refresh_overlay_with(&placement.guides, &drag.path);
         self.sync_rect();
+        let landing = match self.dropping.clone() {
+            None => String::new(),
+            Some(parent) if parent.is_empty() => String::from(" — onto the form"),
+            Some(parent) => format!(" — into {}", self.describe(&parent)),
+        };
         self.status = format!(
-            "{} {},{} {}x{}",
+            "{} {},{} {}x{}{landing}",
             self.placed
                 .iter()
                 .find(|p| p.path == drag.path)
@@ -2327,13 +2375,27 @@ impl Designer {
     }
 
     fn release(&mut self) {
+        if self.band.is_some() {
+            self.drop_band();
+            return;
+        }
         let Some(drag) = self.drag.take() else {
             return;
         };
+        self.dropping = None;
         if !drag.moved {
             // A press that never moved was a selection, and a selection must not
             // touch the file.
             self.refresh_overlay();
+            return;
+        }
+        // A move that ended over a different container is a reparent, which is
+        // a different edit: the node changes place in the *tree*, not only its
+        // numbers.
+        if matches!(drag.grip, Grip::Move)
+            && let Some(parent) = self.reparent_target(drag.to, &drag.path)
+        {
+            self.reparent(&drag.path, parent);
             return;
         }
         let Some(rect) = self.node_id(&drag.path).and_then(|id| self.ui.layout(id)) else {
@@ -2341,6 +2403,202 @@ impl Designer {
         };
         self.write_rect(&drag.path, rect, drag.origin);
         self.refresh_overlay();
+    }
+
+    // ------------------------------------------------------------- the band
+
+    /// Starts a rubber band over `scope`'s children.
+    fn begin_band(&mut self, scope: Vec<usize>, at: Point, add: bool) {
+        self.history.separate();
+        self.band = Some(Band {
+            from: at,
+            to: at,
+            scope,
+            kept: if add {
+                self.selection.clone()
+            } else {
+                Vec::new()
+            },
+            moved: false,
+        });
+    }
+
+    /// The band followed the pointer: whatever it now encloses is selected.
+    fn band_to(&mut self, to: Point) {
+        let Some(band) = self.band.as_mut() else {
+            return;
+        };
+        if !band.moved && (to.x - band.from.x).abs() + (to.y - band.from.y).abs() < THRESHOLD {
+            return;
+        }
+        band.moved = true;
+        band.to = to;
+        let band = band.clone();
+
+        let mut selection = band.kept.clone();
+        for path in self.enclosed(&band) {
+            if !selection.contains(&path) {
+                selection.push(path);
+            }
+        }
+        self.selection = selection;
+        self.selected = self.selection.last().and_then(|path| self.node_id(path));
+        // Every pane that follows the selection follows it here too, on every
+        // step: a band is a selection being made, and watching the inspector
+        // fill in is most of how somebody knows what they have caught.
+        self.reselected();
+        self.say_selection();
+    }
+
+    /// The scope's direct children that the band has taken.
+    ///
+    /// Direct children only, and never past one: see [`Band`]. Drawn ones only,
+    /// for the same reason a click does not find a node that is not drawn.
+    fn enclosed(&self, band: &Band) -> Vec<Vec<usize>> {
+        let depth = band.scope.len() + 1;
+        self.placed
+            .iter()
+            .filter(|node| node.path.len() == depth && node.path.starts_with(&band.scope))
+            .filter(|node| {
+                self.ui.visible(node.id) && self.ui.bounds(node.id).is_some_and(|it| band.takes(it))
+            })
+            .map(|node| node.path.clone())
+            .collect()
+    }
+
+    /// The pointer came up on a band.
+    fn drop_band(&mut self) {
+        let Some(band) = self.band.take() else {
+            return;
+        };
+        if !band.moved {
+            // A band that never travelled is not a band, and leaves the
+            // selection exactly as it found it.
+            self.refresh_overlay();
+            return;
+        }
+        // A band that took nothing inside a container leaves the container
+        // held: it is still the thing being worked on, and giving it up would
+        // make banding inside it a one-way door.
+        if self.selection.is_empty() && !band.scope.is_empty() {
+            self.selection = vec![band.scope];
+            self.selected = self.selection.last().and_then(|path| self.node_id(path));
+        }
+        self.reselected();
+        self.say_selection();
+    }
+
+    /// Gives up a band without changing anything.
+    fn cancel_band(&mut self) {
+        let Some(band) = self.band.take() else {
+            return;
+        };
+        self.selection = band.kept;
+        self.selected = self.selection.last().and_then(|path| self.node_id(path));
+        self.reselected();
+    }
+
+    /// Says how much is selected, in the status line.
+    fn say_selection(&mut self) {
+        self.status = match self.selection.as_slice() {
+            [] => String::from("nothing selected"),
+            [one] => format!("selected {}", self.describe(one)),
+            many => format!("{} selected", many.len()),
+        };
+        self.refresh_labels();
+    }
+
+    /// What to call a node in a sentence.
+    fn describe(&self, path: &[usize]) -> String {
+        self.placed
+            .iter()
+            .find(|node| node.path == path)
+            .map_or_else(
+                || String::from("the form"),
+                |node| {
+                    node.name.as_deref().map_or_else(
+                        || format!("a `{}`", node.kind),
+                        |name| format!("`{}` {name}", node.kind),
+                    )
+                },
+            )
+    }
+
+    // -------------------------------------------------------- reparenting
+
+    /// Whether a node can hold children of its own.
+    fn is_container(&self, path: &[usize]) -> bool {
+        self.placed
+            .iter()
+            .any(|node| node.path == path && denise_forms::owns_children(node.kind))
+    }
+
+    /// Which container a drag ending at `at` would drop the node into, when that
+    /// is not the one it is already in.
+    ///
+    /// A drop on something that cannot hold children targets whatever holds
+    /// *it*, which is what [`Self::container_at`] answers — so dropping a button
+    /// on a button inside a panel puts it in the panel, and not in a button.
+    fn reparent_target(&self, at: Point, from: &[usize]) -> Option<Vec<usize>> {
+        let stage = self.ui.bounds(self.chrome.stage)?;
+        if !stage.contains(at) {
+            return None;
+        }
+        // A node dragged out over nothing lands on the form itself.
+        let to = self.container_at(at, from).unwrap_or_default();
+        let (_, parent) = from.split_last()?;
+        (parent != to.as_slice()).then_some(to)
+    }
+
+    /// Moves a node into another container, without letting it appear to move.
+    ///
+    /// The rectangle in the file is relative to the parent, so a node that keeps
+    /// its place on screen has to be given different numbers — which is the
+    /// whole of why this is two edits and not one, and why they are applied as
+    /// one [`Edit::Many`] so that undo puts both back together.
+    fn reparent(&mut self, from: &[usize], to: Vec<usize>) {
+        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
+        let Some(bounds) = self.path_bounds(from) else {
+            return;
+        };
+        let origin = if to.is_empty() {
+            stage
+        } else {
+            self.path_bounds(&to).unwrap_or(stage)
+        };
+        let mut rect = Rect::new(
+            bounds.x - origin.x,
+            bounds.y - origin.y,
+            bounds.width,
+            bounds.height,
+        );
+        if self.snapping {
+            rect = snap(rect, self.grid);
+        }
+
+        // Last of its new siblings, which is the front: a node dropped onto a
+        // panel is put on top of it and not under it.
+        let index = self.child_count(&to);
+        let mut landed = denise_forms::after_removing(&to, from).unwrap_or_else(|| to.clone());
+        landed.push(index);
+
+        let mut edits = vec![Edit::Move {
+            from: from.to_vec(),
+            to,
+            index,
+        }];
+        for (name, value) in [("x", rect.x), ("y", rect.y)] {
+            if self.document.form().property(from, name).as_deref() != Some(&value.to_string()) {
+                edits.push(Edit::number(&landed, name, Some(i64::from(value))));
+            }
+        }
+
+        self.history.separate();
+        self.edit(Edit::Many(edits));
+        self.selection = vec![landed];
+        self.dropping = None;
+        self.reload_from_document();
+        self.say_selection();
     }
 
     /// Applies an edit through the history, so it can be undone.
@@ -2471,6 +2729,18 @@ impl Designer {
                 self.refresh_outline();
                 true
             }
+            KeyCode::Escape if self.band.is_some() => {
+                self.cancel_band();
+                true
+            }
+            KeyCode::PageUp if !self.selection.is_empty() && !typing => {
+                self.restack(true);
+                true
+            }
+            KeyCode::PageDown if !self.selection.is_empty() && !typing => {
+                self.restack(false);
+                true
+            }
             KeyCode::Escape if self.placing != Placing::Idle => {
                 self.cancel_placing();
                 self.status = String::from("nothing armed");
@@ -2535,6 +2805,74 @@ impl Designer {
         self.reload_from_document();
     }
 
+    /// Puts the selected node in front of its siblings, or behind them.
+    ///
+    /// **By reordering the file**, not by writing `z=`. Siblings are drawn in
+    /// file order, so the order in the file is the order on the screen, and a
+    /// person reading the file sees the stacking without having to hold a second
+    /// rule in their head. A `z=` written here would be that second rule.
+    ///
+    /// Siblings only: file order decides between two nodes of the same parent
+    /// and nothing else, so there is no such thing as bringing a node in front
+    /// of its uncle.
+    pub fn restack(&mut self, front: bool) {
+        let Some(path) = self.selection.last().cloned() else {
+            return;
+        };
+        let Some((&index, parent)) = path.split_last() else {
+            return;
+        };
+        let parent = parent.to_vec();
+        let target = if front {
+            self.child_count(&parent).saturating_sub(1)
+        } else {
+            0
+        };
+        let side = if front { "front" } else { "back" };
+        if index == target {
+            self.status = format!("already at the {side}");
+            self.refresh_labels();
+            return;
+        }
+
+        let mut landed = parent.clone();
+        landed.push(target);
+        self.history.separate();
+        self.edit(Edit::Move {
+            from: path,
+            to: parent.clone(),
+            index: target,
+        });
+        self.selection = vec![landed];
+        self.reload_from_document();
+
+        // `z` overrules file order, so on a form that sets it this has moved the
+        // node in the file and nowhere a person can see. Saying so beats leaving
+        // somebody to wonder why nothing happened.
+        self.status = if self.stacked_by_z(&parent) {
+            format!(
+                "moved to the {side} of the file — but `z` is set here, and `z` is what decides"
+            )
+        } else {
+            format!("moved to the {side}")
+        };
+        self.refresh_labels();
+    }
+
+    /// Whether anything among a parent's children sets `z`, which overrules the
+    /// file order [`Self::restack`] moves.
+    fn stacked_by_z(&self, parent: &[usize]) -> bool {
+        self.placed
+            .iter()
+            .filter(|node| node.path.len() == parent.len() + 1 && node.path.starts_with(parent))
+            .any(|node| {
+                self.document
+                    .form()
+                    .property(&node.path, "z")
+                    .is_some_and(|z| z != "0")
+            })
+    }
+
     /// Selects the next node in file order.
     pub fn cycle(&mut self, backwards: bool) {
         if self.placed.is_empty() {
@@ -2596,6 +2934,22 @@ impl Designer {
         self.placing = Placing::Pressed { kind, from };
         self.carry_to(Point::new(stage.x + over.x, stage.y + over.y));
         matches!(self.placing, Placing::Carrying { .. })
+    }
+
+    /// Poses a rubber band across a rectangle in the form's own coordinates.
+    ///
+    /// For `--snapshot`, which has no pointer to draw one with. The band is left
+    /// in flight, because in flight is when there is anything to see. It is
+    /// scoped to whatever container its first corner is in, rather than needing
+    /// that container to have been selected first — a snapshot has nobody to
+    /// select it.
+    pub fn band_over(&mut self, rect: Rect) {
+        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
+        let from = Point::new(stage.x + rect.x, stage.y + rect.y);
+        let to = Point::new(from.x + rect.width, from.y + rect.height);
+        let scope = self.container_at(from, &[]).unwrap_or_default();
+        self.begin_band(scope, from, false);
+        self.band_to(to);
     }
 
     /// Selects a node by the name the form gave it.
@@ -2706,6 +3060,28 @@ impl Designer {
             }
         }
 
+        // Where a drag would drop, drawn round the container that would take it.
+        if let Some(target) = self.dropping.clone()
+            && let Some(bounds) = if target.is_empty() {
+                self.ui.bounds(self.chrome.stage)
+            } else {
+                self.path_bounds(&target)
+            }
+        {
+            add(
+                &mut self.ui,
+                bounds,
+                Panel {
+                    fill: None,
+                    border: Some(Role::Accent),
+                    border_width: 2,
+                    radius: Radius::Box,
+                    backdrop: false,
+                },
+                195,
+            );
+        }
+
         let selection = self.selection.clone();
         for (index, path) in selection.iter().enumerate() {
             let Some(bounds) = self.path_bounds(path) else {
@@ -2731,6 +3107,19 @@ impl Designer {
                         210,
                     );
                 }
+            }
+        }
+        // The band on top of everything, since it is the thing being drawn now.
+        // Four hairlines rather than a bordered panel: a band has square
+        // corners, and every rounding this toolkit offers is a rounding.
+        if let Some(rect) = self.band.as_ref().filter(|band| band.moved).map(Band::rect) {
+            for edge in [
+                Rect::new(rect.x, rect.y, rect.width, 1),
+                Rect::new(rect.x, rect.y + rect.height - 1, rect.width, 1),
+                Rect::new(rect.x, rect.y, 1, rect.height),
+                Rect::new(rect.x + rect.width - 1, rect.y, 1, rect.height),
+            ] {
+                add(&mut self.ui, edge, Panel::filled(Role::Accent), 230);
             }
         }
         self.overlay = added;
@@ -2936,15 +3325,6 @@ impl Designer {
 }
 
 /// The rectangle between two corners, whichever way round they were given.
-fn between(from: Point, to: Point) -> Rect {
-    Rect::new(
-        from.x.min(to.x),
-        from.y.min(to.y),
-        (to.x - from.x).abs(),
-        (to.y - from.y).abs(),
-    )
-}
-
 /// Which of a rectangle's four numbers a tree-owned property is, if it is one.
 const fn axis_of(name: &str) -> Option<usize> {
     Some(match name.as_bytes() {
@@ -3998,7 +4378,15 @@ mod tests {
             "    panel name=right x=140 y=30 w=120 h=120\n",
             "}\n",
         );
-        let path = std::env::temp_dir().join("denise-designer-two.dform");
+        scratch("two", source)
+    }
+
+    /// A designer on a form file of this test's own, so two tests running at
+    /// once never read a file the other is halfway through writing.
+    fn scratch(name: &str, source: &str) -> Designer {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let ordinal = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("denise-designer-{name}-{ordinal}.dform"));
         std::fs::write(&path, source).expect("writing");
         let document = Document::open(&path).expect("the form opens");
         Designer::new(WINDOW, 1.0, Settings::default(), document)
@@ -5264,5 +5652,368 @@ mod tests {
         );
         // And the form that was open is still open.
         assert_eq!(designer.document.form().title(), "Hello");
+    }
+
+    // ------------------------------------------------- the band and the tree
+
+    /// A point on the stage, from a position in the form's own coordinates.
+    fn on_stage(designer: &Designer, x: i32, y: i32) -> Point {
+        let stage = designer.ui.bounds(designer.chrome.stage).expect("a stage");
+        Point::new(stage.x + x, stage.y + y)
+    }
+
+    /// Presses at `from`, drags to `to`, lets go — with shift held or not.
+    fn sweep(designer: &mut Designer, from: Point, to: Point, shift: bool) {
+        let modifiers = if shift {
+            denise::Modifiers::SHIFT
+        } else {
+            denise::Modifiers::NONE
+        };
+        feed(
+            designer,
+            &[
+                InputEvent::PointerMoved { position: from },
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state: ElementState::Down,
+                    position: from,
+                    modifiers,
+                },
+                InputEvent::PointerMoved { position: to },
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state: ElementState::Up,
+                    position: to,
+                    modifiers,
+                },
+            ],
+        );
+    }
+
+    /// What is selected, by name, in the order it was selected.
+    fn selected_names(designer: &Designer) -> Vec<String> {
+        designer
+            .selection
+            .iter()
+            .map(|path| {
+                designer
+                    .placed
+                    .iter()
+                    .find(|node| node.path == *path)
+                    .and_then(|node| node.name.clone())
+                    .unwrap_or_else(|| String::from("?"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_band_over_the_canvas_takes_everything_it_wholly_encloses() {
+        let mut designer = two_panels();
+        let before = text(&designer);
+
+        // From the empty bottom-right corner up past everything.
+        let (from, to) = (on_stage(&designer, 295, 195), on_stage(&designer, 2, 2));
+        sweep(&mut designer, from, to, false);
+
+        let mut names = selected_names(&designer);
+        names.sort();
+        // The three top-level nodes — and not `inside`, which belongs to the
+        // panel rather than to the form.
+        assert_eq!(names, vec!["left", "loose", "right"]);
+        assert_eq!(designer.status, "3 selected");
+        assert_eq!(text(&designer), before, "a band must not touch the file");
+        assert_eq!(designer.history.depth().0, 0);
+    }
+
+    #[test]
+    fn a_band_that_only_brushes_a_node_does_not_take_it() {
+        let mut designer = two_panels();
+        // Across the right panel's top-left corner, enclosing none of it.
+        let (from, to) = (on_stage(&designer, 100, 10), on_stage(&designer, 200, 100));
+        sweep(&mut designer, from, to, false);
+        assert!(
+            designer.selection.is_empty(),
+            "took something it only brushed: {:?}",
+            selected_names(&designer)
+        );
+    }
+
+    #[test]
+    fn a_band_inside_a_panel_takes_the_panels_children_and_not_the_panel() {
+        let mut designer = two_panels();
+        // The first press takes hold of the panel.
+        let background = on_stage(&designer, 100, 140);
+        click_at(&mut designer, background, false);
+        assert_eq!(selected_names(&designer), vec!["left"]);
+
+        // The second, over the same background, is a band across its children.
+        let corner = on_stage(&designer, 2, 28);
+        sweep(&mut designer, background, corner, false);
+        assert_eq!(selected_names(&designer), vec!["inside"]);
+    }
+
+    #[test]
+    fn a_band_that_never_travelled_leaves_the_selection_where_it_was() {
+        let mut designer = two_panels();
+        let background = on_stage(&designer, 100, 140);
+        click_at(&mut designer, background, false);
+        click_at(&mut designer, background, false);
+        assert_eq!(
+            selected_names(&designer),
+            vec!["left"],
+            "a press that went nowhere gave up the panel"
+        );
+    }
+
+    #[test]
+    fn an_empty_band_inside_a_panel_leaves_the_panel_held() {
+        let mut designer = two_panels();
+        let background = on_stage(&designer, 100, 140);
+        click_at(&mut designer, background, false);
+        // A band over a corner of the panel with nothing in it.
+        let corner = on_stage(&designer, 120, 100);
+        sweep(&mut designer, background, corner, false);
+        assert_eq!(selected_names(&designer), vec!["left"]);
+    }
+
+    #[test]
+    fn shift_adds_what_a_band_takes_to_what_was_already_held() {
+        let mut designer = two_panels();
+        select(&mut designer, "loose");
+        let (from, to) = (on_stage(&designer, 270, 20), on_stage(&designer, 135, 160));
+        sweep(&mut designer, from, to, true);
+        assert_eq!(selected_names(&designer), vec!["loose", "right"]);
+    }
+
+    #[test]
+    fn dragging_a_node_onto_a_panel_makes_it_a_child_and_leaves_it_looking_still() {
+        let mut designer = two_panels();
+        designer.toggle_snapping();
+        let loose = path_named(&designer, "loose");
+        let before = text(&designer);
+        let was = designer.path_bounds(&loose).expect("laid out");
+
+        let from = middle(&designer, &loose);
+        let to = on_stage(&designer, 200, 90);
+        drag_from_to(&mut designer, from, to);
+
+        let after = text(&designer);
+        // In the panel, and the panel grew the braces it did not have.
+        assert!(
+            after.contains("panel name=right x=140 y=30 w=120 h=120 {\n        label \"loose\""),
+            "{after}"
+        );
+        // The numbers changed because the space they are in changed: the node
+        // is where it was on the screen, and its rectangle says something else.
+        assert!(after.contains("x=20 y=50"), "{after}");
+        let now = designer
+            .path_bounds(&path_named(&designer, "loose"))
+            .expect("laid out");
+        assert_eq!(
+            (now.x - was.x, now.y - was.y),
+            (to.x - from.x, to.y - from.y),
+            "it did not end where the pointer left it"
+        );
+
+        denise_forms::Form::parse(&after).expect("still a form");
+        assert_eq!(designer.selection, vec![path_named(&designer, "loose")]);
+        assert_eq!(designer.history.depth().0, 1, "a reparent is one step");
+        designer.undo();
+        assert_eq!(
+            text(&designer),
+            before,
+            "undoing the reparent was not exact"
+        );
+    }
+
+    #[test]
+    fn dragging_a_node_off_a_panel_puts_it_on_the_form() {
+        let mut designer = two_panels();
+        designer.toggle_snapping();
+        let inside = path_named(&designer, "inside");
+        let before = text(&designer);
+
+        let from = middle(&designer, &inside);
+        let to = on_stage(&designer, 200, 180);
+        drag_from_to(&mut designer, from, to);
+
+        let after = text(&designer);
+        // Out of the panel, which is left without children and so without a
+        // block to hold them.
+        assert!(
+            after.contains("panel name=left x=4 y=30 w=120 h=120\n"),
+            "{after}"
+        );
+        assert!(after.contains("x=160 y=170"), "{after}");
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel left",
+                "0:panel right",
+                "0:label inside"
+            ]
+        );
+        denise_forms::Form::parse(&after).expect("still a form");
+        designer.undo();
+        assert_eq!(
+            text(&designer),
+            before,
+            "undoing the reparent was not exact"
+        );
+    }
+
+    #[test]
+    fn a_drop_on_something_that_cannot_hold_children_lands_in_what_holds_it() {
+        let mut designer = two_panels();
+        let inside = path_named(&designer, "inside");
+        let onto = middle(&designer, &inside);
+
+        let loose = path_named(&designer, "loose");
+        let from = middle(&designer, &loose);
+        drag_from_to(&mut designer, from, onto);
+
+        // A label cannot hold anything, so the panel behind it took the drop.
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:panel left",
+                "1:label inside",
+                "1:label loose",
+                "0:panel right"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_panel_dropped_into_another_takes_its_children_with_it() {
+        let mut designer = two_panels();
+        let before = text(&designer);
+        let background = on_stage(&designer, 100, 140);
+        let onto = on_stage(&designer, 200, 90);
+        drag_from_to(&mut designer, background, onto);
+
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel right",
+                "1:panel left",
+                "2:label inside"
+            ]
+        );
+        denise_forms::Form::parse(&text(&designer)).expect("still a form");
+        designer.undo();
+        assert_eq!(
+            text(&designer),
+            before,
+            "undoing the reparent was not exact"
+        );
+    }
+
+    #[test]
+    fn a_panel_dragged_over_its_own_background_is_moved_and_not_swallowed() {
+        let mut designer = two_panels();
+        designer.toggle_snapping();
+        let before = text(&designer);
+        let background = on_stage(&designer, 100, 140);
+        let onto = on_stage(&designer, 110, 150);
+        drag_from_to(&mut designer, background, onto);
+
+        // A node cannot be dropped into itself, and the pointer never left it,
+        // so this is the plain move it looks like.
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:label loose",
+                "0:panel left",
+                "1:label inside",
+                "0:panel right"
+            ]
+        );
+        assert_eq!(
+            diff(&before, &text(&designer)),
+            vec!["    panel name=left x=14 y=40 w=120 h=120 {"],
+            "a plain move is one line: {}",
+            text(&designer)
+        );
+    }
+
+    // ------------------------------------------------------------- z-order
+
+    #[test]
+    fn bring_to_front_and_send_to_back_reorder_the_file() {
+        let mut designer = two_panels();
+        select(&mut designer, "loose");
+        let before = text(&designer);
+
+        press_key(&mut designer, KeyCode::PageUp, false);
+        assert_eq!(
+            shown_rows(&designer),
+            vec![
+                "0:panel left",
+                "1:label inside",
+                "0:panel right",
+                "0:label loose"
+            ],
+            "it did not go to the end of its siblings"
+        );
+        assert_eq!(designer.status, "moved to the front");
+        // Still what is selected, which is what makes a second press mean
+        // something.
+        assert_eq!(selected_names(&designer), vec!["loose"]);
+        // And no `z` was written: file order is the stacking.
+        assert!(!text(&designer).contains("z="), "{}", text(&designer));
+
+        press_key(&mut designer, KeyCode::PageDown, false);
+        assert_eq!(
+            text(&designer),
+            before,
+            "back to the front is back to where it was"
+        );
+        assert_eq!(designer.status, "moved to the back");
+    }
+
+    #[test]
+    fn bringing_the_front_one_further_forward_writes_nothing() {
+        let mut designer = two_panels();
+        select(&mut designer, "right");
+        let before = text(&designer);
+        press_key(&mut designer, KeyCode::PageUp, false);
+        assert_eq!(designer.status, "already at the front");
+        assert_eq!(text(&designer), before);
+        assert_eq!(designer.history.depth().0, 0);
+    }
+
+    #[test]
+    fn reordering_a_form_that_sets_z_says_that_z_is_what_decides() {
+        let source = concat!(
+            "form \"Z\" version=1 width=200 height=120 {\n",
+            "    label \"a\" name=a x=4 y=4 w=40 h=20\n",
+            "    label \"b\" name=b x=4 y=30 w=40 h=20 z=5\n",
+            "}\n",
+        );
+        let mut designer = scratch("z", source);
+
+        select(&mut designer, "a");
+        press_key(&mut designer, KeyCode::PageUp, false);
+        assert!(
+            designer.status.contains("`z` is what decides"),
+            "{}",
+            designer.status
+        );
+        // It moved in the file all the same: the file is the thing being edited.
+        assert_eq!(shown_rows(&designer), vec!["0:label b", "0:label a"]);
+    }
+
+    #[test]
+    fn undoing_a_reorder_puts_the_file_back_byte_for_byte() {
+        let mut designer = two_panels();
+        select(&mut designer, "loose");
+        let before = text(&designer);
+        press_key(&mut designer, KeyCode::PageUp, false);
+        assert_ne!(text(&designer), before);
+        designer.undo();
+        assert_eq!(text(&designer), before);
     }
 }

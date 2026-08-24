@@ -52,8 +52,10 @@ is skipped, so an invisible sheet over the whole form does not eat every click.
 |---|---|
 | Click | Selects what is under it. Shift adds and takes away. Escape clears. |
 | Tab | Walks the form in file order; Shift+Tab back. |
-| Drag the body | Moves. Drag a handle: resizes. |
+| Drag the body | Moves. Drag a handle: resizes. Drop it on a panel: reparents. |
+| Drag empty space | A rubber band. Shift keeps what was already held. |
 | Arrow keys | One pixel. With Shift, twice the grid. |
+| PageUp/PageDown | To the front of its siblings, or to the back — by reordering the file. |
 | Delete | Takes the node and everything under it out of the file. |
 | G | Turns snapping off, and on again. |
 | Ctrl/Cmd-Z | Undo. With Shift: redo. |
@@ -69,6 +71,60 @@ no layout engine. A guide is drawn on whatever it lined up with.
 the file is written once, on release, as a targeted edit to that node's line. A
 press that never moved writes nothing at all, because it was a selection. That is
 what keeps a move to a one-line diff, and what makes it one undo step.
+
+## The band
+
+![Three nodes caught by a rubber band across the top of the form: a sharp accent rectangle drawn inside the header panel, the two labels and the badge it encloses outlined on the canvas and highlighted in the outline, and the inspector on the right showing what the three have in common](../../assets/screenshots/designer-band.png)
+
+Press where there is nothing to take hold of, drag, and everything the rectangle
+**wholly** encloses is selected — brushing a node does not take it, which is what
+lets a band be drawn through a crowd to reach the two widgets at the far end.
+
+A band belongs to **one container**, and takes only its direct children. A band
+drawn across a panel from outside it would otherwise select the panel *and*
+everything in it, with no way to say which was meant; starting the band inside
+the panel says it plainly. So a panel is a thing before it is a surface: the
+first press takes hold of it, and once it is held its background is somewhere to
+band over. A band that catches nothing inside a container leaves that container
+held, so banding into one is never a one-way door.
+
+Nothing here touches the file. A selection is not an edit.
+
+## Dropping a node onto a panel
+
+![An avatar being dragged over the form's sidebar panel: the sidebar outlined in accent as the container that would take the drop, the avatar carrying its handles and its name tag, and the status line naming the panel it would land in](../../assets/screenshots/designer-drop.png)
+
+Let a node go over a panel and it becomes that panel's child, **with its
+rectangle rewritten so that it does not appear to move**. Drag it back out over
+the form and the reverse. The container that would take it is outlined while the
+drag is in flight and named in the status line, so a reparent is never a
+surprise.
+
+Dropping on something that cannot hold children targets whatever holds *it* — a
+button dropped on a button inside a panel lands in the panel. What can hold
+children is `denise_forms::owns_children` and not a list here, so a `collapse`
+takes a drop and a `select`, which holds options rather than widgets, does not. A
+node cannot be dropped into itself: the subtree being dragged is looked straight
+through.
+
+This is the same `Edit::Move` the outline's drag uses, which is why the two
+panes agree about what reparenting means rather than agreeing by care. Because
+the rectangle in a form file is relative to the parent, keeping a node still on
+the screen means giving it different numbers — so a reparent is two edits applied
+as one, and undone as one.
+
+## Front and back
+
+`PageUp` puts the selected node in front of its siblings and `PageDown` puts it
+behind them — **by moving it in the file**, not by writing `z=`. Siblings are
+drawn in file order, so the order in the file is the order on the screen, and
+somebody reading the file sees the stacking without holding a second rule in
+their head. A `z=` written here would be that second rule.
+
+Siblings only: file order decides between two children of the same parent and
+nothing else, so there is no bringing a node in front of its uncle. And on a form
+that *does* set `z`, `z` is what decides — the status line says so, rather than
+leaving somebody to wonder why the file changed and the screen did not.
 
 ## Undo
 
@@ -253,7 +309,7 @@ out of the field being typed in.
 |---|---|
 | **Palette** | Every widget the toolkit ships, from `widgets::all()`, filtered by the field above — dragged or clicked onto the canvas. |
 | **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
-| **Canvas** | The form, drawn — and selected, moved, resized and deleted. |
+| **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
 | **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, and the theme being simulated. |
 | **Log** | While previewing: the messages the form has fired, by name. |
@@ -270,11 +326,6 @@ registry carries a name and a property list and nothing else, and a table of
 descriptions in this crate is exactly what the registry exists to avoid. That
 wants a line of documentation on each widget's `Describe`, which is [#126].
 
-Three parts of [#92] are not done: a rubber band over empty space, dropping a node
-onto a panel **on the canvas** to reparent it, and bring-to-front and send-to-back.
-The reparent edit itself is here — the outline drives it — so the canvas drag is
-the gesture and not the mechanism.
-
 The outline remembers what is folded and what is hidden **by path**, so an edit
 that shifts a path leaves those pointing at whatever moved into its place. A form
 is small and a click puts it right; the alternative is giving every node an
@@ -288,14 +339,13 @@ A message field is a field, not a combo box: the name being typed is usually one
 the form has not used yet, and this toolkit has no widget that is both. What the
 form *does* already use is in the row's tooltip.
 
-[#92]: https://github.com/bisand/denise/issues/92
 [#126]: https://github.com/bisand/denise/issues/126
 
 ## Elsewhere
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
-`--drag`, `--carry` and `--preview` to pose it, since a snapshot has no pointer to select,
-drag or carry anything with — the same
+`--drag`, `--carry`, `--band` and `--preview` to pose it, since a snapshot has no
+pointer to select, drag, carry or band anything with — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 

@@ -18,7 +18,12 @@
 //! A drag moves the node's `layout` in the tree so the person can see it, and
 //! commits **once, on release**, as a targeted edit on the KDL document. One drag
 //! is one document edit — which is what keeps a move to a one-line diff, and what
-//! will make it one undo step in #94.
+//! makes it one undo step.
+//!
+//! A drag that ended over a *different* container is a reparent instead: the node
+//! moves in the tree rather than along it, and its rectangle is rewritten so that
+//! it stays where the pointer left it. Still one step, because the two edits go
+//! in together.
 
 use denise::{Point, Rect};
 use denise_forms::Placed;
@@ -106,6 +111,9 @@ pub struct Drag {
     pub grip: Grip,
     /// Where the pointer went down.
     pub from: Point,
+    /// Where the pointer is now. Where a drop lands is decided by this, so the
+    /// drag carries it rather than the release being told again.
+    pub to: Point,
     /// The node's rectangle, relative to its parent, when the drag began.
     pub origin: Rect,
     /// The node being dragged.
@@ -274,6 +282,56 @@ pub fn place(drag: &Drag, to: Point, siblings: &[Rect], grid: i32, snapping: boo
     Placement { rect, guides }
 }
 
+/// The rectangle two corners make, whichever way round they were given.
+pub fn between(from: Point, to: Point) -> Rect {
+    Rect::new(
+        from.x.min(to.x),
+        from.y.min(to.y),
+        (to.x - from.x).abs(),
+        (to.y - from.y).abs(),
+    )
+}
+
+/// A rubber band in progress.
+///
+/// # Why a band has a scope
+///
+/// A band selects among the **direct children of the container it started in**,
+/// and never descends past one. Otherwise a band drawn across a panel would
+/// select the panel *and* everything inside it, and there would be no way to say
+/// which was meant. Starting inside the panel says it plainly.
+#[derive(Clone, Debug)]
+pub struct Band {
+    /// Where the pointer went down, in screen coordinates.
+    pub from: Point,
+    /// Where it is now.
+    pub to: Point,
+    /// The container being banded over; empty for the form itself.
+    pub scope: Vec<usize>,
+    /// What was selected when the band began. Shift keeps it; a plain drag
+    /// replaces it.
+    pub kept: Vec<Vec<usize>>,
+    /// Whether the pointer has actually travelled. A band that never moved is
+    /// not a band, and leaves the selection alone.
+    pub moved: bool,
+}
+
+impl Band {
+    /// The band's rectangle, in screen coordinates.
+    pub fn rect(&self) -> Rect {
+        between(self.from, self.to)
+    }
+
+    /// Whether the band has taken hold of a node at `bounds`.
+    ///
+    /// Wholly, not partly: a band that merely brushes a node does not take it,
+    /// which is what lets a band be drawn through a crowd to reach the two
+    /// widgets at the end of it.
+    pub fn takes(&self, bounds: Rect) -> bool {
+        self.rect().contains_rect(&bounds)
+    }
+}
+
 /// The top-most node containing `at`.
 ///
 /// Every node counts, whether or not it would accept a pointer while the form was
@@ -310,6 +368,7 @@ mod tests {
         Drag {
             grip,
             from,
+            to: from,
             origin: NODE,
             path: vec![0],
             moved: true,
