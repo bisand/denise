@@ -27,6 +27,7 @@
 
 use denise::{Point, Rect};
 use denise_forms::Placed;
+use denise_ui::Side;
 
 /// How far from an edge a drag starts a resize rather than a move.
 pub const HANDLE: i32 = 7;
@@ -332,6 +333,22 @@ impl Band {
     }
 }
 
+/// Where a drawer or a shelf rests on the surface it comes in over.
+///
+/// The same rectangle [`denise_ui::Ui::push_drawer`] gives it, so the canvas
+/// shows where the form will actually be rather than an artist's impression of
+/// it: `extent` is how far it comes in, and it covers the surface across the
+/// other axis.
+pub fn resting(surface: Rect, side: Side, extent: i32) -> Rect {
+    let extent = extent.clamp(1, surface.width.max(surface.height));
+    match side {
+        Side::Before => Rect::new(surface.x, surface.y, extent, surface.height),
+        Side::After => Rect::new(surface.right() - extent, surface.y, extent, surface.height),
+        Side::Above => Rect::new(surface.x, surface.y, surface.width, extent),
+        Side::Below => Rect::new(surface.x, surface.bottom() - extent, surface.width, extent),
+    }
+}
+
 /// The top-most node containing `at`.
 ///
 /// Every node counts, whether or not it would accept a pointer while the form was
@@ -486,5 +503,40 @@ mod tests {
         assert_eq!(to_grid(-2, 4), -4);
         assert_eq!(to_grid(-1, 4), 0);
         assert_eq!(to_grid(7, 1), 7, "a grid of one is no grid");
+    }
+}
+
+#[cfg(test)]
+mod edges {
+    use super::*;
+
+    const SURFACE: Rect = Rect::new(10, 20, 400, 300);
+
+    #[test]
+    fn what_comes_in_from_an_edge_covers_the_other_axis() {
+        assert_eq!(
+            resting(SURFACE, Side::Before, 120),
+            Rect::new(10, 20, 120, 300)
+        );
+        assert_eq!(
+            resting(SURFACE, Side::After, 120),
+            Rect::new(290, 20, 120, 300)
+        );
+        assert_eq!(
+            resting(SURFACE, Side::Above, 64),
+            Rect::new(10, 20, 400, 64)
+        );
+        assert_eq!(
+            resting(SURFACE, Side::Below, 64),
+            Rect::new(10, 256, 400, 64)
+        );
+    }
+
+    #[test]
+    fn an_extent_larger_than_the_surface_is_the_surface() {
+        let all = resting(SURFACE, Side::Before, 9000);
+        assert_eq!(all.width, 400, "{all:?}");
+        // And nothing comes in by nothing at all.
+        assert_eq!(resting(SURFACE, Side::Above, 0).height, 1);
     }
 }

@@ -1,6 +1,7 @@
 //! The file, parsed but not yet built.
 
 use denise::{Role, Size, Theme, theme};
+use denise_ui::Side;
 use kdl::{KdlDocument, KdlEntry, KdlEntryFormat, KdlNode, KdlValue};
 
 use crate::error::{At, Error, Reason};
@@ -57,6 +58,30 @@ impl FormKind {
     pub const NAMES: &'static [&'static str] =
         &["screen", "window", "dialog", "drawer", "shelf", "fragment"];
 
+    /// One line on what this kind is for.
+    ///
+    /// Here rather than in the designer because it is a fact about the format:
+    /// the CLI prints it, the designer offers it when a form is being made, and
+    /// neither of them should be keeping its own copy.
+    pub const fn what(self) -> &'static str {
+        match self {
+            Self::Screen => "A panel's whole surface: the root of a `Ui`.",
+            Self::Window => "A desktop window, with a title bar and a size somebody can drag.",
+            Self::Dialog => "A modal: a pushed scene on a panel, a modal window on a desktop.",
+            Self::Drawer => "A panel that slides in from an edge, over a dimmed screen.",
+            Self::Shelf => "A bar that slides in from an edge, with nothing dimmed behind it.",
+            Self::Fragment => "A subtree with no root of its own, for reuse inside other forms.",
+        }
+    }
+
+    /// Which edge one of these comes in from when the file does not say.
+    pub const fn default_side(self) -> Side {
+        match self {
+            Self::Shelf => Side::Below,
+            _ => Side::Before,
+        }
+    }
+
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "screen" => FormKind::Screen,
@@ -71,7 +96,7 @@ impl FormKind {
 }
 
 /// The themes a form may name.
-const THEMES: &[&str] = &["dark", "light", "high-contrast"];
+pub const THEMES: &[&str] = &["dark", "light", "high-contrast"];
 
 /// A property's value, as a form file writes it.
 ///
@@ -451,8 +476,58 @@ impl Form {
             }
         }
 
-        self.named(root, "kind", FormKind::NAMES, FormKind::from_name)?;
+        let kind = self
+            .named(root, "kind", FormKind::NAMES, FormKind::from_name)?
+            .unwrap_or(FormKind::Screen);
         self.named(root, "theme", THEMES, |n| THEMES.contains(&n).then_some(()))?;
+
+        // A property the form node does not have is a mistake, and every widget
+        // node has been told so since the beginning — the form node was the one
+        // place a typo went quietly into the file and stayed there. What counts
+        // is the descriptor, and the descriptor knows which kind it is: a
+        // `resizable` on a screen is not an unused property, it is a window's
+        // property on something that is not a window, and the message says so.
+        for entry in root.entries() {
+            let Some(name) = entry.name() else {
+                continue;
+            };
+            let name = name.value();
+            if name == "version" || crate::build::form_property(kind, name).is_some() {
+                continue;
+            }
+            let accepted: Vec<&'static str> = crate::build::FORM_PROPERTIES
+                .iter()
+                .chain(crate::build::kind_properties(kind))
+                .map(|property| property.name)
+                .collect();
+            return Err(Error::new(
+                self.at(entry.span().offset()),
+                Reason::UnknownFormProperty {
+                    kind: FormKind::NAMES[kind as usize],
+                    found: name.to_string(),
+                    accepted,
+                },
+            ));
+        }
+
+        // What comes in from an edge has to say how far, or there is nothing for
+        // the engine to slide and nothing for a designer to draw. Its other axis
+        // is the surface it comes in over, which is what `width` and `height`
+        // already are.
+        if matches!(kind, FormKind::Drawer | FormKind::Shelf)
+            && root.get("extent").and_then(KdlValue::as_integer).is_none()
+        {
+            return Err(Error::new(
+                self.at_node(root),
+                Reason::Missing {
+                    kind: String::from(FormKind::NAMES[kind as usize]),
+                    name: "extent",
+                },
+            ));
+        }
+        self.named(root, "side", denise_ui::widgets::SIDES, |n| {
+            denise_ui::widgets::describe::side_from_name(n)
+        })?;
         if let Some(background) = root.get("background") {
             let name = background.as_string().ok_or_else(|| {
                 Error::new(
@@ -562,6 +637,66 @@ impl Form {
             .unwrap_or(FormKind::Screen)
     }
 
+    /// Whether a window form may be resized. `true` unless the file says not.
+    ///
+    /// Meaningless on any other kind, which is why the file is not allowed to
+    /// say it on one.
+    pub fn resizable(&self) -> bool {
+        self.root()
+            .get("resizable")
+            .and_then(KdlValue::as_bool)
+            .unwrap_or(true)
+    }
+
+    /// The smallest a window form may be made, if it says.
+    pub fn min_size(&self) -> Option<Size> {
+        let axis = |name: &str| {
+            self.root()
+                .get(name)
+                .and_then(KdlValue::as_integer)
+                .and_then(|v| u32::try_from(v).ok())
+        };
+        match (axis("min-width"), axis("min-height")) {
+            (None, None) => None,
+            (width, height) => Some(Size::new(width.unwrap_or(0), height.unwrap_or(0))),
+        }
+    }
+
+    /// How dark the backdrop behind a dialog is, 0 to 255. `160` by default,
+    /// which is what [`denise_ui::Ui::push_scene`] is usually given.
+    pub fn dim(&self) -> u8 {
+        self.root()
+            .get("dim")
+            .and_then(KdlValue::as_integer)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or(160)
+    }
+
+    /// Which edge a drawer or a shelf comes in from.
+    ///
+    /// The defaults differ by kind and deliberately: a drawer is a side panel
+    /// and a shelf is a bar, so they come in from different edges when nobody
+    /// says.
+    pub fn side(&self) -> Side {
+        self.root()
+            .get("side")
+            .and_then(KdlValue::as_string)
+            .and_then(denise_ui::widgets::describe::side_from_name)
+            .unwrap_or_else(|| self.kind().default_side())
+    }
+
+    /// How far a drawer or a shelf comes in, in logical pixels.
+    ///
+    /// Required on those two kinds, so this is what the file says or `0` on a
+    /// kind that has no such thing.
+    pub fn extent(&self) -> i32 {
+        self.root()
+            .get("extent")
+            .and_then(KdlValue::as_integer)
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or(0)
+    }
+
     /// The size the form was designed at, in logical pixels.
     pub fn size(&self) -> Size {
         let axis = |name: &str| {
@@ -616,7 +751,13 @@ impl Form {
 
     /// The node at a child path, if there is one.
     fn at_mut(&mut self, path: &[usize]) -> Option<&mut KdlNode> {
-        let (&first, rest) = path.split_first()?;
+        // The empty path is the `form` node, the same as it is for `node_at`.
+        // That is what lets an edit reach the form's own properties — its size,
+        // its kind, its theme — through the one door every other edit uses, and
+        // so undo them the same way.
+        let Some((&first, rest)) = path.split_first() else {
+            return self.doc.nodes_mut().first_mut();
+        };
         let mut node = self
             .doc
             .nodes_mut()

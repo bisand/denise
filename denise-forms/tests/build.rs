@@ -747,3 +747,198 @@ fn only_the_two_kinds_that_lay_children_out_own_children() {
         );
     }
 }
+
+// ------------------------------------------------------- the form's own kind
+
+/// A form node with whatever is given after the required parts.
+fn form_with(extra: &str) -> String {
+    format!("form \"F\" version=1 width=400 height=300 {extra}\n")
+}
+
+#[test]
+fn a_property_the_form_node_does_not_have_is_a_mistake_like_any_other() {
+    // The one place a typo used to go quietly into the file and stay there.
+    let reason = Form::parse(&form_with("widht=800")).unwrap_err().reason;
+    match reason {
+        Reason::UnknownFormProperty { found, kind, .. } => {
+            assert_eq!(found, "widht");
+            assert_eq!(kind, "screen");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_kinds_own_property_is_accepted_on_it_and_refused_on_every_other_kind() {
+    for (kind, property) in [
+        ("window", "resizable=#true"),
+        ("window", "min-width=320"),
+        ("dialog", "dim=200"),
+        ("drawer", "side=after"),
+    ] {
+        let extent = if kind == "drawer" { " extent=200" } else { "" };
+        let good = form_with(&format!("kind={kind} {property}{extent}"));
+        Form::parse(&good).unwrap_or_else(|error| panic!("`{property}` on {kind}: {error}"));
+
+        // And on a screen, which has none of them, it says whose it is.
+        let bad = form_with(&format!("kind=screen {property}"));
+        let error = Form::parse(&bad).unwrap_err();
+        assert!(
+            matches!(error.reason, Reason::UnknownFormProperty { .. }),
+            "`{property}` was accepted on a screen: {error}"
+        );
+        assert!(error.to_string().contains("screen"), "{error}");
+    }
+}
+
+#[test]
+fn what_comes_in_from_an_edge_has_to_say_how_far() {
+    for kind in ["drawer", "shelf"] {
+        let error = Form::parse(&form_with(&format!("kind={kind}"))).unwrap_err();
+        match &error.reason {
+            Reason::Missing { name, .. } => assert_eq!(*name, "extent"),
+            other => panic!("{kind}: {other:?}"),
+        }
+        Form::parse(&form_with(&format!("kind={kind} extent=240")))
+            .unwrap_or_else(|error| panic!("{kind}: {error}"));
+    }
+    // Nothing else needs one, and saying it would be saying something untrue.
+    let error = Form::parse(&form_with("kind=screen extent=240")).unwrap_err();
+    assert!(
+        matches!(error.reason, Reason::UnknownFormProperty { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_side_that_is_not_a_side_says_which_ones_are() {
+    let error = Form::parse(&form_with("kind=drawer extent=200 side=sideways")).unwrap_err();
+    assert!(error.to_string().contains("before"), "{error}");
+}
+
+#[test]
+fn the_form_reports_the_defaults_the_documentation_promises() {
+    let plain = Form::parse(&form_with("")).expect("parses");
+    assert!(
+        plain.resizable(),
+        "a window is resizable unless it says not"
+    );
+    assert_eq!(plain.min_size(), None);
+    assert_eq!(plain.dim(), 160);
+    assert_eq!(plain.extent(), 0);
+
+    // The two edge kinds default to different edges: a drawer is a side panel,
+    // a shelf is a bar.
+    let drawer = Form::parse(&form_with("kind=drawer extent=200")).expect("parses");
+    assert_eq!(drawer.side(), denise_ui::Side::Before);
+    assert_eq!(drawer.extent(), 200);
+    let shelf = Form::parse(&form_with("kind=shelf extent=64")).expect("parses");
+    assert_eq!(shelf.side(), denise_ui::Side::Below);
+
+    let window =
+        Form::parse(&form_with("kind=window resizable=#false min-width=320")).expect("parses");
+    assert!(!window.resizable());
+    assert_eq!(window.min_size(), Some(Size::new(320, 0)));
+
+    let dialog = Form::parse(&form_with("kind=dialog dim=0")).expect("parses");
+    assert_eq!(dialog.dim(), 0);
+    assert_eq!(
+        dialog.side(),
+        denise_ui::Side::Before,
+        "a dialog has no side"
+    );
+}
+
+#[test]
+fn every_form_property_is_described_once_and_only_by_the_kinds_that_have_it() {
+    use denise_forms::{FORM_PROPERTIES, FormKind, form_property, kind_properties};
+
+    let kinds = [
+        FormKind::Screen,
+        FormKind::Window,
+        FormKind::Dialog,
+        FormKind::Drawer,
+        FormKind::Shelf,
+        FormKind::Fragment,
+    ];
+    for kind in kinds {
+        for property in kind_properties(kind) {
+            assert!(
+                !FORM_PROPERTIES.iter().any(|it| it.name == property.name),
+                "`{}` is both everybody's and {kind:?}'s",
+                property.name
+            );
+            assert!(form_property(kind, property.name).is_some());
+        }
+        // Everything every form has, this kind has too.
+        for property in FORM_PROPERTIES {
+            assert!(form_property(kind, property.name).is_some(), "{kind:?}");
+        }
+        assert!(
+            form_property(kind, "version").is_none(),
+            "version is not editable"
+        );
+    }
+    // A window's is not a dialog's.
+    assert!(form_property(FormKind::Dialog, "resizable").is_none());
+    assert!(form_property(FormKind::Window, "dim").is_none());
+}
+
+#[test]
+fn a_new_form_writes_only_what_is_not_a_default() {
+    use denise_forms::{FormKind, seed_form};
+
+    // A screen at 800x480 is defaults all the way down except its size.
+    let screen = seed_form("Untitled", FormKind::Screen, Size::new(800, 480));
+    assert_eq!(screen, "form \"Untitled\" version=1 width=800 height=480\n");
+    assert!(!screen.contains("kind="), "the default kind was written");
+    assert!(!screen.contains("theme="), "the default theme was written");
+
+    // Every kind's seed loads, and says its kind when its kind is not the
+    // default one.
+    for kind in [
+        FormKind::Screen,
+        FormKind::Window,
+        FormKind::Dialog,
+        FormKind::Drawer,
+        FormKind::Shelf,
+        FormKind::Fragment,
+    ] {
+        let source = seed_form("New", kind, Size::new(1024, 600));
+        let form =
+            Form::parse(&source).unwrap_or_else(|error| panic!("{kind:?}: {error}\n{source}"));
+        assert_eq!(form.kind(), kind, "{source}");
+        assert_eq!(form.title(), "New");
+        assert_eq!(form.size(), Size::new(1024, 600));
+
+        // What comes in from an edge must say how far, and a third of the axis
+        // it comes in along is something somebody will recognise.
+        if matches!(kind, FormKind::Drawer | FormKind::Shelf) {
+            let along = match kind.default_side() {
+                denise_ui::Side::Above | denise_ui::Side::Below => 600,
+                _ => 1024,
+            };
+            assert_eq!(form.extent(), along / 3, "{kind:?}");
+        }
+    }
+}
+
+#[test]
+fn every_kind_says_what_it_is_for() {
+    use denise_forms::FormKind;
+    let mut seen: Vec<&str> = Vec::new();
+    for (index, name) in FormKind::NAMES.iter().enumerate() {
+        let kind = [
+            FormKind::Screen,
+            FormKind::Window,
+            FormKind::Dialog,
+            FormKind::Drawer,
+            FormKind::Shelf,
+            FormKind::Fragment,
+        ][index];
+        let what = kind.what();
+        assert!(what.len() > 20, "`{name}` explains nothing");
+        assert!(!seen.contains(&what), "two kinds share a line: {what}");
+        seen.push(what);
+    }
+}

@@ -1,0 +1,21 @@
+// A shelf: the motion of a drawer without the modality.
+//
+// It pushes no scene, so focus does not move and input still reaches what is
+// underneath — which is why a shelf is what an on-screen keyboard is. `side`
+// defaults to `below` here and to `before` for a drawer, so this file does not
+// write it.
+
+form "Keys" name=keys version=1 kind=shelf width=1024 height=600 extent=180 theme=dark background=base-200 {
+
+    label "Numeric entry" x=24 y=14 w=300 h=20 size=13 role=base-content
+
+    button "7" x=24 y=44 w=64 h=44 size=18 on-press=seven
+    button "8" x=96 y=44 w=64 h=44 size=18 on-press=eight
+    button "9" x=168 y=44 w=64 h=44 size=18 on-press=nine
+
+    button "4" x=24 y=96 w=64 h=44 size=18 on-press=four
+    button "5" x=96 y=96 w=64 h=44 size=18 on-press=five
+    button "6" x=168 y=96 w=64 h=44 size=18 on-press=six
+
+    button "Enter" x=248 y=44 w=120 h=96 role=primary size=16 on-press=enter
+}

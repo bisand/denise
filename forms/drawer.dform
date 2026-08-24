@@ -1,0 +1,25 @@
+// A drawer, and the two properties an edge-borne form carries.
+//
+// `width` and `height` are the **surface it comes in over**, not the drawer:
+// `extent` is how far it comes in, and across the other axis it covers the
+// surface. That is what `Ui::push_drawer` does, and what the designer draws.
+
+form "Filters" name=filters version=1 kind=drawer width=1024 height=600 side=after extent=320 theme=dark {
+
+    label "Filters" x=24 y=24 w=272 h=26 size=20
+
+    divider x=24 y=60 w=272 h=1
+
+    label "Show" x=24 y=80 w=272 h=18 size=12 role=base-content
+    select name=show x=24 y=102 w=272 h=34 on-change=show selected=0 {
+        option "Everything"
+        option "Only errors"
+        option "Only warnings"
+    }
+
+    checkbox name=archived x=24 y=156 w=24 h=24 on-change=archived
+    label "Include archived" x=56 y=158 w=240 h=20
+
+    button "Clear" x=24 y=520 w=128 h=36 on-press=clear
+    button "Apply" x=168 y=520 w=128 h=36 role=primary on-press=apply
+}

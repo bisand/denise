@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use denise::{
     ElementState, InputEvent, KeyCode, Point, PointerButton, Radius, Rect, Role, Size, theme,
 };
-use denise_forms::{Edit, Form, Handler, Literal, Payload, Picture, Placed, Wiring};
+use denise_forms::{Edit, Form, FormKind, Handler, Literal, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{
     Button, Divider, Label, List, ListItem, Panel, Property, PropertyKind, TextInput, Value,
     open_select,
@@ -13,7 +13,7 @@ use denise_ui::widgets::{
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
 use crate::arrange::{self, Command, Needs};
-use crate::canvas::{Band, Drag, Grip, Guide, between, place, snap, topmost};
+use crate::canvas::{Band, Drag, Grip, Guide, between, place, resting, snap, topmost};
 use crate::clipboard::Clipboard;
 use crate::document::Document;
 use crate::history::History;
@@ -63,6 +63,14 @@ pub enum Message {
     Browse(usize),
     /// One of the arrange commands: align, size, space, group.
     Arrange(Command),
+    /// A kind picked in the new-form sheet.
+    NewKind(usize),
+    /// A size preset picked in the new-form sheet.
+    NewSize(usize),
+    /// Make the form the new-form sheet describes.
+    Create,
+    /// Put the new-form sheet away and change nothing.
+    Never,
     /// Turns preview mode on, or off again.
     Preview,
     /// The next theme along.
@@ -104,6 +112,31 @@ const GAP: i32 = 8;
 const LOG: i32 = 84;
 /// How many fired messages the log keeps.
 const LOGGED: usize = 6;
+
+/// The new-form sheet, while somebody is answering it.
+///
+/// A form has a kind before it has anything else — Delphi asked *Form / Data
+/// module / Frame* first, and for the same reason: the kind decides what the
+/// rest of the questions even are.
+struct Making {
+    /// What has been picked so far.
+    kind: FormKind,
+    /// The kind buttons, so the picked one can be the one that looks picked.
+    kinds: Vec<NodeId>,
+    /// The line under them, which says what the picked kind is for.
+    note: NodeId,
+    /// The two fields, which a preset writes into and a person may overwrite.
+    width: NodeId,
+    height: NodeId,
+}
+
+/// The sizes offered, which are the panels this toolkit is aimed at.
+const PRESETS: &[(&str, u32, u32)] = &[
+    ("800x480", 800, 480),
+    ("1024x600", 1024, 600),
+    ("1280x720", 1280, 720),
+    ("1920x1080", 1920, 1080),
+];
 
 /// What the canvas is standing in for.
 ///
@@ -240,6 +273,10 @@ struct Chrome {
     theme_button: NodeId,
     /// The invisible sheet over the form. Hiding it *is* preview mode.
     scrim: Option<NodeId>,
+    /// What the form is shown *over*, for the kinds that are shown over
+    /// something: the dimmed backdrop behind a dialog, the screen a drawer
+    /// comes in across. `None` for a form that is the whole surface.
+    surface: Option<NodeId>,
     /// The two columns, greyed out while the form is running: a palette that
     /// looked live and was not would be worse than one that says so.
     columns: [NodeId; 2],
@@ -495,6 +532,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         preview_button,
         theme_button,
         scrim: None,
+        surface: None,
         stage,
         canvas,
     }
@@ -534,6 +572,8 @@ pub struct Designer {
     band: Option<Band>,
     /// Where copied nodes go, as `.dform` source.
     clipboard: Clipboard,
+    /// The new-form sheet, while it is up.
+    making: Option<Making>,
     /// The rest of the selection while one of them is being dragged, with the
     /// rectangle each had when the drag began. A drag moves all of them by the
     /// same amount, and writes all of them as one edit.
@@ -605,6 +645,7 @@ impl Designer {
             drag: None,
             band: None,
             clipboard: Clipboard::new(),
+            making: None,
             carrying: Vec::new(),
             dropping: None,
             overlay: Vec::new(),
@@ -733,6 +774,9 @@ impl Designer {
             self.ui.remove(id);
         }
         self.ui.remove(self.chrome.stage);
+        if let Some(surface) = self.chrome.surface.take() {
+            self.ui.remove(surface);
+        }
         self.selected = None;
         self.placed.clear();
         self.drag = None;
@@ -742,6 +786,7 @@ impl Designer {
         self.outline_drag = None;
 
         let size = self.document.form().size();
+        let kind = self.document.form().kind();
         // Centred in the viewport if it fits, and at the margin if it does not —
         // the canvas scrolls, so a form larger than the window is reachable
         // rather than cropped.
@@ -750,13 +795,62 @@ impl Designer {
         let view = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
         let x = ((view.width - size.width as i32) / 2).max(GAP);
         let y = ((view.height - size.height as i32) / 2).max(GAP);
+        let designed = Rect::new(x, y, size.width as i32, size.height as i32);
+
+        // A form is not always the whole surface, and the kinds that are not say
+        // so on the canvas rather than in a property nobody looks at. What the
+        // form is shown *over* goes down first, so the form is drawn on it.
+        let (backdrop, stage_rect) = match kind {
+            // The surface is the form's own size and the form is the strip that
+            // comes in across it — which is exactly what `width`, `height` and
+            // `extent` mean for these two.
+            FormKind::Drawer | FormKind::Shelf => {
+                let side = self.document.form().side();
+                let extent = self.document.form().extent();
+                (Some(designed), resting(designed, side, extent))
+            }
+            // Whatever is behind a dialog is the application's, so the canvas
+            // stands in for it: dimmed, the whole way out, at the depth the
+            // file asks for.
+            FormKind::Dialog => (
+                Some(Rect::new(
+                    0,
+                    0,
+                    view.width.max(designed.right() + GAP),
+                    view.height.max(designed.bottom() + GAP),
+                )),
+                designed,
+            ),
+            FormKind::Screen | FormKind::Window | FormKind::Fragment => (None, designed),
+        };
+
+        if let Some(rect) = backdrop {
+            let panel = if kind == FormKind::Dialog {
+                // A stand-in, and knowingly so: the toolkit dims a scene with
+                // black at an alpha, and a `Panel` names a theme *role* rather
+                // than a colour, so there is no role that means "whatever is
+                // behind, darker". What this draws is that there **is** a
+                // backdrop and where the dialog sits on it; `dim` in the
+                // inspector is what says how dark it will really be.
+                Panel::filled(Role::Base300)
+            } else {
+                Panel {
+                    fill: Some(Role::Base200),
+                    border: Some(Role::Base300),
+                    border_width: 1,
+                    radius: Radius::Box,
+                    backdrop: false,
+                }
+            };
+            self.chrome.surface = self.ui.add(self.chrome.canvas, panel, rect);
+        }
 
         let stage = self
             .ui
             .add(
                 self.chrome.canvas,
                 Panel::filled(self.document.form().background()),
-                Rect::new(x, y, size.width as i32, size.height as i32),
+                stage_rect,
             )
             .expect("the canvas is there");
         self.chrome.stage = stage;
@@ -812,11 +906,7 @@ impl Designer {
             radius: Radius::Box,
             backdrop: true,
         };
-        self.chrome.scrim = self.ui.add(
-            self.chrome.canvas,
-            scrim,
-            Rect::new(x, y, size.width as i32, size.height as i32),
-        );
+        self.chrome.scrim = self.ui.add(self.chrome.canvas, scrim, stage_rect);
         if let Some(id) = self.chrome.scrim {
             self.ui.set_z(id, 100);
             // Hiding it is the whole of preview mode. Nothing else about the
@@ -898,21 +988,28 @@ impl Designer {
         let paths = self.selection.clone();
         let ids: Vec<NodeId> = paths.iter().filter_map(|path| self.node_id(path)).collect();
 
+        // Nothing selected is not nothing to edit: it is the **form**, whose own
+        // properties have no node to be reached through. It is also the only
+        // way to reach them — the form node is not on the canvas and not in the
+        // outline, so a pane that said "nothing selected" was a pane saying the
+        // form's size could not be changed.
         if ids.is_empty() {
+            let form = self.document.form();
             let header = [
-                (String::from("Nothing selected"), Role::BaseContent, 13),
                 (
-                    String::from("Pick a node on the canvas or in the outline."),
-                    Role::Base300,
-                    11,
+                    String::from(denise_forms::FormKind::NAMES[form.kind() as usize]),
+                    Role::Primary,
+                    15,
                 ),
+                (form.title().to_string(), Role::BaseContent, 11),
             ];
+            let fields = self.form_fields();
             self.inspector = Some(Inspector::build(
                 &mut self.ui,
                 self.chrome.inspector_view,
                 width,
                 &header,
-                &[],
+                &fields,
             ));
             return;
         }
@@ -954,6 +1051,107 @@ impl Designer {
     ///
     /// With several selected that is the *intersection*, so an edit is never
     /// offered that only some of them could take.
+    /// The form's own properties: the ones every form has, then the ones only
+    /// this kind of form has.
+    ///
+    /// From the descriptors, like everything else in this pane — so changing the
+    /// kind changes the rows, and adding a property to the format adds a row
+    /// here without anybody editing this file.
+    fn form_fields(&self) -> Vec<Field> {
+        let kind = self.document.form().kind();
+        std::iter::once(&TITLE)
+            .chain(denise_forms::FORM_PROPERTIES)
+            .chain(denise_forms::kind_properties(kind))
+            .map(|property| {
+                // The title is the node's argument, and a form always has one.
+                let written = property.name == "title"
+                    || self.document.form().property(&[], property.name).is_some();
+                Field {
+                    property,
+                    node: false,
+                    value: Some(self.form_value(property)),
+                    written,
+                    // The title cannot be taken away: a form with no title is
+                    // not a form this format can write.
+                    resettable: property.name != "title"
+                        && self.document.form().property(&[], property.name).is_some(),
+                    hint: None,
+                }
+            })
+            .collect()
+    }
+
+    /// What a form property is showing: what the file says, or what the form
+    /// resolves it to when the file says nothing.
+    ///
+    /// The one place descriptor names are matched against accessors. It is a
+    /// mapping that has to live somewhere, and
+    /// `every_form_property_the_schema_declares_has_a_value_here` is what stops
+    /// it going quietly out of date.
+    fn form_value(&self, property: &Property) -> String {
+        let form = self.document.form();
+        let written = || form.property(&[], property.name).unwrap_or_default();
+        match property.name {
+            "title" => form.title().to_string(),
+            "name" => form.name().unwrap_or_default().to_string(),
+            "kind" => String::from(denise_forms::FormKind::NAMES[form.kind() as usize]),
+            "width" => form.size().width.to_string(),
+            "height" => form.size().height.to_string(),
+            "theme" => form.theme_name().to_string(),
+            "background" => {
+                String::from(denise_ui::widgets::describe::role_name(form.background()))
+            }
+            "resizable" => String::from(if form.resizable() { "#true" } else { "#false" }),
+            "min-width" => form
+                .min_size()
+                .map(|it| it.width.to_string())
+                .unwrap_or_default(),
+            "min-height" => form
+                .min_size()
+                .map(|it| it.height.to_string())
+                .unwrap_or_default(),
+            "dim" => form.dim().to_string(),
+            "side" => String::from(denise_ui::widgets::describe::side_name(form.side())),
+            "extent" => form.extent().to_string(),
+            _ => written(),
+        }
+    }
+
+    /// Writes one of the form's own properties.
+    ///
+    /// Never live: the size, the kind and the theme are what the canvas is
+    /// *built from*, so each of them is a rebuild rather than a value set on a
+    /// widget. What is deferred is only the caret — a field being typed in must
+    /// not have the form pulled out from under it mid-keystroke.
+    fn commit_form(&mut self, property: &'static Property, text: &str, deferred: bool) {
+        let Ok(written) = (!text.trim().is_empty())
+            .then(|| self.interpret(property, text))
+            .transpose()
+        else {
+            return;
+        };
+        self.complain("");
+
+        let edit = match (property.name, written) {
+            // The title is the form node's argument, and a form must have one:
+            // an empty field leaves it alone rather than writing `form ""`.
+            ("title", None) => return,
+            ("title", Some((literal, _))) => Edit::Argument {
+                path: Vec::new(),
+                value: literal,
+            },
+            (name, None) => Edit::property(&[], name, None),
+            (name, Some((literal, _))) => Edit::property(&[], name, Some(literal)),
+        };
+        self.edit(edit);
+
+        if deferred {
+            self.stale = true;
+        } else {
+            self.reload_from_document();
+        }
+    }
+
     fn fields(&self, paths: &[Vec<usize>], ids: &[NodeId]) -> Vec<Field> {
         let used = self.message_names();
         let hint = (!used.is_empty()).then(|| format!("Used in this form: {}", used.join(", ")));
@@ -1233,6 +1431,7 @@ impl Designer {
 
         let paths = self.selection.clone();
         if paths.is_empty() {
+            self.commit_form(property, &text, deferred);
             return;
         }
 
@@ -1458,6 +1657,25 @@ impl Designer {
     /// While previewing it takes almost nothing: the form is running, and every
     /// press and keystroke is its own. Only the way out is still the designer's.
     fn claim(&mut self, event: &InputEvent) -> bool {
+        // While the new-form sheet is up, every press belongs to it. It is a
+        // modal scene *over* the canvas, and design mode reading the events
+        // first would read a press on one of its buttons as a press on the form
+        // behind it. Escape is the way out, as it is everywhere else here.
+        if self.making() {
+            return matches!(
+                event,
+                InputEvent::Key {
+                    code: KeyCode::Escape,
+                    state: ElementState::Down,
+                    ..
+                }
+            ) && {
+                self.close_new();
+                self.status = String::from("no new form, then");
+                self.refresh_labels();
+                true
+            };
+        }
         if self.preview {
             return matches!(
                 event,
@@ -2950,6 +3168,275 @@ impl Designer {
         self.reload_from_document();
     }
 
+    // ------------------------------------------------- making a new form
+
+    /// Puts up the sheet that asks what the new form is.
+    ///
+    /// A modal scene of the designer's own, which is why design mode stops
+    /// claiming input while it is up: the canvas is behind it, and a press on
+    /// the sheet must not be read as a press on the form.
+    pub fn begin_new(&mut self) {
+        if self.making.is_some() {
+            return;
+        }
+        const WIDE: i32 = 560;
+        const TALL: i32 = 280;
+        const ROW: i32 = 30;
+
+        // The scene is the top one from here until it goes, which is what
+        // `close_new` pops: a modal over a modal is not a thing this designer
+        // does.
+        let scene = self.ui.push_scene(160);
+        let size = self.settings_size();
+        let sheet = Rect::new(
+            (size.width as i32 - WIDE) / 2,
+            (size.height as i32 - TALL) / 3,
+            WIDE,
+            TALL,
+        );
+        let card = self
+            .ui
+            .add(
+                scene,
+                Panel {
+                    fill: Some(Role::Base100),
+                    border: Some(Role::Base300),
+                    border_width: 1,
+                    radius: Radius::Box,
+                    backdrop: false,
+                },
+                sheet,
+            )
+            .expect("a scene root takes children");
+
+        let label = |ui: &mut Ui<Message>, text: &str, rect: Rect, role, size| {
+            ui.add(card, Label::new(text).with_size(size).with_role(role), rect)
+        };
+        label(
+            &mut self.ui,
+            "New form",
+            Rect::new(GAP * 2, GAP * 2, 300, 22),
+            Role::Primary,
+            17,
+        );
+        label(
+            &mut self.ui,
+            "What is it?",
+            Rect::new(GAP * 2, 48, 300, 16),
+            Role::Base300,
+            11,
+        );
+
+        // A button each rather than a dropdown: there are six, they all fit,
+        // and a person choosing what to make should be able to see what the
+        // choices are.
+        let mut kinds = Vec::new();
+        let mut x = GAP * 2;
+        for (index, name) in denise_forms::FormKind::NAMES.iter().enumerate() {
+            let width = 8 * name.len() as i32 + 18;
+            if let Some(id) = self.ui.add(
+                card,
+                Button::new(*name, Message::NewKind(index))
+                    .with_role(if index == 0 {
+                        Role::Primary
+                    } else {
+                        Role::Neutral
+                    })
+                    .with_size(12),
+                Rect::new(x, 68, width, 26),
+            ) {
+                kinds.push(id);
+            }
+            x += width + 5;
+        }
+        let note = label(
+            &mut self.ui,
+            FormKind::Screen.what(),
+            Rect::new(GAP * 2, 100, WIDE - GAP * 4, 16),
+            Role::Base300,
+            11,
+        )
+        .expect("the card is there");
+
+        label(
+            &mut self.ui,
+            "How big?",
+            Rect::new(GAP * 2, 130, 300, 16),
+            Role::Base300,
+            11,
+        );
+        let mut x = GAP * 2;
+        for (index, (name, _, _)) in PRESETS.iter().enumerate() {
+            let width = 8 * name.len() as i32 + 18;
+            self.ui.add(
+                card,
+                Button::new(*name, Message::NewSize(index))
+                    .with_role(Role::Neutral)
+                    .with_size(12),
+                Rect::new(x, 150, width, 26),
+            );
+            x += width + 5;
+        }
+
+        let field = |ui: &mut Ui<Message>, x: i32, text: &str| {
+            let id = ui.add(
+                card,
+                TextInput::<Message>::new().with_size(12),
+                Rect::new(x, 186, 90, ROW),
+            )?;
+            if let Some(input) = ui.widget_mut::<TextInput<Message>>(id) {
+                input.set_text(text.to_string());
+            }
+            Some(id)
+        };
+        label(
+            &mut self.ui,
+            "width",
+            Rect::new(GAP * 2, 192, 44, 16),
+            Role::BaseContent,
+            11,
+        );
+        let width = field(&mut self.ui, GAP * 2 + 48, "800").expect("the card is there");
+        label(
+            &mut self.ui,
+            "height",
+            Rect::new(GAP * 2 + 150, 192, 50, 16),
+            Role::BaseContent,
+            11,
+        );
+        let height = field(&mut self.ui, GAP * 2 + 204, "480").expect("the card is there");
+
+        self.ui.add(
+            card,
+            Button::new("Cancel", Message::Never)
+                .with_role(Role::Neutral)
+                .with_size(13),
+            Rect::new(WIDE - 200, TALL - 46, 88, 32),
+        );
+        self.ui.add(
+            card,
+            Button::new("Create", Message::Create)
+                .with_role(Role::Primary)
+                .with_size(13),
+            Rect::new(WIDE - 104, TALL - 46, 88, 32),
+        );
+
+        self.making = Some(Making {
+            kind: FormKind::Screen,
+            kinds,
+            note,
+            width,
+            height,
+        });
+        self.status = String::from("what kind of form is it?");
+        self.refresh_labels();
+    }
+
+    /// The window's size, which the sheet is centred in.
+    fn settings_size(&self) -> Size {
+        self.ui
+            .bounds(self.ui.root())
+            .map_or(Size::new(1280, 800), |rect| {
+                Size::new(rect.width.max(1) as u32, rect.height.max(1) as u32)
+            })
+    }
+
+    /// A kind was picked: the button that was pressed becomes the one that
+    /// looks pressed, and the line under them says what it is for.
+    pub fn choose_kind(&mut self, index: usize) {
+        let Some(kind) = [
+            FormKind::Screen,
+            FormKind::Window,
+            FormKind::Dialog,
+            FormKind::Drawer,
+            FormKind::Shelf,
+            FormKind::Fragment,
+        ]
+        .get(index)
+        .copied() else {
+            return;
+        };
+        let Some(making) = self.making.as_mut() else {
+            return;
+        };
+        making.kind = kind;
+        let (kinds, note) = (making.kinds.clone(), making.note);
+        for (nth, id) in kinds.iter().enumerate() {
+            if let Some(button) = self.ui.widget_mut::<Button<Message>>(*id) {
+                button.set_role(if nth == index {
+                    Role::Primary
+                } else {
+                    Role::Neutral
+                });
+            }
+        }
+        let what = kind.what();
+        if let Some(label) = self.ui.widget_mut::<Label>(note) {
+            label.set_text(what);
+        }
+    }
+
+    /// A size preset was picked: it goes into the two fields, which somebody
+    /// may still type over.
+    pub fn choose_size(&mut self, index: usize) {
+        let Some(&(_, width, height)) = PRESETS.get(index) else {
+            return;
+        };
+        let Some(making) = self.making.as_ref() else {
+            return;
+        };
+        let (into_width, into_height) = (making.width, making.height);
+        for (id, value) in [(into_width, width), (into_height, height)] {
+            if let Some(field) = self.ui.widget_mut::<TextInput<Message>>(id) {
+                field.set_text(value.to_string());
+            }
+        }
+    }
+
+    /// Makes the form the sheet describes.
+    pub fn create(&mut self) {
+        let Some(making) = self.making.as_ref() else {
+            return;
+        };
+        let read = |ui: &Ui<Message>, id: NodeId, fallback: u32| {
+            ui.widget::<TextInput<Message>>(id)
+                .and_then(|field| field.text().trim().parse::<u32>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(fallback)
+        };
+        let size = Size::new(
+            read(&self.ui, making.width, 800).clamp(16, 8192),
+            read(&self.ui, making.height, 480).clamp(16, 8192),
+        );
+        let kind = making.kind;
+
+        self.close_new();
+        self.document = Document::of(kind, size);
+        self.history = History::new();
+        self.warned = false;
+        self.selection.clear();
+        self.show_form();
+        self.status = format!(
+            "a new {} — {}x{}",
+            denise_forms::FormKind::NAMES[kind as usize],
+            size.width,
+            size.height
+        );
+        self.refresh_labels();
+    }
+
+    /// Puts the sheet away, whether it was answered or not.
+    pub fn close_new(&mut self) {
+        if self.making.take().is_some() {
+            self.ui.pop_scene();
+        }
+    }
+
+    /// Whether the new-form sheet is up.
+    pub const fn making(&self) -> bool {
+        self.making.is_some()
+    }
+
     // ------------------------------------------------- the clipboard
 
     /// Puts the selection on the clipboard, as `.dform` source.
@@ -3716,12 +4203,7 @@ impl Designer {
     /// Acts on one of the designer's own messages.
     pub fn handle(&mut self, message: Message) {
         match message {
-            Message::New => {
-                self.document = Document::blank();
-                self.history = History::new();
-                self.warned = false;
-                self.show_form();
-            }
+            Message::New => self.begin_new(),
             Message::Open => {
                 if let Some(path) = pick_open() {
                     self.open(path);
@@ -3748,6 +4230,14 @@ impl Designer {
             }
             Message::Renamed => self.finish_rename(),
             Message::Arrange(command) => self.arrange(command),
+            Message::NewKind(index) => self.choose_kind(index),
+            Message::NewSize(index) => self.choose_size(index),
+            Message::Create => self.create(),
+            Message::Never => {
+                self.close_new();
+                self.status = String::from("no new form, then");
+                self.refresh_labels();
+            }
             Message::Preview => self.toggle_preview(),
             Message::Theme => self.cycle_theme(),
             Message::Key(code) => {
@@ -3780,11 +4270,15 @@ impl Designer {
         else {
             return;
         };
-        let edits: Vec<Edit> = self
-            .selection
-            .iter()
-            .map(|path| Edit::property(path, name, None))
-            .collect();
+        // Nothing selected is the form, whose properties are at the empty path.
+        let edits: Vec<Edit> = if self.selection.is_empty() {
+            vec![Edit::property(&[], name, None)]
+        } else {
+            self.selection
+                .iter()
+                .map(|path| Edit::property(path, name, None))
+                .collect()
+        };
         if edits.is_empty() {
             return;
         }
@@ -3920,6 +4414,15 @@ const fn axis_of(name: &str) -> Option<usize> {
         _ => return None,
     })
 }
+
+/// The form's title, which is the form node's **argument** rather than one of
+/// its properties — so the schema has no descriptor for it, and the inspector
+/// needs one to draw a row with.
+static TITLE: Property = Property::new(
+    "title",
+    PropertyKind::Text,
+    "What this form is called. Shown in a window's title bar.",
+);
 
 /// What a tree-owned property means when the file does not write it.
 ///
@@ -5543,6 +6046,14 @@ mod tests {
         designer.poll();
     }
 
+    /// The row for a property, when the pane has one at all.
+    fn showing_row(designer: &Designer, name: &str) -> Option<usize> {
+        designer
+            .inspector
+            .as_ref()
+            .and_then(|pane| pane.rows.iter().position(|row| row.property.name == name))
+    }
+
     /// What a row is showing.
     fn showing(designer: &Designer, name: &str) -> String {
         let index = row(designer, name);
@@ -5860,14 +6371,26 @@ mod tests {
     }
 
     #[test]
-    fn nothing_selected_is_a_pane_that_says_so_rather_than_an_empty_one() {
+    fn nothing_selected_is_the_form_rather_than_an_empty_pane() {
         let mut designer = designer_on("forms/reference.dform");
         select(&mut designer, "volume");
-        assert!(!designer.inspector.as_ref().unwrap().rows.is_empty());
+        assert!(
+            showing_row(&designer, "role").is_some(),
+            "a slider has a role"
+        );
 
         press_key(&mut designer, KeyCode::Escape, false);
-        assert!(designer.inspector.as_ref().unwrap().rows.is_empty());
-        // And polling an empty pane is not a crash.
+        // The form node is on neither the canvas nor the outline, so this pane
+        // is the only way to reach what it says about itself.
+        assert_eq!(showing(&designer, "title"), "Reference");
+        assert_eq!(showing(&designer, "kind"), "screen");
+        assert_eq!(showing(&designer, "width"), "1024");
+        assert_eq!(showing(&designer, "background"), "base-200");
+        assert!(
+            showing_row(&designer, "role").is_none(),
+            "a form has no `role`"
+        );
+        // And polling it is not a crash.
         designer.poll();
     }
 
@@ -6203,10 +6726,12 @@ mod tests {
         assert_eq!(messages, vec![Message::New]);
 
         designer.handle(Message::New);
+        assert!(designer.making(), "New did not ask what to make");
+        designer.handle(Message::Create);
         assert_eq!(
             designer.outline_names().count(),
             0,
-            "a blank form names nothing"
+            "a new form names nothing"
         );
     }
 
@@ -7265,5 +7790,251 @@ mod tests {
                 .is_some_and(|it| it.contains("loose")),
             "an empty copy wiped the clipboard"
         );
+    }
+
+    // --------------------------------------------------- the form's own kind
+
+    #[test]
+    fn a_new_form_asks_what_kind_it_is_and_writes_only_what_is_not_a_default() {
+        let mut designer = designer_on("forms/reference.dform");
+        designer.handle(Message::New);
+        assert!(designer.making());
+
+        // Every kind is offered, and picking one says what it is for.
+        designer.handle(Message::NewKind(2));
+        designer.handle(Message::NewSize(1));
+        designer.handle(Message::Create);
+
+        assert!(!designer.making(), "the sheet stayed up");
+        assert_eq!(
+            designer.document.form().kind(),
+            denise_forms::FormKind::Dialog
+        );
+        assert_eq!(designer.document.form().size(), Size::new(1024, 600));
+        assert_eq!(
+            text(&designer),
+            "form \"Untitled\" version=1 kind=dialog width=1024 height=600\n",
+            "a new form should say nothing it does not have to"
+        );
+        // A form nobody has edited is not unsaved work.
+        assert_eq!(designer.history.depth().0, 0);
+    }
+
+    #[test]
+    fn a_new_drawer_says_how_far_it_comes_in_because_it_has_to() {
+        let mut designer = designer_on("forms/hello.dform");
+        designer.handle(Message::New);
+        designer.handle(Message::NewKind(3));
+        designer.handle(Message::NewSize(0));
+        designer.handle(Message::Create);
+
+        let form = designer.document.form();
+        assert_eq!(form.kind(), denise_forms::FormKind::Drawer);
+        // A third of the axis it comes in along, which is 800 for a drawer.
+        assert_eq!(form.extent(), 800 / 3);
+        denise_forms::Form::parse(&text(&designer)).expect("a drawer with no extent will not load");
+    }
+
+    #[test]
+    fn giving_up_the_sheet_leaves_the_form_that_was_open() {
+        let mut designer = designer_on("forms/reference.dform");
+        let before = text(&designer);
+        designer.handle(Message::New);
+        designer.handle(Message::NewKind(1));
+        designer.handle(Message::Never);
+
+        assert!(!designer.making());
+        assert_eq!(text(&designer), before, "it made one anyway");
+
+        // And Escape is the other way out.
+        designer.handle(Message::New);
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert!(!designer.making());
+        assert_eq!(text(&designer), before);
+    }
+
+    #[test]
+    fn while_the_sheet_is_up_the_canvas_takes_none_of_the_presses() {
+        let mut designer = designer_on("forms/reference.dform");
+        let path = path_named(&designer, "volume");
+        let at = middle(&designer, &path);
+
+        designer.handle(Message::New);
+        // A press where a node is: it belongs to the sheet over it, not to the
+        // form behind it.
+        let rest = designer.input(&[button(ElementState::Down, at)]);
+        assert_eq!(
+            rest.len(),
+            1,
+            "design mode took a press meant for the sheet"
+        );
+        assert!(
+            designer.selection.is_empty(),
+            "it selected something anyway"
+        );
+    }
+
+    #[test]
+    fn a_drawer_is_drawn_attached_to_the_side_of_the_screen_it_comes_in_over() {
+        let designer = scratch(
+            "drawer",
+            "form \"D\" version=1 kind=drawer width=800 height=480 side=after extent=200\n",
+        );
+        let surface = designer
+            .ui
+            .bounds(designer.chrome.surface.expect("a screen to come in over"))
+            .expect("laid out");
+        let stage = designer.ui.bounds(designer.chrome.stage).expect("laid out");
+
+        assert_eq!((surface.width, surface.height), (800, 480));
+        // Against the right edge, the full height, as far in as it says.
+        assert_eq!(stage.width, 200);
+        assert_eq!(stage.height, 480);
+        assert_eq!(stage.right(), surface.right());
+        assert_eq!(stage.y, surface.y);
+    }
+
+    #[test]
+    fn a_shelf_comes_in_from_the_bottom_unless_it_says_otherwise() {
+        let designer = scratch(
+            "shelf",
+            "form \"S\" version=1 kind=shelf width=800 height=480 extent=120\n",
+        );
+        let surface = designer
+            .ui
+            .bounds(designer.chrome.surface.expect("a screen"))
+            .expect("laid out");
+        let stage = designer.ui.bounds(designer.chrome.stage).expect("laid out");
+        assert_eq!(stage.width, 800);
+        assert_eq!(stage.height, 120);
+        assert_eq!(stage.bottom(), surface.bottom());
+    }
+
+    #[test]
+    fn a_dialog_is_drawn_on_a_backdrop_and_a_screen_is_not() {
+        let dialog = scratch(
+            "dialog",
+            "form \"A\" version=1 kind=dialog width=380 height=180\n",
+        );
+        let backdrop = dialog
+            .ui
+            .bounds(dialog.chrome.surface.expect("a backdrop"))
+            .expect("laid out");
+        let stage = dialog.ui.bounds(dialog.chrome.stage).expect("laid out");
+        assert_eq!((stage.width, stage.height), (380, 180));
+        assert!(
+            backdrop.width > stage.width && backdrop.height > stage.height,
+            "the backdrop does not reach past the dialog: {backdrop:?}"
+        );
+
+        // A screen is the whole surface, so there is nothing behind it.
+        let screen = designer_on("forms/hello.dform");
+        assert!(screen.chrome.surface.is_none());
+    }
+
+    #[test]
+    fn the_forms_own_size_is_changed_from_the_pane_and_undone_from_it() {
+        let mut designer = designer_on("forms/hello.dform");
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert_eq!(showing(&designer, "width"), "460");
+
+        let before = text(&designer);
+        write(&mut designer, "width", "640");
+        designer.settle();
+
+        assert_eq!(designer.document.form().size(), Size::new(640, 260));
+        let stage = designer.ui.bounds(designer.chrome.stage).expect("laid out");
+        assert_eq!(stage.width, 640, "the canvas did not follow the file");
+
+        designer.undo();
+        assert_eq!(text(&designer), before, "undoing the resize was not exact");
+    }
+
+    #[test]
+    fn changing_the_kind_changes_which_rows_the_pane_has() {
+        let mut designer = designer_on("forms/hello.dform");
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert!(
+            showing_row(&designer, "extent").is_none(),
+            "a screen has none"
+        );
+        assert!(showing_row(&designer, "resizable").is_none());
+
+        // The dropdown writes through the same door a field does.
+        designer.commit_form(
+            denise_forms::form_property(denise_forms::FormKind::Screen, "kind").expect("kind"),
+            "window",
+            false,
+        );
+        assert_eq!(
+            designer.document.form().kind(),
+            denise_forms::FormKind::Window
+        );
+        assert!(
+            showing_row(&designer, "resizable").is_some(),
+            "a window has one"
+        );
+        assert_eq!(showing(&designer, "resizable"), "#true", "and its default");
+        assert!(
+            showing_row(&designer, "dim").is_none(),
+            "that is a dialog's"
+        );
+    }
+
+    #[test]
+    fn every_form_property_the_schema_declares_has_a_value_in_the_pane() {
+        // The one place descriptor names are matched against accessors by hand.
+        // A property added to the format and forgotten here would show as empty
+        // for ever; this is what says so instead.
+        let designer = designer_on("forms/reference.dform");
+        for kind in [
+            denise_forms::FormKind::Screen,
+            denise_forms::FormKind::Window,
+            denise_forms::FormKind::Dialog,
+            denise_forms::FormKind::Drawer,
+            denise_forms::FormKind::Shelf,
+            denise_forms::FormKind::Fragment,
+        ] {
+            for property in denise_forms::FORM_PROPERTIES
+                .iter()
+                .chain(denise_forms::kind_properties(kind))
+            {
+                // `name`, `min-width` and `min-height` are genuinely empty when
+                // the file does not write them; the rest all resolve to
+                // something.
+                if matches!(property.name, "name" | "min-width" | "min-height") {
+                    continue;
+                }
+                assert!(
+                    !designer.form_value(property).is_empty(),
+                    "`{}` has no value for a {kind:?}",
+                    property.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_forms_title_is_edited_in_the_pane_and_is_the_nodes_argument() {
+        let mut designer = designer_on("forms/hello.dform");
+        press_key(&mut designer, KeyCode::Escape, false);
+        assert_eq!(showing(&designer, "title"), "Hello");
+
+        write(&mut designer, "title", "Greeting");
+        designer.settle();
+        assert_eq!(designer.document.form().title(), "Greeting");
+        assert!(
+            text(&designer).contains("form \"Greeting\""),
+            "{}",
+            text(&designer)
+        );
+        // And it cannot be taken away: a form with no title is not a form.
+        let title = designer
+            .form_fields()
+            .into_iter()
+            .find(|field| field.property.name == "title")
+            .expect("a title row");
+        assert!(title.written);
+        assert!(!title.resettable, "the title offered a reset");
     }
 }

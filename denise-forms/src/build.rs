@@ -16,7 +16,7 @@ use denise_ui::{Anchors, Dock, NodeId, Ui};
 use kdl::{KdlNode, KdlValue};
 
 use crate::error::{At, Error, Reason};
-use crate::form::{Form, MAX_DEPTH};
+use crate::form::{Form, FormKind, MAX_DEPTH};
 
 /// Pixels for a picture a form named, as [`Wiring::asset`] hands them back.
 #[derive(Clone, Debug)]
@@ -178,6 +178,109 @@ const ANYWHERE: PropertyKind = PropertyKind::Int {
     min: -8192,
     max: 8192,
 };
+
+/// The properties the `form` node itself carries, whatever kind it is.
+///
+/// Not `version`, which is the file format's rather than the form's and is not
+/// somebody's to edit; and not the title, which is the node's *argument* rather
+/// than a property. Everything else about a form is here, which is what lets an
+/// inspector show a form the same way it shows a widget — from a descriptor,
+/// with no list of its own.
+pub const FORM_PROPERTIES: &[Property] = &[
+    Property::new(
+        "name",
+        PropertyKind::Text,
+        "What the application calls this form. Names what the typed layer generates.",
+    ),
+    Property::new(
+        "kind",
+        PropertyKind::Enum(FormKind::NAMES),
+        "What this form is for: a screen, a window, a dialog, a drawer, a shelf, or a fragment.",
+    ),
+    Property::new(
+        "width",
+        PropertyKind::Int { min: 1, max: 8192 },
+        "The width the form was designed at, in logical pixels.",
+    ),
+    Property::new(
+        "height",
+        PropertyKind::Int { min: 1, max: 8192 },
+        "The height the form was designed at, in logical pixels.",
+    ),
+    Property::new(
+        "theme",
+        PropertyKind::Enum(crate::form::THEMES),
+        "Which built-in theme the form is drawn with.",
+    ),
+    Property::new(
+        "background",
+        PropertyKind::Enum(denise_ui::widgets::ROLES),
+        "The surface the form is drawn on.",
+    ),
+];
+
+/// What only a window has.
+const WINDOW_PROPERTIES: &[Property] = &[
+    Property::new(
+        "resizable",
+        PropertyKind::Bool,
+        "Whether the window may be resized. Windows only.",
+    ),
+    Property::new(
+        "min-width",
+        PropertyKind::Int { min: 0, max: 8192 },
+        "The narrowest the window may be made. Windows only.",
+    ),
+    Property::new(
+        "min-height",
+        PropertyKind::Int { min: 0, max: 8192 },
+        "The shortest the window may be made. Windows only.",
+    ),
+];
+
+/// What only a dialog has.
+const DIALOG_PROPERTIES: &[Property] = &[Property::new(
+    "dim",
+    PropertyKind::Int { min: 0, max: 255 },
+    "How dark the backdrop behind the dialog is, 0 to 255. Dialogs only.",
+)];
+
+/// What comes in from an edge: a drawer and a shelf, which differ in modality
+/// and not in shape.
+const EDGE_PROPERTIES: &[Property] = &[
+    Property::new(
+        "side",
+        PropertyKind::Enum(denise_ui::widgets::SIDES),
+        "Which edge it comes in from.",
+    ),
+    Property::new(
+        "extent",
+        PropertyKind::Int { min: 1, max: 8192 },
+        "How far it comes in. Required; across the other axis it covers the surface.",
+    ),
+];
+
+/// The properties a form of this kind carries **and no other kind does**.
+///
+/// A `resizable` on a screen is not a property with no effect; it is a mistake,
+/// and saying so is the whole reason this is a function of the kind rather than
+/// one long list.
+pub const fn kind_properties(kind: FormKind) -> &'static [Property] {
+    match kind {
+        FormKind::Window => WINDOW_PROPERTIES,
+        FormKind::Dialog => DIALOG_PROPERTIES,
+        FormKind::Drawer | FormKind::Shelf => EDGE_PROPERTIES,
+        FormKind::Screen | FormKind::Fragment => &[],
+    }
+}
+
+/// Whether the `form` node may carry this property, given its kind.
+pub fn form_property(kind: FormKind, name: &str) -> Option<&'static Property> {
+    FORM_PROPERTIES
+        .iter()
+        .chain(kind_properties(kind))
+        .find(|property| property.name == name)
+}
 
 /// The properties the *tree* owns rather than the widget.
 ///
@@ -371,6 +474,32 @@ pub fn seed(kind: &str, rect: Rect) -> String {
         _ => "",
     });
     node
+}
+
+/// A whole form file with nothing in it yet, writing **only** what is not a
+/// default.
+///
+/// What *File → New* produces. A form that spelled out every default would read
+/// as a form somebody had made decisions about, and the next person would have
+/// to check each one against the schema to find out that none of them meant
+/// anything. The exception is `extent`, which a drawer and a shelf must say:
+/// this picks a third of the axis it comes in along, which is a drawer somebody
+/// will recognise rather than one they have to fix before they can see it.
+pub fn seed_form(title: &str, kind: FormKind, size: Size) -> String {
+    let mut out = format!("form {title:?} version={}", crate::form::VERSION);
+    if kind != FormKind::Screen {
+        out.push_str(&format!(" kind={}", FormKind::NAMES[kind as usize]));
+    }
+    out.push_str(&format!(" width={} height={}", size.width, size.height));
+    if matches!(kind, FormKind::Drawer | FormKind::Shelf) {
+        let along = match kind.default_side() {
+            denise_ui::Side::Above | denise_ui::Side::Below => size.height,
+            denise_ui::Side::Before | denise_ui::Side::After => size.width,
+        };
+        out.push_str(&format!(" extent={}", (along / 3).max(1)));
+    }
+    out.push('\n');
+    out
 }
 
 impl Form {

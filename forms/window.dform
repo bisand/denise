@@ -1,0 +1,24 @@
+// A desktop window, and the properties only a window carries.
+//
+// `resizable` and the two minimums are a window's alone: writing one of them on
+// a screen is the same error as a typo, which is the point of the kind being in
+// the file rather than in the application that loads it.
+
+form "Preferences" name=preferences version=1 kind=window width=520 height=340 resizable=#true min-width=420 min-height=280 theme=dark {
+
+    label "Preferences" x=24 y=20 w=300 h=26 size=20
+
+    divider x=24 y=56 w=472 h=1
+
+    label "Your name" x=24 y=76 w=200 h=18 size=12 role=base-content
+    text-input name=who x=24 y=98 w=472 h=34 placeholder="who you are" on-submit=save
+
+    checkbox name=startup x=24 y=150 w=24 h=24 checked=#true on-change=startup
+    label "Open the last form on startup" x=56 y=152 w=440 h=20
+
+    toggle name=verbose x=24 y=186 w=44 h=24 on-change=verbose
+    label "Verbose logging" x=76 y=188 w=440 h=20
+
+    button "Cancel" x=296 y=282 w=92 h=34 on-press=cancel
+    button "Save" x=396 y=282 w=100 h=34 role=primary on-press=save
+}

@@ -91,7 +91,7 @@ pub use checkbox::Checkbox;
 pub use collapse::{Accordion, Collapse, FOLD_MS, set_open};
 pub use describe::{
     ALIGNMENTS, Describe, DynDescribe, FITS, Mismatch, ORIENTATIONS, PRESENCES, Payload, Property,
-    PropertyError, PropertyKind, RADII, ROLES, Value, WidgetInfo, all,
+    PropertyError, PropertyKind, RADII, ROLES, SIDES, Value, WidgetInfo, all,
 };
 pub use divider::Divider;
 pub use image::{Fit, Image};

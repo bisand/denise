@@ -95,6 +95,7 @@ is skipped, so an invisible sheet over the whole form does not eat every click.
 | F5 | Runs the form, and stops running it. Escape also stops. |
 | Enter | Puts down whatever the palette has armed. Escape gives it up. |
 | F2 | Renames the selected node, in the outline, in place. |
+| Escape | Clears the selection — which is what puts the *form's* properties in the pane. |
 
 Snapping is to a 4-pixel grid and, in preference to it, to the edges and centres
 of the node's **siblings** — the only alignment that means anything when there is
@@ -374,6 +375,38 @@ has to fix by hand.
 missing-character box. Which is what every tree control drew before it had the
 glyphs for anything better.
 
+## The form itself
+
+![The new-form sheet: a card over the dimmed designer asking what kind of form it is — screen, window, dialog, drawer, shelf or fragment — with a line saying what the picked one is for, four size presets, width and height fields, and Cancel and Create](../../assets/screenshots/designer-new.png)
+
+A form is not only a tree. It has a **kind**, and the kind is the first thing
+asked, the way Delphi asked *Form / Data module / Frame*: it decides what the
+rest of the questions even are. *New* puts up a sheet with all six, because
+somebody choosing what to make should be able to see the choices, and what it
+writes is **only what is not a default** — a form that spelled out every default
+would read as a form somebody had made decisions about.
+
+With nothing selected, the inspector shows the form's own properties. That is
+the only way to reach them: the form node is not on the canvas and not in the
+outline, so a pane that said *nothing selected* was a pane saying the form's
+size could not be changed. The rows come from the same descriptors the widget
+rows do, so **the kind changes which rows there are** — a window has
+`resizable`, a dialog has `dim`, a drawer has `side` and `extent`, and a screen
+has none of them. Writing one on the wrong kind is refused with the same error a
+typo gets.
+
+**The canvas shows the kind.** A dialog is drawn at the size it will have, on a
+backdrop; a drawer and a shelf are drawn attached to their edge of the screen
+they come in over, at exactly the rectangle `Ui::push_drawer` will give them —
+`width` and `height` are that screen and `extent` is how far it comes in. A
+screen, a window and a fragment are the whole surface and get no backdrop.
+
+The dimmed backdrop behind a dialog is a stand-in and knowingly so: the toolkit
+dims a scene with black at an alpha, and a `Panel` names a theme *role* rather
+than a colour, so there is no role that means "whatever is behind, darker". What
+the canvas draws is that there **is** a backdrop and where the dialog sits on
+it; `dim` in the inspector is what says how dark it will really be.
+
 ## The inspector
 
 Select something and its properties fill the right pane, each with an editor
@@ -418,7 +451,7 @@ out of the field being typed in.
 | **Palette** | Every widget the toolkit ships, from `widgets::all()`, filtered by the field above — dragged or clicked onto the canvas. |
 | **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
 | **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, copied, pasted and deleted. |
-| **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
+| **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. With nothing selected: the form's own. |
 | **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, and the theme being simulated. |
 | **Arrange** | Align, same size, space evenly, group and ungroup — greyed one button at a time, each saying in its tooltip what it wants. |
 | **Log** | While previewing: the messages the form has fired, by name. |
@@ -440,10 +473,6 @@ that shifts a path leaves those pointing at whatever moved into its place. A for
 is small and a click puts it right; the alternative is giving every node an
 identity the file does not have.
 
-The **form's own** properties — its title, its size, its theme — are not in the
-pane: it shows the selected *node*, and the form node cannot be selected. Its
-size is what the canvas is, so changing it wants somewhere of its own.
-
 A message field is a field, not a combo box: the name being typed is usually one
 the form has not used yet, and this toolkit has no widget that is both. What the
 form *does* already use is in the row's tooltip.
@@ -453,8 +482,8 @@ form *does* already use is in the row's tooltip.
 ## Elsewhere
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
-`--drag`, `--carry`, `--band` and `--preview` to pose it, since a snapshot has no
-pointer to select, drag, carry or band anything with — the same
+`--drag`, `--carry`, `--band`, `--new` and `--preview` to pose it, since a
+snapshot has no pointer to select, drag, carry or band anything with — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 

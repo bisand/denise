@@ -203,13 +203,21 @@ what the designer does with each.
 | `screen` | the root tree of a `Ui`, a panel's whole surface | — |
 | `window` | a `denise-winit` `WindowConfig` | `resizable` (bool, `#true`), `min-width`, `min-height` (integer) |
 | `dialog` | `Ui::push_scene` on a panel; a `Modality::Modal` window on a desktop | `dim` (integer `0`–`255`, `160`) |
-| `drawer` | `Ui::push_drawer` | `side` ([side](#other-enums), `before`), `extent` (integer) |
-| `shelf` | `Ui::push_shelf` | `side` ([side](#other-enums), `below`), `extent` (integer) |
+| `drawer` | `Ui::push_drawer` | `side` ([side](#other-enums), `before`), `extent` (integer, **required**) |
+| `shelf` | `Ui::push_shelf` | `side` ([side](#other-enums), `below`), `extent` (integer, **required**) |
 | `fragment` | a subtree with no root of its own, for reuse — Delphi's *Frame* | — |
 
 `width` and `height` are still required for a drawer or a shelf: `extent` is how
 far it comes in, and the other axis is the surface it comes in over, which the
 designer needs in order to draw it.
+
+**A kind's extra properties are that kind's.** `resizable` on a screen is not a
+property with no effect; it is a window's property on something that is not a
+window, and it is refused with the same error a typo gets — which is what the
+paragraph above promises for every node, and the `form` node is a node. There is
+a small file for each kind next to the reference form:
+[`window`](../forms/window.dform), [`dialog`](../forms/dialog.dform),
+[`drawer`](../forms/drawer.dform) and [`shelf`](../forms/shelf.dform).
 
 ### Every node
 
