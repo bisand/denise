@@ -21,6 +21,7 @@ members = [
     "denise-winit",
     "examples/bare-linux",
     "examples/browser",
+    "examples/designed",
     "examples/forms",
     "examples/gallery",
     "examples/hello",

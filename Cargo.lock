@@ -994,6 +994,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
+name = "designed"
+version = "0.19.0"
+dependencies = [
+ "bare-linux",
+ "denise",
+ "denise-forms",
+ "denise-ui",
+ "denise-winit",
+ "rustix 1.1.4",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
