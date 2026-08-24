@@ -679,6 +679,19 @@ impl Form {
         Some(spell(self.node_at(path)?.get(name)?))
     }
 
+    /// The source of one node, as it stands in the file, with its own
+    /// indentation taken off.
+    ///
+    /// What copying a node puts on the clipboard: `.dform` source that reads as
+    /// source. Its children come with it, and so does a comment written above
+    /// it — the node's leading trivia is part of the node, which is the same
+    /// reason an undone removal puts the comment back.
+    pub fn node_text(&self, path: &[usize]) -> Option<String> {
+        let node = self.node_at(path)?;
+        let own = indent_of(node);
+        Some(reindent(&node.to_string(), &own, "", false))
+    }
+
     /// A node's positional argument — the `"Hello"` in `label "Hello"`.
     pub fn argument(&self, path: &[usize]) -> Option<String> {
         let node = self.node_at(path)?;
@@ -817,6 +830,7 @@ impl Form {
                 let empty = holder.children().is_none();
                 let was = empty.then(|| holder.to_string());
                 let indent = indent_of(holder);
+                let step = self.indent_step();
 
                 let bare = node.format().is_none_or(|format| format.leading.is_empty());
                 let children = self.block_mut(&parent).ok_or_else(|| {
@@ -839,12 +853,17 @@ impl Form {
                 // only the first in a block also carries the newline that
                 // follows the brace, because nothing before it did.
                 if bare {
+                    // And *all* of it, not only its first line: a pasted panel
+                    // arrives with its children, and they are as deep as the
+                    // panel is now.
+                    let laid = reindent(
+                        &node.to_string(),
+                        "",
+                        &format!("{indent}{step}"),
+                        index == 0,
+                    );
+                    node = one_node(&laid)?;
                     let mut format = node.format().cloned().unwrap_or_default();
-                    format.leading = if index == 0 {
-                        format!("\n{indent}    ")
-                    } else {
-                        format!("{indent}    ")
-                    };
                     format.terminator = String::from("\n");
                     node.set_format(format);
                 }
@@ -1255,6 +1274,101 @@ fn one_node(text: &str) -> Result<KdlNode, Error> {
             Reason::Syntax(format!("this must be one node; it is {}", other.len())),
         )),
     }
+}
+
+/// The top-level nodes of a fragment of form source, each as its own text.
+///
+/// A *fragment* is what the nodes of a form look like without the `form` node
+/// around them: what copying a selection produces, and what somebody who typed
+/// a widget into a text editor is likely to have. Each node comes back with its
+/// own indentation taken off, ready for [`Edit::Insert`] to lay it out wherever
+/// it is going.
+///
+/// Every `name=` in it that `taken` already holds is given a number until it
+/// does not collide, and every name it settles on is added to `taken`. So
+/// pasting the same fragment twice gives two sets of names rather than two
+/// clashes, and the caller passes in the names the document already uses.
+///
+/// This answers whether the text is *nodes*. Whether they are widgets this
+/// engine knows, with properties it has, is what [`Form::build`] answers — the
+/// schema lives with the builder and there is no second copy of it here, so a
+/// caller that cares builds the fragment before pasting it.
+///
+/// ```
+/// # use denise_forms::fragment;
+/// let mut taken = vec![String::from("card")];
+/// let nodes = fragment("panel name=card x=0 y=0 w=10 h=10", &mut taken)?;
+/// assert_eq!(nodes, vec![String::from("panel name=card2 x=0 y=0 w=10 h=10")]);
+/// assert_eq!(taken, vec![String::from("card"), String::from("card2")]);
+/// # Ok::<(), denise_forms::Error>(())
+/// ```
+pub fn fragment(text: &str, taken: &mut Vec<String>) -> Result<Vec<String>, Error> {
+    // The same two guards a whole file gets, and for the same reason: this text
+    // came from the system clipboard, which is to say from anywhere.
+    if text.len() > MAX_SOURCE {
+        return Err(Error::new(
+            At::START,
+            Reason::TooLarge { limit: MAX_SOURCE },
+        ));
+    }
+    if let Some(at) = too_deep(text) {
+        return Err(Error::new(
+            At::of(text, at),
+            Reason::TooDeep { limit: MAX_DEPTH },
+        ));
+    }
+
+    let mut doc: KdlDocument = text.parse().map_err(|error: kdl::KdlError| {
+        let first = error.diagnostics.first();
+        let at = first.map_or(At::START, |d| At::of(text, d.span.offset()));
+        let message = first
+            .and_then(|d| d.message.clone())
+            .unwrap_or_else(|| String::from("this is not form source"));
+        Error::new(at, Reason::Syntax(message))
+    })?;
+
+    for node in doc.nodes_mut() {
+        rename_apart(node, taken)?;
+    }
+    Ok(doc
+        .nodes()
+        .iter()
+        .map(|node| reindent(&node.to_string(), &indent_of(node), "", false))
+        .collect())
+}
+
+/// Gives every `name=` in a subtree one that `taken` does not already hold.
+fn rename_apart(node: &mut KdlNode, taken: &mut Vec<String>) -> Result<(), Error> {
+    if let Some(entry) = node.entry("name") {
+        let was = spell(entry.value());
+        let now = unused(&was, taken);
+        if now != was {
+            set_literal(node, "name", &Literal::Name(now.clone()))?;
+        }
+        taken.push(now);
+    }
+    if let Some(block) = node.children_mut() {
+        for child in block.nodes_mut() {
+            rename_apart(child, taken)?;
+        }
+    }
+    Ok(())
+}
+
+/// `name` if nobody has it, and `name2`, `name3`… until somebody does not.
+///
+/// A name that already ends in digits carries on from its stem, so pasting
+/// `nav2` gives `nav3` rather than `nav22`.
+fn unused(name: &str, taken: &[String]) -> String {
+    if !taken.iter().any(|held| held == name) {
+        return String::from(name);
+    }
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    let stem = if stem.is_empty() { name } else { stem };
+    (2usize..)
+        .map(|number| format!("{stem}{number}"))
+        .find(|candidate| !taken.iter().any(|held| held == candidate))
+        .unwrap_or_else(|| String::from(name))
 }
 
 /// A path as it stands once `removed` has been taken out.

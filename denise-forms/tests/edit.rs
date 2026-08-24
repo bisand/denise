@@ -5,7 +5,7 @@
 //! back in order restores the document exactly — comments, blank lines, column
 //! alignment and all. Nothing here snapshots anything.
 
-use denise_forms::{Edit, Form, Literal};
+use denise_forms::{Edit, Form, Literal, Reason, fragment};
 
 fn repo_form(name: &str) -> String {
     let path = format!("{}/../forms/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -630,6 +630,149 @@ fn reordering_among_siblings_undoes_exactly() {
 
     form.apply(undo).expect("undone");
     assert_eq!(form.text(), NESTED);
+}
+
+// ------------------------------------------------------- copying and pasting
+
+#[test]
+fn the_source_of_a_node_comes_back_without_the_indentation_it_stood_in() {
+    let form = Form::parse(NESTED).expect("parses");
+    assert_eq!(
+        form.node_text(&[0]).as_deref(),
+        Some("label \"one\" x=0 y=0 w=10 h=10\n")
+    );
+    // A panel brings its children, at the depth they have relative to it.
+    assert_eq!(
+        form.node_text(&[1]).as_deref(),
+        Some(concat!(
+            "panel name=left x=0 y=20 w=100 h=100 {\n",
+            "    label \"two\" x=1 y=1 w=10 h=10\n",
+            "    label \"three\" x=1 y=20 w=10 h=10\n",
+            "}\n",
+        ))
+    );
+    assert_eq!(form.node_text(&[9]), None);
+}
+
+#[test]
+fn a_copied_node_pastes_back_in_and_is_laid_out_where_it_lands() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    let copied = form.node_text(&[1]).expect("the left panel");
+
+    let mut taken: Vec<String> = vec![String::from("left"), String::from("right")];
+    let nodes = fragment(&copied, &mut taken).expect("a fragment");
+    assert_eq!(nodes.len(), 1);
+    assert!(nodes[0].contains("name=left2"), "{}", nodes[0]);
+
+    // Into the *other* panel, which is one level deeper than it came from.
+    form.apply(Edit::Insert {
+        parent: vec![2],
+        index: 1,
+        text: nodes[0].clone(),
+    })
+    .expect("pasted");
+
+    let after = form.text();
+    assert!(
+        after.contains(concat!(
+            "        panel name=left2 x=0 y=20 w=100 h=100 {\n",
+            "            label \"two\" x=1 y=1 w=10 h=10\n",
+            "            label \"three\" x=1 y=20 w=10 h=10\n",
+            "        }\n",
+        )),
+        "the children did not follow the panel down a level:\n{after}"
+    );
+    Form::parse(&after).expect("still a form");
+}
+
+#[test]
+fn undoing_a_paste_takes_the_whole_subtree_back_out() {
+    let mut form = Form::parse(NESTED).expect("parses");
+    let copied = form.node_text(&[1]).expect("the left panel");
+    let mut taken = vec![String::from("left")];
+    let nodes = fragment(&copied, &mut taken).expect("a fragment");
+
+    let undo = form
+        .apply(Edit::Insert {
+            parent: Vec::new(),
+            index: 4,
+            text: nodes[0].clone(),
+        })
+        .expect("pasted");
+    assert_ne!(form.text(), NESTED);
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), NESTED, "undoing the paste was not exact");
+}
+
+#[test]
+fn every_name_in_a_pasted_subtree_is_made_unique_and_the_rest_is_left_alone() {
+    let mut taken = vec![
+        String::from("card"),
+        String::from("card2"),
+        String::from("title"),
+    ];
+    let nodes = fragment(
+        concat!(
+            "panel name=card x=0 y=0 w=10 h=10 {\n",
+            "    label \"T\" name=title x=1 y=1 w=2 h=2\n",
+            "    label \"U\" name=other x=1 y=4 w=2 h=2\n",
+            "}\n",
+        ),
+        &mut taken,
+    )
+    .expect("a fragment");
+
+    let text = &nodes[0];
+    assert!(text.contains("name=card3"), "{text}");
+    assert!(text.contains("name=title2"), "{text}");
+    assert!(
+        text.contains("name=other"),
+        "a free name was changed: {text}"
+    );
+    // And the caller's list now holds what was settled on, so a second paste
+    // does not land on the same names.
+    assert!(taken.contains(&String::from("card3")));
+    assert!(taken.contains(&String::from("other")));
+}
+
+#[test]
+fn a_name_that_already_ends_in_a_number_carries_on_from_its_stem() {
+    let mut taken = vec![String::from("nav2")];
+    let nodes = fragment("label \"N\" name=nav2 x=0 y=0 w=1 h=1", &mut taken).expect("a fragment");
+    assert!(nodes[0].contains("name=nav3"), "{}", nodes[0]);
+}
+
+#[test]
+fn several_nodes_paste_as_several_nodes() {
+    let mut taken = Vec::new();
+    let nodes = fragment(
+        "label \"a\" x=0 y=0 w=1 h=1\nlabel \"b\" x=0 y=4 w=1 h=1\n",
+        &mut taken,
+    )
+    .expect("a fragment");
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes[0].contains("\"a\""));
+    assert!(nodes[1].contains("\"b\""));
+}
+
+#[test]
+fn nonsense_on_the_clipboard_is_reported_rather_than_pasted() {
+    let mut taken = Vec::new();
+    let error = fragment(
+        "label \"a\" x=0 y=0 w=1 h=1\n{{{ this is not a form",
+        &mut taken,
+    )
+    .expect_err("refused");
+    assert!(matches!(error.reason, Reason::Syntax(_)), "{error}");
+    assert_eq!(error.at.line, 2, "the line is the fragment's own: {error}");
+    assert!(taken.is_empty(), "a refused paste took names anyway");
+}
+
+#[test]
+fn a_fragment_deeper_than_the_limit_is_refused_rather_than_overflowing() {
+    let mut taken = Vec::new();
+    let deep = "panel x=0 y=0 w=1 h=1 { ".repeat(denise_forms::MAX_DEPTH + 4);
+    assert!(fragment(&deep, &mut taken).is_err());
 }
 
 #[test]
