@@ -19,8 +19,16 @@ use crate::inspector::{Editor, Field, Inspector, show_value};
 use crate::outline::{self, Outline};
 use crate::settings::Settings;
 
+/// How many message names a form can have before the log stops naming them.
+///
+/// A widget that carries a value holds a **function pointer** — `fn(bool) -> M`
+/// — which cannot capture which name it belongs to. So there is a table of
+/// function pointers, one per name, generated below; sixty-four is more names
+/// than a screen has and the log says so plainly if a form has more.
+const NAMES: usize = 64;
+
 /// What the designer's own widgets emit.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Message {
     /// Start a new form.
     New,
@@ -51,12 +59,26 @@ pub enum Message {
     Chose(usize),
     /// Find a picture for an inspector row, through the platform's dialog.
     Browse(usize),
-    /// A message the *form under design* emits.
+    /// Turns preview mode on, or off again.
+    Preview,
+    /// The next theme along.
+    Theme,
+    /// A key tapped on the on-screen keyboard.
+    Key(KeyCode),
+    /// A message the **form under design** emitted, by the index of its name.
     ///
     /// A designer cannot know an application's message type, so every name in an
-    /// open form resolves to this one. Nothing fires it while the canvas is in
-    /// design mode — the scrim over the form absorbs the press — and preview mode
-    /// (#99) is where it starts meaning something.
+    /// open form resolves to one of these four. Nothing fires them while the
+    /// canvas is in design mode — the scrim over the form absorbs the press — and
+    /// in preview mode they are what the log is showing.
+    Fired(usize),
+    /// One carrying a flag: a checkbox, a toggle, a collapse.
+    FiredBool(usize, bool),
+    /// One carrying a choice: anything that selects one of several.
+    FiredIndex(usize, usize),
+    /// One carrying a number: a slider, a rating.
+    FiredNumber(usize, f32),
+    /// A name the form used that this build ran out of table for.
     Inert,
 }
 
@@ -72,6 +94,42 @@ const FILTER: i32 = 26;
 const THRESHOLD: i32 = 4;
 const HEADER: i32 = 22;
 const GAP: i32 = 8;
+/// The message log, while previewing. Nothing at all while designing.
+const LOG: i32 = 84;
+/// How many fired messages the log keeps.
+const LOGGED: usize = 6;
+
+/// What the canvas is standing in for.
+///
+/// Preview mode is **hiding the scrim** and letting the events through, which is
+/// what the whole canvas design was for; the rest of it is simulating the machine
+/// the form will run on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Simulated {
+    /// Whatever the file's own `theme=` says.
+    Own,
+    Dark,
+    Light,
+    HighContrast,
+}
+
+impl Simulated {
+    const ALL: [Self; 4] = [Self::Own, Self::Dark, Self::Light, Self::HighContrast];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Own => "theme: the form's",
+            Self::Dark => "theme: dark",
+            Self::Light => "theme: light",
+            Self::HighContrast => "theme: high contrast",
+        }
+    }
+
+    fn next(self) -> Self {
+        let at = Self::ALL.iter().position(|held| *held == self).unwrap_or(0);
+        Self::ALL[(at + 1) % Self::ALL.len()]
+    }
+}
 
 /// A widget on its way from the palette onto the canvas.
 ///
@@ -162,6 +220,20 @@ struct Chrome {
     /// The inspector's scrolling viewport. The pane inside it is replaced
     /// whenever the selection changes; this outlives every form.
     inspector_view: NodeId,
+    /// The strip that lists the messages the form has fired. Nothing but a
+    /// docked node of no height until preview mode gives it some.
+    log: NodeId,
+    /// The lines inside it, replaced whenever one arrives.
+    log_lines: NodeId,
+    /// The button that says which mode it is.
+    preview_button: NodeId,
+    /// The button that says which theme is being simulated.
+    theme_button: NodeId,
+    /// The invisible sheet over the form. Hiding it *is* preview mode.
+    scrim: Option<NodeId>,
+    /// The two columns, greyed out while the form is running: a palette that
+    /// looked live and was not would be worse than one that says so.
+    columns: [NodeId; 2],
     /// The node the form is built under, replaced whenever a form is opened.
     stage: NodeId,
     /// The canvas's scrolling viewport, which the stage is centred in.
@@ -187,7 +259,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     ui.set_dock(toolbar, Some(Dock::Top));
 
     let mut x = GAP;
-    let mut history_buttons = Vec::new();
+    let mut kept: Vec<NodeId> = Vec::new();
     for (text, message) in [
         ("New", Message::New),
         ("Open…", Message::Open),
@@ -195,23 +267,32 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         ("Save as…", Message::SaveAs),
         ("Undo", Message::Undo),
         ("Redo", Message::Redo),
+        ("Design", Message::Preview),
+        (Simulated::Own.name(), Message::Theme),
     ] {
         let width = 8 * text.chars().count() as i32 + 24;
         let id = ui.add(
             toolbar,
             Button::new(text, message)
-                .with_role(Role::Neutral)
+                .with_role(if matches!(message, Message::Preview) {
+                    Role::Primary
+                } else {
+                    Role::Neutral
+                })
                 .with_size(13),
             Rect::new(x, GAP, width, TOOLBAR - GAP * 2),
         );
-        if matches!(message, Message::Undo | Message::Redo)
-            && let Some(id) = id
+        if matches!(
+            message,
+            Message::Undo | Message::Redo | Message::Preview | Message::Theme
+        ) && let Some(id) = id
         {
-            history_buttons.push(id);
+            kept.push(id);
         }
         x += width + 6;
     }
-    let (undo_button, redo_button) = (history_buttons[0], history_buttons[1]);
+    let (undo_button, redo_button) = (kept[0], kept[1]);
+    let (preview_button, theme_button) = (kept[2], kept[3]);
     let title = ui
         .add(
             toolbar,
@@ -237,6 +318,17 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
             Rect::new(GAP, 0, 4000, STATUS),
         )
         .expect("status bar");
+
+    // Above the status line and across the whole width, and of no height at all
+    // until preview mode gives it some: a strip that was there while designing
+    // would be a strip with nothing in it.
+    let log = ui
+        .add(root, Panel::filled(Role::Base200), Rect::new(0, 0, 0, 0))
+        .expect("root");
+    ui.set_dock(log, Some(Dock::Bottom));
+    let log_lines = ui
+        .add(log, Panel::default(), Rect::new(0, 0, 1, 1))
+        .expect("the log strip is there");
 
     let left = ui
         .add(
@@ -340,6 +432,12 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         palette,
         outline_view,
         inspector_view,
+        columns: [left, right],
+        log,
+        log_lines,
+        preview_button,
+        theme_button,
+        scrim: None,
         stage,
         canvas,
     }
@@ -384,7 +482,19 @@ pub struct Designer {
     inspector: Option<Inspector>,
     /// The row whose dropdown is open, and the popup it opened.
     choosing: Option<(usize, NodeId)>,
-    /// Whether the canvas is behind the file.
+    /// Whether the form is being run rather than drawn.
+    preview: bool,
+    /// Which theme the canvas is standing in for.
+    simulated: Simulated,
+    /// Every message name the open form used, for the log to name them by.
+    names: Vec<String>,
+    /// The last few messages the form fired, newest last.
+    fired: Vec<String>,
+    /// The on-screen keyboard, up over the form while previewing.
+    keyboard: denise_keyboard::Keyboard,
+    /// Whether it was up last time anybody looked.
+    keyboard_up: bool,
+    /// Whether the form is behind the file.
     ///
     /// Some edits cannot be shown by setting something on a widget — a property
     /// taken away has to come back as the widget's own default, and a message
@@ -430,6 +540,12 @@ impl Designer {
             grid: 4,
             inspector: None,
             choosing: None,
+            preview: false,
+            simulated: Simulated::Own,
+            names: Vec::new(),
+            fired: Vec::new(),
+            keyboard: denise_keyboard::Keyboard::from_system().0,
+            keyboard_up: false,
             stale: false,
             history: History::new(),
             warned: false,
@@ -462,6 +578,12 @@ impl Designer {
     /// version of it until then, and it is at least impossible to lose a form to
     /// one keystroke.
     pub fn request_exit(&mut self) {
+        // Escape out of a running form goes back to designing it, which is what
+        // the key does in every tool that has a preview.
+        if self.preview {
+            self.toggle_preview();
+            return;
+        }
         if self.history.is_dirty() && !self.warned {
             self.warned = true;
             self.status = format!(
@@ -567,6 +689,7 @@ impl Designer {
         let mut wiring = Design {
             base: self.document.base(),
             missing: Vec::new(),
+            names: Vec::new(),
         };
         let outcome = self
             .document
@@ -575,6 +698,7 @@ impl Designer {
             .map(|built| {
                 self.placed = built.placed().to_vec();
             });
+        self.names = std::mem::take(&mut wiring.names);
 
         match outcome {
             Ok(()) => {
@@ -613,12 +737,16 @@ impl Designer {
             radius: Radius::Box,
             backdrop: true,
         };
-        if let Some(id) = self.ui.add(
+        self.chrome.scrim = self.ui.add(
             self.chrome.canvas,
             scrim,
             Rect::new(x, y, size.width as i32, size.height as i32),
-        ) {
+        );
+        if let Some(id) = self.chrome.scrim {
             self.ui.set_z(id, 100);
+            // Hiding it is the whole of preview mode. Nothing else about the
+            // form changes: the same tree, the same widgets, the same paint.
+            self.ui.set_visible(id, !self.preview);
         }
 
         // The selection is held by path, so it survives a rebuild — but the
@@ -912,6 +1040,22 @@ impl Designer {
         let (can_undo, can_redo) = (self.history.can_undo(), self.history.can_redo());
         self.ui.set_enabled(self.chrome.undo_button, can_undo);
         self.ui.set_enabled(self.chrome.redo_button, can_redo);
+
+        // The button says what pressing it does, which is the other mode.
+        let mode = if self.preview { "Design" } else { "Preview" };
+        if let Some(button) = self
+            .ui
+            .widget_mut::<Button<Message>>(self.chrome.preview_button)
+        {
+            button.set_label(mode);
+        }
+        let theme = self.simulated.name();
+        if let Some(button) = self
+            .ui
+            .widget_mut::<Button<Message>>(self.chrome.theme_button)
+        {
+            button.set_label(theme);
+        }
 
         let title = self.document.label();
         if let Some(label) = self.ui.widget_mut::<Label>(self.chrome.title) {
@@ -1219,7 +1363,28 @@ impl Designer {
     }
 
     /// Whether design mode took this event.
+    ///
+    /// While previewing it takes almost nothing: the form is running, and every
+    /// press and keystroke is its own. Only the way out is still the designer's.
     fn claim(&mut self, event: &InputEvent) -> bool {
+        if self.preview {
+            return matches!(
+                event,
+                InputEvent::Key {
+                    code: KeyCode::F5,
+                    state: ElementState::Down,
+                    ..
+                }
+            ) && {
+                self.toggle_preview();
+                true
+            };
+        }
+        self.claim_designing(event)
+    }
+
+    /// Whether design mode took this event, while designing.
+    fn claim_designing(&mut self, event: &InputEvent) -> bool {
         let canvas = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
         let palette = self
             .ui
@@ -1309,6 +1474,202 @@ impl Designer {
             } => self.key(*code, *modifiers),
             _ => false,
         }
+    }
+
+    // --------------------------------------------------------------- preview
+
+    /// Whether the form is being run rather than drawn.
+    pub const fn previewing(&self) -> bool {
+        self.preview
+    }
+
+    /// Runs the form, or stops running it.
+    ///
+    /// The whole of the first half is **hiding the scrim** — the invisible sheet
+    /// that has been absorbing every press over the form — and letting design
+    /// mode stop claiming the canvas's events. The same tree, the same widgets,
+    /// the same paint; what changes is who the events belong to.
+    ///
+    /// Going back rebuilds the form from the file, which is what puts the typed
+    /// text and the toggled toggles back to what the file says. There is no
+    /// snapshot of runtime state to restore, because the file is the state.
+    pub fn toggle_preview(&mut self) {
+        self.preview = !self.preview;
+
+        if self.preview {
+            // Nothing that belongs to designing survives into running: no
+            // selection, no handles, no half-finished placement, no rename.
+            self.cancel_placing();
+            self.cancel_rename();
+            self.close_choice();
+            self.selection.clear();
+            self.selected = None;
+            self.fired.clear();
+            self.reselected();
+            if let Some(scrim) = self.chrome.scrim {
+                self.ui.set_visible(scrim, false);
+            }
+            self.status = String::from("running the form — F5 or Escape goes back");
+        } else {
+            self.keyboard.close(&mut self.ui);
+            self.ui.focus(None);
+            // The file is the state, so this is the reset.
+            self.reload_from_document();
+            self.status = String::from("designing");
+        }
+
+        // The panes are not the form's, so they go grey rather than pretending
+        // to work: a press on a palette row while the form was running would
+        // otherwise arm a widget nobody could ever place.
+        for column in self.chrome.columns {
+            self.ui.set_enabled(column, !self.preview);
+        }
+        self.resize_log();
+        self.refresh_labels();
+    }
+
+    /// Gives the log strip its height, or takes it away again.
+    fn resize_log(&mut self) {
+        let height = if self.preview { LOG } else { 0 };
+        self.ui
+            .set_layout(self.chrome.log, Rect::new(0, 0, 0, height));
+        self.refresh_log();
+    }
+
+    /// Redraws the log for the messages the form has fired.
+    fn refresh_log(&mut self) {
+        self.ui.remove(self.chrome.log_lines);
+        let width = self.ui.bounds(self.chrome.log).unwrap_or(Rect::ZERO).width;
+        let lines = self
+            .ui
+            .add(
+                self.chrome.log,
+                Panel::default(),
+                Rect::new(0, 0, width.max(1), LOG.max(1)),
+            )
+            .expect("the log strip is there");
+        self.chrome.log_lines = lines;
+        if !self.preview {
+            return;
+        }
+
+        if self.fired.is_empty() {
+            self.ui.add(
+                lines,
+                Label::new("no messages yet — press something on the form")
+                    .with_size(11)
+                    .with_role(Role::Base300),
+                Rect::new(GAP, 4, width - GAP * 2, 14),
+            );
+            return;
+        }
+        // Newest last, so the eye stays at the bottom where the next one lands.
+        for (index, line) in self.fired.iter().enumerate() {
+            let last = index + 1 == self.fired.len();
+            self.ui.add(
+                lines,
+                Label::new(line.clone()).with_size(11).with_role(if last {
+                    Role::Accent
+                } else {
+                    Role::BaseContent
+                }),
+                Rect::new(GAP, 4 + index as i32 * 13, width - GAP * 2, 13),
+            );
+        }
+    }
+
+    /// Notes a message the form fired.
+    fn log_fired(&mut self, index: usize, value: Option<String>) {
+        let name = self
+            .names
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| String::from("(more names than this build can hold)"));
+        let line = match value {
+            Some(value) => format!("{name}({value})"),
+            None => name,
+        };
+        self.fired.push(line);
+        // A strip, not a transcript: the oldest goes when the newest arrives.
+        while self.fired.len() > LOGGED {
+            self.fired.remove(0);
+        }
+        self.refresh_log();
+    }
+
+    /// The next theme along, applied to the whole window.
+    ///
+    /// The whole window, and not only the canvas, because there is one tree and
+    /// one theme — which is the same reason the canvas is pixel-exact about what
+    /// the panel will draw. Going back to designing is what puts the designer's
+    /// own theme back.
+    pub fn cycle_theme(&mut self) {
+        self.simulated = self.simulated.next();
+        self.apply_theme();
+        self.status = String::from(self.simulated.name());
+        self.refresh_labels();
+    }
+
+    fn apply_theme(&mut self) {
+        let theme = match self.simulated {
+            Simulated::Own => self.document.form().theme(),
+            Simulated::Dark => theme::DARK,
+            Simulated::Light => theme::LIGHT,
+            Simulated::HighContrast => theme::HIGH_CONTRAST,
+        };
+        self.ui.set_theme(theme);
+    }
+
+    /// Lets the on-screen keyboard see the events before the tree does.
+    ///
+    /// Its alternates gesture is answered by its own hit test — the press that
+    /// opened the popup is still down on the key — so it needs them first and
+    /// unedited. Only while previewing: the keyboard is part of the machine being
+    /// simulated, and a designer whose own fields summoned one would be a
+    /// designer you could not type a property into.
+    pub fn keyboard_input(&mut self, events: &[InputEvent]) {
+        if !self.preview {
+            return;
+        }
+        let typed = self.keyboard.handle(&mut self.ui, events);
+        if !typed.is_empty() {
+            self.ui.handle(&typed);
+        }
+    }
+
+    /// A held key, and the caret deciding whether a keyboard is wanted.
+    pub fn keyboard_turn(&mut self, now_ms: u64) {
+        if !self.preview {
+            return;
+        }
+        let repeats = self.keyboard.tick(&mut self.ui, now_ms);
+        if !repeats.is_empty() {
+            self.ui.handle(&repeats);
+        }
+        // Focus lands on a field and the keyboard comes up; it leaves and the
+        // keyboard goes. Which is the behaviour worth being able to check on the
+        // form being designed, because it is the one that moves the form.
+        self.keyboard.follow_focus(&mut self.ui, Message::Key);
+
+        // Said out loud when it changes, because *how much of the form the
+        // keyboard is covering* is the thing somebody is previewing to find out.
+        let up = self.keyboard_open();
+        if up != self.keyboard_up {
+            self.keyboard_up = up;
+            self.status = match self.keyboard.occluded(&self.ui) {
+                Some(covered) => format!(
+                    "the keyboard is up, over the bottom {} pixels of the surface",
+                    covered.height
+                ),
+                None => String::from("the keyboard is away"),
+            };
+            self.refresh_labels();
+        }
+    }
+
+    /// Whether the on-screen keyboard is up.
+    pub const fn keyboard_open(&self) -> bool {
+        self.keyboard.is_open()
     }
 
     // --------------------------------------------------------------- outline
@@ -2097,6 +2458,10 @@ impl Designer {
                 self.place_armed();
                 true
             }
+            KeyCode::F5 => {
+                self.toggle_preview();
+                true
+            }
             KeyCode::F2 if !self.selection.is_empty() => {
                 self.begin_rename();
                 true
@@ -2426,6 +2791,18 @@ impl Designer {
                 }
             }
             Message::Renamed => self.finish_rename(),
+            Message::Preview => self.toggle_preview(),
+            Message::Theme => self.cycle_theme(),
+            Message::Key(code) => {
+                let events = self.keyboard.press_key(&mut self.ui, code);
+                self.ui.handle(&events);
+            }
+            Message::Fired(index) => self.log_fired(index, None),
+            Message::FiredBool(index, value) => self.log_fired(index, Some(value.to_string())),
+            Message::FiredIndex(index, value) => self.log_fired(index, Some(value.to_string())),
+            Message::FiredNumber(index, value) => {
+                self.log_fired(index, Some(crate::inspector::trim(value)));
+            }
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
             Message::Reset(row) => self.reset(row),
@@ -2640,25 +3017,66 @@ fn pick_save() -> Option<PathBuf> {
         .save_file()
 }
 
+/// A function pointer per message name, because one cannot carry an index.
+///
+/// `|value| Message::FiredBool(3, value)` captures nothing, so it coerces to a
+/// `fn(bool) -> Message` — which is what a `Checkbox` holds. What it cannot do is
+/// take the `3` from a variable, so there is one of these per name and the
+/// engine is handed the one belonging to the name it just resolved.
+macro_rules! by_name {
+    ($($index:literal)*) => {
+        const FLAGS: &[fn(bool) -> Message] =
+            &[$(|value| Message::FiredBool($index, value)),*];
+        const CHOICES: &[fn(usize) -> Message] =
+            &[$(|value| Message::FiredIndex($index, value)),*];
+        const NUMBERS: &[fn(f32) -> Message] =
+            &[$(|value| Message::FiredNumber($index, value)),*];
+    };
+}
+
+by_name!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63);
+
 /// What the designer supplies a form it did not write.
 struct Design {
     base: PathBuf,
     missing: Vec<String>,
+    /// Every message name the form used, in the order they were first seen. The
+    /// index into this is what a fired message carries.
+    names: Vec<String>,
 }
 
 impl Wiring<Message> for Design {
-    /// Every name resolves.
+    /// Every name resolves, and carries which name it was.
     ///
     /// A designer cannot know an application's message type, and a form that
     /// would not open because the designer had never heard of `on-press=greet`
-    /// would be useless. So every name is accepted and every one means
-    /// [`Message::Inert`]; the scrim over the canvas means none of them fires.
-    fn message(&mut self, _name: &str, payload: Payload) -> Option<Handler<Message>> {
+    /// would be useless. So every name is accepted, and what it resolves to
+    /// remembers the name — which is what preview mode's log shows, and the
+    /// answer to "is `on-press=greet` wired up" without writing the application
+    /// first.
+    fn message(&mut self, name: &str, payload: Payload) -> Option<Handler<Message>> {
+        let index = match self.names.iter().position(|held| held == name) {
+            Some(index) => index,
+            None => {
+                self.names.push(name.to_string());
+                self.names.len() - 1
+            }
+        };
+        // Past the end of the table: the message still fires, and the log says
+        // it cannot name it rather than naming the wrong one.
+        if index >= NAMES {
+            return Some(match payload {
+                Payload::None => Handler::Plain(Message::Inert),
+                Payload::Bool => Handler::Bool(|_| Message::Inert),
+                Payload::Index => Handler::Index(|_| Message::Inert),
+                Payload::Number => Handler::Number(|_| Message::Inert),
+            });
+        }
         Some(match payload {
-            Payload::None => Handler::Plain(Message::Inert),
-            Payload::Bool => Handler::Bool(|_| Message::Inert),
-            Payload::Index => Handler::Index(|_| Message::Inert),
-            Payload::Number => Handler::Number(|_| Message::Inert),
+            Payload::None => Handler::Plain(Message::Fired(index)),
+            Payload::Bool => Handler::Bool(FLAGS[index]),
+            Payload::Index => Handler::Index(CHOICES[index]),
+            Payload::Number => Handler::Number(NUMBERS[index]),
         })
     }
 
@@ -3097,6 +3515,301 @@ mod tests {
         designer.release();
         assert_eq!(designer.overlay.len(), settled);
         assert!(!designer.selection.is_empty());
+    }
+
+    // ------------------------------------------------------------- preview
+
+    #[test]
+    fn preview_lets_the_form_behave_and_design_mode_stops_it() {
+        // `hello.dform`, because it fits the canvas whole: the reference form is
+        // wider than the pane, and a press meant for a button in it would land
+        // on the inspector instead and prove nothing.
+        let mut designer = designer_on("forms/hello.dform");
+        let scrim = designer.chrome.scrim.expect("a scrim");
+        assert!(designer.ui.visible(scrim), "designing without a scrim");
+
+        // A press on the form's button does nothing while designing.
+        let greet = designer
+            .placed
+            .iter()
+            .find(|node| node.kind == "button")
+            .expect("hello.dform has a button")
+            .path
+            .clone();
+        let at = middle(&designer, &greet);
+        let canvas = designer
+            .ui
+            .bounds(designer.chrome.canvas)
+            .expect("a canvas");
+        assert!(canvas.contains(at), "{at:?} is not over {canvas:?}");
+        feed(
+            &mut designer,
+            &[
+                button_at(ElementState::Down, at),
+                button_at(ElementState::Up, at),
+            ],
+        );
+        assert!(
+            designer.ui.drain_messages().next().is_none(),
+            "the form acted while it was being designed"
+        );
+
+        press_key(&mut designer, KeyCode::F5, false);
+        assert!(designer.previewing());
+        assert!(
+            !designer.ui.visible(scrim),
+            "the scrim survived into preview"
+        );
+        // And nothing that belongs to designing came with it.
+        assert!(designer.selection.is_empty());
+        assert!(
+            designer.overlay.is_empty(),
+            "handles were left on a running form"
+        );
+
+        // Now the same press reaches the button.
+        feed(
+            &mut designer,
+            &[
+                button_at(ElementState::Down, at),
+                button_at(ElementState::Up, at),
+            ],
+        );
+        let messages: Vec<Message> = designer.ui.drain_messages().collect();
+        assert_eq!(
+            messages,
+            vec![Message::Fired(names_of(&designer, "greet"))],
+            "the form did not act"
+        );
+
+        press_key(&mut designer, KeyCode::F5, false);
+        assert!(!designer.previewing());
+        let scrim = designer.chrome.scrim.expect("a scrim again");
+        assert!(designer.ui.visible(scrim));
+    }
+
+    /// The index the log knows a message name by.
+    fn names_of(designer: &Designer, name: &str) -> usize {
+        designer
+            .names
+            .iter()
+            .position(|held| held == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{name}` is not a message this form uses: {:?}",
+                    designer.names
+                )
+            })
+    }
+
+    fn button_at(state: ElementState, at: Point) -> InputEvent {
+        InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state,
+            position: at,
+            modifiers: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_message_the_form_fires_shows_up_in_the_log_by_name() {
+        // The whole point of the log: `on-press=retry` is wired, and this says
+        // so without an application being written first.
+        let mut designer = designer_on("forms/reference.dform");
+        press_key(&mut designer, KeyCode::F5, false);
+
+        designer.handle(Message::Fired(names_of(&designer, "retry")));
+        assert_eq!(designer.fired, vec!["retry"]);
+
+        // One carrying a value says what the value was.
+        let notify = names_of(&designer, "set-notify");
+        designer.handle(Message::FiredBool(notify, true));
+        assert_eq!(designer.fired, vec!["retry", "set-notify(true)"]);
+
+        let volume = names_of(&designer, "set-volume");
+        designer.handle(Message::FiredNumber(volume, 42.5));
+        assert_eq!(designer.fired.last().unwrap(), "set-volume(42.5)");
+
+        // A strip, not a transcript.
+        for _ in 0..20 {
+            designer.handle(Message::Fired(names_of(&designer, "save")));
+        }
+        assert_eq!(designer.fired.len(), LOGGED);
+    }
+
+    #[test]
+    fn typing_into_a_field_while_previewing_and_going_back_forgets_it() {
+        // The reset the issue asks for, and there is no snapshot behind it: the
+        // file is the state, so rebuilding from the file *is* the reset.
+        let mut designer = designer_on("forms/reference.dform");
+        assert!(designer.select_named("secret"));
+        let field = designer.selected().expect("selected");
+        let before = text(&designer);
+
+        press_key(&mut designer, KeyCode::F5, false);
+        designer.ui.focus(Some(field));
+        for character in "hello".chars() {
+            feed(&mut designer, &[InputEvent::Text { ch: character }]);
+        }
+        assert_eq!(
+            designer
+                .ui
+                .widget::<TextInput<Message>>(field)
+                .expect("a field")
+                .text(),
+            "hello",
+            "the form would not take the keystrokes"
+        );
+        assert_eq!(
+            text(&designer),
+            before,
+            "running the form wrote to the file"
+        );
+
+        press_key(&mut designer, KeyCode::F5, false);
+        assert!(designer.select_named("secret"));
+        let field = designer.selected().expect("selected");
+        assert_eq!(
+            designer
+                .ui
+                .widget::<TextInput<Message>>(field)
+                .expect("a field")
+                .text(),
+            "",
+            "what was typed survived going back to designing"
+        );
+    }
+
+    #[test]
+    fn escape_out_of_a_running_form_goes_back_to_designing_it_rather_than_leaving() {
+        let mut designer = designer_on("forms/hello.dform");
+        press_key(&mut designer, KeyCode::F5, false);
+        assert!(designer.previewing());
+
+        designer.request_exit();
+        assert!(!designer.previewing(), "Escape did not come out of preview");
+        assert!(!designer.exit_requested(), "Escape closed the designer");
+
+        // And now it means what it always meant.
+        designer.request_exit();
+        assert!(designer.exit_requested());
+    }
+
+    #[test]
+    fn the_log_strip_has_no_height_until_there_is_something_to_put_in_it() {
+        let mut designer = designer_on("forms/hello.dform");
+        let strip = designer.chrome.log;
+        assert_eq!(designer.ui.bounds(strip).map(|r| r.height), Some(0));
+
+        press_key(&mut designer, KeyCode::F5, false);
+        assert_eq!(designer.ui.bounds(strip).map(|r| r.height), Some(LOG));
+        // Across the whole width, above the status line.
+        let bounds = designer.ui.bounds(strip).expect("laid out");
+        assert_eq!(bounds.x, 0);
+        assert_eq!(bounds.width, WINDOW.width as i32);
+        assert_eq!(bounds.y + bounds.height, WINDOW.height as i32 - STATUS);
+
+        press_key(&mut designer, KeyCode::F5, false);
+        assert_eq!(designer.ui.bounds(strip).map(|r| r.height), Some(0));
+    }
+
+    #[test]
+    fn the_theme_control_walks_the_built_in_themes_and_says_which() {
+        let mut designer = designer_on("forms/reference.dform");
+        // `reference.dform` says `theme=dark`, and that is where it starts.
+        assert_eq!(designer.ui.theme().name, theme::DARK.name);
+
+        designer.cycle_theme();
+        assert_eq!(designer.ui.theme().name, theme::DARK.name);
+        assert!(designer.status.contains("dark"), "{}", designer.status);
+
+        designer.cycle_theme();
+        assert_eq!(designer.ui.theme().name, theme::LIGHT.name);
+        designer.cycle_theme();
+        assert_eq!(designer.ui.theme().name, theme::HIGH_CONTRAST.name);
+
+        // Round again to the form's own.
+        designer.cycle_theme();
+        assert_eq!(designer.simulated, Simulated::Own);
+        designer.apply_theme();
+        assert_eq!(designer.ui.theme().name, theme::DARK.name);
+    }
+
+    #[test]
+    fn the_keyboard_comes_up_for_a_field_while_previewing_and_never_while_designing() {
+        let mut designer = designer_on("forms/hello.dform");
+        assert!(designer.select_named("who"));
+        let field = designer.selected().expect("selected");
+
+        // Designing: focus goes where it is put and no keyboard appears.
+        designer.ui.focus(Some(field));
+        designer.keyboard_turn(0);
+        assert!(
+            !designer.keyboard_open(),
+            "a keyboard over a form being designed"
+        );
+
+        press_key(&mut designer, KeyCode::F5, false);
+        assert!(designer.select_named("who"));
+        let field = designer.selected().expect("selected");
+        designer.ui.focus(Some(field));
+        designer.keyboard_turn(0);
+        assert!(
+            designer.keyboard_open(),
+            "no keyboard for a field in a running form"
+        );
+        // And it is over the bottom of the surface, which is the thing being
+        // checked: how much of the form it covers.
+        let covered = designer
+            .keyboard
+            .occluded(&designer.ui)
+            .expect("the keyboard occludes something");
+        assert!(covered.height > 0, "{covered:?}");
+        assert!(
+            designer.status.contains("keyboard is up"),
+            "{}",
+            designer.status
+        );
+
+        // Going back takes it away.
+        press_key(&mut designer, KeyCode::F5, false);
+        assert!(!designer.keyboard_open());
+    }
+
+    #[test]
+    fn preview_takes_nothing_of_the_designers_own_input() {
+        // The canvas, the palette and the outline all stop being design mode's.
+        let mut designer = designer_on("forms/hello.dform");
+        press_key(&mut designer, KeyCode::F5, false);
+
+        // Greyed out, so a press on a row reaches nothing and answers nothing.
+        let row = palette_point(&mut designer, "button");
+        click_at(&mut designer, row, false);
+        let answered: Vec<Message> = designer.ui.drain_messages().collect();
+        assert!(answered.is_empty(), "the palette answered: {answered:?}");
+        assert_eq!(
+            designer.placing,
+            Placing::Idle,
+            "the palette armed a widget"
+        );
+
+        let card = path_named(&designer, "card");
+        let at = middle(&designer, &card);
+        click_at(&mut designer, at, false);
+        assert!(
+            designer.selection.is_empty(),
+            "the canvas selected something"
+        );
+
+        // And they answer again once the form stops running.
+        press_key(&mut designer, KeyCode::F5, false);
+        let row = palette_point(&mut designer, "button");
+        click_at(&mut designer, row, false);
+        assert_eq!(
+            designer.placing,
+            Placing::Armed { kind: "button" },
+            "the palette stayed grey"
+        );
     }
 
     // ------------------------------------------------------------- outline

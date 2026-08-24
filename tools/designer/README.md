@@ -57,6 +57,7 @@ is skipped, so an invisible sheet over the whole form does not eat every click.
 | Delete | Takes the node and everything under it out of the file. |
 | G | Turns snapping off, and on again. |
 | Ctrl/Cmd-Z | Undo. With Shift: redo. |
+| F5 | Runs the form, and stops running it. Escape also stops. |
 | Enter | Puts down whatever the palette has armed. Escape gives it up. |
 | F2 | Renames the selected node, in the outline, in place. |
 
@@ -89,6 +90,54 @@ away again.
 Closing with unsaved work stops once and says so; ask again and it goes. A modal
 would be the better question and needs a second window — this is the honest
 version until then, and it is at least impossible to lose a form to one keystroke.
+
+## Preview
+
+**F5** runs the form. Escape or F5 again goes back to designing it.
+
+![The designer running a form: the palette and outline greyed out, the form live on the canvas, and a log strip along the bottom](../../assets/screenshots/designer-preview.png)
+
+The whole of the first half is **hiding the scrim** — the invisible sheet that has
+been absorbing every press over the form — and design mode giving up the canvas's
+events. The same tree, the same widgets, the same paint. What changes is who the
+events belong to: buttons press, fields type, a select opens.
+
+The two columns go grey, because they are not the form's. A palette that looked
+live and was not would be worse than one that says so.
+
+The strip along the bottom lists the messages the form has fired, **by name**:
+press the Greet button and `greet` appears. That is how you find out whether
+`on-press=greet` is wired up without writing the application first, and it needed
+a small piece of machinery — a widget carrying a value holds a `fn(bool) -> M`,
+which cannot capture *which* name it belongs to, so there is a table of function
+pointers, one per name, and the engine is handed the one for the name it just
+resolved.
+
+Going back rebuilds the form from the file, and that is the whole of the reset:
+what was typed and what was toggled are gone, because **the file is the state** and
+there was never a snapshot of anything else.
+
+The on-screen keyboard comes up for a field and goes when the focus leaves —
+which is worth watching on the form being designed, because it is the thing that
+moves the form. The status line says how much of the surface it is covering.
+
+The theme control walks the form's own, dark, light and high contrast. It
+recolours **the whole window**, not only the canvas, because there is one tree and
+one theme — the same reason the canvas is pixel-exact about what the panel will
+draw. Going back to designing puts the designer's own theme back.
+
+Two of the four simulations #99 asks for are not here:
+
+- **Font.** A form cannot be drawn in any face but the built-in 5×7 one, whatever
+  the machine has installed — `denise-forms render --font <a real .ttf>` produces
+  byte-identical output, because `TextStyle::built_in` names `FontId(0)` and every
+  widget the builder makes carries it. There is no default face to point
+  elsewhere. That is [#130], and this control arrives with it.
+- **Scaled down to fit, with the scale shown.** There is no transform: nothing in
+  the toolkit draws a subtree at anything but 1:1. The canvas scrolls instead,
+  which is the other half of what the issue asks for.
+
+[#130]: https://github.com/bisand/denise/issues/130
 
 ## The palette
 
@@ -206,7 +255,8 @@ out of the field being typed in.
 | **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
 | **Canvas** | The form, drawn — and selected, moved, resized and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
-| **Toolbar** | New, Open, Save, Save as, Undo, Redo. |
+| **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, and the theme being simulated. |
+| **Log** | While previewing: the messages the form has fired, by name. |
 
 Open a form, save it, and `git diff` is empty: the document is what is held, not a
 value taken from it, so a save that changed nothing changes nothing. That is the
@@ -244,7 +294,7 @@ form *does* already use is in the row's tooltip.
 ## Elsewhere
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
-`--drag` and `--carry` to pose it, since a snapshot has no pointer to select,
+`--drag`, `--carry` and `--preview` to pose it, since a snapshot has no pointer to select,
 drag or carry anything with — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
