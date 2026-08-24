@@ -5,7 +5,7 @@
 //! back in order restores the document exactly — comments, blank lines, column
 //! alignment and all. Nothing here snapshots anything.
 
-use denise_forms::{Edit, Form};
+use denise_forms::{Edit, Form, Literal};
 
 fn repo_form(name: &str) -> String {
     let path = format!("{}/../forms/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -60,13 +60,45 @@ form \"Edits\" version=1 kind=screen width=400 height=300 theme=dark {
 fn roll(rolls: &mut Rolls) -> Edit {
     let depth = 1 + rolls.upto(3);
     let path: Vec<usize> = (0..depth).map(|_| rolls.upto(4)).collect();
-    match rolls.upto(10) {
+    match rolls.upto(16) {
         0..=5 => Edit::number(
             &path,
             ["x", "y", "w", "h", "z"][rolls.upto(5)],
             Some(rolls.upto(500) as i64),
         ),
-        6..=7 => Edit::number(&path, ["z", "w"][rolls.upto(2)], None),
+        6..=7 => Edit::property(
+            &path,
+            ["z", "w", "role", "placeholder"][rolls.upto(4)],
+            None,
+        ),
+        // The other four shapes a property can take. A guess that lands on a
+        // property holding something else is refused, which is the rule about
+        // numbers and strings not crossing — and a refusal must leave the
+        // document alone just as a missing path does.
+        8..=9 => Edit::property(
+            &path,
+            ["placeholder", "tooltip", "text"][rolls.upto(3)],
+            Some(Literal::text(
+                ["Ada", "a \"quoted\" one", "line\nbreak"][rolls.upto(3)],
+            )),
+        ),
+        10..=11 => Edit::property(
+            &path,
+            ["role", "name", "align"][rolls.upto(3)],
+            Some(Literal::name(
+                ["primary", "secondary", "not an ident"][rolls.upto(3)],
+            )),
+        ),
+        12..=13 => Edit::property(
+            &path,
+            ["checked", "visible", "enabled"][rolls.upto(3)],
+            Some(Literal::Flag(rolls.upto(2) == 0)),
+        ),
+        14 => Edit::property(
+            &path,
+            ["size", "value", "x"][rolls.upto(3)],
+            Some(Literal::Float(rolls.upto(1000) as f64 / 8.0)),
+        ),
         _ => Edit::remove(&path),
     }
 }
@@ -164,16 +196,153 @@ fn a_property_that_was_not_there_is_undone_by_taking_it_away_again() {
 }
 
 #[test]
-fn an_edit_that_could_not_be_undone_is_refused_instead() {
-    // `placeholder` holds a string. Setting a number over it would be an edit
-    // whose inverse could not be written as a number, so it does not happen.
+fn a_number_over_a_string_is_refused_rather_than_written() {
+    // `placeholder` holds a string, and `placeholder=3` is a file that parses
+    // and then will not build. The door refuses it rather than the loader.
     let mut form = Form::parse(SOURCE).expect("parses");
     let before = form.text();
     let error = form
         .apply(Edit::number(&[1, 1], "placeholder", Some(3)))
         .expect_err("a string property is not a number");
     assert!(error.to_string().contains("placeholder"), "{error}");
+    assert!(error.to_string().contains("a string"), "{error}");
     assert_eq!(form.text(), before, "a refused edit changed the file");
+
+    // And the other way, on a property holding a number.
+    let error = form
+        .apply(Edit::property(&[0], "size", Some(Literal::text("large"))))
+        .expect_err("a number property is not a string");
+    assert!(error.to_string().contains("size"), "{error}");
+    assert_eq!(form.text(), before);
+}
+
+#[test]
+fn a_number_may_gain_a_decimal_point_and_lose_it_again() {
+    // Not the rule above: `size=20` becoming `size=20.5` is an ordinary edit,
+    // and it is written as a number rather than quoted.
+    let mut form = Form::parse(SOURCE).expect("parses");
+    let undo = form
+        .apply(Edit::property(&[0], "size", Some(Literal::Float(20.5))))
+        .expect("a number over a number");
+    assert!(form.text().contains("size=20.5"), "{}", form.text());
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), SOURCE);
+}
+
+#[test]
+fn a_string_is_written_quoted_and_a_name_is_written_bare() {
+    let mut form = Form::parse(SOURCE).expect("parses");
+
+    // The difference the two variants exist for: both hold a string, and a
+    // form file spells them differently.
+    form.apply(Edit::property(
+        &[1, 1],
+        "placeholder",
+        Some(Literal::text("Grace")),
+    ))
+    .expect("a string");
+    assert!(
+        form.text().contains("placeholder=\"Grace\""),
+        "{}",
+        form.text()
+    );
+
+    form.apply(Edit::property(
+        &[2],
+        "role",
+        Some(Literal::name("secondary")),
+    ))
+    .expect("a name");
+    assert!(form.text().contains("role=secondary"), "{}", form.text());
+
+    // A name that KDL would not read back bare is quoted anyway, so an edit can
+    // never produce a file that stops parsing.
+    form.apply(Edit::property(
+        &[2],
+        "role",
+        Some(Literal::name("two words")),
+    ))
+    .expect("a name needing quotes");
+    assert!(
+        form.text().contains("role=\"two words\""),
+        "{}",
+        form.text()
+    );
+    Form::parse(&form.text()).expect("still a form");
+}
+
+#[test]
+fn a_string_with_something_awkward_in_it_survives_the_round_trip() {
+    let mut form = Form::parse(SOURCE).expect("parses");
+    for awkward in [
+        "a \"quoted\" word",
+        "back\\slash",
+        "two\nlines",
+        "a\ttab",
+        "",
+    ] {
+        let undo = form
+            .apply(Edit::property(
+                &[1, 1],
+                "placeholder",
+                Some(Literal::text(awkward)),
+            ))
+            .expect("set");
+        let text = form.text();
+        let back = Form::parse(&text).expect("still a form");
+        assert_eq!(
+            back.text(),
+            text,
+            "{awkward:?} did not survive being written"
+        );
+        form.apply(undo).expect("undone");
+        assert_eq!(form.text(), SOURCE, "{awkward:?} did not undo exactly");
+    }
+}
+
+#[test]
+fn a_value_spelled_by_hand_comes_back_spelled_the_same_way() {
+    // The reason an inverse carries text rather than a number: `1_000` and
+    // `0x10` mean what a plain integer means and are not written the way one
+    // would be written. An undo that changed the spelling would be correct and
+    // would still have edited a line nobody touched.
+    let source = "form \"F\" version=1 width=9 height=9 {\n    \
+                  label \"hi\" x=1_000 y=0x10 w=3 h=4 size=20.0\n}\n";
+    let mut form = Form::parse(source).expect("parses");
+
+    let mut undo = Vec::new();
+    for edit in [
+        Edit::number(&[0], "x", Some(5)),
+        Edit::number(&[0], "y", Some(6)),
+        Edit::property(&[0], "size", Some(Literal::Float(11.5))),
+    ] {
+        undo.push(form.apply(edit).expect("applied"));
+    }
+    assert!(form.text().contains("x=5 y=6"), "{}", form.text());
+
+    while let Some(inverse) = undo.pop() {
+        form.apply(inverse).expect("undone");
+    }
+    assert_eq!(form.text(), source);
+}
+
+#[test]
+fn a_verbatim_that_is_not_one_value_is_refused() {
+    let mut form = Form::parse(SOURCE).expect("parses");
+    let before = form.text();
+    for text in ["", "1 x=2", "x=2", "\"unterminated"] {
+        assert!(
+            form.apply(Edit::property(
+                &[0],
+                "size",
+                Some(Literal::Verbatim(text.to_string()))
+            ))
+            .is_err(),
+            "accepted {text:?}"
+        );
+    }
+    assert_eq!(form.text(), before);
 }
 
 #[test]
@@ -281,4 +450,62 @@ fn a_compound_edit_that_cannot_finish_does_not_start() {
         before,
         "a refused compound left half an edit behind"
     );
+}
+
+#[test]
+fn a_nodes_argument_is_edited_where_it_stands() {
+    // `label "Heading"` carries its text as an argument rather than a property,
+    // which is how every form in this repo is written. An inspector editing that
+    // text has to change the argument, or the file would say one thing and the
+    // screen another.
+    let mut form = Form::parse(SOURCE).expect("parses");
+    assert_eq!(form.argument(&[0]).as_deref(), Some("Heading"));
+
+    let undo = form
+        .apply(Edit::argument(&[0], "A heading"))
+        .expect("set the argument");
+    assert!(
+        form.text().contains(r#"label "A heading""#),
+        "{}",
+        form.text()
+    );
+    // And nothing else on the line moved.
+    assert!(form.text().contains("x=16 y=16  w=200"), "{}", form.text());
+
+    form.apply(undo).expect("undone");
+    assert_eq!(form.text(), SOURCE);
+}
+
+#[test]
+fn a_node_written_without_an_argument_does_not_grow_one() {
+    let mut form = Form::parse(SOURCE).expect("parses");
+    let before = form.text();
+    // The panel is `panel name=card …`, all properties and no argument.
+    let error = form
+        .apply(Edit::argument(&[1], "Card"))
+        .expect_err("there is nothing there to set");
+    assert!(error.to_string().contains("argument"), "{error}");
+    assert_eq!(form.text(), before);
+    assert_eq!(form.argument(&[1]), None);
+}
+
+#[test]
+fn what_the_file_writes_is_what_it_reports() {
+    let form = Form::parse(SOURCE).expect("parses");
+
+    // A string comes back without its quotes: a field edits the string.
+    assert_eq!(
+        form.property(&[1, 1], "placeholder").as_deref(),
+        Some("Ada")
+    );
+    assert_eq!(form.property(&[1], "name").as_deref(), Some("card"));
+    assert_eq!(form.property(&[0], "x").as_deref(), Some("16"));
+    assert_eq!(
+        form.property(&[1, 2, 0], "checked").as_deref(),
+        Some("#true")
+    );
+
+    // Nothing written is the whole of "this is at its default".
+    assert_eq!(form.property(&[0], "z"), None);
+    assert_eq!(form.property(&[9], "x"), None, "no such node");
 }

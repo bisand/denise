@@ -1,7 +1,7 @@
 //! The file, parsed but not yet built.
 
 use denise::{Role, Size, Theme, theme};
-use kdl::{KdlDocument, KdlNode, KdlValue};
+use kdl::{KdlDocument, KdlEntry, KdlEntryFormat, KdlNode, KdlValue};
 
 use crate::error::{At, Error, Reason};
 
@@ -73,21 +73,140 @@ impl FormKind {
 /// The themes a form may name.
 const THEMES: &[&str] = &["dark", "light", "high-contrast"];
 
+/// A property's value, as a form file writes it.
+///
+/// Smaller than KDL's own set, because a `.dform` property is one of these and
+/// nothing else. The spelling is part of it: `role=primary` and
+/// `text="primary"` hold the same string and are not the same line, so
+/// [`Name`](Literal::Name) and [`Text`](Literal::Text) are separate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Literal {
+    /// A quoted string: `text="Save"`.
+    Text(String),
+    /// A bare name, which is how an enum is written: `role=primary`.
+    ///
+    /// Quoted anyway if the name is not something KDL would read back bare, so
+    /// this can never produce a file that stops parsing.
+    Name(String),
+    /// `#true` or `#false`.
+    Flag(bool),
+    /// A whole number.
+    Int(i64),
+    /// A real number.
+    Float(f64),
+    /// Exactly this text, character for character, as it stood in the file.
+    ///
+    /// What [`Form::apply`] hands back for a value it replaced, and the reason
+    /// undo is byte-exact rather than merely correct: `1_000`, `0x10`, `70.0`
+    /// and `#"a raw string"#` are all values a typed variant could carry, and
+    /// none of them would be written the same way twice.
+    ///
+    /// One built by hand is checked: it has to be the text of a single value.
+    Verbatim(String),
+}
+
+impl Literal {
+    /// A quoted string.
+    pub fn text(text: impl Into<String>) -> Self {
+        Literal::Text(text.into())
+    }
+
+    /// A bare name.
+    pub fn name(name: impl Into<String>) -> Self {
+        Literal::Name(name.into())
+    }
+
+    /// The value this stands for, and the text to write for it.
+    fn parts(&self) -> Result<(KdlValue, String), Error> {
+        Ok(match self {
+            Literal::Text(text) => (KdlValue::String(text.clone()), quoted(text)),
+            // `KdlValue`'s own rendering writes a plain identifier bare and
+            // quotes anything else, which is this variant's rule exactly.
+            Literal::Name(name) => {
+                let value = KdlValue::String(name.clone());
+                let repr = value.to_string();
+                (value, repr)
+            }
+            Literal::Flag(flag) => {
+                let value = KdlValue::Bool(*flag);
+                let repr = value.to_string();
+                (value, repr)
+            }
+            Literal::Int(number) => {
+                let value = KdlValue::Integer(i128::from(*number));
+                let repr = value.to_string();
+                (value, repr)
+            }
+            Literal::Float(number) => {
+                let value = KdlValue::Float(*number);
+                let repr = value.to_string();
+                (value, repr)
+            }
+            Literal::Verbatim(text) => (one_value(text)?, text.clone()),
+        })
+    }
+
+    /// What sort of thing this is, for the rule that a number and a string do
+    /// not replace each other.
+    fn class(&self) -> Result<Class, Error> {
+        Ok(match self {
+            Literal::Text(_) | Literal::Name(_) => Class::Text,
+            Literal::Flag(_) => Class::Flag,
+            Literal::Int(_) | Literal::Float(_) => Class::Number,
+            Literal::Verbatim(text) => Class::of(&one_value(text)?),
+        })
+    }
+}
+
+/// The sorts of value a property may hold.
+///
+/// Coarser than [`Literal`] on purpose: `value=70` becoming `value=70.5` is an
+/// ordinary edit, and `placeholder="Ada"` becoming `placeholder=70` is a form
+/// that will not load. One kind of change is worth refusing and the other is
+/// not, and this is the line between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Class {
+    Text,
+    Number,
+    Flag,
+    Nothing,
+}
+
+impl Class {
+    fn of(value: &KdlValue) -> Self {
+        match value {
+            KdlValue::String(_) => Class::Text,
+            KdlValue::Integer(_) | KdlValue::Float(_) => Class::Number,
+            KdlValue::Bool(_) => Class::Flag,
+            KdlValue::Null => Class::Nothing,
+        }
+    }
+
+    const fn noun(self) -> &'static str {
+        match self {
+            Class::Text => "a string",
+            Class::Number => "a number",
+            Class::Flag => "true or false",
+            Class::Nothing => "nothing",
+        }
+    }
+}
+
 /// One reversible change to a form.
 ///
 /// Applied with [`Form::apply`], which hands back the edit that undoes it. See
 /// there for why an inverse is always knowable.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
-    /// Set a whole-number property, or take it away with `None`.
-    Number {
+    /// Set a property, or take it away with `None`.
+    Property {
         /// The node.
         path: Vec<usize>,
         /// The property.
         name: String,
         /// What to set it to, or `None` to remove it — which is what returning a
         /// property to its default means, since a default is not written.
-        value: Option<i64>,
+        value: Option<Literal>,
     },
     /// Put a node, written as form-file text, among a parent's children.
     ///
@@ -100,6 +219,19 @@ pub enum Edit {
         index: usize,
         /// The node.
         text: String,
+    },
+    /// Set a node's positional argument — the `"Hello"` in `label "Hello"`.
+    ///
+    /// Only ever *replaces* one. A node written without an argument does not
+    /// grow one this way: an argument has to come before every property, and
+    /// there is no shape of edit that puts something at the front of a line
+    /// without rewriting the line. Setting the matching property is what an
+    /// editor does instead, and means the same thing to the engine.
+    Argument {
+        /// The node.
+        path: Vec<usize>,
+        /// What to put there.
+        value: Literal,
     },
     /// Take a node, and everything under it, out.
     Remove {
@@ -130,11 +262,27 @@ pub enum Edit {
 
 impl Edit {
     /// Sets or clears a whole-number property.
+    ///
+    /// The common one by a long way: every rectangle a drag writes is four of
+    /// these.
     pub fn number(path: &[usize], name: &str, value: Option<i64>) -> Self {
-        Edit::Number {
+        Edit::property(path, name, value.map(Literal::Int))
+    }
+
+    /// Sets or clears a property.
+    pub fn property(path: &[usize], name: &str, value: Option<Literal>) -> Self {
+        Edit::Property {
             path: path.to_vec(),
             name: name.to_string(),
             value,
+        }
+    }
+
+    /// Sets a node's positional argument to a string.
+    pub fn argument(path: &[usize], text: impl Into<String>) -> Self {
+        Edit::Argument {
+            path: path.to_vec(),
+            value: Literal::Text(text.into()),
         }
     }
 
@@ -476,12 +624,38 @@ impl Form {
     /// ```
     pub fn set_number(&mut self, path: &[usize], name: &str, value: i64) -> bool {
         match self.at_mut(path) {
-            Some(node) => {
-                set_integer(node, name, value);
-                true
-            }
+            // Only a `Literal::Verbatim` can fail to be written, so this is
+            // always `true` when the path names a node.
+            Some(node) => set_literal(node, name, &Literal::Int(value)).is_ok(),
             None => false,
         }
+    }
+
+    /// The node at `path`, or the form itself for an empty one.
+    fn node_at(&self, path: &[usize]) -> Option<&KdlNode> {
+        let mut node = self.doc.nodes().first()?;
+        for &index in path {
+            node = node.children()?.nodes().get(index)?;
+        }
+        Some(node)
+    }
+
+    /// What the file writes for a node's property, or `None` when it does not
+    /// write it at all.
+    ///
+    /// The *value*, not the spelling: a string comes back unquoted, because an
+    /// inspector's field edits the string and not the quotes around it. What a
+    /// `None` means is the whole of "this property is at its default" — the
+    /// schema does not write a default, so nothing written is the default.
+    pub fn property(&self, path: &[usize], name: &str) -> Option<String> {
+        Some(spell(self.node_at(path)?.get(name)?))
+    }
+
+    /// A node's positional argument — the `"Hello"` in `label "Hello"`.
+    pub fn argument(&self, path: &[usize]) -> Option<String> {
+        let node = self.node_at(path)?;
+        let entry = node.entries().iter().find(|e| e.name().is_none())?;
+        Some(spell(entry.value()))
     }
 
     /// Removes a property from the node at `path`.
@@ -549,29 +723,43 @@ impl Form {
     /// silently made irreversible.
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, Error> {
         match edit {
-            Edit::Number { path, name, value } => {
+            Edit::Property { path, name, value } => {
                 let node = self.at_mut(&path).ok_or_else(|| {
                     Error::new(At::START, Reason::NoSuchNode { path: path.clone() })
                 })?;
-                let before = match node.get(name.as_str()) {
-                    None => None,
-                    Some(KdlValue::Integer(number)) => Some(i64::try_from(*number).unwrap_or(0)),
-                    Some(_) => {
-                        return Err(Error::new(At::START, Reason::NotANumber { name }));
-                    }
-                };
-                let Some(number) = value else {
+                let Some(literal) = value else {
                     // Taking a property away cannot be undone by putting it back
-                    // by name: `insert` appends, so it would return to the end of
-                    // the line rather than to its place in it. The node's own
-                    // text is what carries the order.
+                    // by name: an added entry lands at the end of the line rather
+                    // than in its place in it. The node's own text is what
+                    // carries the order.
                     let text = node.to_string();
                     let key = name.clone();
                     node.retain(|entry| entry.name().map(|k| k.value()) != Some(&key));
                     return Ok(Edit::Replace { path, text });
                 };
-                set_integer(node, name.as_str(), number);
-                Ok(Edit::Number {
+
+                // What was there, spelled the way the file spelled it. Anything
+                // else would put `1_000` back as `1000`, which is a correct undo
+                // and not an exact one.
+                let before = node
+                    .entry(name.as_str())
+                    .map(|entry| Literal::Verbatim(repr_of(entry)));
+                if let Some(was) = node.get(name.as_str()) {
+                    let (holds, given) = (Class::of(was), literal.class()?);
+                    if holds != given && holds != Class::Nothing {
+                        return Err(Error::new(
+                            At::START,
+                            Reason::WrongKind {
+                                name,
+                                holds: holds.noun(),
+                                given: given.noun(),
+                            },
+                        ));
+                    }
+                }
+
+                set_literal(node, name.as_str(), &literal)?;
+                Ok(Edit::Property {
                     path,
                     name,
                     value: before,
@@ -597,6 +785,27 @@ impl Form {
                 let mut path = parent;
                 path.push(index);
                 Ok(Edit::Remove { path })
+            }
+
+            Edit::Argument { path, value } => {
+                let node = self.at_mut(&path).ok_or_else(|| {
+                    Error::new(At::START, Reason::NoSuchNode { path: path.clone() })
+                })?;
+                let Some(entry) = node.entries_mut().iter_mut().find(|e| e.name().is_none()) else {
+                    return Err(Error::new(At::START, Reason::NoArgument));
+                };
+                let was = Literal::Verbatim(repr_of(entry));
+                let (new, repr) = value.parts()?;
+                entry.set_value(new);
+                match entry.format_mut() {
+                    Some(format) => format.value_repr = repr,
+                    None => entry.set_format(KdlEntryFormat {
+                        value_repr: repr,
+                        leading: String::from(" "),
+                        ..KdlEntryFormat::default()
+                    }),
+                }
+                Ok(Edit::Argument { path, value: was })
             }
 
             Edit::Remove { path } => {
@@ -799,7 +1008,79 @@ fn one_node(text: &str) -> Result<KdlNode, Error> {
     }
 }
 
-/// Sets a whole-number property, keeping everything about the line but the number.
+/// Parses form-file text that must be exactly one value.
+///
+/// What checks a [`Literal::Verbatim`] before it is written: the text goes into
+/// the file as it stands, so it has to be one value and not, say, `1 x=2`.
+fn one_value(text: &str) -> Result<KdlValue, Error> {
+    let entry = KdlEntry::parse(text).map_err(|error: kdl::KdlError| {
+        let message = error
+            .diagnostics
+            .first()
+            .and_then(|d| d.message.clone())
+            .unwrap_or_else(|| String::from("this is not a value"));
+        Error::new(At::START, Reason::Syntax(message))
+    })?;
+    if entry.name().is_some() {
+        return Err(Error::new(
+            At::START,
+            Reason::Syntax(String::from("this must be a value, not a property")),
+        ));
+    }
+    Ok(entry.value().clone())
+}
+
+/// The text a property's value was written with.
+///
+/// An entry that came from a parse remembers it. One built in memory does not,
+/// and renders canonically — which is then what it was written with, since
+/// nobody has written it yet.
+fn repr_of(entry: &KdlEntry) -> String {
+    entry.format().map_or_else(
+        || entry.value().to_string(),
+        |format| format.value_repr.clone(),
+    )
+}
+
+/// A value as an inspector's field should show it.
+///
+/// A string is its own text with nothing around it; everything else is what the
+/// file would write.
+fn spell(value: &KdlValue) -> String {
+    match value.as_string() {
+        Some(text) => text.to_string(),
+        None => value.to_string(),
+    }
+}
+
+/// A string as a form file would quote it.
+///
+/// [`KdlValue`]'s own rendering writes a plain identifier bare, which is right
+/// for [`Literal::Name`] and wrong for [`Literal::Text`]: a label whose text
+/// happens to be one word is still a string, and `text=Save` in a file whose
+/// every other string is quoted reads as a mistake.
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(character);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Sets a property, keeping everything about the line but the value.
 ///
 /// Two things here are not what the obvious code would do, and both were found by
 /// the test that asserts an edit undone is byte-for-byte what it was.
@@ -813,16 +1094,31 @@ fn one_node(text: &str) -> Result<KdlNode, Error> {
 /// from a parse: the entry keeps the text it was written with, and renders that
 /// rather than the value it now holds. The cached representation has to be set
 /// too, which is why this is a function and not a line.
-fn set_integer(node: &mut KdlNode, name: &str, number: i64) {
-    let Some(entry) = node.entry_mut(name) else {
-        // Nothing there to keep the shape of; appending is right.
-        node.insert(name, KdlValue::Integer(i128::from(number)));
-        return;
-    };
-    entry.set_value(KdlValue::Integer(i128::from(number)));
-    if let Some(format) = entry.format_mut() {
-        format.value_repr = number.to_string();
+fn set_literal(node: &mut KdlNode, name: &str, literal: &Literal) -> Result<(), Error> {
+    let (value, repr) = literal.parts()?;
+    if let Some(entry) = node.entry_mut(name) {
+        entry.set_value(value);
+        match entry.format_mut() {
+            Some(format) => format.value_repr = repr,
+            // Built in memory rather than parsed, so there is no spacing to
+            // keep and the whole format is this crate's to write.
+            None => entry.set_format(KdlEntryFormat {
+                value_repr: repr,
+                leading: String::from(" "),
+                ..KdlEntryFormat::default()
+            }),
+        }
+        return Ok(());
     }
+    // Nothing there to keep the shape of; appending is right.
+    let mut entry = KdlEntry::new_prop(name, value);
+    entry.set_format(KdlEntryFormat {
+        value_repr: repr,
+        leading: String::from(" "),
+        ..KdlEntryFormat::default()
+    });
+    node.push(entry);
+    Ok(())
 }
 
 #[cfg(test)]

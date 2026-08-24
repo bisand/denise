@@ -155,14 +155,29 @@ pub enum Reason {
         /// The child path that went nowhere.
         path: Vec<usize>,
     },
-    /// An edit would have replaced a value it could not have put back.
+    /// An edit set the positional argument of a node written without one.
     ///
-    /// Every edit has to be reversible or undo is a lie, and the inverse of
-    /// setting a number is setting the number that was there. A property holding
-    /// something else is refused rather than quietly made irreversible.
-    NotANumber {
+    /// An argument comes before every property, and no edit puts something at
+    /// the front of a line without rewriting the line. Setting the property
+    /// that argument stands for is what to do instead.
+    NoArgument,
+    /// An edit would have put a number where a string lives, or the reverse.
+    ///
+    /// Not a matter of reversibility — an edit's inverse restores the text that
+    /// was there, so any value can be put back. It is a matter of what the file
+    /// would become: `placeholder=70` parses and then will not build, and an
+    /// editor holding the widget's own descriptor already knows better. So the
+    /// door refuses it rather than the loader, three steps later.
+    ///
+    /// A number replacing a number is not this, whichever way it is written:
+    /// `value=70` becoming `value=70.5` is an ordinary edit.
+    WrongKind {
         /// The property.
         name: String,
+        /// What it holds now.
+        holds: &'static str,
+        /// What the edit offered.
+        given: &'static str,
     },
 }
 
@@ -276,9 +291,13 @@ impl fmt::Display for Error {
                 )
             }
             Reason::NoSuchNode { path } => write!(f, "there is no node at {path:?}"),
-            Reason::NotANumber { name } => write!(
+            Reason::NoArgument => write!(
                 f,
-                "`{name}` does not hold a whole number, so setting one could not be undone"
+                "this node is written without an argument; set the property instead"
+            ),
+            Reason::WrongKind { name, holds, given } => write!(
+                f,
+                "`{name}` holds {holds}; putting {given} there would make a form that will not load"
             ),
         }
     }

@@ -36,7 +36,7 @@ affordance that lets an on-screen keyboard type into a field without the field
 losing its caret. Preview mode is hiding the scrim, and that is the whole of
 preview mode.
 
-![The designer with a slider selected and being dragged: the palette and outline on the left, the reference form on the canvas with a selection outline, eight handles and a name tag, an alignment guide running down the panel, and the slider's own properties in the inspector](../../assets/screenshots/designer.png)
+![The designer with a slider selected and being dragged: the palette and outline on the left, the reference form on the canvas with a selection outline, eight handles and a name tag, an alignment guide running down the panel, and on the right the slider's own properties — a field each for the rectangle, boxes for `visible` and `enabled`, a dropdown for `role`, and the ones the file does not write dimmed](../../assets/screenshots/designer.png)
 
 ## Design mode
 
@@ -88,6 +88,43 @@ Closing with unsaved work stops once and says so; ask again and it goes. A modal
 would be the better question and needs a second window — this is the honest
 version until then, and it is at least impossible to lose a form to one keystroke.
 
+## The inspector
+
+Select something and its properties fill the right pane, each with an editor
+chosen from its type: a field for a string, a box for a flag, a dropdown for a
+role, a field with a slider beside it for a number over a range you can aim at.
+
+**Nothing in the designer lists them.** A row exists because the widget's own
+`Describe` implementation says the property exists, and the properties the *tree*
+owns — `x`, `visible`, `dock` — come from `denise_forms::NODE_PROPERTIES`,
+described the same way. A twenty-sixth widget, or a twenty-seventh property on an
+existing one, gets its editors without a line of this crate changing.
+
+Edits apply **as they are typed**, through the same `set` the engine calls when it
+loads a form — so the pane cannot show a value the engine could not load, and one
+the widget refuses is reported in the error role rather than written. An `x` of
+`over there` never reaches the file.
+
+A property the file does not write is at its default, and is dimmed to say so. The
+`×` beside one it does write takes it back out, which is what returning to a
+default means when the schema does not spell defaults out. Clearing a field does
+the same thing.
+
+Where the file already writes a property as the node's **argument** — `label
+"Heading"`, which is how every form here is written — that is what an edit
+changes. Adding `text="…"` beside it would leave the file saying one thing and the
+screen showing another.
+
+Select several and the pane shows what they have in common, blank where they
+disagree, and an edit goes to all of them as a single undo step.
+
+Two things the pane writes but the canvas cannot immediately show: a message name,
+which is a value of the *application's* type and so is not something any widget
+can be handed, and a property cleared back to a default that only exists once the
+widget is built again. Both are written to the file at once and the canvas catches
+up when the caret leaves the field — rebuilding mid-keystroke would take the caret
+out of the field being typed in.
+
 ## What is here
 
 | | |
@@ -95,8 +132,8 @@ version until then, and it is at least impossible to lose a form to one keystrok
 | **Palette** | Every widget the toolkit ships, from `widgets::all()`. This file names none of them, so a twenty-sixth appears without it changing. |
 | **Outline** | The nodes the open form named, and picking one selects it. |
 | **Canvas** | The form, drawn — and selected, moved, resized and deleted. |
-| **Inspector** | The selected node's properties, from the widget's own `Describe` — again, no list here. |
-| **Toolbar** | New, Open, Save, Save as. |
+| **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. |
+| **Toolbar** | New, Open, Save, Save as, Undo, Redo. |
 
 Open a form, save it, and `git diff` is empty: the document is what is held, not a
 value taken from it, so a save that changed nothing changes nothing. That is the
@@ -104,16 +141,24 @@ round trip the whole file format is built around, and there is a test for it.
 
 ## What is not here yet
 
-Dragging from the palette is [#91] and editing a property is [#93] — the
-inspector reports, it does not yet edit.
+Dragging a widget out of the palette is [#91], and it is the last thing between
+this and a designer you could build a form in from nothing: today the palette
+says what it would place.
 
 Three parts of [#92] are not done either: a rubber band over empty space, dropping
 a node onto a panel to reparent it, and bring-to-front and send-to-back. Each is
 its own mechanism rather than a corner of what is here.
 
+The **form's own** properties — its title, its size, its theme — are not in the
+pane: it shows the selected *node*, and the form node cannot be selected. Its
+size is what the canvas is, so changing it wants somewhere of its own.
+
+A message field is a field, not a combo box: the name being typed is usually one
+the form has not used yet, and this toolkit has no widget that is both. What the
+form *does* already use is in the row's tooltip.
+
 [#91]: https://github.com/bisand/denise/issues/91
 [#92]: https://github.com/bisand/denise/issues/92
-[#93]: https://github.com/bisand/denise/issues/93
 
 ## Elsewhere
 
