@@ -109,6 +109,13 @@ pub const FITS: &[&str] = &["fill", "contain", "cover", "center"];
 /// Every [`Presence`].
 pub const PRESENCES: &[&str] = &["online", "offline", "busy"];
 
+/// Every [`Side`](crate::Side).
+///
+/// No widget takes one: the side a drawer or a shelf comes in from is a
+/// property of the *form*, which is why the name table lives here with the
+/// others rather than on a widget that would never use it.
+pub const SIDES: &[&str] = &["above", "below", "before", "after"];
+
 /// The [`Role`] a name stands for, and back again.
 ///
 /// The table and the mapping are next to each other on purpose: a role added to
@@ -260,6 +267,29 @@ pub fn presence_from_name(name: &str) -> Option<Presence> {
         "online" => Presence::Online,
         "offline" => Presence::Offline,
         "busy" => Presence::Busy,
+        _ => return None,
+    })
+}
+
+/// What a form file calls a [`Side`](crate::Side).
+pub const fn side_name(side: crate::Side) -> &'static str {
+    use crate::Side;
+    match side {
+        Side::Above => "above",
+        Side::Below => "below",
+        Side::Before => "before",
+        Side::After => "after",
+    }
+}
+
+/// The [`Side`](crate::Side) a name stands for.
+pub fn side_from_name(name: &str) -> Option<crate::Side> {
+    use crate::Side;
+    Some(match name {
+        "above" => Side::Above,
+        "below" => Side::Below,
+        "before" => Side::Before,
+        "after" => Side::After,
         _ => return None,
     })
 }
