@@ -133,11 +133,13 @@ pub struct Built {
 }
 
 impl Built {
+    /// See [`Form::build`] for one of these being made and read.
     /// The node a form gave this name, if it gave one that name.
     pub fn node(&self, name: &str) -> Option<NodeId> {
         self.names.get(name).copied()
     }
 
+    /// See [`Form::build`] for one of these being made and read.
     /// Every name the form gave a node, in no particular order.
     pub fn names(&self) -> impl Iterator<Item = (&str, NodeId)> {
         self.names.iter().map(|(name, &id)| (name.as_str(), id))
@@ -145,22 +147,26 @@ impl Built {
 
     /// Every node the form built, in file order.
     ///
+    /// See [`Form::build`] for one of these being made and read.
     /// Includes the ones with no name: a designer selects what a person clicked
     /// on, and most of what a person clicks on was never named.
     pub fn placed(&self) -> &[Placed] {
         &self.placed
     }
 
+    /// See [`Form::build`] for one of these being made and read.
     /// The node at a path, if the form put one there.
     pub fn at(&self, path: &[usize]) -> Option<&Placed> {
         self.placed.iter().find(|p| p.path == path)
     }
 
+    /// See [`Form::build`] for one of these being made and read.
     /// How many nodes were named.
     pub fn len(&self) -> usize {
         self.names.len()
     }
 
+    /// See [`Form::build`] for one of these being made and read.
     /// Whether the form named nothing.
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
@@ -265,6 +271,21 @@ const EDGE_PROPERTIES: &[Property] = &[
 /// A `resizable` on a screen is not a property with no effect; it is a mistake,
 /// and saying so is the whole reason this is a function of the kind rather than
 /// one long list.
+/// ```
+/// # use denise_forms::{FORM_PROPERTIES, FormKind, form_property, kind_properties};
+/// // Everything every form has.
+/// assert!(FORM_PROPERTIES.iter().any(|it| it.name == "width"));
+///
+/// // And what only this kind has.
+/// assert!(kind_properties(FormKind::Window).iter().any(|it| it.name == "resizable"));
+/// assert!(kind_properties(FormKind::Screen).is_empty());
+///
+/// // `form_property` is the two together, which is what "may a form of this
+/// // kind say this?" means.
+/// assert!(form_property(FormKind::Window, "resizable").is_some());
+/// assert!(form_property(FormKind::Screen, "resizable").is_none());
+/// assert!(form_property(FormKind::Screen, "width").is_some());
+/// ```
 pub const fn kind_properties(kind: FormKind) -> &'static [Property] {
     match kind {
         FormKind::Window => WINDOW_PROPERTIES,
@@ -275,6 +296,7 @@ pub const fn kind_properties(kind: FormKind) -> &'static [Property] {
 }
 
 /// Whether the `form` node may carry this property, given its kind.
+/// See [`kind_properties`].
 pub fn form_property(kind: FormKind, name: &str) -> Option<&'static Property> {
     FORM_PROPERTIES
         .iter()
@@ -361,6 +383,14 @@ pub const NODE_PROPERTIES: &[Property] = &[
 ];
 
 /// The tree-owned property of this name, if there is one.
+/// ```
+/// # use denise_forms::node_property;
+/// // The tree owns geometry and visibility; no widget declares them.
+/// assert!(node_property("x").is_some());
+/// assert!(node_property("dock").is_some());
+/// // A widget's own property is not one of these.
+/// assert!(node_property("role").is_none());
+/// ```
 pub fn node_property(name: &str) -> Option<&'static Property> {
     NODE_PROPERTIES.iter().find(|p| p.name == name)
 }
@@ -374,6 +404,15 @@ const COLLECTIONS: &[&str] = &["option", "item", "column", "row", "event", "pict
 /// holds `option`s, a `table` holds `column`s — which is not the same thing: a
 /// designer dropping a button on a `select` has missed, and dropping one on a
 /// `panel` means it.
+/// ```
+/// # use denise_forms::owns_children;
+/// assert!(owns_children("panel"));
+/// assert!(owns_children("collapse"));
+/// // Content is not children: a `select` holds options, and dropping a button
+/// // on one has missed.
+/// assert!(!owns_children("select"));
+/// assert!(!owns_children("label"));
+/// ```
 pub fn owns_children(kind: &str) -> bool {
     matches!(kind, "panel" | "collapse")
 }
@@ -395,6 +434,16 @@ const ARGUMENT: &[&str] = &[
 /// what it is, so that somebody can see what they placed before they resize it —
 /// which is a question about writing forms, and so this crate's, rather than a
 /// question about widgets.
+/// ```
+/// # use denise_forms::default_size;
+/// // A button is wider than it is tall; an avatar is square.
+/// let button = default_size("button");
+/// assert!(button.width > button.height);
+/// let avatar = default_size("avatar");
+/// assert_eq!(avatar.width, avatar.height);
+/// // A kind nobody has heard of still gets something you can see and click.
+/// assert!(default_size("banana").width > 0);
+/// ```
 pub fn default_size(kind: &str) -> Size {
     let (width, height) = match kind {
         "alert" => (320, 36),
@@ -485,6 +534,20 @@ pub fn seed(kind: &str, rect: Rect) -> String {
 /// anything. The exception is `extent`, which a drawer and a shelf must say:
 /// this picks a third of the axis it comes in along, which is a drawer somebody
 /// will recognise rather than one they have to fix before they can see it.
+/// ```
+/// # use denise::Size;
+/// # use denise_forms::{Form, FormKind, seed_form};
+/// // A screen is every default but its size, so it says nothing else.
+/// let screen = seed_form("Untitled", FormKind::Screen, Size::new(800, 480));
+/// assert_eq!(screen, "form \"Untitled\" version=1 width=800 height=480\n");
+///
+/// // What comes in from an edge has to say how far, so this picks one.
+/// let drawer = seed_form("Filters", FormKind::Drawer, Size::new(1024, 600));
+/// let form = Form::parse(&drawer)?;
+/// assert_eq!(form.kind(), FormKind::Drawer);
+/// assert_eq!(form.extent(), 1024 / 3);
+/// # Ok::<(), denise_forms::Error>(())
+/// ```
 pub fn seed_form(title: &str, kind: FormKind, size: Size) -> String {
     let mut out = format!("form {title:?} version={}", crate::form::VERSION);
     if kind != FormKind::Screen {
@@ -503,6 +566,45 @@ pub fn seed_form(title: &str, kind: FormKind, size: Size) -> String {
 }
 
 impl Form {
+    /// ```
+    /// # use denise_forms::{Form, Handler, Payload};
+    /// # use denise_ui::Ui;
+    /// #[derive(Clone, Copy, PartialEq, Debug)]
+    /// enum Message {
+    ///     Greet,
+    /// }
+    ///
+    /// let form = Form::parse(
+    ///     r#"form "Hello" version=1 width=320 height=120 { button "Greet" name=go x=8 y=8 w=90 h=30 on-press=greet }"#,
+    /// )?;
+    ///
+    /// let mut ui: Ui<Message> = Ui::new(form.size(), form.theme());
+    /// let root = ui.root();
+    ///
+    /// // The one thing a file cannot hold: this application's own message type.
+    /// let built = form.build(&mut ui, root, &mut |name: &str, payload: Payload| {
+    ///     match (name, payload) {
+    ///         ("greet", Payload::None) => Some(Handler::Plain(Message::Greet)),
+    ///         _ => None,
+    ///     }
+    /// })?;
+    ///
+    /// // What the file named, by the name it used.
+    /// let button = built.node("go").expect("the form names it `go`");
+    /// assert_eq!(built.len(), 1);
+    /// assert!(!built.is_empty());
+    ///
+    /// // And everything it put on screen, named or not, in file order.
+    /// assert_eq!(built.placed().len(), 1);
+    /// assert_eq!(built.at(&[0]).map(|node| node.kind), Some("button"));
+    /// assert_eq!(built.at(&[0]).map(|node| node.id), Some(button));
+    /// assert_eq!(
+    ///     built.names().map(|(name, _)| name).collect::<Vec<_>>(),
+    ///     vec!["go"],
+    /// );
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    ///
     /// Builds this form into `ui` under `parent`.
     ///
     /// Nodes are added in file order, so paint order is file order. See the

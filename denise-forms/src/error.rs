@@ -24,6 +24,16 @@ impl At {
     /// Computed on demand rather than carried around: the parser hands back byte
     /// spans, and a form that loads without complaint should not have paid for
     /// counting newlines.
+    ///
+    /// ```
+    /// # use denise_forms::At;
+    /// let source = "form \"F\" version=1\n    label \"æøå\" x=0\n";
+    ///
+    /// assert_eq!(At::of(source, 0), At { line: 1, column: 1 });
+    /// // Characters, not bytes, so a column points where a caret would be even
+    /// // on a line with an `æ` in it.
+    /// assert_eq!(At::of(source, source.len() - 1).line, 2);
+    /// ```
     pub fn of(source: &str, offset: usize) -> Self {
         let offset = offset.min(source.len());
         let consumed = &source[..offset];
