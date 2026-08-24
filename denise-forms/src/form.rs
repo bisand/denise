@@ -58,6 +58,12 @@ impl FormKind {
     pub const NAMES: &'static [&'static str] =
         &["screen", "window", "dialog", "drawer", "shelf", "fragment"];
 
+    /// ```
+    /// # use denise_forms::FormKind;
+    /// assert!(FormKind::Dialog.what().contains("modal"));
+    /// // Every kind has one, and no two share it.
+    /// assert_ne!(FormKind::Drawer.what(), FormKind::Shelf.what());
+    /// ```
     /// One line on what this kind is for.
     ///
     /// Here rather than in the designer because it is a fact about the format:
@@ -74,6 +80,13 @@ impl FormKind {
         }
     }
 
+    /// ```
+    /// # use denise_forms::FormKind;
+    /// # use denise_ui::Side;
+    /// // A drawer is a side panel; a shelf is a bar.
+    /// assert_eq!(FormKind::Drawer.default_side(), Side::Before);
+    /// assert_eq!(FormKind::Shelf.default_side(), Side::Below);
+    /// ```
     /// Which edge one of these comes in from when the file does not say.
     pub const fn default_side(self) -> Side {
         match self {
@@ -131,11 +144,26 @@ pub enum Literal {
 }
 
 impl Literal {
+    /// The spelling is the difference, and the file keeps it: `role=primary`
+    /// and `text="primary"` hold the same string and are not the same line.
+    ///
+    /// ```
+    /// # use denise_forms::{Edit, Form, Literal};
+    /// let mut form = Form::parse(r#"form "F" version=1 width=99 height=99 { label "Hi" x=0 y=0 w=9 h=9 }"#)?;
+    ///
+    /// form.apply(Edit::property(&[0], "text", Some(Literal::text("Hello"))))?;
+    /// form.apply(Edit::property(&[0], "role", Some(Literal::name("primary"))))?;
+    ///
+    /// assert!(form.text().contains(r#"text="Hello""#), "{}", form.text());
+    /// assert!(form.text().contains("role=primary"), "{}", form.text());
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// A quoted string.
     pub fn text(text: impl Into<String>) -> Self {
         Literal::Text(text.into())
     }
 
+    /// See [`Literal::text`].
     /// A bare name.
     pub fn name(name: impl Into<String>) -> Self {
         Literal::Name(name.into())
@@ -308,10 +336,33 @@ impl Edit {
     ///
     /// The common one by a long way: every rectangle a drag writes is four of
     /// these.
+    /// ```
+    /// # use denise_forms::{Edit, Form};
+    /// let mut form = Form::parse(r#"form "F" version=1 width=99 height=99 { label "Hi" x=0 y=0 w=9 h=9 }"#)?;
+    ///
+    /// form.apply(Edit::number(&[0], "x", Some(24)))?;
+    /// assert_eq!(form.property(&[0], "x").as_deref(), Some("24"));
+    ///
+    /// // `None` takes it out of the file, which is what a default is.
+    /// form.apply(Edit::number(&[0], "x", None))?;
+    /// assert_eq!(form.property(&[0], "x"), None);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     pub fn number(path: &[usize], name: &str, value: Option<i64>) -> Self {
         Edit::property(path, name, value.map(Literal::Int))
     }
 
+    /// The path is child indices from the `form` node down, and **the empty path
+    /// is the form itself** — its size, its kind, its theme.
+    ///
+    /// ```
+    /// # use denise_forms::{Edit, Form, Literal};
+    /// let mut form = Form::parse(r#"form "F" version=1 width=320 height=240 { label "Hi" x=0 y=0 w=9 h=9 }"#)?;
+    ///
+    /// form.apply(Edit::property(&[], "width", Some(Literal::Int(640))))?;
+    /// assert_eq!(form.size(), denise::Size::new(640, 240));
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// Sets or clears a property.
     pub fn property(path: &[usize], name: &str, value: Option<Literal>) -> Self {
         Edit::Property {
@@ -321,6 +372,21 @@ impl Edit {
         }
     }
 
+    /// A `label "Heading"` keeps its text there rather than in a `text=`
+    /// property, and so does the form's own title.
+    ///
+    /// ```
+    /// # use denise_forms::{Edit, Form};
+    /// let mut form = Form::parse(r#"form "F" version=1 width=99 height=99 { label "Hi" x=0 y=0 w=9 h=9 }"#)?;
+    ///
+    /// form.apply(Edit::argument(&[0], "Hello"))?;
+    /// assert_eq!(form.argument(&[0]).as_deref(), Some("Hello"));
+    ///
+    /// // The form's title is its argument too.
+    /// form.apply(Edit::argument(&[], "Greeting"))?;
+    /// assert_eq!(form.title(), "Greeting");
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// Sets a node's positional argument to a string.
     pub fn argument(path: &[usize], text: impl Into<String>) -> Self {
         Edit::Argument {
@@ -329,6 +395,20 @@ impl Edit {
         }
     }
 
+    /// `index` is the position **after** the node has been taken out, which is
+    /// the part that is easy to get wrong: removing `[1]` moves `[3]` to `[2]`.
+    ///
+    /// ```
+    /// # use denise_forms::{Edit, Form};
+    /// let mut form = Form::parse(
+    ///     "form \"F\" version=1 width=99 height=99 {\n    label \"a\" x=0 y=0 w=9 h=9\n    panel name=box x=0 y=9 w=9 h=9\n}\n",
+    /// )?;
+    ///
+    /// // The label into the panel, which grows the braces it did not have.
+    /// form.apply(Edit::move_to(&[0], &[1], 0))?;
+    /// assert!(form.text().contains("panel name=box x=0 y=9 w=9 h=9 {"), "{}", form.text());
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// Moves a node under another parent, or to another place among its
     /// siblings.
     pub fn move_to(from: &[usize], to: &[usize], index: usize) -> Self {
@@ -339,6 +419,22 @@ impl Edit {
         }
     }
 
+    /// Its children go with it, and so does the comment written above it — the
+    /// node's leading trivia is part of the node, which is what makes undoing a
+    /// removal put the comment back.
+    ///
+    /// ```
+    /// # use denise_forms::{Edit, Form};
+    /// let source = "form \"F\" version=1 width=99 height=99 {\n    // why\n    label \"a\" x=0 y=0 w=9 h=9\n}\n";
+    /// let mut form = Form::parse(source)?;
+    ///
+    /// let undo = form.apply(Edit::remove(&[0]))?;
+    /// assert!(!form.text().contains("why"));
+    ///
+    /// form.apply(undo)?;
+    /// assert_eq!(form.text(), source, "the comment came back with the node");
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// Removes a node.
     pub fn remove(path: &[usize]) -> Self {
         Edit::Remove {
@@ -604,6 +700,29 @@ impl Form {
             .expect("checked at parse: exactly one `form` node")
     }
 
+    /// What a form says about itself, and the defaults for what it does not say.
+    ///
+    /// ```
+    /// # use denise_forms::{Form, FormKind};
+    /// let form = Form::parse(
+    ///     r#"form "Preferences" name=prefs version=1 kind=window width=520 height=340 theme=light background=base-200"#,
+    /// )?;
+    ///
+    /// assert_eq!(form.title(), "Preferences");
+    /// assert_eq!(form.name(), Some("prefs"));
+    /// assert_eq!(form.version(), 1);
+    /// assert_eq!(form.kind(), FormKind::Window);
+    /// assert_eq!(form.size(), denise::Size::new(520, 340));
+    /// assert_eq!(form.theme_name(), "light");
+    /// assert_eq!(form.background(), denise::Role::Base200);
+    /// assert_eq!(form.theme(), denise::theme::LIGHT);
+    ///
+    /// // Nothing written is the default: a window may be resized, and says
+    /// // nothing about a smallest size.
+    /// assert!(form.resizable());
+    /// assert_eq!(form.min_size(), None);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// The form's title — a window's title bar, and the designer's name for it.
     pub fn title(&self) -> &str {
         self.root()
@@ -614,11 +733,13 @@ impl Form {
             .unwrap_or_default()
     }
 
+    /// See [`Form::title`] for what a form says about itself.
     /// The form's identifier, if it was given one.
     pub fn name(&self) -> Option<&str> {
         self.root().get("name").and_then(KdlValue::as_string)
     }
 
+    /// See [`Form::title`] for what a form says about itself.
     /// The schema version the file declares.
     pub fn version(&self) -> u64 {
         self.root()
@@ -628,6 +749,7 @@ impl Form {
             .expect("checked at parse")
     }
 
+    /// See [`Form::title`] for what a form says about itself.
     /// What this form is for. [`FormKind::Screen`] unless the file says otherwise.
     pub fn kind(&self) -> FormKind {
         self.root()
@@ -637,6 +759,15 @@ impl Form {
             .unwrap_or(FormKind::Screen)
     }
 
+    /// ```
+    /// # use denise_forms::Form;
+    /// let fixed = Form::parse(
+    ///     r#"form "F" version=1 kind=window width=400 height=300 resizable=#false min-width=320 min-height=240"#,
+    /// )?;
+    /// assert!(!fixed.resizable());
+    /// assert_eq!(fixed.min_size(), Some(denise::Size::new(320, 240)));
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// Whether a window form may be resized. `true` unless the file says not.
     ///
     /// Meaningless on any other kind, which is why the file is not allowed to
@@ -648,6 +779,7 @@ impl Form {
             .unwrap_or(true)
     }
 
+    /// See [`Form::resizable`].
     /// The smallest a window form may be made, if it says.
     pub fn min_size(&self) -> Option<Size> {
         let axis = |name: &str| {
@@ -662,6 +794,15 @@ impl Form {
         }
     }
 
+    /// ```
+    /// # use denise_forms::Form;
+    /// let asked = Form::parse(r#"form "F" version=1 kind=dialog width=380 height=170 dim=200"#)?;
+    /// assert_eq!(asked.dim(), 200);
+    ///
+    /// let quiet = Form::parse(r#"form "F" version=1 kind=dialog width=380 height=170"#)?;
+    /// assert_eq!(quiet.dim(), 160);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// How dark the backdrop behind a dialog is, 0 to 255. `160` by default,
     /// which is what [`denise_ui::Ui::push_scene`] is usually given.
     pub fn dim(&self) -> u8 {
@@ -672,6 +813,23 @@ impl Form {
             .unwrap_or(160)
     }
 
+    /// `width` and `height` are the surface it comes in *over*; [`extent`] is
+    /// how far it comes in, and across the other axis it covers the surface.
+    ///
+    /// ```
+    /// # use denise_forms::Form;
+    /// # use denise_ui::Side;
+    /// let drawer = Form::parse(r#"form "F" version=1 kind=drawer width=1024 height=600 extent=320"#)?;
+    /// assert_eq!(drawer.side(), Side::Before);
+    /// assert_eq!(drawer.extent(), 320);
+    ///
+    /// // A shelf is a bar rather than a side panel, so it comes in from below.
+    /// let shelf = Form::parse(r#"form "F" version=1 kind=shelf width=1024 height=600 extent=180"#)?;
+    /// assert_eq!(shelf.side(), Side::Below);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    ///
+    /// [`extent`]: Form::extent
     /// Which edge a drawer or a shelf comes in from.
     ///
     /// The defaults differ by kind and deliberately: a drawer is a side panel
@@ -685,6 +843,7 @@ impl Form {
             .unwrap_or_else(|| self.kind().default_side())
     }
 
+    /// See [`Form::side`].
     /// How far a drawer or a shelf comes in, in logical pixels.
     ///
     /// Required on those two kinds, so this is what the file says or `0` on a
@@ -697,6 +856,7 @@ impl Form {
             .unwrap_or(0)
     }
 
+    /// See [`Form::title`] for what a form says about itself.
     /// The size the form was designed at, in logical pixels.
     pub fn size(&self) -> Size {
         let axis = |name: &str| {
@@ -709,6 +869,7 @@ impl Form {
         Size::new(axis("width"), axis("height"))
     }
 
+    /// See [`Form::title`] for what a form says about itself.
     /// The theme the file names, or the dark one.
     pub fn theme(&self) -> Theme {
         match self.theme_name() {
@@ -718,6 +879,7 @@ impl Form {
         }
     }
 
+    /// See [`Form::title`] for what a form says about itself.
     /// The theme's name, as the file spells it.
     pub fn theme_name(&self) -> &str {
         self.root()
@@ -726,6 +888,7 @@ impl Form {
             .unwrap_or("dark")
     }
 
+    /// See [`Form::title`] for what a form says about itself.
     /// The surface the form is drawn on.
     pub fn background(&self) -> Role {
         self.root()
@@ -743,6 +906,28 @@ impl Form {
     /// column alignment and entry order all survive an edit to a property three
     /// nodes away. That is the round trip the designer stands on, and the reason
     /// this crate parses the way it does.
+    /// ```
+    /// # use denise_forms::{Edit, Form};
+    /// // A comment, a blank line, and columns somebody lined up by hand.
+    /// let source = "\
+    /// // The panel everything sits on.
+    /// form \"F\" version=1 width=320 height=240 {
+    ///
+    ///     label \"One\"   x=8  y=8  w=80 h=20
+    ///     label \"Two\"   x=8  y=32 w=80 h=20
+    /// }
+    /// ";
+    /// let mut form = Form::parse(source)?;
+    /// assert_eq!(form.text(), source, "parsing changed nothing");
+    ///
+    /// // One number, one line: everything else is where it was, spacing and all.
+    /// form.apply(Edit::number(&[1], "y", Some(40)))?;
+    /// assert_eq!(
+    ///     form.text(),
+    ///     source.replace("x=8  y=32", "x=8  y=40"),
+    /// );
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     pub fn text(&self) -> String {
         self.doc.to_string()
     }
@@ -816,6 +1001,17 @@ impl Form {
     /// inspector's field edits the string and not the quotes around it. What a
     /// `None` means is the whole of "this property is at its default" — the
     /// schema does not write a default, so nothing written is the default.
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(r#"form "F" version=1 width=99 height=99 { label "Hi" name=greeting x=8 y=8 w=80 h=20 }"#)?;
+    ///
+    /// assert_eq!(form.property(&[0], "x").as_deref(), Some("8"));
+    /// // Unquoted, because a field edits the string and not the quotes.
+    /// assert_eq!(form.property(&[0], "name").as_deref(), Some("greeting"));
+    /// // Not written is the default.
+    /// assert_eq!(form.property(&[0], "role"), None);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     pub fn property(&self, path: &[usize], name: &str) -> Option<String> {
         Some(spell(self.node_at(path)?.get(name)?))
     }
@@ -827,12 +1023,33 @@ impl Form {
     /// source. Its children come with it, and so does a comment written above
     /// it — the node's leading trivia is part of the node, which is the same
     /// reason an undone removal puts the comment back.
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(
+    ///     "form \"F\" version=1 width=99 height=99 {\n    panel name=box x=0 y=0 w=9 h=9 {\n        label \"in\" x=1 y=1 w=2 h=2\n    }\n}\n",
+    /// )?;
+    ///
+    /// assert_eq!(
+    ///     form.node_text(&[0]).as_deref(),
+    ///     Some("panel name=box x=0 y=0 w=9 h=9 {\n    label \"in\" x=1 y=1 w=2 h=2\n}\n"),
+    /// );
+    /// assert_eq!(form.node_text(&[9]), None);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     pub fn node_text(&self, path: &[usize]) -> Option<String> {
         let node = self.node_at(path)?;
         let own = indent_of(node);
         Some(reindent(&node.to_string(), &own, "", false))
     }
 
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(r#"form "F" version=1 width=99 height=99 { label "Hello" x=0 y=0 w=9 h=9 }"#)?;
+    /// assert_eq!(form.argument(&[0]).as_deref(), Some("Hello"));
+    /// // The form's own argument is its title.
+    /// assert_eq!(form.argument(&[]).as_deref(), Some("F"));
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
     /// A node's positional argument — the `"Hello"` in `label "Hello"`.
     pub fn argument(&self, path: &[usize]) -> Option<String> {
         let node = self.node_at(path)?;
@@ -845,6 +1062,19 @@ impl Form {
     /// What a designer does when a property goes back to its default: the schema
     /// says a default is not written, so resetting one is deleting it rather than
     /// spelling it out.
+    /// ```
+    /// # use denise_forms::Form;
+    /// let mut form = Form::parse(r#"form "F" version=1 width=99 height=99 { label "Hi" x=0 y=0 w=9 h=9 role=primary }"#)?;
+    ///
+    /// assert!(form.clear_property(&[0], "role"));
+    /// assert_eq!(form.property(&[0], "role"), None);
+    /// // Nothing there to clear.
+    /// assert!(!form.clear_property(&[0], "role"));
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    ///
+    /// Use [`Form::apply`] with [`Edit::property`] instead where the change has
+    /// to be undoable: this one hands back nothing to put it back with.
     pub fn clear_property(&mut self, path: &[usize], name: &str) -> bool {
         let Some(node) = self.at_mut(path) else {
             return false;
@@ -861,6 +1091,18 @@ impl Form {
     /// Removes the node at `path`, and everything under it.
     ///
     /// Returns `false` if there is no node there.
+    /// ```
+    /// # use denise_forms::Form;
+    /// let mut form = Form::parse(r#"form "F" version=1 width=99 height=99 { label "Hi" x=0 y=0 w=9 h=9 }"#)?;
+    ///
+    /// assert!(form.remove_at(&[0]));
+    /// assert!(!form.text().contains("label"));
+    /// assert!(!form.remove_at(&[0]), "there is nothing there now");
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    ///
+    /// Use [`Form::apply`] with [`Edit::remove`] instead where the change has to
+    /// be undoable.
     pub fn remove_at(&mut self, path: &[usize]) -> bool {
         let Some((&last, above)) = path.split_last() else {
             return false;
