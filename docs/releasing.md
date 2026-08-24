@@ -33,6 +33,52 @@ A release cut on a tree whose manifests already carry the tag's version — a
 manual `bump-version.py` commit, or a re-run — skips 1 and 2 and just verifies
 and publishes.
 
+### The downloads
+
+The designer is a *program*, and nobody who wants a form designer will
+`cargo install` one. After the publish — after the one irreversible step, since a
+binary that fails to build cannot un-publish a crate — a second workflow builds
+`denise-designer` and the `denise-forms` CLI for four platforms, runs each one to
+check it opens the reference form, and attaches them to the release:
+
+| | |
+|---|---|
+| macOS | one `.dmg` holding **Denise Designer.app**, universal for Intel and Apple silicon |
+| Windows | a `.zip` with the `.exe` |
+| Linux x86-64, aarch64 | a `.tar.gz` each |
+
+Every archive carries both programs, the licence, the designer's README, and the
+form files with the pictures they name — a designer that opens with nothing to
+open is a blank page. Each artifact has a `.sha256` beside it, and the release
+notes gain a **Download the designer** section, appended once under a marker so a
+re-run does not say it twice and whatever was written above it is left alone.
+
+To rehearse it, run the **Binaries** workflow by hand from the Actions tab with
+any tag. If no release of that name exists the archives come back as the run's
+own artifacts and nothing is published or edited, which makes it safe to try on a
+tag that is only a tag.
+
+It is re-runnable on its own for a tag whose release already exists: the uploads
+use `--clobber`, so a second attempt replaces the first rather than failing on it.
+
+**They are not signed.** There is no Apple Developer account behind this project
+and no Windows code-signing certificate, so a first launch needs a right-click →
+*Open* on macOS and *More info* → *Run anyway* on Windows. The release notes say
+so. The macOS binaries *are* ad-hoc signed, which is not the same thing and is
+not optional: `lipo` throws away whatever signature the two halves had, and an
+arm64 Mac will not run a Mach-O with no signature at all.
+
+### Why this is not cargo-dist
+
+`cargo-dist` does all of the above and generates installer scripts too, and it
+was the first thing tried. It wants to **own** the release flow: it plans from a
+tag push, creates the release object itself, and decides what happens when.
+Everything above is the other way round — the release is published first, by a
+person, and the tag drives the rest — so adopting it would have meant rewriting
+the one part of this process that is written down and understood, in exchange for
+installer scripts. What is left once its opinions are not needed is eighty lines
+of workflow.
+
 ### When a release fails partway
 
 Nothing is uploaded until every guard has passed, so a red run leaves crates.io
@@ -44,7 +90,9 @@ existing tag, which is only right when the tree it points at was fine and the
 failure was transient.
 
 To rehearse without publishing anything, run the **Release** workflow by hand
-from the Actions tab. With no release attached it stops after the dry run.
+from the Actions tab. With no release attached it stops after the dry run, and
+the downloads are not built — rehearse those from the **Binaries** workflow
+instead, which is a job of its own for exactly this reason.
 
 ### Why the release comes first
 

@@ -33,6 +33,9 @@ denise-winit = "0.19"    # develop on a desktop
 # denise-image = "0.19"  # decode PNG, JPEG, GIF and BMP
 ```
 
+Or **[download the form designer](https://github.com/bisand/denise/releases/latest)**
+— macOS, Windows, Linux — and draw a screen without writing any of it.
+
 ## Show me the code
 
 ```rust
@@ -370,6 +373,26 @@ cargo run -p denise-ui --example showcase -- dark showcase.ppm
 
 <img src="assets/showcase.png" width="620"
      alt="A panel of themed buttons, text fields and a modal dialog over a dimmed backdrop">
+
+## Tools
+
+| | |
+|---|---|
+| [`denise-designer`](tools/designer) | A visual form designer: the thing Delphi had in 1995 and the WinForms designer kept. Drag widgets onto a canvas, edit their properties, press F5 to run the form. |
+| [`denise-forms`](denise-forms) | The `.dform` command line tool: check a form, render one to a picture, and print what it holds. |
+
+<img src="assets/screenshots/designer.png" width="620"
+     alt="The designer: a palette and outline on the left, a form on the canvas with a selected slider and alignment guides, and the slider's properties on the right">
+
+The designer writes the same [`.dform` files](docs/forms.md) a person edits by
+hand — text, in `git diff`, with comments and column alignment surviving a
+save — and the canvas draws them **with the code that will draw them on the
+panel**, so what is on screen is what ships, to the pixel.
+
+Every [release](https://github.com/bisand/denise/releases/latest) carries a build
+for each platform, so it takes no Rust toolchain to try;
+[its README](tools/designer/README.md#getting-it-without-a-rust-toolchain) has the
+one extra click an unsigned application needs.
 
 ## Status
 
