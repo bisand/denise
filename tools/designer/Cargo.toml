@@ -30,6 +30,13 @@ denise-image = { workspace = true, features = ["png", "jpeg", "gif"] }
 # portal rather than GTK, so this adds no system packages to a build.
 rfd = "0.15"
 
+# The system clipboard, which is a platform thing the toolkit does not touch and
+# never will: a `no_std` widget library has no business knowing what a desktop
+# is. Text only — the default features pull in the whole `image` crate to put
+# pictures on the clipboard, and what goes on the clipboard here is `.dform`
+# source.
+arboard = { version = "3", default-features = false }
+
 [lints.rust]
 unsafe_code = "forbid"
 

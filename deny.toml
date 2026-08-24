@@ -54,6 +54,13 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    # `clipboard-win` and its `error-code`, which are how `arboard` reaches the
+    # Windows clipboard for the designer. Boost is permissive — no attribution
+    # required in a binary, no source obligations — so it belongs in this list
+    # rather than in the exceptions below: those are for licences that *fail*
+    # the permissive-only rule and were let through anyway, and this one passes
+    # it.
+    "BSL-1.0",
     "ISC",
     "MIT",
     "Unicode-3.0",

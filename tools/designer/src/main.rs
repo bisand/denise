@@ -29,7 +29,7 @@
 //!
 //! A form opens, draws, selects — one at a time or by rubber band — moves,
 //! resizes, reparents by dropping a node on a panel, reorders front to back,
-//! aligns, sizes, spaces, groups, ungroups, deletes and undoes; its properties are edited in the right pane; a widget is
+//! aligns, sizes, spaces, groups, ungroups, copies, pastes, deletes and undoes; its properties are edited in the right pane; a widget is
 //! dragged out of the palette or drawn on the canvas; and the outline shows the
 //! tree as a tree, with folding, renaming, reparenting, and an eye that hides a
 //! node here without the file learning of it. That is a form built from nothing.
@@ -46,6 +46,7 @@
 mod app;
 mod arrange;
 mod canvas;
+mod clipboard;
 mod document;
 mod history;
 mod inspector;
