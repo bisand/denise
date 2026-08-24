@@ -848,7 +848,29 @@ impl Form {
                     format.terminator = String::from("\n");
                     node.set_format(format);
                 }
+
+                // Whether the arrival carries the newline that follows the
+                // opening brace — which only the first node in a block does.
+                let opens = node
+                    .format()
+                    .is_some_and(|format| format.leading.starts_with('\n'));
+                let displaced = index == 0 && !children.nodes().is_empty();
                 children.nodes_mut().insert(index, node);
+                // The node that used to be first is not any more, and the line
+                // it was holding open is being held by the new arrival. Leaving
+                // it with its own newline would leave a blank line behind —
+                // exactly the mirror of what `Remove` puts right when it takes
+                // the first node out.
+                if displaced
+                    && opens
+                    && let Some(after) = children.nodes_mut().get_mut(1)
+                {
+                    let mut format = after.format().cloned().unwrap_or_default();
+                    if let Some(rest) = format.leading.strip_prefix('\n') {
+                        format.leading = rest.to_string();
+                        after.set_format(format);
+                    }
+                }
                 if empty {
                     // The closing brace lines up under the node that opened it,
                     // and there is a space before the one that opens it.

@@ -633,6 +633,24 @@ fn reordering_among_siblings_undoes_exactly() {
 }
 
 #[test]
+fn a_node_moved_to_the_front_and_back_again_leaves_no_blank_line() {
+    // Only the first node in a block carries the newline that follows the
+    // opening brace. A node arriving in front of it takes that job over, and the
+    // one it displaced has to give it up — or the file grows a blank line every
+    // time something is brought to the front.
+    let mut form = Form::parse(NESTED).expect("parses");
+    form.apply(Edit::move_to(&[3], &[], 0))
+        .expect("to the front");
+    let after = form.text();
+    assert!(!after.contains("\n\n"), "a blank line appeared: {after:?}");
+    Form::parse(&after).expect("still a form");
+
+    // And there and back is where it started, without anybody undoing.
+    form.apply(Edit::move_to(&[0], &[], 3)).expect("and back");
+    assert_eq!(form.text(), NESTED);
+}
+
+#[test]
 fn a_node_that_changes_depth_is_reindented_and_undone_back() {
     let mut form = Form::parse(NESTED).expect("parses");
     // The top-level `one` into the left panel.
