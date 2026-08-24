@@ -117,6 +117,14 @@ The ranges on a numeric property are what an editor should offer, not a gate: a
 widget that clamps clamps a value from `set` exactly as it clamps one from its
 own setter, so there is one rule rather than two.
 
+This is what lets the [visual designer](https://github.com/bisand/denise/tree/main/tools/designer)
+contain **no list of widgets anywhere**. Its palette is `widgets::all()`, its
+inspector draws one editor per `Property` and reads the tooltip from that
+property's own documentation, and a widget added to this crate turns up in both
+without anybody editing the designer. The properties the *tree* owns — geometry,
+visibility, docking — and the ones the *form node* owns are described the same
+way, in `denise-forms`, so the inspector has one rule for all three.
+
 ## Anchors and docking
 
 A node keeps its rectangle when its parent resizes — unless it says otherwise.

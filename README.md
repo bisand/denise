@@ -170,6 +170,36 @@ being hidden.
 <img src="assets/screenshots/gallery.png" width="860"
      alt="The gallery: a theme editor sidebar beside live widgets — role buttons, form controls, sliders driving a progress ring, ratings and a spinner">
 
+## The designer
+
+Delphi had one in 1995 and the WinForms designer kept it. This is that, for
+DeniseUI, and it is a Denise application itself — not Tauri, not egui, not a web
+page. The canvas draws the form with **the same code that will draw it on the
+panel**, so what is on screen is what ships, to the pixel.
+
+<img src="assets/screenshots/designer.png" width="860"
+     alt="The designer: a palette and outline on the left, the reference form on the canvas with a selected slider, eight handles and an alignment guide, and the slider's own properties on the right">
+
+Drag widgets out of the palette, move and resize them against snapping guides,
+align and group them, edit every property in the inspector, and press **F5** to
+run the form live. Every edit lands in the file as a targeted change and every
+one of them undoes byte-for-byte, because the model *is* the document rather
+than a struct serialised back over it.
+
+```bash
+cargo run -p denise-designer -- forms/reference.dform
+```
+
+Or **[download it](https://github.com/bisand/denise/releases/latest)** — macOS,
+Windows and Linux builds on every release, with the `denise-forms` command line
+tool beside it and no Rust toolchain needed.
+
+What it writes is [a `.dform` file](docs/forms.md): text, in `git diff`, that a
+person can hand-edit and that comments survive. What reads one is
+[`denise-forms`](denise-forms), in about five lines. The path from a drawing to a
+running screen is [docs/designer.md](docs/designer.md); the panes and every
+gesture are [the designer's own README](tools/designer/README.md).
+
 ## The browser
 
 [`examples/browser`](examples/browser) is the composability proof: a small
@@ -349,6 +379,7 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 |---|---|
 | [`hello`](examples/hello) | **Start here.** Eighty lines: a message enum, a tree, an event loop. Builds for a window or a bare display. |
 | [`table-editor`](examples/table-editor) | A record editor with a grid, a form, validation, a modal and real fonts. Builds for a window *or* for a bare display. |
+| [`designed`](examples/designed) | **`hello` again, from a file.** The same application built from [`hello.dform`](forms/hello.dform) rather than from Rust. Read the two side by side: a form replaces the tree-building and nothing else. |
 | [`forms`](examples/forms) | Secondary windows on the desktop: a modeless settings form, a modal, and the state they share. Desktop only, deliberately. |
 | [`hello-rect`](examples/hello-rect) | The damage proof: a bouncing rectangle that repaints two rectangles, not a window. |
 | [`panel`](examples/panel) | The widget tree, a modal and a cursor sprite, on bare Linux with no X. |
@@ -373,26 +404,6 @@ cargo run -p denise-ui --example showcase -- dark showcase.ppm
 
 <img src="assets/showcase.png" width="620"
      alt="A panel of themed buttons, text fields and a modal dialog over a dimmed backdrop">
-
-## Tools
-
-| | |
-|---|---|
-| [`denise-designer`](tools/designer) | A visual form designer: the thing Delphi had in 1995 and the WinForms designer kept. Drag widgets onto a canvas, edit their properties, press F5 to run the form. |
-| [`denise-forms`](denise-forms) | The `.dform` command line tool: check a form, render one to a picture, and print what it holds. |
-
-<img src="assets/screenshots/designer.png" width="620"
-     alt="The designer: a palette and outline on the left, a form on the canvas with a selected slider and alignment guides, and the slider's properties on the right">
-
-The designer writes the same [`.dform` files](docs/forms.md) a person edits by
-hand — text, in `git diff`, with comments and column alignment surviving a
-save — and the canvas draws them **with the code that will draw them on the
-panel**, so what is on screen is what ships, to the pixel.
-
-Every [release](https://github.com/bisand/denise/releases/latest) carries a build
-for each platform, so it takes no Rust toolchain to try;
-[its README](tools/designer/README.md#getting-it-without-a-rust-toolchain) has the
-one extra click an unsigned application needs.
 
 ## Status
 
@@ -488,7 +499,8 @@ is in [docs/design.md](docs/design.md).
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
 | [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all seventeen share one number, and what each guard is for |
-| [docs/forms.md](docs/forms.md) | The `.dform` file: why KDL, the version 1 schema, and what a form file deliberately will not do |
+| [docs/forms.md](docs/forms.md) | The `.dform` file: why KDL, the version 1 schema, loading one from Rust, and what a form file deliberately will not do |
+| [docs/designer.md](docs/designer.md) | From a drawing to a running screen: the designer, the file and an application, end to end |
 
 ## Constraints
 

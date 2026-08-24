@@ -694,6 +694,83 @@ What survives a designer save, and is tested to:
 What does not survive: nothing. If the designer changes a byte the user did not
 ask it to change, that is a bug with a test waiting for it.
 
+## Loading one from Rust
+
+Five lines, and the whole of what an application does with a form:
+
+```rust
+use denise_forms::{Form, Handler, Payload};
+use denise_ui::Ui;
+
+let form = Form::parse(include_str!("../forms/hello.dform"))?;
+
+// The form says how big it is and which theme it wants; nothing here says it
+// twice.
+let mut ui: Ui<Message> = Ui::new(form.size(), form.theme());
+let root = ui.root();
+
+let built = form.build(&mut ui, root, &mut |name: &str, payload: Payload| {
+    match (name, payload) {
+        ("greet", Payload::None) => Some(Handler::Plain(Message::Greet)),
+        _ => None,
+    }
+})?;
+
+// The nodes the file named, by the names it used.
+let field = built.node("who");
+```
+
+[`examples/designed`](../examples/designed) is that, complete and runnable — the
+`hello` example again, from [`hello.dform`](../forms/hello.dform) rather than from
+twenty lines of `ui.add`. Read the two side by side: **a form replaces the
+tree-building and nothing else.** The message enum, the `update`, the damage and
+the event loop are the same file in both.
+
+### The three things a file cannot hold
+
+A `.dform` holds widgets and their initial state. It holds no code, so three
+things stay the application's, and the closure above (or a `Wiring` impl, where
+there are pictures too) is where it says them.
+
+**Its own message type.** The file says `on-press=greet`; only the application
+knows that `greet` is `Message::Greet`. The mapping is a match on a string, which
+the compiler cannot check — so a name the form uses and the application does not
+answer is an error *at load*, with the name in it, rather than a button that
+quietly does nothing.
+
+`payload` is which **shape** the widget needs, and it is why this is a `Handler`
+and not a closure returning `M`. A button holds a message; a checkbox holds a
+`fn(bool) -> M`, which is a *function pointer* that no closure built from a name
+could ever be. An enum's tuple variant already is one — `Handler::Bool(Message::Notify)`
+— which is the whole trick.
+
+| `payload` | The widget wants | Answer with |
+|---|---|---|
+| `Payload::None` | the message itself | `Handler::Plain(Message::Save)` |
+| `Payload::Bool` | `fn(bool) -> M` | `Handler::Bool(Message::Notify)` |
+| `Payload::Index` | `fn(usize) -> M` | `Handler::Index(Message::Chose)` |
+| `Payload::Number` | `fn(f32) -> M` | `Handler::Number(Message::Level)` |
+
+**Its pictures.** `image src="logo.png"` is a path relative to the form file, and
+`Wiring::asset` is what turns it into pixels. This crate decodes nothing and does
+not depend on `denise-image`, which keeps a board with its pictures compiled in
+from linking a decoder it will never call.
+
+**What the widgets are called.** `name=who` in the file becomes
+`built.node("who")`, and that is the one place a typo shows up as a `None` rather
+than as a compile error. [#101](https://github.com/bisand/denise/issues/101) is
+where the names get generated instead.
+
+### Baked in, or read at runtime
+
+`include_str!` compiles the form into the binary: a kiosk image with no writable
+filesystem still gets its layout, and the file is checked at build time by being a
+string literal and at load time by `Form::parse`. `std::fs::read_to_string` is
+the other way, and is what you want when the form is meant to be swapped without
+a rebuild — a panel whose screens are updated by copying files.
+
+Both are the same three lines afterwards. The format does not care.
+
 ## Checking a file
 
 ```bash

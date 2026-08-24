@@ -134,6 +134,52 @@ with no layout engine nothing else ever will. `--no-lint` turns that off,
 installed, so two renders of one file are the same bytes and a snapshot is worth
 committing. `--font` needs the `truetype` feature.
 
+## Editing one, byte for byte
+
+The other half of the crate, and the one the [designer](https://github.com/bisand/denise/tree/main/tools/designer)
+is built on. A `Form` holds the **document**, not a struct taken from it, so an
+edit changes what it names and nothing else:
+
+```rust
+# use denise_forms::{Edit, Form};
+// A comment, and columns somebody lined up by hand.
+let source = "\
+// The panel everything sits on.
+form \"F\" version=1 width=320 height=240 {
+    label \"One\"   x=8  y=8  w=80 h=20
+    label \"Two\"   x=8  y=32 w=80 h=20
+}
+";
+let mut form = Form::parse(source)?;
+
+let undo = form.apply(Edit::number(&[1], "y", Some(40)))?;
+assert_eq!(form.text(), source.replace("x=8  y=32", "x=8  y=40"));
+
+// Every edit hands back the edit that reverses it, so undo is applying that —
+// there is no snapshot of anything, anywhere.
+form.apply(undo)?;
+assert_eq!(form.text(), source);
+# Ok::<(), denise_forms::Error>(())
+```
+
+The inverse carries the **text** that was there and not the value, which is why
+this is byte-exact rather than merely correct: `1_000`, `0x10` and `70.0` are
+values a typed inverse would carry, and none of them would be written back the
+way they were written down.
+
+`Edit::Move` reparents a node — its children, its indentation and the comment
+above it all going with it — and `Edit::Many` makes a run of edits one step, so a
+gesture that changes four numbers is one thing to undo. The empty path is the
+`form` node itself, so its size, kind and theme are edited through the same door.
+
+[`Form::node_text`] hands one node back as source and [`fragment`] reads source
+back into nodes, which is how copy and paste carry `.dform` text on the system
+clipboard: paste into a text editor and you have the source, paste from one and
+you have the nodes.
+
+[`Form::node_text`]: https://docs.rs/denise-forms/latest/denise_forms/struct.Form.html#method.node_text
+[`fragment`]: https://docs.rs/denise-forms/latest/denise_forms/fn.fragment.html
+
 ## What this crate does not do
 
 **It does not open anything.** `Form::kind` reports that a file is a dialog;
@@ -142,3 +188,7 @@ the application's decision, and it differs by machine.
 
 **It does not lay anything out.** Nodes are rectangles, with the toolkit's own
 anchors and docking over them. There is no solver here and none below.
+
+**It does not know what a clipboard or a window is.** Editing a form is text in,
+text out; whose clipboard that text came from is the tool's business, which is
+why `arboard` is a dependency of the designer and never of this crate.
