@@ -17,6 +17,11 @@ denise-forms = { workspace = true }
 denise-ui = { workspace = true, features = ["std"] }
 denise-winit = { workspace = true }
 
+# Preview mode puts the on-screen keyboard up over the form under design, so
+# that "the form gets out of the keyboard's way by shrinking" can be checked on
+# the form being designed rather than after it ships.
+denise-keyboard = { workspace = true }
+
 # A form under design names pictures, and a designer that drew none of them would
 # be showing something other than what the panel will.
 denise-image = { workspace = true, features = ["png", "jpeg", "gif"] }

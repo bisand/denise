@@ -33,6 +33,9 @@
 //! with folding, renaming, reparenting, and an eye that hides a node here
 //! without the file learning of it. That is a form built from nothing.
 //!
+//! F5 runs it: the scrim goes, the events become the form's, and the strip along
+//! the bottom names every message it fires.
+//!
 //! The palette is a flat list of names, because the registry carries a name and
 //! a property list and nothing that says what a widget *is* — grouping it and
 //! giving each row a tooltip is [#126].
@@ -65,6 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut select: Option<String> = None;
     let mut drag: Option<(i32, i32)> = None;
     let mut carry: Option<(String, i32, i32)> = None;
+    let mut preview = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -76,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some((dx.trim().parse().ok()?, dy.trim().parse().ok()?))
                 });
             }
+            "--preview" => preview = true,
             "--carry" => {
                 carry = rest.next().and_then(|value| {
                     let mut parts = value.split(',');
@@ -98,7 +103,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --snapshot <out.ppm>   draw one frame and exit, with no window\n\
                      \x20 --select <name>        snapshot: select this node first\n\
                      \x20 --drag <dx>,<dy>       snapshot: and drag it, so the guides show\n\
-                     \x20 --carry <kind>[,x,y]   snapshot: hold this widget over the form"
+                     \x20 --carry <kind>[,x,y]   snapshot: hold this widget over the form\n\
+                     \x20 --preview              snapshot: run the form rather than draw it"
                 );
                 return Ok(());
             }
@@ -129,6 +135,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some((dx, dy)) = drag {
             designer.drag_selection(dx, dy);
+        }
+        if preview {
+            designer.toggle_preview();
         }
         if let Some((kind, x, y)) = carry
             && !designer.carry(&kind, denise::Point::new(x, y))
@@ -191,20 +200,36 @@ impl DeniseApp for Main {
         // comes back is everything else, so the toolbar and the panes go on
         // working while the form under design does not.
         let rest = self.designer.input(events);
+        // First, and unedited: see `Designer::keyboard_input`.
+        self.designer.keyboard_input(&rest);
         self.designer.ui.handle(&rest);
-        self.designer
-            .ui
-            .tick(self.started.elapsed().as_millis() as u64);
 
-        let messages: Vec<Message> = self.designer.ui.drain_messages().collect();
-        for message in messages {
-            self.designer.handle(message);
+        let now = self.started.elapsed().as_millis() as u64;
+        self.designer.ui.tick(now);
+        self.designer.keyboard_turn(now);
+
+        // Drained until it stops rather than once: a tap on the on-screen
+        // keyboard is answered by feeding events straight back into the tree,
+        // and whatever *those* produce belongs to the same frame as the tap.
+        // Bounded, so a message that produced itself would cost a frame rather
+        // than the application.
+        for _ in 0..8 {
+            let messages: Vec<Message> = self.designer.ui.drain_messages().collect();
+            if messages.is_empty() {
+                break;
+            }
+            for message in messages {
+                self.designer.handle(message);
+            }
         }
 
         // Last, so a keystroke that has just reached a field is applied in the
         // same frame it was typed in. Nothing in the inspector emits a message;
-        // see `Designer::poll`.
-        self.designer.poll();
+        // see `Designer::poll`. There is no inspector while previewing, and no
+        // palette filter either.
+        if !self.designer.previewing() {
+            self.designer.poll();
+        }
 
         if self.designer.ui.needs_paint() {
             let pending = self.designer.ui.pending_damage();

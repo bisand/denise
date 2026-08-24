@@ -784,6 +784,7 @@ dependencies = [
  "denise",
  "denise-forms",
  "denise-image",
+ "denise-keyboard",
  "denise-ui",
  "denise-winit",
  "rfd",
