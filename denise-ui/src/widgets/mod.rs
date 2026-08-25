@@ -80,6 +80,7 @@ mod tabs;
 mod text_input;
 mod timeline;
 mod toggle;
+mod tree;
 mod video;
 
 pub use alert::Alert;
@@ -111,4 +112,5 @@ pub use tabs::Tabs;
 pub use text_input::TextInput;
 pub use timeline::{Timeline, TimelineItem};
 pub use toggle::Toggle;
+pub use tree::{Tree, TreeItem};
 pub use video::Video;

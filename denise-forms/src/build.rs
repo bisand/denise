@@ -10,7 +10,7 @@ use denise_ui::widgets::describe::{
 use denise_ui::widgets::{
     Alert, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Column, Divider, Fit, Image, Label,
     List, ListItem, Panel, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner,
-    Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, Video,
+    Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, Tree, TreeItem, Video,
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 use kdl::{KdlNode, KdlValue};
@@ -470,6 +470,7 @@ pub fn default_size(kind: &str) -> Size {
         "slider" => (200, 24),
         "spinner" => (24, 24),
         "table" => (320, 180),
+        "tree" => (220, 180),
         "tabs" => (320, 36),
         "timeline" => (220, 140),
         "video" => (160, 90),
@@ -1199,6 +1200,42 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 };
                 if let Some(h) = self.handler(node, "on-activate", Payload::Index)? {
                     widget = widget.on_activate(self.on_index(node, "on-activate", h)?);
+                }
+                self.ui.add(parent, widget, rect)
+            }
+            "tree" => {
+                let items: Vec<TreeItem> = self
+                    .collection(node, "item")
+                    .into_iter()
+                    .map(|n| {
+                        let mut item = TreeItem::new(self.arg(n).unwrap_or_default());
+                        if let Some(depth) = n.get("depth").and_then(KdlValue::as_integer) {
+                            item = item.at_depth(depth.clamp(0, i128::from(u16::MAX)) as u16);
+                        }
+                        if n.get("open").and_then(KdlValue::as_bool) == Some(false) {
+                            item = item.shut();
+                        }
+                        if let Some(leading) = self.string(n, "leading") {
+                            item = item.with_leading(leading);
+                        }
+                        if let Some(trailing) = self.string(n, "trailing") {
+                            item = item.with_trailing(trailing);
+                        }
+                        if n.get("enabled").and_then(KdlValue::as_bool) == Some(false) {
+                            item = item.disabled();
+                        }
+                        item
+                    })
+                    .collect();
+                let mut widget = match self.handler(node, "on-select", Payload::Index)? {
+                    Some(h) => Tree::new(items, self.on_index(node, "on-select", h)?),
+                    None => Tree::inert(items),
+                };
+                if let Some(h) = self.handler(node, "on-activate", Payload::Index)? {
+                    widget = widget.on_activate(self.on_index(node, "on-activate", h)?);
+                }
+                if let Some(h) = self.handler(node, "on-toggle", Payload::Index)? {
+                    widget = widget.on_toggle(self.on_index(node, "on-toggle", h)?);
                 }
                 self.ui.add(parent, widget, rect)
             }

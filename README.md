@@ -118,7 +118,7 @@ all.
 Three things it is showing, none of which is obvious from the outside:
 
 - **There was no grid widget when this example was written** — and it remains a
-  lesson in how the widgets compose. There are twenty-five now, `Table` among
+  lesson in how the widgets compose. There are twenty-six now, `Table` among
   them: label, button, panel, text field, checkbox, toggle, radio group, progress
   bar, slider, divider, badge, alert, tabs, list, radial progress, spinner,
   select, image, rating, avatar, table, timeline, carousel, collapse, video. A row is a full-width `Button` with the cell `Label`s placed on top of it;
@@ -436,12 +436,12 @@ is in [docs/design.md](docs/design.md).
   node's children top-to-bottom — the piece that makes an animated collapse move
   its siblings. A constraint solver can still be added over all of this without
   changing anything below it.
-- **Twenty-five widgets**, plus tree-owned tooltips, toasts and drawers. Label,
+- **Twenty-six widgets**, plus tree-owned tooltips, toasts and drawers. Label,
   button, panel, text field, checkbox, toggle, radio group, progress bar,
-  slider, divider, badge, alert, tabs, list, radial progress, spinner, select,
-  image, rating, avatar, table, timeline, carousel, collapse, video. Everything
-  is assembled from them, as `table-editor` shows. More are being added one at a
-  time — see [#6](https://github.com/bisand/denise/issues/6).
+  slider, divider, badge, alert, tabs, list, tree, radial progress, spinner,
+  select, image, rating, avatar, table, timeline, carousel, collapse, video.
+  Everything is assembled from them, as `table-editor` shows. More are being
+  added one at a time — see [#6](https://github.com/bisand/denise/issues/6).
 - **Scrolling is a tree concern, and the tree does it.** Mark a node
   `set_scrollable` and it becomes a viewport: wheel, page keys, touch-drag on
   its background, clipping and hit testing all agree because one reflow

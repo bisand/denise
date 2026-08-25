@@ -66,7 +66,8 @@ pub use widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Voi
 pub use widgets::{
     Alert, Align, Badge, Button, Checkbox, Describe, Divider, DynDescribe, Label, List, ListItem,
     Mismatch, Orientation, Panel, Progress, Property, PropertyError, PropertyKind, RadialProgress,
-    RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle, Value, open_select,
+    RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle, Tree, TreeItem, Value,
+    open_select,
 };
 
 // Re-exported so an application names one crate rather than three to style a

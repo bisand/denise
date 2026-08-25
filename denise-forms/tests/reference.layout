@@ -1,4 +1,4 @@
-advanced collapse 8 460 224 40
+advanced collapse 8 464 224 40
 author avatar 888 526 54 54
 busy spinner 880 16 24 24
 dark toggle 264 508 348 24
@@ -8,15 +8,16 @@ delivery radio-group 264 394 348 76
 form-section panel 248 152 380 440
 full-name text-input 264 214 348 34
 header panel 0 0 1024 56
-history timeline 8 312 224 140
+history timeline 8 344 224 112
 job select 264 334 348 34
 loaded progress 652 356 352 8
 logo image 652 428 120 90
 me avatar 916 12 32 32
 media-section panel 640 416 376 176
-nav list 8 64 224 200
-notes panel 8 508 224 84
+nav list 8 64 224 136
+notes panel 8 512 224 84
 notify checkbox 264 478 348 24
+places tree 8 232 224 80
 records table 652 164 352 180
 retry button 952 540 52 28
 scrim panel 0 0 1024 600
