@@ -238,7 +238,7 @@ impl Describe for Image {
             "radius",
             PropertyKind::Int { min: 0, max: 256 },
             "Corner radius in pixels — a picture is cropped to a shape rather than themed into one.",
-        ),
+        ).in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

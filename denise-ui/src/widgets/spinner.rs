@@ -286,7 +286,8 @@ impl Describe for Spinner {
             "thickness",
             PropertyKind::Int { min: 1, max: 64 },
             "Ring width in pixels. Derived from the node's size without it.",
-        ),
+        )
+        .in_pixels(),
         Property::new(
             "period-ms",
             // The floor is the clamp `set_period_ms` applies, named rather than

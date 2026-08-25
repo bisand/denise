@@ -415,7 +415,8 @@ impl<M> Describe for Collapse<M> {
             "expanded-height",
             PropertyKind::Int { min: 0, max: 4096 },
             "The content's height when open; measured from the children without it.",
-        ),
+        )
+        .in_pixels(),
         Property::new(
             "on-toggle",
             PropertyKind::Message(Payload::Bool),
@@ -430,7 +431,8 @@ impl<M> Describe for Collapse<M> {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Title size in logical pixels.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

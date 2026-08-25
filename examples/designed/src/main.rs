@@ -56,9 +56,9 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use denise::Size;
 #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
-use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode};
-use denise::{Rect, Size};
+use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
 use denise_forms::{Built, Form, Handler, Payload, Wiring};
 use denise_ui::widgets::{Label, TextInput};
 use denise_ui::{NodeId, Ui};
@@ -144,28 +144,27 @@ impl Designed {
     fn new(size: Size, _scale: f32) -> Self {
         let form = Form::parse(FORM).expect("the form is compiled in and was checked by CI");
 
-        // The theme comes from the file too. A form that says `theme=light` is a
-        // light application, with nothing here to change.
-        let mut ui: Ui<Message> = Ui::new(size, form.theme());
+        // The form was designed at `form.size()`; the surface is whatever the
+        // machine gives — a 460x260 window here, a 1920x1080 panel there. What
+        // to do about the difference is the **file's** decision rather than this
+        // application's: `hello.dform` says nothing, which means `scaling=none`,
+        // which means its own size in the middle. Change that one word in the
+        // file to `proportional` and this application fills the panel, with no
+        // line here changing.
+        let fit = form.fit(size);
+
+        // The theme comes from the file too — a form that says `theme=light` is
+        // a light application, with nothing here to change — and it is scaled
+        // here, once, because a widget's corners and its border are the theme's
+        // numbers rather than the file's.
+        let mut ui: Ui<Message> = Ui::new(size, form.theme().scaled(fit.uniform()));
         let root = ui.root();
 
-        // The form was designed at `form.size()`; the surface is whatever the
-        // machine gives — a 460x260 window here, a 1920x1080 panel there.
-        // Centring one in the other is the *application's* decision, because a
-        // form file carries a design size and not a promise about the display.
-        // It is the same decision `hello` makes with the same arithmetic, and
-        // #111 is where a form gets to say it may be scaled instead.
-        let designed = form.size();
         let stage = ui
             .add(
                 root,
                 denise_ui::widgets::Panel::filled(form.background()),
-                Rect::new(
-                    (size.width as i32 - designed.width as i32) / 2,
-                    (size.height as i32 - designed.height as i32) / 2,
-                    designed.width as i32,
-                    designed.height as i32,
-                ),
+                fit.rect,
             )
             .expect("the root takes a child");
 
@@ -173,7 +172,7 @@ impl Designed {
         // property, with a line and a column, because a form is a file somebody
         // typed and the message has to be usable by whoever typed it.
         let built: Built = form
-            .build(&mut ui, stage, &mut Wires)
+            .build_fitted(&mut ui, stage, fit, &mut Wires)
             .expect("the form builds; `denise-forms check` says so in CI");
 
         // The named nodes, by the names in the file. Everything else the form
@@ -332,8 +331,8 @@ mod tests {
     fn a_surface_bigger_than_the_form_centres_it_rather_than_stretching_it() {
         // A form file carries a design size, not a promise about the display.
         // On a panel twice the size the tree is the size the file says, in the
-        // middle — which is the decision this application makes and #111 is
-        // where a form gets to ask for a different one.
+        // middle — because `hello.dform` says nothing about scaling, and saying
+        // nothing means `scaling=none`. The file decides; this only obeys.
         let app = Designed::new(Size::new(920, 520), 1.0);
         let field = app.ui.bounds(app.name).expect("laid out");
         let small = Designed::new(Size::new(460, 260), 1.0);

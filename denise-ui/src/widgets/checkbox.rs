@@ -345,7 +345,8 @@ impl<M> Describe for Checkbox<M> {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Label text size in logical pixels. The box itself is a theme metric.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

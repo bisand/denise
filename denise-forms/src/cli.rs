@@ -20,6 +20,9 @@ denise-forms — the DeniseUI form file
 
 Options
     --theme <dark|light|high-contrast>   render: which theme (default: the file's)
+    --scale <factor>                     render: draw at this scale, e.g. 2 or 0.75
+    --size <WxH>                         render: fit the form to this surface, by its
+                                         own `scaling=` rule
     --font <path.ttf>                    render: a real font instead of the built-in one
     --quiet                              check: say nothing unless something is wrong
     --no-lint                            check: syntax and building only, no geometry
@@ -66,7 +69,7 @@ fn split(args: &[String]) -> (Vec<(&str, Option<&str>)>, Vec<&str>) {
         let arg = args[i].as_str();
         if let Some(name) = arg.strip_prefix("--") {
             // A flag that takes a value takes the next argument.
-            let takes_value = matches!(name, "theme" | "font");
+            let takes_value = matches!(name, "theme" | "font" | "scale" | "size");
             let value = if takes_value {
                 i += 1;
                 args.get(i).map(String::as_str)
@@ -394,20 +397,65 @@ fn render(args: &[String]) -> Result<ExitCode, String> {
         None => form.theme(),
     };
 
-    let size = form.size();
-    if size.width == 0 || size.height == 0 {
+    let design = form.size();
+    if design.width == 0 || design.height == 0 {
         return Err(format!(
             "{path}: a form of {}x{} has nothing to draw",
-            size.width, size.height
+            design.width, design.height
         ));
     }
-    let mut ui: Ui<Void> = Ui::new(size, theme);
+
+    // Two ways to ask for a size, and they answer different questions. `--scale`
+    // is "the same panel at a higher density": one factor, and the picture grows
+    // with the form. `--size` is "this actual panel": the surface is what was
+    // asked for and the form's own `scaling=` decides what it does with it,
+    // which is the thing that cannot be reviewed any other way.
+    let (size, fit) = match (value(&flags, "size"), value(&flags, "scale")) {
+        (Some(_), Some(_)) => {
+            return Err(String::from(
+                "--size and --scale ask different questions; give one",
+            ));
+        }
+        (Some(spec), None) => {
+            let surface = surface_size(spec)?;
+            (surface, form.fit(surface))
+        }
+        (None, Some(spec)) => {
+            // The picture grows with the form, so the surface *is* the form and
+            // there is nothing to centre it in.
+            let scale = factor(spec)?;
+            let grown = Rect::from_size(design).scaled(scale);
+            let surface = Size::new(grown.width.max(1) as u32, grown.height.max(1) as u32);
+            (
+                surface,
+                denise_forms::Placement {
+                    x: scale,
+                    y: scale,
+                    rect: Rect::from_size(surface),
+                },
+            )
+        }
+        (None, None) => (design, form.fit(design)),
+    };
+
+    // Scaled once, here, or every widget is the old size inside a new rectangle.
+    let mut ui: Ui<Void> = Ui::new(size, theme.scaled(fit.uniform()));
 
     if let Some(font) = value(&flags, "font") {
         add_font(&mut ui, font)?;
     }
 
     let root = ui.root();
+    // The form's own rectangle, where the fit put it. At 1:1 with no `--size`
+    // this is the whole surface and the panel is what the form would have been
+    // drawn on anyway.
+    let stage = ui
+        .add(
+            root,
+            denise_ui::widgets::Panel::filled(form.background()),
+            fit.rect,
+        )
+        .ok_or_else(|| String::from("the root would not take a child"))?;
     let mut wiring = Drawing {
         base: Path::new(path)
             .parent()
@@ -415,7 +463,7 @@ fn render(args: &[String]) -> Result<ExitCode, String> {
             .to_path_buf(),
         failed: Vec::new(),
     };
-    let outcome = form.build(&mut ui, root, &mut wiring);
+    let outcome = form.build_fitted(&mut ui, stage, fit, &mut wiring);
     // The loader's own reasons first: `build` reports only that a picture could
     // not be had, and "no such file" or "not a PNG" is the half worth reading.
     for failure in &wiring.failed {
@@ -423,9 +471,51 @@ fn render(args: &[String]) -> Result<ExitCode, String> {
     }
     outcome.map_err(|e| format!("{path}:{e}"))?;
 
+    // Cropped rather than fitted, which is what `scaling=none` means when the
+    // surface is too small. Visible in the picture, but say it too: somebody
+    // rendering at a panel's size is asking whether it fits.
+    if fit.rect.x < 0 || fit.rect.y < 0 {
+        eprintln!(
+            "denise-forms: {path} is {}x{} and says `scaling={}`, so it is cropped by \
+             {}x{} on this surface",
+            design.width,
+            design.height,
+            denise_forms::Scaling::NAMES[form.scaling() as usize],
+            (-fit.rect.x * 2).max(0),
+            (-fit.rect.y * 2).max(0),
+        );
+    }
+
     write_ppm(&mut ui, size, out)?;
     eprintln!("wrote {out} at {}x{}", size.width, size.height);
     Ok(ExitCode::SUCCESS)
+}
+
+/// `--scale 2`, `--scale 0.75`.
+fn factor(spec: &str) -> Result<f32, String> {
+    let scale: f32 = spec
+        .parse()
+        .map_err(|_| format!("`{spec}` is not a scale; try 2 or 0.75"))?;
+    // Not zero, not negative, and not so large that the picture is measured in
+    // gigabytes before anything says why.
+    if !(0.05..=16.0).contains(&scale) {
+        return Err(format!("a scale of {scale} is outside 0.05 to 16"));
+    }
+    Ok(scale)
+}
+
+/// `--size 1920x1080`.
+fn surface_size(spec: &str) -> Result<Size, String> {
+    let wrong = || format!("`{spec}` is not a size; try 1920x1080");
+    let (w, h) = spec.split_once(['x', 'X']).ok_or_else(wrong)?;
+    let parse = |text: &str| -> Result<u32, String> {
+        let value: u32 = text.trim().parse().map_err(|_| wrong())?;
+        (1..=16384)
+            .contains(&value)
+            .then_some(value)
+            .ok_or_else(|| format!("{value} is outside 1 to 16384"))
+    };
+    Ok(Size::new(parse(w)?, parse(h)?))
 }
 
 #[cfg(feature = "truetype")]

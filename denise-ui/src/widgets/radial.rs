@@ -328,7 +328,8 @@ impl Describe for RadialProgress {
             "thickness",
             PropertyKind::Int { min: 1, max: 64 },
             "Ring width in pixels; derived from the radius without it.",
-        ),
+        )
+        .in_pixels(),
         Property::new(
             "role",
             PropertyKind::Enum(ROLES),
@@ -338,7 +339,8 @@ impl Describe for RadialProgress {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Text size in logical pixels.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

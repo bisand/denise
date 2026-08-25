@@ -16,7 +16,7 @@ use denise_ui::{Anchors, Dock, NodeId, Ui};
 use kdl::{KdlNode, KdlValue};
 
 use crate::error::{At, Error, Reason};
-use crate::form::{Form, FormKind, MAX_DEPTH};
+use crate::form::{Form, FormKind, MAX_DEPTH, Placement};
 
 /// Pixels for a picture a form named, as [`Wiring::asset`] hands them back.
 #[derive(Clone, Debug)]
@@ -222,6 +222,11 @@ pub const FORM_PROPERTIES: &[Property] = &[
         "background",
         PropertyKind::Enum(denise_ui::widgets::ROLES),
         "The surface the form is drawn on.",
+    ),
+    Property::new(
+        "scaling",
+        PropertyKind::Enum(crate::form::Scaling::NAMES),
+        "Whether this form may be drawn at another size: none, proportional or stretch.",
     ),
 ];
 
@@ -620,10 +625,125 @@ impl Form {
         parent: NodeId,
         wiring: &mut impl Wiring<M>,
     ) -> Result<Built, Error> {
+        self.build_fitted(
+            ui,
+            parent,
+            Placement {
+                x: 1.0,
+                y: 1.0,
+                rect: Rect::from_size(self.size()),
+            },
+            wiring,
+        )
+    }
+
+    /// Builds this form at `scale`: every rectangle and every length in it
+    /// multiplied once, on the way in.
+    ///
+    /// The DPI answer this toolkit gives, for a form. An application computing
+    /// its own rectangles multiplies them itself — three lines, and
+    /// `examples/hello` is those three lines. A form file has no application
+    /// doing that, so the multiplying goes where the rectangles are computed,
+    /// which is here.
+    ///
+    /// **Two things the caller still has to do**, because neither belongs to a
+    /// subtree:
+    ///
+    /// ```no_run
+    /// # use denise::{Size, theme};
+    /// # use denise_forms::Form;
+    /// # use denise_ui::{Ui, Void};
+    /// # let form = Form::parse("").unwrap();
+    /// # let scale = 2.0;
+    /// // The theme's metrics, or every widget is the old size inside a new
+    /// // rectangle — a 2x button with a 6px corner on it.
+    /// let mut ui: Ui<Void> = Ui::new(Size::new(1920, 1080), form.theme().scaled(scale));
+    /// ```
+    ///
+    /// ...and putting the form where it goes, which is [`Form::fit`].
+    ///
+    /// **Text scales like a rectangle here, and that is a choice.** A 1024x600
+    /// form on a 1920x1080 panel gets 16 px text at 30 px. That is right when
+    /// the panel is the same screen at a higher density and wrong when it is a
+    /// bigger screen meant to show more. This does the first one. The second is
+    /// not a multiplication and no file can express it.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`Form::build`]; scaling adds no failure of its own.
+    pub fn build_scaled<M: Clone + 'static>(
+        &self,
+        ui: &mut Ui<M>,
+        parent: NodeId,
+        scale: f32,
+        wiring: &mut impl Wiring<M>,
+    ) -> Result<Built, Error> {
+        self.build_fitted(
+            ui,
+            parent,
+            Placement {
+                x: scale,
+                y: scale,
+                rect: Rect::from_size(self.size()).scaled(scale),
+            },
+            wiring,
+        )
+    }
+
+    /// Builds this form at a [`Fit`] — a factor per axis, which is what
+    /// [`Scaling::Stretch`](crate::Scaling::Stretch) needs and [`Form::fit`] works
+    /// out.
+    ///
+    /// Only [`Placement::x`] and [`Placement::y`] are read. [`Placement::rect`] is where the
+    /// *caller* puts the node this builds into, and is none of this method's
+    /// business: a form is built under whatever `parent` it is given.
+    ///
+    /// ```
+    /// # use denise::{Rect, Size, theme};
+    /// # use denise_forms::Form;
+    /// # use denise_ui::{Ui, Void, widgets::Panel};
+    /// let form = Form::parse(
+    ///     r#"form "F" version=1 width=200 height=100 scaling=proportional {
+    ///         label "Hi" name=hi x=10 y=10 w=100 h=20 size=16
+    ///     }"#,
+    /// )?;
+    ///
+    /// let surface = Size::new(400, 400);
+    /// let fit = form.fit(surface);
+    ///
+    /// // The theme is scaled once, here, and the form is built into a panel at
+    /// // the rectangle the fit worked out.
+    /// let mut ui: Ui<Void> = Ui::new(surface, form.theme().scaled(fit.uniform()));
+    /// let root = ui.root();
+    /// let stage = ui.add(root, Panel::filled(form.background()), fit.rect).unwrap();
+    /// let mut nothing = |_: &str, _: denise_forms::Payload| None;
+    /// let built = form.build_fitted(&mut ui, stage, fit, &mut nothing)?;
+    ///
+    /// let hi = built.node("hi").expect("the form names it");
+    /// assert_eq!(ui.layout(hi), Some(Rect::new(20, 20, 200, 40)), "twice as big");
+    /// assert_eq!(
+    ///     ui.get_property(hi, "size"),
+    ///     Some(denise_ui::widgets::Value::Int(32)),
+    ///     "and so is the text",
+    /// );
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The same as [`Form::build`].
+    pub fn build_fitted<M: Clone + 'static>(
+        &self,
+        ui: &mut Ui<M>,
+        parent: NodeId,
+        fit: Placement,
+        wiring: &mut impl Wiring<M>,
+    ) -> Result<Built, Error> {
         let mut builder = Builder {
             form: self,
             ui,
             wiring,
+            fit,
             built: Built::default(),
             focused: None,
         };
@@ -650,6 +770,10 @@ struct Builder<'a, M: 'static, W> {
     form: &'a Form,
     ui: &'a mut Ui<M>,
     wiring: &'a mut W,
+    /// What every rectangle and every length is multiplied by on the way in.
+    /// `1.0` on both axes for [`Form::build`], which is why that is this with
+    /// nothing else said.
+    fit: Placement,
     built: Built,
     focused: Option<NodeId>,
 }
@@ -778,7 +902,9 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 })?;
             *slot = i32::try_from(value).unwrap_or(i32::MAX);
         }
-        Ok(Rect::new(axes[0], axes[1], axes[2], axes[3]))
+        // By its edges rather than its width and height: two panels designed to
+        // touch still touch at a fractional scale. See [`Rect::scaled_by`].
+        Ok(Rect::new(axes[0], axes[1], axes[2], axes[3]).scaled_by(self.fit.x, self.fit.y))
     }
 
     /// The node's single positional argument, as a string.
@@ -1217,7 +1343,10 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 continue;
             };
             let at = self.form.at(entry.span().offset());
-            let value = self.convert(at, info.kind, property, entry.value())?;
+            let mut value = self.convert(at, info.kind, property, entry.value())?;
+            if property.pixels {
+                value = self.lengthened(value);
+            }
             if let Some(Err(error)) = self.ui.set_property(id, property.name, value) {
                 return Err(Error::new(
                     at,
@@ -1233,6 +1362,31 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
             }
         }
         Ok(())
+    }
+
+    /// One length, at the scale this form is being built at.
+    ///
+    /// Which numbers are lengths is the **widget's** to say, not this crate's:
+    /// see [`Property::pixels`](denise_ui::widgets::Property::pixels). A text
+    /// size is a length and doubles at 2x; a duration in milliseconds is not and
+    /// does not; a selected index is not and would be nonsense if it did.
+    ///
+    /// [`Placement::uniform`] rather than the axis factors, because none of these is
+    /// horizontal or vertical: a text size is a size, and a border is as thick
+    /// on the top as on the left.
+    fn lengthened(&self, value: Value) -> Value {
+        let scale = self.fit.uniform();
+        match value {
+            // At least one: a border that rounded to nothing at 0.75x has been
+            // deleted rather than scaled, and the same for a one-pixel divider.
+            // Zero stays zero, because zero was somebody saying "none".
+            Value::Int(n) if n != 0 => {
+                let scaled = (n as f32 * scale + 0.5) as i32;
+                Value::Int(if n > 0 { scaled.max(1) } else { scaled.min(-1) })
+            }
+            Value::Float(f) => Value::Float(f * scale),
+            other => other,
+        }
     }
 
     /// A value from the file, in the shape the property takes.

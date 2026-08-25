@@ -762,7 +762,8 @@ impl<M> Describe for List<M> {
             "row-height",
             PropertyKind::Int { min: 16, max: 200 },
             "Height of every row in logical pixels, overriding the theme's field height.",
-        ),
+        )
+        .in_pixels(),
         Property::new(
             "role",
             PropertyKind::Enum(ROLES),
@@ -772,7 +773,8 @@ impl<M> Describe for List<M> {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Text size in logical pixels.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

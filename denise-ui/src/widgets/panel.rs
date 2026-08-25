@@ -174,7 +174,8 @@ impl Describe for Panel {
             "border-width",
             PropertyKind::Int { min: 0, max: 16 },
             "Border thickness in pixels, drawn inside the bounds.",
-        ),
+        )
+        .in_pixels(),
         Property::new(
             "radius",
             PropertyKind::Enum(RADII),

@@ -233,7 +233,8 @@ impl Describe for Divider {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Text size in logical pixels; only a labelled divider draws text.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

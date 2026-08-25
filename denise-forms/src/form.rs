@@ -1,6 +1,6 @@
 //! The file, parsed but not yet built.
 
-use denise::{Role, Size, Theme, theme};
+use denise::{Rect, Role, Size, Theme, theme};
 use denise_ui::Side;
 use kdl::{KdlDocument, KdlEntry, KdlEntryFormat, KdlNode, KdlValue};
 
@@ -105,6 +105,117 @@ impl FormKind {
             "fragment" => FormKind::Fragment,
             _ => return None,
         })
+    }
+}
+
+/// Whether a form may be drawn at a size other than the one it was designed at.
+///
+/// Scaling is not always right, and the form is the thing that knows. A dial
+/// designed against a 1:1 photographic background, a layout whose text must stay
+/// a legal minimum size, a panel whose touch targets are already at the smallest
+/// a gloved finger can hit — each of those is a form that should be drawn at its
+/// design size and centred, not stretched to fit. So it is declared rather than
+/// assumed, and the default is the one every form written before this property
+/// existed already had.
+///
+/// This is a **deployment** concern, applied once on the way in.
+/// [`anchors`](crate::NODE_PROPERTIES) are a *design* concern, resolved by the
+/// tree at every reflow. They are different tools and they compose: a form may
+/// use either, both or neither.
+///
+/// ```
+/// # use denise_forms::{Form, Scaling};
+/// let form = Form::parse(r#"form "F" version=1 width=100 height=100 { }"#)?;
+/// assert_eq!(form.scaling(), Scaling::None, "the default is what was always true");
+/// # Ok::<(), denise_forms::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Scaling {
+    /// Never scaled. Drawn at its design size, centred in whatever it is given.
+    #[default]
+    None,
+    /// One factor on both axes — `min(target.w / design.w, target.h / design.h)`
+    /// — so nothing distorts, and the leftover is a margin on one axis.
+    Proportional,
+    /// A factor per axis, filling the surface. Distorts, and is occasionally
+    /// exactly what a signage layout wants.
+    Stretch,
+}
+
+impl Scaling {
+    /// Every one, in the spelling a form file uses.
+    pub const NAMES: &'static [&'static str] = &["none", "proportional", "stretch"];
+
+    /// ```
+    /// # use denise_forms::Scaling;
+    /// assert!(Scaling::None.what().contains("design size"));
+    /// assert_ne!(Scaling::Proportional.what(), Scaling::Stretch.what());
+    /// ```
+    /// One line on what this one does.
+    ///
+    /// Here rather than in the designer for the same reason as
+    /// [`FormKind::what`]: it is a fact about the format, and two copies of a
+    /// sentence drift.
+    pub const fn what(self) -> &'static str {
+        match self {
+            Self::None => "Never scaled: drawn at its design size, in the middle.",
+            Self::Proportional => "Scaled to fit by one factor, with a margin on the long axis.",
+            Self::Stretch => "Scaled per axis to fill the surface, distorting if it must.",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "none" => Self::None,
+            "proportional" => Self::Proportional,
+            "stretch" => Self::Stretch,
+            _ => return None,
+        })
+    }
+}
+
+/// Where a form goes on a surface, and by how much it is multiplied to get there.
+///
+/// What [`Form::fit`] works out and [`Form::build_fitted`] then applies. Held as
+/// a value rather than done in one call because the application needs the parts
+/// separately: [`Placement::rect`] is where to put the panel the form is built into,
+/// and [`Placement::uniform`] is what the theme has to be scaled by at `Ui::new` —
+/// **which is not optional**, or the widgets are the old size inside the new
+/// rectangles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    /// The horizontal factor.
+    pub x: f32,
+    /// The vertical factor.
+    pub y: f32,
+    /// Where the form's own rectangle lands in the surface it was fitted to,
+    /// already scaled and already centred.
+    pub rect: Rect,
+}
+
+impl Placement {
+    /// The one factor that everything which is not a rectangle scales by: text
+    /// sizes, border widths, row heights, and the theme's own metrics.
+    ///
+    /// The **smaller** of the two, so that a stretched layout never grows text
+    /// taller than the axis that had least room to give. Equal to either of them
+    /// whenever the fit is uniform, which is every fit except
+    /// [`Scaling::Stretch`].
+    ///
+    /// ```
+    /// # use denise::Size;
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(
+    ///     r#"form "F" version=1 width=100 height=100 scaling=stretch { }"#,
+    /// )?;
+    /// let fit = form.fit(Size::new(400, 200));
+    /// assert_eq!((fit.x, fit.y), (4.0, 2.0));
+    /// assert_eq!(fit.uniform(), 2.0, "text follows the tighter axis");
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    #[must_use]
+    pub fn uniform(self) -> f32 {
+        if self.x < self.y { self.x } else { self.y }
     }
 }
 
@@ -783,6 +894,91 @@ impl Form {
             .and_then(KdlValue::as_string)
             .and_then(FormKind::from_name)
             .unwrap_or(FormKind::Screen)
+    }
+
+    /// See [`Form::title`] for what a form says about itself.
+    /// Whether this form consents to being drawn at another size.
+    ///
+    /// [`Scaling::None`] unless the file says otherwise, because that is what
+    /// every form written before the property existed already did.
+    pub fn scaling(&self) -> Scaling {
+        self.root()
+            .get("scaling")
+            .and_then(KdlValue::as_string)
+            .and_then(Scaling::from_name)
+            .unwrap_or_default()
+    }
+
+    /// How this form occupies a surface of some other size.
+    ///
+    /// Reads [`Form::scaling`] and does the arithmetic, so that the policy lives
+    /// in the file and the multiplication lives here — rather than in every
+    /// application that loads a form.
+    ///
+    /// ```
+    /// # use denise::Size;
+    /// # use denise_forms::Form;
+    /// # use denise::Rect;
+    /// let source = |scaling: &str| {
+    ///     format!(r#"form "F" version=1 width=200 height=100 scaling={scaling} {{ }}"#)
+    /// };
+    ///
+    /// // The default: its own size, in the middle of the surface.
+    /// let fixed = Form::parse(&source("none"))?;
+    /// let fit = fixed.fit(Size::new(400, 400));
+    /// assert_eq!((fit.x, fit.y), (1.0, 1.0));
+    /// assert_eq!(fit.rect, Rect::new(100, 150, 200, 100));
+    ///
+    /// // Proportional: as big as fits, letterboxed on the axis with room left.
+    /// let fits = Form::parse(&source("proportional"))?;
+    /// let fit = fits.fit(Size::new(400, 400));
+    /// assert_eq!((fit.x, fit.y), (2.0, 2.0), "the tighter axis decides");
+    /// assert_eq!(fit.rect, Rect::new(0, 100, 400, 200));
+    ///
+    /// // Stretch: the whole surface, whatever that does to the shape.
+    /// let fills = Form::parse(&source("stretch"))?;
+    /// let fit = fills.fit(Size::new(400, 400));
+    /// assert_eq!((fit.x, fit.y), (2.0, 4.0));
+    /// assert_eq!(fit.rect, Rect::from_size(Size::new(400, 400)));
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn fit(&self, surface: Size) -> Placement {
+        let design = self.size();
+        // A form of no size cannot be fitted to anything; it is drawn where it
+        // is and the caller finds out from the empty rectangle.
+        if design.width == 0 || design.height == 0 {
+            return Placement {
+                x: 1.0,
+                y: 1.0,
+                rect: Rect::ZERO,
+            };
+        }
+        let full = (
+            surface.width as f32 / design.width as f32,
+            surface.height as f32 / design.height as f32,
+        );
+        let (x, y) = match self.scaling() {
+            Scaling::None => (1.0, 1.0),
+            Scaling::Proportional => {
+                let both = if full.0 < full.1 { full.0 } else { full.1 };
+                (both, both)
+            }
+            Scaling::Stretch => full,
+        };
+        // Scaled by its own edges from the origin, then centred in what is left
+        // — so the two halves of the margin differ by at most a pixel and the
+        // form is never a pixel wider than the arithmetic says.
+        let scaled = Rect::from_size(design).scaled_by(x, y);
+        Placement {
+            x,
+            y,
+            rect: Rect::new(
+                (surface.width as i32 - scaled.width) / 2,
+                (surface.height as i32 - scaled.height) / 2,
+                scaled.width,
+                scaled.height,
+            ),
+        }
     }
 
     /// ```

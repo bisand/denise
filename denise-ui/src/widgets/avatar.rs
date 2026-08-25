@@ -387,14 +387,16 @@ impl Describe for Avatar {
             "radius",
             PropertyKind::Int { min: 0, max: 256 },
             "Corner radius in pixels; `0` is a square, unset is a circle.",
-        ),
+        )
+        .in_pixels(),
         Property::new("ring", PropertyKind::Enum(ROLES), "A ring around the disc."),
         Property::new("presence", PropertyKind::Enum(PRESENCES), "The status dot."),
         Property::new(
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Initials' text size in logical pixels.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

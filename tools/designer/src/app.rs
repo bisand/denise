@@ -1147,6 +1147,7 @@ impl Designer {
                 .map(|it| it.height.to_string())
                 .unwrap_or_default(),
             "dim" => form.dim().to_string(),
+            "scaling" => String::from(denise_forms::Scaling::NAMES[form.scaling() as usize]),
             "side" => String::from(denise_ui::widgets::describe::side_name(form.side())),
             "extent" => form.extent().to_string(),
             _ => written(),

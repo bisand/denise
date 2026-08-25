@@ -13,7 +13,7 @@
 // Those have a small file each beside this one — window.dform, dialog.dform,
 // drawer.dform and shelf.dform — and CI checks every one of them.
 
-form "Reference" name=reference version=1 kind=screen width=1024 height=600 theme=dark background=base-200 {
+form "Reference" name=reference version=1 kind=screen width=1024 height=600 theme=dark background=base-200 scaling=none {
 
     // ---------------------------------------------------------------- header
 
