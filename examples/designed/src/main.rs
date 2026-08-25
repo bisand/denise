@@ -56,9 +56,9 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use denise::Size;
 #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
-use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode};
-use denise::{Rect, Size};
+use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
 use denise_forms::{Built, Form, Handler, Payload, Wiring};
 use denise_ui::widgets::{Label, TextInput};
 use denise_ui::{NodeId, Ui};
