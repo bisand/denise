@@ -74,7 +74,7 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
             path: Some(path.to_path_buf()),
             form,
             dirty: false,
-            watch: Watch::agreed(path, &source),
+            watch: Watch::seen(&source),
         })
     }
 
@@ -99,19 +99,17 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
             let _ = std::fs::remove_file(&temporary);
             format!("{}: {e}", path.display())
         })?;
-        // Stamped *after* the rename, and with what was written, so the
-        // designer's own save is never read back as somebody else's edit.
-        self.watch.accept(&path, text);
+        // With what was written, so the designer's own save is never read back
+        // as somebody else's edit.
+        self.watch.agree(&text);
         self.dirty = false;
         Ok(())
     }
 
-    /// The file's text, if it has changed on disk since this designer last
-    /// agreed with it.
+    /// The file's text, if it is not the text this designer last saw.
     ///
-    /// Costs a `stat` and nothing else when the answer is no, which it almost
-    /// always is; see [`crate::watch`] for why this is asked rather than
-    /// subscribed to.
+    /// See [`crate::watch`] for why this is asked rather than subscribed to, and
+    /// why it reads the file rather than trusting its timestamp.
     pub fn changed_on_disk(&mut self) -> Option<String> {
         let path = self.path.clone()?;
         self.watch.changed(&path)
@@ -129,18 +127,8 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
             .map_or_else(String::new, |path| format!("{}:", path.display()));
         self.form = Form::parse(&text).map_err(|e| format!("{where_from}{e}"))?;
         self.dirty = false;
-        self.accept_disk(text);
+        self.watch.agree(&text);
         Ok(())
-    }
-
-    /// Takes what is on disk as agreed without reading it as a change.
-    ///
-    /// What *Keep mine* does: the answer has been given, and the same change
-    /// must not be raised again on the next frame.
-    pub fn accept_disk(&mut self, text: String) {
-        if let Some(path) = self.path.clone() {
-            self.watch.accept(&path, text);
-        }
     }
 
     /// The parsed form.

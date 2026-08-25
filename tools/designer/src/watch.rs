@@ -10,85 +10,84 @@
 //! The obvious answer is `notify`, and it would buy nothing here. A change has to
 //! reach the designer *through its event loop*, and the loop sleeps until a frame
 //! is due or input arrives — there is no way to wake it from a watcher thread. So
-//! the loop has to ask on a cadence whatever the mechanism, and once it is asking,
-//! `stat` is the whole of what a subscription would have told it. Two syscalls
-//! twice a second is less than a dependency on three platforms' file-notification
-//! APIs, and it works on the network filesystems where those quietly do not.
+//! the loop has to ask on a cadence whatever the mechanism, and a dependency on
+//! three platforms' file-notification APIs would not shorten that cadence by a
+//! millisecond. Asking also works on the network filesystems where those quietly
+//! do not.
 //!
-//! What the stat cannot answer is whether the *bytes* changed, so it does not
-//! try: a stamp that moved is a reason to read the file, and the text is what
-//! decides. That is what keeps a `touch`, or the designer's own save landing on a
-//! coarse-grained clock, from putting a conflict up over nothing.
+//! # Why it reads the file rather than stat-ing it
+//!
+//! This did compare a timestamp and a length first, and read the file only when
+//! one of them moved. It was wrong, and Windows CI is what said so: the system
+//! clock ticks about every 16 ms, so a write landing in the same tick as the
+//! previous one carries the same timestamp, and a change that happens not to
+//! alter the file's length is then invisible. A watcher that misses an edit is
+//! worse than no watcher, because it is trusted.
+//!
+//! So the bytes are the whole answer, and the stat bought nothing worth that. A
+//! form file is a few kilobytes — the reference form, which is every node kind
+//! this toolkit has, is under nine — and reading one measures at **29 µs**,
+//! nearly all of it the open and the close rather than the size. Against the
+//! [`EVERY`] cadence that is 0.007% of a second; against the 60 Hz the designer
+//! only reaches while something is animating, and therefore painting, it is
+//! 0.17% of a frame. Comparing the text also means a `touch`, or a save that
+//! rewrote a file identically, is correctly not a change at all.
 
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::Duration;
 
 use denise_forms::{Form, Written};
 
-/// What a file looked like, cheaply.
+/// How long the designer may go without looking at the file under it.
 ///
-/// Length as well as time because a second's granularity is still out there —
-/// on a network share, on an old filesystem — and two writes within one tick
-/// are usually not the same length.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Stamp {
-    modified: Option<SystemTime>,
-    len: u64,
-}
+/// Long enough to cost nothing on an idle machine, and short enough for #100's
+/// "the node moves on the canvas within a second". `Designer::next_frame_in`
+/// is what turns this into a cadence: an idle designer with a file open wakes
+/// this often, and one with something animating in it looks more often than
+/// this and pays nothing extra for it.
+pub const EVERY: Duration = Duration::from_millis(400);
 
-impl Stamp {
-    fn of(path: &Path) -> Option<Self> {
-        let data = std::fs::metadata(path).ok()?;
-        Some(Self {
-            modified: data.modified().ok(),
-            len: data.len(),
-        })
-    }
-}
-
-/// What the designer last read from a file, or last wrote to it.
+/// What the file held the last time the designer looked at it or wrote it.
 ///
-/// Held so that "somebody else changed this" is a question about bytes rather
-/// than about timestamps. The text is the last agreed state, which is *not* the
-/// form in memory: the form has the designer's unsaved edits in it, and those
-/// are exactly what must not be mistaken for the other editor's.
+/// The point of holding the text is that "somebody else changed this" is then a
+/// question about bytes. It is *not* the form in memory: the form has the
+/// designer's unsaved edits in it, and those are exactly what must not be
+/// mistaken for the other editor's.
 #[derive(Clone, Debug, Default)]
 pub struct Watch {
-    stamp: Option<Stamp>,
     text: String,
 }
 
 impl Watch {
     /// Records what a file holds, at the moment it was read or written.
-    pub fn agreed(path: &Path, text: &str) -> Self {
+    pub fn seen(text: &str) -> Self {
         Self {
-            stamp: Stamp::of(path),
             text: text.to_string(),
         }
     }
 
-    /// The file's text, if somebody other than this designer has written it.
+    /// The file's text, if it is not the text this last saw.
     ///
-    /// `None` when the file is where it was left — including when its timestamp
-    /// moved but its contents did not, in which case the stamp is quietly caught
-    /// up so the read does not happen again.
+    /// Reporting a change is also taking note of it, so one write is one
+    /// question: a file somebody has broken is complained about once rather than
+    /// twice a second until they fix it, and an answer given to the sheet is not
+    /// asked again on the next frame.
     pub fn changed(&mut self, path: &Path) -> Option<String> {
-        let stamp = Stamp::of(path);
-        if stamp == self.stamp {
+        let text = std::fs::read_to_string(path).ok()?;
+        if text == self.text {
             return None;
         }
-        self.stamp = stamp;
-        let text = std::fs::read_to_string(path).ok()?;
-        (text != self.text).then_some(text)
+        self.text.clone_from(&text);
+        Some(text)
     }
 
-    /// Takes what is on disk as the agreed state without reading it as a change.
+    /// Takes this text as what the file holds, without reading it as a change.
     ///
-    /// What *Keep mine* does: the designer has been told the other editor's
-    /// version is not wanted, so the same change must not be raised twice.
-    pub fn accept(&mut self, path: &Path, text: String) {
-        self.stamp = Stamp::of(path);
-        self.text = text;
+    /// What saving does — the designer's own write must never come back as
+    /// somebody else's edit — and what adopting the other editor's version does.
+    pub fn agree(&mut self, text: &str) {
+        self.text.clear();
+        self.text.push_str(text);
     }
 }
 
@@ -304,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stamp_that_moved_without_the_bytes_moving_is_not_somebody_elses_edit() {
+    fn a_write_that_changed_nothing_is_not_somebody_elses_edit() {
         let path = std::env::temp_dir().join(format!(
             "denise-watch-{}-{}.dform",
             std::process::id(),
@@ -312,19 +311,29 @@ mod tests {
         ));
         let text = "form \"F\" version=1 width=99 height=99 { }\n";
         std::fs::write(&path, text).expect("a temporary file");
-        let mut watch = Watch::agreed(&path, text);
+        let mut watch = Watch::seen(text);
 
         // The same bytes again, which is what a `touch` or an editor that always
         // writes on save leaves behind.
         std::fs::write(&path, text).expect("written again");
         assert_eq!(watch.changed(&path), None);
 
-        std::fs::write(&path, "form \"F\" version=1 width=42 height=99 { }\n")
-            .expect("written for real");
-        assert!(watch.changed(&path).is_some());
-        // And only once: the stamp caught up as the change was reported.
+        // The case a timestamp cannot answer, and the reason this reads the file:
+        // written within the same clock tick as the last one, and the same length,
+        // so nothing about the file except its contents has moved.
+        let theirs = "form \"F\" version=1 width=42 height=99 { }\n";
+        assert_eq!(
+            theirs.len(),
+            text.len(),
+            "this test is not testing what it says"
+        );
+        std::fs::write(&path, theirs).expect("written for real");
+        assert_eq!(watch.changed(&path).as_deref(), Some(theirs));
+        // And only once: reporting a change is taking note of it.
         assert_eq!(watch.changed(&path), None);
 
-        let _ = std::fs::remove_file(&path);
+        // A file that has gone is not a change either, and does not panic.
+        std::fs::remove_file(&path).expect("removable");
+        assert_eq!(watch.changed(&path), None);
     }
 }

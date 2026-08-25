@@ -292,10 +292,18 @@ and the file will still have changed when the pointer comes up.
 This polls rather than subscribing to the platform's file notifications, and that
 is deliberate. A change has to reach the designer *through its event loop*, which
 sleeps until a frame is due — so the loop has to ask on a cadence whatever the
-mechanism, and once it is asking, a `stat` is the whole of what a subscription
-would have told it. Two syscalls twice a second is less than a dependency on three
-platforms' notification APIs, and it works on the network filesystems where those
-quietly do not.
+mechanism, and a dependency on three platforms' notification APIs would not
+shorten that cadence by a millisecond. Asking also works on the network
+filesystems where those quietly do not.
+
+It **reads the file** rather than trusting its timestamp, which is the second
+half of the same argument. Comparing a timestamp and a length first is the
+obvious optimisation and it is wrong: the Windows clock ticks about every 16 ms,
+so a write landing in the same tick as the previous one carries the same
+timestamp, and a change that happens not to alter the file's length is then
+invisible. A watcher that misses an edit is worse than no watcher, because it is
+trusted. Reading a form file measures at 29 µs — 0.007% of a second at this
+cadence — so there was nothing worth the risk.
 
 ## Preview
 
