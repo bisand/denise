@@ -440,7 +440,8 @@ impl<M> Describe for Toggle<M> {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Label text size in logical pixels. The track itself is a theme metric.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

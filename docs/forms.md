@@ -189,6 +189,7 @@ is not accepted.
 | `width` `height` | integer | — | Required, logical pixels. What the form was designed at. |
 | `theme` | `dark` `light` `high-contrast` | `dark` | A built-in theme. |
 | `background` | [role](#roles) | `base-100` | The surface the form is drawn on. |
+| `scaling` | `none` `proportional` `stretch` | `none` | Whether this form may be drawn at a size other than the one it was designed at. See [Responsiveness](#responsiveness). |
 | `name` | identifier | — | Optional. Used by the typed layer ([#101](https://github.com/bisand/denise/issues/101)) to name what it generates. |
 
 #### Form kinds
@@ -886,7 +887,7 @@ separate problems that are easy to run together:
 
 | | | |
 |---|---|---|
-| **Scale** | Same design, more pixels. A 1024×600 form on a 2048×1200 panel, or on a 2× display. | [#111](https://github.com/bisand/denise/issues/111) — the engine multiplies on the way in, exactly as `hello` does by hand, and the form declares with `scaling=` whether it consents to being scaled at all. |
+| **Scale** | Same design, more pixels. A 1024×600 form on a 2048×1200 panel, or on a 2× display. | **Done** — [`scaling=`](#scaling) below ([#111](https://github.com/bisand/denise/issues/111)): the engine multiplies on the way in, exactly as `hello` does by hand, and the form declares whether it consents to being scaled at all. |
 | **Resize** | A window being dragged, a different aspect ratio, a panel turned to portrait. Scaling alone letterboxes or distorts. | **Done** — `anchor=` and `dock=` per node ([#110](https://github.com/bisand/denise/issues/110)): Delphi's and WinForms' own answer, one derived rectangle per child in the reflow pass the tree already runs, and [#86](https://github.com/bisand/denise/issues/86) builds them from the file. |
 | **Content-driven sizing** | A label as wide as its text, a row that grows with what is in it. | [#112](https://github.com/bisand/denise/issues/112) — a real measure-and-arrange engine, in a crate of its own that an application opts into, so the core keeps costing nothing. |
 
@@ -900,6 +901,84 @@ per-size layout overrides, which KDL can carry later as `at width<=800 { … }`
 child nodes with no version bump. It is deliberately not being built yet — for two
 genuinely different layouts, two form files is a good answer, and no panel has
 asked for the other thing.
+
+### Scaling
+
+```kdl
+form "Dashboard" version=1 kind=screen width=1024 height=600 scaling=proportional
+```
+
+| `scaling` | |
+|---|---|
+| `none` | Never scaled. Drawn at its design size, centred in whatever it is given. **The default**, because it is what every form written before this property existed already did. |
+| `proportional` | One factor on both axes — `min(target.w / design.w, target.h / design.h)` — so nothing distorts. The leftover is a margin on the axis that had room to spare. |
+| `stretch` | A factor per axis, filling the surface. Distorts, and is occasionally exactly what a signage layout wants. |
+
+**The form decides, not the application.** Scaling is not always right and the
+form is the thing that knows: a dial designed against a 1:1 photographic
+background, a layout whose text must stay a legal minimum size, a panel whose
+touch targets are already the smallest a gloved finger can hit. Each of those is
+a form that should be shown at its design size and centred, whatever the panel it
+lands on. So it is declared in the file rather than decided by whoever loaded it.
+
+Loading one is three lines, and **all three matter**:
+
+```rust
+let fit = form.fit(surface);                                    // what the file's rule works out to
+let mut ui = Ui::new(surface, form.theme().scaled(fit.uniform()));   // or the widgets are the old size
+let stage = ui.add(root, Panel::filled(form.background()), fit.rect);
+let built = form.build_fitted(&mut ui, stage, fit, &mut wiring)?;
+```
+
+The theme is the easy one to forget, and forgetting it is visible: a button at 2×
+with a 6-pixel corner and a 1-pixel border on it. `Ui` has one theme, so scaling
+it is the caller's line rather than something `build_fitted` could do.
+
+[`examples/designed`](../examples/designed) is exactly those lines. Change
+`hello.dform`'s form node to say `scaling=proportional` and it fills the window,
+with no Rust changing.
+
+**What scales, and what does not.** Every rectangle, and every number a widget
+declares to be a length in logical pixels — a text size, a row height, a border
+width, a ring thickness. Not a duration, not a count, not a selected index. The
+widget is what says which of its own numbers is which, through
+`Property::in_pixels`, for the same reason the rest of the descriptor exists:
+there is no table of widgets anywhere in this repository, and this is not the
+place to start one.
+
+Rectangles scale **by their edges** (`Rect::scaled_by`), so two panels designed to
+touch still touch at 0.75×. Scaling width and height instead rounds each
+independently and opens one-pixel seams. Lengths that are not rectangles use the
+smaller of the two axis factors, so a stretched layout never grows text taller
+than the axis with least room to give; and a length that would round to nothing
+keeps one pixel, because deleting a hairline is a visible change while `0` in the
+file was somebody saying *none*.
+
+**Text scaling is a DPI answer, not a "bigger screen" answer.** A 1024×600 form
+on a 1920×1080 panel gets its 16 px text at 30 px. That is right when the panel is
+the same screen at a higher density, and wrong when it is a bigger screen meant to
+show *more*. This does the first. The second is not a multiplication and no file
+can express it — it is two form files, or [#112](https://github.com/bisand/denise/issues/112).
+
+**Scaling and anchoring compose.** Scale is a *deployment* concern applied once on
+the way in; [`anchor=`](#every-node) is a *design* concern the tree resolves at
+every reflow. A form may use either, both or neither.
+
+You can see it without a display:
+
+```bash
+denise-forms render --scale 2    forms/reference.dform reference-2x.ppm
+denise-forms render --scale 0.75 forms/reference.dform reference-075x.ppm
+denise-forms render --size 1920x1080 forms/reference.dform panel.ppm
+```
+
+`--scale` is "the same panel at a higher density" and the picture grows with the
+form. `--size` is "this actual panel": the surface is what you asked for and the
+file's own `scaling=` decides what happens inside it, which is the part that
+cannot be reviewed any other way. The reference form at each, committed:
+[1×](../assets/screenshots/reference-1x.png),
+[2×](../assets/screenshots/reference-2x.png),
+[0.75×](../assets/screenshots/reference-075x.png).
 
 ## What is still open
 

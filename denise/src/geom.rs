@@ -118,7 +118,31 @@ impl Rect {
     /// once — the DPI answer this toolkit gives; see `docs/design.md`.
     ///
     /// Rounds half away from zero, without `f32::round`, which lives in `std`.
+    #[inline]
     pub fn scaled(self, scale: f32) -> Rect {
+        self.scaled_by(scale, scale)
+    }
+
+    /// This rectangle at a different factor per axis — again **by its edges**.
+    ///
+    /// The general form of [`Rect::scaled`], and what a layout stretched to fill
+    /// a surface of another shape needs. Everything [`Rect::scaled`] says about
+    /// shared edges applies here and matters more: the two factors differ, so a
+    /// column of panels and a row of them round differently, and only scaling
+    /// the edges keeps both sets of seams closed.
+    ///
+    /// A form file asks for this with `scaling=stretch`; see `docs/forms.md`.
+    ///
+    /// ```
+    /// # use denise::Rect;
+    /// // Two panels sharing the edge at x=10, stretched wide and squashed short.
+    /// let left = Rect::new(0, 0, 10, 40).scaled_by(1.5, 0.75);
+    /// let right = Rect::new(10, 0, 10, 40).scaled_by(1.5, 0.75);
+    ///
+    /// assert_eq!(left.right(), right.x, "a seam opened between them");
+    /// assert_eq!((left.width, left.height), (15, 30));
+    /// ```
+    pub fn scaled_by(self, x: f32, y: f32) -> Rect {
         #[inline]
         fn round(v: f32) -> i32 {
             // `as i32` truncates towards zero, so the negative side needs its
@@ -130,10 +154,10 @@ impl Rect {
             }
         }
         Rect::from_edges(
-            round(self.x as f32 * scale),
-            round(self.y as f32 * scale),
-            round(self.right() as f32 * scale),
-            round(self.bottom() as f32 * scale),
+            round(self.x as f32 * x),
+            round(self.y as f32 * y),
+            round(self.right() as f32 * x),
+            round(self.bottom() as f32 * y),
         )
     }
 

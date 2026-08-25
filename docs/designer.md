@@ -167,11 +167,13 @@ byte for byte; on a surface of some other size the arithmetic follows and the
 rectangle does not. That is exactly the boundary, and
 [docs/forms.md](forms.md#what-the-format-will-not-do) is where it is argued.
 
-What an application does about it is its own decision, and `designed` makes the
-obvious one: it centres the form's own rectangle in whatever surface it is given,
-so a 460x260 form on a 1920x1080 panel is a 460x260 form in the middle.
-[#111](https://github.com/bisand/denise/issues/111) is where a form gets to ask
-to be *scaled* instead.
+What to do about it is the **file's** decision, not the application's, because
+the file is what knows whether the design tolerates it. `hello.dform` says
+nothing, which means `scaling=none`, which means its own rectangle centred in
+whatever surface it is given: a 460x260 form on a 1920x1080 panel is a 460x260
+form in the middle. Change that one word to `proportional` and `designed` fills
+the panel, with no Rust changing — the three lines that load a form already ask.
+See [Scaling](forms.md#scaling).
 
 **No expressions, no bindings, no scripting.** There is no `visible={not
 loading}`. A form file describes a tree of widgets and their initial state;

@@ -121,6 +121,8 @@ decoders because a command-line tool needs them to draw a picture into a PPM.
 denise-forms check settings.dform            # exit 1, with positions
 denise-forms check $(git ls-files '*.dform')
 denise-forms render settings.dform out.ppm   # --theme light, --font path.ttf
+denise-forms render --scale 2 settings.dform out.ppm
+denise-forms render --size 1920x1080 settings.dform panel.ppm
 ```
 
 `check` parses the file **and builds it**, so it catches everything a panel
@@ -133,6 +135,56 @@ with no layout engine nothing else ever will. `--no-lint` turns that off,
 `--font` it uses the built-in bitmap font rather than whatever the machine has
 installed, so two renders of one file are the same bytes and a snapshot is worth
 committing. `--font` needs the `truetype` feature.
+
+`--scale` and `--size` ask different questions. `--scale 2` is *the same panel at
+twice the density*: one factor, and the picture grows with the form. `--size
+1920x1080` is *this actual panel*: the surface is what you asked for, and the
+file's own `scaling=` decides what happens inside it — its own size in the middle,
+scaled to fit, or stretched. That last one cannot be reviewed any other way.
+
+## Scaling one
+
+A form declares whether it may be drawn at a size other than the one it was
+designed at, because the form is the thing that knows: a dial against a 1:1
+photographic background, or a panel whose touch targets are already the smallest
+a gloved finger can hit, should be centred rather than stretched however big the
+display is.
+
+```kdl
+form "Dashboard" version=1 kind=screen width=1024 height=600 scaling=proportional
+```
+
+`none` (the default, and what every form written before the property existed
+already did), `proportional`, or `stretch`. Loading it is three lines, and all
+three matter:
+
+```rust
+# use denise::Size;
+# use denise_forms::Form;
+# use denise_ui::{Ui, Void, widgets::Panel};
+# let form = Form::parse(r#"form "F" version=1 width=200 height=100 { }"#)?;
+# let surface = Size::new(400, 400);
+# let mut wiring = |_: &str, _: denise_forms::Payload| None;
+let fit = form.fit(surface);
+
+// The theme too, or every widget is the old size inside a new rectangle.
+let mut ui: Ui<Void> = Ui::new(surface, form.theme().scaled(fit.uniform()));
+let root = ui.root();
+let stage = ui.add(root, Panel::filled(form.background()), fit.rect).unwrap();
+
+let built = form.build_fitted(&mut ui, stage, fit, &mut wiring)?;
+# Ok::<(), denise_forms::Error>(())
+```
+
+Every rectangle scales **by its edges**, so two panels designed to touch still
+touch at 0.75×. Every number a widget declares to be a length in logical pixels —
+a text size, a row height, a border width — scales with it; a duration, a count
+and a selected index do not. The widget is what says which of its own numbers is
+which, so there is no table of widgets here.
+
+The full argument, including why text scaling is a DPI answer rather than a
+"bigger screen" answer, is in
+[docs/forms.md](https://github.com/bisand/denise/blob/main/docs/forms.md#scaling).
 
 ## Editing one, byte for byte
 

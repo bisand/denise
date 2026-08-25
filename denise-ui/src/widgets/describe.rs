@@ -387,12 +387,56 @@ pub struct Property {
     /// One line, shown as a tooltip in the inspector and rendered into the
     /// widget's documentation.
     pub doc: &'static str,
+    /// Whether the number is a **length in logical pixels**, and so multiplies
+    /// with the scale factor.
+    ///
+    /// A widget's numbers are not all the same kind of thing. A `Label`'s `size`
+    /// is 16 logical pixels and is 32 at 2×; a `Carousel`'s `auto-advance-ms` is
+    /// 4000 milliseconds and is 4000 at every scale; a `List`'s `selected` is
+    /// the third row and is the third row on a wall. Only the widget knows
+    /// which of its own numbers are lengths, so only the widget can say — the
+    /// same reason the rest of this descriptor exists rather than a table
+    /// somewhere central.
+    ///
+    /// [`Form::build_scaled`] is what reads it.
+    ///
+    /// [`Form::build_scaled`]: https://docs.rs/denise-forms/latest/denise_forms/struct.Form.html#method.build_scaled
+    pub pixels: bool,
 }
 
 impl Property {
-    /// A property.
+    /// A property. Not a length unless [`in_pixels`](Property::in_pixels) says so.
     pub const fn new(name: &'static str, kind: PropertyKind, doc: &'static str) -> Self {
-        Self { name, kind, doc }
+        Self {
+            name,
+            kind,
+            doc,
+            pixels: false,
+        }
+    }
+
+    /// This property is a length in logical pixels.
+    ///
+    /// Say it about a number that should be twice as many at 2× — a text size, a
+    /// row height, a border width — and not about a count, a duration, an index
+    /// or a proportion. See [`Property::pixels`].
+    ///
+    /// ```
+    /// # use denise_ui::widgets::{Property, PropertyKind};
+    /// const SIZE: Property = Property::new(
+    ///     "size",
+    ///     PropertyKind::Int { min: 6, max: 96 },
+    ///     "Text size in logical pixels.",
+    /// )
+    /// .in_pixels();
+    ///
+    /// assert!(SIZE.pixels);
+    /// assert!(!Property::new("selected", PropertyKind::Int { min: 0, max: 99 }, "").pixels);
+    /// ```
+    #[must_use]
+    pub const fn in_pixels(mut self) -> Self {
+        self.pixels = true;
+        self
     }
 
     /// Whether [`Describe::set`] can apply this property.

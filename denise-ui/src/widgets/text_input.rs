@@ -503,7 +503,8 @@ impl<M> Describe for TextInput<M> {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Text size in logical pixels.",
-        ),
+        )
+        .in_pixels(),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {

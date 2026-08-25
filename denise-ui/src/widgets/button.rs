@@ -644,7 +644,8 @@ impl<M> Describe for Button<M> {
             "size",
             PropertyKind::Int { min: 6, max: 96 },
             "Text size in logical pixels.",
-        ),
+        )
+        .in_pixels(),
         Property::new(
             "corner",
             PropertyKind::Text,
