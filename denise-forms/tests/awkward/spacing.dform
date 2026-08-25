@@ -1,0 +1,17 @@
+// Whitespace somebody chose on purpose: columns lined up by hand, blank lines
+// used as paragraph breaks, and an indent that is not the designer's.
+
+form "Spacing" version=1 kind=screen width=400 height=300 {
+  label "one"     x=8   y=8    w=100 h=20 size=16
+  label "two"     x=8   y=32   w=100 h=20 size=16
+  label "three"   x=8   y=56   w=100 h=20 size=16
+
+
+  panel name=wide x=8 y=88 w=384 h=120 {
+        label "deeper than its parent by six"  x=8  y=8  w=300 h=20
+        label "and the next one lines up"      x=8  y=32 w=300 h=20
+  }
+
+
+  button "Go"     x=8   y=220  w=100 h=32
+}

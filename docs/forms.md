@@ -679,20 +679,47 @@ pixels, in an editor:
 ```
 
 The same nudge on the canvas, in the designer, produces the same diff. That is the
-whole promise, and [#88](https://github.com/bisand/denise/issues/88) is where it
-is enforced rather than hoped for.
+whole promise, and it is enforced rather than hoped for.
 
-What survives a designer save, and is tested to:
+What survives a designer save:
 
-- Comments — including one on the line of a property that was then changed.
-- Blank lines and indentation the author chose.
-- The order properties were written in.
-- A property the designer has never heard of. It is kept verbatim and shown in
-  the inspector as *unknown*, because the alternative — dropping it — is how a
-  tool silently eats work.
+- Comments — including one on the line of a property that was then changed, and
+  one written above a node that was then deleted and undeleted.
+- Blank lines and indentation the author chose, including columns lined up by
+  hand and an indent that is not the designer's.
+- The order properties were written in. A property added goes on the end; one
+  reset to its default is taken out rather than spelled out.
+- A property written twice. KDL says the last one wins and this crate agrees, but
+  the file still says both after a save: somebody edited that line and did not
+  finish, and the fix is theirs to make rather than a tool's to make silently.
+- A file with no trailing newline, which stays that way.
 
 What does not survive: nothing. If the designer changes a byte the user did not
 ask it to change, that is a bug with a test waiting for it.
+
+### How it is checked
+
+[`denise-forms/tests/awkward/`](../denise-forms/tests/awkward/README.md) is a
+corpus of forms written the way a person writes them — comments in every position
+KDL allows one, hand-aligned columns, a property written three times, strings with
+escapes and emoji in them, a panel with no braces, no trailing newline. Two tests
+walk it, so defending a new way of writing a form by hand is adding a file and
+nothing else:
+
+- `denise-forms/tests/awkward.rs` — parse to text, the format's own round trip,
+  and one targeted edit each.
+- `tools/designer/src/app.rs` — `Document::open` to `Document::save`, through a
+  real file, which is the path a person's form actually takes.
+
+Both assert that a save with no edits changes no byte, and that moving one node
+changes exactly the line that node is written on — the same line, with the number
+changed, every other property still in the order the file wrote them and whatever
+comment was on the end still on the end.
+
+An **unknown property is an error at load**, not something kept and shown as
+unknown. That is the deliberate choice described [above](#the-document) and it is
+the same error a typo produces, with the same fix; refusing to open is louder than
+dropping the property and loses nothing.
 
 And it is a two-way street while both are open: the designer watches the file it
 has open and reads it again when something else writes it, so an editor and a

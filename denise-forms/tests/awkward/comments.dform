@@ -1,0 +1,33 @@
+// Comments in every position KDL allows one, because a comment is the part of a
+// file a tool has no excuse for losing: it is the only place the reasons live.
+
+// Two blank lines and a second comment block above the form node.
+
+form "Comments" version=1 kind=screen width=400 height=300 { // and one out here
+
+    // Above a node.
+    label "Above" x=8 y=8 w=200 h=20   // and on the end of its line
+
+    /* A block comment, which KDL also has, */
+    panel name=body x=8 y=40 w=384 h=200 { // opened here
+
+        // Inside a block, above the first child.
+        label "Inside" x=8 y=8 w=200 h=20
+
+        /*
+           A block comment spanning lines, indented with the children it sits
+           among, which is how somebody explains a group of them.
+        */
+        label "After" x=8 y=32 w=200 h=20
+
+        // Last thing in a block, with nothing after it.
+    }
+
+    // Between two nodes, referring to neither.
+
+    button "End" x=8 y=250 w=100 h=32
+
+    // Last thing in the form.
+}
+
+// After the closing brace, at the end of the file.

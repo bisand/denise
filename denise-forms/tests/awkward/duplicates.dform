@@ -1,0 +1,11 @@
+// A property written twice, which happens when somebody edits a line and does
+// not finish. KDL says the last one wins; the file still says both, and saving
+// it must still say both — the fix is the author's to make, not a tool's to make
+// silently.
+
+form "Duplicates" version=1 kind=screen width=400 height=300 {
+    label "twice" x=10 y=10 w=100 h=20 x=20
+
+    // Three times, and out of order with everything else on the line.
+    button "thrice" role=primary x=10 role=neutral y=40 w=100 h=32 role=accent
+}

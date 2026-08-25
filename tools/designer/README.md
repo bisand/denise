@@ -508,7 +508,12 @@ out of the field being typed in.
 
 Open a form, save it, and `git diff` is empty: the document is what is held, not a
 value taken from it, so a save that changed nothing changes nothing. That is the
-round trip the whole file format is built around, and there is a test for it.
+round trip the whole file format is built around, and it is checked against a
+corpus of forms written the way people write them — comments in every position
+KDL allows one, hand-aligned columns, a property written three times, a panel
+with no braces, no trailing newline. Every one of them opens and saves without a
+byte moving, and nudging any node in any of them changes exactly the line that
+node is written on. See [`denise-forms/tests/awkward/`](../../denise-forms/tests/awkward/README.md).
 
 ## What is not here yet
 

@@ -5054,6 +5054,15 @@ mod tests {
         designer.document.form().text()
     }
 
+    /// One line with every run of whitespace squeezed to a single space.
+    ///
+    /// What "the same line apart from the number" has to mean: `y=8` becoming
+    /// `y=16` is a character wider, so the columns somebody lined up shift with
+    /// it, and that is the edit doing its job rather than reformatting.
+    fn squeezed(line: &str) -> String {
+        line.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     /// The lines that differ, which must be the same count on both sides.
     fn diff(before: &str, after: &str) -> Vec<String> {
         let a: Vec<&str> = before.lines().collect();
@@ -7104,6 +7113,115 @@ mod tests {
             source,
             "saving a form nobody edited must not change a byte of it"
         );
+    }
+
+    /// Every file in the awkward corpus, by path.
+    ///
+    /// `denise-forms/tests/awkward/` — see its README. Walked rather than
+    /// listed, so defending a new way of writing a form by hand is adding a
+    /// file and nothing else.
+    fn awkward() -> Vec<std::path::PathBuf> {
+        let mut found: Vec<std::path::PathBuf> =
+            std::fs::read_dir(repo("denise-forms/tests/awkward"))
+                .expect("the corpus directory is there")
+                .filter_map(|entry| {
+                    let path = entry.ok()?.path();
+                    (path.extension()? == "dform").then_some(path)
+                })
+                .collect();
+        found.sort();
+        assert!(found.len() >= 6, "the corpus went missing: {found:?}");
+        found
+    }
+
+    #[test]
+    fn every_awkward_form_opens_and_saves_without_changing_a_byte() {
+        // #88's own words: a corpus of hand-written forms with deliberately odd
+        // formatting round-trips byte-for-byte through the designer's
+        // load-and-save path, headlessly. Not `Form::parse` to `Form::text` —
+        // that is asserted next door in `denise-forms/tests/awkward.rs`. This is
+        // `Document::open` to `Document::save`, through a real file, which is
+        // the path a person's form actually takes: the temporary file, the
+        // rename, and the designer having built the whole thing into a tree in
+        // between.
+        for path in awkward() {
+            let source = std::fs::read(&path).expect("readable");
+            let name = path
+                .file_name()
+                .expect("a name")
+                .to_string_lossy()
+                .to_string();
+            let out =
+                std::env::temp_dir().join(format!("denise-awkward-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_file(&out);
+
+            let document = Document::open(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let mut designer = Designer::new(WINDOW, 1.0, Settings::default(), document);
+            // Built, drawn and inspected — everything short of an edit — because
+            // a round trip that only holds while nothing has looked at the form
+            // is not the one #88 is asking for.
+            assert!(!designer.placed.is_empty(), "{name} built nothing");
+            designer.select_named("who");
+            designer.document.save(Some(out.clone())).expect("saving");
+
+            assert_eq!(
+                std::fs::read(&out).expect("reading back"),
+                source,
+                "{name} came back different from how it went in",
+            );
+            let _ = std::fs::remove_file(&out);
+        }
+    }
+
+    #[test]
+    fn nudging_a_node_in_an_awkward_form_is_a_one_line_diff() {
+        // The second half of #88's "done when", through the canvas rather than
+        // through `Edit`: pick a node, press the arrow key, and exactly the line
+        // that node is written on is the line that changed.
+        for path in awkward() {
+            let name = path
+                .file_name()
+                .expect("a name")
+                .to_string_lossy()
+                .to_string();
+            let document = Document::open(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let mut designer = Designer::new(WINDOW, 1.0, Settings::default(), document);
+            let before = text(&designer);
+
+            // The first node in the file, whatever it is.
+            let first = designer.placed.first().expect("a node").path.clone();
+            let was: i32 = designer
+                .document
+                .form()
+                .property(&first, "y")
+                .expect("every node in the corpus is placed")
+                .parse()
+                .expect("a whole number");
+            designer.selection = vec![first.clone()];
+            designer.selected = designer.node_id(&first);
+            designer.reselected();
+            designer.nudge(0, 8);
+
+            let changed = diff(&before, &text(&designer));
+            assert_eq!(
+                changed.len(),
+                1,
+                "{name} nudged one node and changed {} lines: {changed:#?}",
+                changed.len(),
+            );
+            // And the same line, with the number changed and nothing else about
+            // it moved — every other property still there, still in the order
+            // the file wrote them, with whatever comment was on the end.
+            let was_line = before
+                .lines()
+                .find(|line| line.contains(&format!("y={was}")))
+                .expect("the line it was on");
+            assert_eq!(
+                squeezed(&changed[0]),
+                squeezed(was_line).replace(&format!("y={was}"), &format!("y={}", was + 8)),
+                "{name}: the line came back rewritten rather than edited",
+            );
+        }
     }
 
     #[test]

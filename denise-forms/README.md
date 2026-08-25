@@ -167,6 +167,13 @@ this is byte-exact rather than merely correct: `1_000`, `0x10` and `70.0` are
 values a typed inverse would carry, and none of them would be written back the
 way they were written down.
 
+That this holds for files people actually write, rather than only for the ones in
+the doc comments, is what [`tests/awkward/`](https://github.com/bisand/denise/tree/main/denise-forms/tests/awkward)
+is for: a corpus with comments in every position KDL allows one, columns lined up
+by hand, a property written three times, strings with escapes and emoji in them,
+a panel with no braces and a file with no trailing newline. The tests walk the
+directory, so defending a new way of writing a form by hand is adding a file.
+
 `Edit::Move` reparents a node — its children, its indentation and the comment
 above it all going with it — and `Edit::Many` makes a run of edits one step, so a
 gesture that changes four numbers is one thing to undo. The empty path is the
