@@ -104,6 +104,13 @@ property — and a table maintained in either would drift from the widgets the
 first time one grew a setting. `widgets::all()` is the catalogue a palette lists,
 and a test reads `mod.rs` and fails if a widget is missing from it.
 
+A widget also declares **what it is** — one line, `Describe::DOC` — and **which
+shelf it stands on**, one of six `Group`s. That is what lets a designer's palette
+group twenty-five rows and say what each is without keeping a table of
+descriptions, which is the thing this whole module exists to avoid. Both are
+required rather than defaulted: a widget nobody can identify in a palette is a
+widget nobody reaches for, so adding one without a line does not compile.
+
 Through the tree it is `ui.set_property(id, "role", Value::Enum("primary"))`,
 which is the single place a string becomes a typed call on a widget. An error
 names the widget, the property, and everything that *would* have been accepted.

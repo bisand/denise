@@ -90,8 +90,8 @@ pub use carousel::Carousel;
 pub use checkbox::Checkbox;
 pub use collapse::{Accordion, Collapse, FOLD_MS, set_open};
 pub use describe::{
-    ALIGNMENTS, Describe, DynDescribe, FITS, Mismatch, ORIENTATIONS, PRESENCES, Payload, Property,
-    PropertyError, PropertyKind, RADII, ROLES, SIDES, Value, WidgetInfo, all,
+    ALIGNMENTS, Describe, DynDescribe, FITS, Group, Mismatch, ORIENTATIONS, PRESENCES, Payload,
+    Property, PropertyError, PropertyKind, RADII, ROLES, SIDES, Value, WidgetInfo, all,
 };
 pub use divider::Divider;
 pub use image::{Fit, Image};

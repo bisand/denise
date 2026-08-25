@@ -356,7 +356,22 @@ Two of the four simulations #99 asks for are not here:
 ## The palette
 
 Every widget the toolkit ships, from `widgets::all()` — this crate names none of
-them, so a twenty-sixth appears without it changing. The field above filters.
+them, so a twenty-sixth appears without it changing, on the right shelf and with
+its own description, still without this crate changing.
+
+**Six shelves**: input, display, indicator, container, data, media. Each widget
+declares which one it is on, the same way it declares its properties. The
+heading carries a count and the shelf disappears when the filter empties it.
+
+**Resting on a row says what the widget is** — one line, declared by the widget
+itself. Twenty-five bare names tell somebody who already knows which widget they
+want; this is for everybody else.
+
+![The designer's palette grouped into shelves — headings reading CONTAINER, DATA 3 and MEDIA 4 with their widgets under them — and a tooltip under the hovered `video` row reading "The rectangle a video plane is shown in."](../../assets/screenshots/designer-palette.png)
+
+**The filter reads what a widget is, not only what it is called.** Typing
+`dropdown` finds `select`; typing `switch` finds `toggle`. Neither word is a
+widget's name, and neither search would have found anything before.
 
 Two ways to put one on the form, and they share their machinery:
 
@@ -497,7 +512,7 @@ out of the field being typed in.
 
 | | |
 |---|---|
-| **Palette** | Every widget the toolkit ships, from `widgets::all()`, filtered by the field above — dragged or clicked onto the canvas. |
+| **Palette** | Every widget the toolkit ships, from `widgets::all()` — on six shelves, each row saying what it is, filtered by name *or* description, dragged or clicked onto the canvas. |
 | **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
 | **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, copied, pasted and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. With nothing selected: the form's own. |
@@ -517,11 +532,10 @@ node is written on. See [`denise-forms/tests/awkward/`](../../denise-forms/tests
 
 ## What is not here yet
 
-The palette is a flat list. Grouping it, and giving each row an icon and a
-tooltip saying what the widget *is*, wants somewhere for that to come from: the
-registry carries a name and a property list and nothing else, and a table of
-descriptions in this crate is exactly what the registry exists to avoid. That
-wants a line of documentation on each widget's `Describe`, which is [#126].
+The palette's rows have no **icon**. Grouping and the tooltip came from the
+widget declaring them; a glyph is a theme's business more than a widget's, and
+where it should be declared is genuinely undecided. It is also the least of the
+three, so it is waiting for somebody to want it rather than for a design.
 
 The outline remembers what is folded and what is hidden **by path**, so an edit
 that shifts a path leaves those pointing at whatever moved into its place. A form
@@ -533,14 +547,13 @@ A message field is a field, not a combo box: the name being typed is usually one
 the form has not used yet, and this toolkit has no widget that is both. What the
 form *does* already use is in the row's tooltip.
 
-[#126]: https://github.com/bisand/denise/issues/126
-
 ## Elsewhere
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
-`--drag`, `--carry`, `--band`, `--new`, `--clash <other.dform>` and `--preview` to
-pose it, since a snapshot has no pointer to select, drag, carry or band anything
-with, and no second editor to change the file under it — the same
+`--drag`, `--carry`, `--band`, `--new`, `--hover <kind>`, `--clash <other.dform>`
+and `--preview` to pose it, since a snapshot has no pointer to select, drag,
+carry, band or rest on anything with, and no second editor to change the file
+under it — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 

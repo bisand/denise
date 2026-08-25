@@ -8,7 +8,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{PaintCtx, Widget};
-use crate::widgets::describe::{Describe, DynDescribe, Mismatch, Property, PropertyKind, Value};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, Value,
+};
 use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
 /// One event on a [`Timeline`].
@@ -324,6 +326,8 @@ impl<M: 'static> Widget<M> for Timeline {
 
 impl Describe for Timeline {
     const KIND: &'static str = "timeline";
+    const DOC: &'static str = "Events in order, each with a time, a marker and a label.";
+    const GROUP: Group = Group::Data;
 
     /// A timeline has no colour role of its own: the role belongs to each
     /// event, so a run of them can be `success` up to the one that is still

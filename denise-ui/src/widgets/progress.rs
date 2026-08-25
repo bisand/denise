@@ -5,7 +5,7 @@ use denise_render::Canvas;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::interactive_pair;
 
@@ -193,6 +193,8 @@ impl<M: 'static> Widget<M> for Progress {
 
 impl Describe for Progress {
     const KIND: &'static str = "progress";
+    const DOC: &'static str = "A bar that fills to show how far along something is.";
+    const GROUP: Group = Group::Indicator;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

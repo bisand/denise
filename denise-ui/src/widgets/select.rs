@@ -9,7 +9,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair, muted};
 
@@ -306,6 +306,8 @@ impl<M: Clone + 'static> Widget<M> for Select<M> {
 
 impl<M> Describe for Select<M> {
     const KIND: &'static str = "select";
+    const DOC: &'static str = "One choice out of many, picked from a dropdown list.";
+    const GROUP: Group = Group::Input;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

@@ -9,7 +9,7 @@ use denise_text::{TextEngine, TextStyle};
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, Value,
 };
 use crate::widgets::style::{Align, focus_ring, interactive_pair};
 
@@ -476,6 +476,8 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
 
 impl<M> Describe for TextInput<M> {
     const KIND: &'static str = "text-input";
+    const DOC: &'static str = "A line of text somebody types into.";
+    const GROUP: Group = Group::Input;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "Initial contents."),

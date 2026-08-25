@@ -7,7 +7,7 @@ use denise_render::{Canvas, TURN};
 use crate::motion::{Motion, Wake};
 use crate::widget::{Animation, PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::radial::{ring, ring_colors, thickness_for};
 
@@ -275,6 +275,9 @@ impl<M: 'static> Widget<M> for Spinner {
 
 impl Describe for Spinner {
     const KIND: &'static str = "spinner";
+    const DOC: &'static str =
+        "A turning arc, for when all there is to say is that something is happening.";
+    const GROUP: Group = Group::Indicator;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

@@ -8,7 +8,7 @@ use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned, interactive_pair};
 
@@ -196,6 +196,8 @@ impl<M: 'static> Widget<M> for Badge {
 
 impl Describe for Badge {
     const KIND: &'static str = "badge";
+    const DOC: &'static str = "A count, a status or a short word, in a pill of its role's colour.";
+    const GROUP: Group = Group::Display;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The text."),

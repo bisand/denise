@@ -9,7 +9,7 @@ use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{
     Align, ClickPair, Intent, RowKind, draw_aligned, focus_ring, hovered_row, row_colors,
@@ -733,6 +733,8 @@ impl<M: 'static> Widget<M> for List<M> {
 
 impl<M> Describe for List<M> {
     const KIND: &'static str = "list";
+    const DOC: &'static str = "Rows in a column, one of them selected.";
+    const GROUP: Group = Group::Data;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

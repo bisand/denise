@@ -8,7 +8,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    ALIGNMENTS, Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+    ALIGNMENTS, Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned};
 
@@ -127,6 +127,8 @@ impl<M: 'static> Widget<M> for Label {
 
 impl Describe for Label {
     const KIND: &'static str = "label";
+    const DOC: &'static str = "Text that is read and not touched.";
+    const GROUP: Group = Group::Display;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The text drawn."),

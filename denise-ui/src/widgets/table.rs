@@ -9,7 +9,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{
     Align, ClickPair, Intent, RowKind, draw_aligned, focus_ring, hovered_row, interactive_pair,
@@ -706,6 +706,8 @@ impl<M: 'static> Widget<M> for Table<M> {
 
 impl<M> Describe for Table<M> {
     const KIND: &'static str = "table";
+    const DOC: &'static str = "Columns of cells under a header that stays put.";
+    const GROUP: Group = Group::Data;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

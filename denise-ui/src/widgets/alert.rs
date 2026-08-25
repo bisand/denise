@@ -8,7 +8,7 @@ use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::interactive_pair;
 
@@ -213,6 +213,9 @@ impl<M: 'static> Widget<M> for Alert {
 
 impl Describe for Alert {
     const KIND: &'static str = "alert";
+    const DOC: &'static str =
+        "A coloured banner saying something happened, in the place it happened.";
+    const GROUP: Group = Group::Display;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The message."),

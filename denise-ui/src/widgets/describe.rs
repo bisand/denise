@@ -14,7 +14,10 @@
 //!   once per property in the file.
 //! - The designer's inspector renders one editor per [`Property`], choosing which
 //!   from the [`PropertyKind`].
-//! - [`all`] lists every widget that ships, so a palette does not name them.
+//! - [`all`] lists every widget that ships, so a palette does not name them —
+//!   with [`Describe::DOC`] saying what each one *is* and [`Describe::GROUP`]
+//!   saying which shelf it belongs on, so the palette does not describe or file
+//!   them either.
 //!
 //! # The two properties a widget cannot hold
 //!
@@ -689,6 +692,21 @@ pub trait Describe {
     /// The name a form file uses for this widget. Kebab-case.
     const KIND: &'static str;
 
+    /// One line saying what this widget **is**, for somebody choosing one.
+    ///
+    /// A designer's palette shows it as a tooltip, which is the difference
+    /// between twenty-five bare names and a catalogue. Not a description of the
+    /// API and not a sentence about this type — a sentence about the thing on
+    /// screen, in the words of a person deciding whether they want it.
+    ///
+    /// Deliberately required rather than defaulted: adding a widget without one
+    /// should not compile, because a widget nobody can identify in the palette
+    /// is a widget nobody reaches for.
+    const DOC: &'static str;
+
+    /// Which shelf of the catalogue this belongs on.
+    const GROUP: Group;
+
     /// Every property, in the order an inspector should show them.
     const PROPERTIES: &'static [Property];
 
@@ -761,6 +779,10 @@ impl<T: Describe> DynDescribe for T {
 pub struct WidgetInfo {
     /// The name a form file uses.
     pub kind: &'static str,
+    /// One line saying what it is. See [`Describe::DOC`].
+    pub doc: &'static str,
+    /// Which shelf of the catalogue it belongs on.
+    pub group: Group,
     /// What it accepts.
     pub properties: &'static [Property],
 }
@@ -770,6 +792,8 @@ impl WidgetInfo {
     pub const fn of<W: Describe>() -> Self {
         Self {
             kind: W::KIND,
+            doc: W::DOC,
+            group: W::GROUP,
             properties: W::PROPERTIES,
         }
     }
@@ -777,6 +801,66 @@ impl WidgetInfo {
     /// The property of this name, if it has one.
     pub fn property(&self, name: &str) -> Option<&'static Property> {
         self.properties.iter().find(|p| p.name == name)
+    }
+}
+
+/// The shelves a catalogue of widgets is arranged on.
+///
+/// Six, and deliberately few: a palette that has to be *read* to be searched has
+/// failed, and the point of grouping twenty-five rows is that the eye lands on
+/// the right handful. The order here is the order a palette should show them,
+/// which is roughly how often somebody reaches for one.
+///
+/// A widget declares its own through [`Describe::GROUP`], for the same reason it
+/// declares its own properties: there is no table of widgets anywhere in this
+/// workspace and this is not the place to start one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Group {
+    /// Something a person operates: it takes a message and emits one.
+    Input,
+    /// Something a person reads. Text, and the decorations around text.
+    Display,
+    /// Something that says how far along, how busy, or how much.
+    Indicator,
+    /// Something other widgets go inside.
+    Container,
+    /// Rows and columns of content, with a selection.
+    Data,
+    /// Pictures and video.
+    Media,
+}
+
+impl Group {
+    /// Every one, in the order a palette shows them.
+    pub const ALL: [Self; 6] = [
+        Self::Input,
+        Self::Display,
+        Self::Indicator,
+        Self::Container,
+        Self::Data,
+        Self::Media,
+    ];
+
+    /// The heading a palette writes above the shelf.
+    ///
+    /// ```
+    /// # use denise_ui::widgets::Group;
+    /// assert_eq!(Group::Input.name(), "input");
+    /// // Every group has one, and no two share it.
+    /// let mut names: Vec<&str> = Group::ALL.iter().map(|g| g.name()).collect();
+    /// names.sort_unstable();
+    /// names.dedup();
+    /// assert_eq!(names.len(), Group::ALL.len());
+    /// ```
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Display => "display",
+            Self::Indicator => "indicator",
+            Self::Container => "container",
+            Self::Data => "data",
+            Self::Media => "media",
+        }
     }
 }
 
@@ -883,6 +967,71 @@ mod tests {
                     property.name
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_widget_says_in_one_line_what_it_is() {
+        for widget in all() {
+            let doc = widget.doc;
+            assert!(!doc.is_empty(), "{} says nothing about itself", widget.kind);
+            // One line, because it is a tooltip.
+            assert!(
+                !doc.contains('\n'),
+                "{}'s line is more than one",
+                widget.kind
+            );
+            // A sentence a person reads, not a fragment: a capital and a stop.
+            assert!(
+                doc.starts_with(|c: char| c.is_uppercase()),
+                "{}: `{doc}` does not start a sentence",
+                widget.kind,
+            );
+            assert!(
+                doc.ends_with('.'),
+                "{}: `{doc}` does not end one",
+                widget.kind
+            );
+            // Long enough to say something, short enough to read at a glance.
+            assert!(
+                (20..=100).contains(&doc.len()),
+                "{}: `{doc}` is {} characters",
+                widget.kind,
+                doc.len(),
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_widgets_describe_themselves_the_same_way() {
+        // Two identical lines means one of them is wrong: the whole point is
+        // telling a `checkbox` from a `toggle` while choosing between them.
+        let mut docs: Vec<&str> = all().iter().map(|w| w.doc).collect();
+        let count = docs.len();
+        docs.sort_unstable();
+        docs.dedup();
+        assert_eq!(docs.len(), count, "two widgets say the same thing");
+    }
+
+    #[test]
+    fn every_group_has_something_on_it() {
+        // A shelf with nothing on it is a heading a palette would draw over
+        // nothing, and a sign that the set of groups drifted from the widgets.
+        for group in Group::ALL {
+            assert!(
+                all().iter().any(|w| w.group == group),
+                "nothing is `{}`",
+                group.name(),
+            );
+        }
+        // And every widget is on one of them, which the type already promises;
+        // this catches a group added to the enum and left out of `ALL`.
+        for widget in all() {
+            assert!(
+                Group::ALL.contains(&widget.group),
+                "{} is in a group `Group::ALL` does not list",
+                widget.kind,
+            );
         }
     }
 

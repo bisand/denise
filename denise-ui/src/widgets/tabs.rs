@@ -9,7 +9,7 @@ use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
@@ -345,6 +345,8 @@ impl<M: 'static> Widget<M> for Tabs<M> {
 
 impl<M> Describe for Tabs<M> {
     const KIND: &'static str = "tabs";
+    const DOC: &'static str = "A row of labels where one is selected, for switching what is below.";
+    const GROUP: Group = Group::Container;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

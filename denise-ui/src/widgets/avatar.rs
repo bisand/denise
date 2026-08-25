@@ -9,7 +9,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, PRESENCES, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, PRESENCES, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::image::{Fit, Image};
 use crate::widgets::style::{Align, draw_aligned, interactive_pair};
@@ -366,6 +366,8 @@ impl<M: 'static> Widget<M> for Avatar {
 
 impl Describe for Avatar {
     const KIND: &'static str = "avatar";
+    const DOC: &'static str = "A person: their picture, or their initials on a coloured disc.";
+    const GROUP: Group = Group::Media;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

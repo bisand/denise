@@ -8,8 +8,8 @@ use denise::{
 };
 use denise_forms::{Edit, Form, FormKind, Handler, Literal, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{
-    Button, Divider, Label, List, ListItem, Panel, Property, PropertyKind, TextInput, Value,
-    open_select,
+    Button, Divider, Group, Label, List, ListItem, Panel, Property, PropertyKind, TextInput, Value,
+    WidgetInfo, open_select,
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 
@@ -201,6 +201,20 @@ impl Simulated {
         let at = Self::ALL.iter().position(|held| *held == self).unwrap_or(0);
         Self::ALL[(at + 1) % Self::ALL.len()]
     }
+}
+
+/// One row of the palette: a shelf's heading, or a widget standing on it.
+///
+/// The palette is one `List`, so a heading is a row like any other — a disabled
+/// one, which the widget already knows to skip with the keyboard and ignore
+/// under the pointer. Design mode takes the palette's presses for itself anyway,
+/// so what a heading really costs is this enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shelf {
+    /// A group heading.
+    Heading(Group),
+    /// A widget, by its index into [`Designer::palette`].
+    Widget(usize),
 }
 
 /// A widget on its way from the palette onto the canvas.
@@ -579,8 +593,9 @@ pub struct Designer {
     settings: Settings,
     /// Every widget the toolkit ships, in the order the palette lists them.
     palette: Vec<&'static str>,
-    /// The ones the filter is letting through, as indices into `palette`.
-    shown: Vec<usize>,
+    /// What the palette is showing: a heading per shelf with anything the
+    /// filter let through under it, in `Group::ALL` order.
+    shown: Vec<Shelf>,
     /// What the filter field last held.
     filter: String,
     /// A widget on its way onto the canvas.
@@ -762,24 +777,54 @@ impl Designer {
     /// height inside the viewport, so the wheel reaches the rest.
     fn fill_palette(&mut self) {
         let needle = self.filter.trim().to_lowercase();
-        self.shown = self
-            .palette
-            .iter()
-            .enumerate()
-            .filter(|(_, kind)| needle.is_empty() || kind.contains(&needle))
-            .map(|(index, _)| index)
-            .collect();
+        // The filter reads what a widget *is* as well as what it is called, so
+        // "dropdown" finds `select` and "switch" finds `toggle`. Somebody
+        // searching a palette is searching for a thing, not for a spelling.
+        let matches = |info: &WidgetInfo| {
+            needle.is_empty()
+                || info.kind.contains(&needle)
+                || info.doc.to_lowercase().contains(&needle)
+        };
 
+        self.shown.clear();
+        let mut counts: Vec<usize> = Vec::new();
+        for group in Group::ALL {
+            let members: Vec<usize> = denise_ui::widgets::all()
+                .iter()
+                .enumerate()
+                .filter(|(_, info)| info.group == group && matches(info))
+                .map(|(index, _)| index)
+                .collect();
+            // A shelf the filter emptied is a heading over nothing.
+            if members.is_empty() {
+                continue;
+            }
+            counts.push(members.len());
+            self.shown.push(Shelf::Heading(group));
+            self.shown.extend(members.into_iter().map(Shelf::Widget));
+        }
+
+        let mut headings = counts.into_iter();
         let items: Vec<ListItem> = self
             .shown
             .iter()
-            .map(|index| ListItem::new(self.palette[*index]))
+            .map(|row| match row {
+                // Upper case and a count, because a heading that only differs
+                // from a widget by being a shade dimmer is not a heading — it
+                // is a row somebody will try to drag. Disabled as well, so the
+                // keyboard steps over it and the pointer leaves it alone.
+                Shelf::Heading(group) => ListItem::new(group.name().to_uppercase())
+                    .with_trailing(headings.next().unwrap_or(0).to_string())
+                    .disabled(),
+                Shelf::Widget(index) => ListItem::new(self.palette[*index]),
+            })
             .collect();
         let rows = items.len().max(1) as i32;
-        let armed = self
-            .placing
-            .kind()
-            .and_then(|kind| self.shown.iter().position(|i| self.palette[*i] == kind));
+        let armed = self.placing.kind().and_then(|kind| {
+            self.shown
+                .iter()
+                .position(|row| matches!(row, Shelf::Widget(i) if self.palette[*i] == kind))
+        });
         let list = List::new(items, Message::Palette)
             .with_row_height(PALETTE_ROW)
             .with_selected(armed);
@@ -796,9 +841,74 @@ impl Designer {
             .expect("the palette viewport is there");
     }
 
-    /// The kind a palette row stands for.
+    /// The kind a palette row stands for, or `None` for a heading.
     fn palette_kind(&self, row: usize) -> Option<&'static str> {
-        self.shown.get(row).map(|index| self.palette[*index])
+        match self.shown.get(row)? {
+            Shelf::Heading(_) => None,
+            Shelf::Widget(index) => self.palette.get(*index).copied(),
+        }
+    }
+
+    /// The row of the palette under a point, if the point is on one.
+    fn palette_row(&self, at: Point) -> Option<usize> {
+        let view = self.ui.bounds(self.chrome.palette_view)?;
+        let scroll = self.ui.scroll(self.chrome.palette_view);
+        usize::try_from((at.y - view.y + scroll.y) / PALETTE_ROW).ok()
+    }
+
+    /// Hovers a palette row by the widget's name, and waits out the tooltip.
+    ///
+    /// For `--snapshot`, which has no pointer: the palette's whole answer to
+    /// #126 is what appears when one rests on a row, and a picture of the
+    /// palette without it is a picture of the thing that was already there.
+    pub fn hover_palette(&mut self, kind: &str) -> bool {
+        let Some(row) = (0..self.shown.len()).find(|row| self.palette_kind(*row) == Some(kind))
+        else {
+            return false;
+        };
+        let Some(view) = self.ui.bounds(self.chrome.palette_view) else {
+            return false;
+        };
+        // Scrolled to, because the viewport holds eleven rows and there are
+        // thirty-one: a `--hover video` that quietly hovered nothing would be a
+        // picture of the palette with the pointer in the wrong place.
+        let top = row as i32 * PALETTE_ROW;
+        let scroll = self.ui.scroll(self.chrome.palette_view);
+        let wanted = scroll.y.clamp(top - view.height + PALETTE_ROW, top);
+        self.ui
+            .set_scroll(self.chrome.palette_view, Point::new(scroll.x, wanted));
+        let scroll = self.ui.scroll(self.chrome.palette_view);
+        let at = Point::new(
+            view.x + view.width / 2,
+            view.y + top - scroll.y + PALETTE_ROW / 2,
+        );
+        let moved = [InputEvent::PointerMoved { position: at }];
+        self.input(&moved);
+        self.ui.handle(&moved);
+        // Past the hover delay, which is what a person resting a pointer does.
+        self.ui.tick(2_000);
+        true
+    }
+
+    /// Puts what a widget *is* on the palette, for the row under the pointer.
+    ///
+    /// The tooltip belongs to the whole list — one node, one tooltip — so it is
+    /// rewritten as the pointer moves down it. That is what the palette is for:
+    /// twenty-five names tell somebody who already knows which widget they want,
+    /// and this is for everybody else. See `Describe::DOC`.
+    fn palette_hover(&mut self, at: Point) {
+        let doc = self
+            .palette_row(at)
+            .and_then(|row| self.shown.get(row).copied())
+            .and_then(|row| match row {
+                Shelf::Heading(_) => None,
+                Shelf::Widget(index) => denise_ui::widgets::all().get(index),
+            })
+            .map(|info| info.doc);
+        match doc {
+            Some(doc) => self.ui.set_tooltip(self.chrome.palette, doc),
+            None => self.ui.clear_tooltip(self.chrome.palette),
+        }
     }
 
     /// Rebuilds the canvas from the open document.
@@ -1823,6 +1933,12 @@ impl Designer {
                 false
             }
             InputEvent::PointerMoved { position } => {
+                // Before anything claims the move: the tree shows the tooltip
+                // for whatever is under the pointer *after* this returns, so the
+                // row's line has to be on the node by then.
+                if palette.contains(*position) {
+                    self.palette_hover(*position);
+                }
                 if self.placing.moving() {
                     self.carry_to(*position);
                     return true;
@@ -2332,13 +2448,9 @@ impl Designer {
 
     /// A press on a palette row: a click until the pointer travels.
     fn press_palette(&mut self, at: Point) {
-        let view = self
-            .ui
-            .bounds(self.chrome.palette_view)
-            .unwrap_or(Rect::ZERO);
-        let scroll = self.ui.scroll(self.chrome.palette_view);
-        let row = (at.y - view.y + scroll.y) / PALETTE_ROW;
-        let Some(kind) = usize::try_from(row).ok().and_then(|r| self.palette_kind(r)) else {
+        // A heading has no kind, so pressing one arms nothing — which is also
+        // what `ListItem::disabled` would have decided if the list saw presses.
+        let Some(kind) = self.palette_row(at).and_then(|row| self.palette_kind(row)) else {
             self.cancel_placing();
             return;
         };
@@ -6076,23 +6188,131 @@ mod tests {
         Point::new(stage.x + stage.width / 2, stage.y + stage.height / 2)
     }
 
+    /// Every kind the palette is currently offering, headings skipped.
+    fn offered(designer: &Designer) -> Vec<&'static str> {
+        (0..designer.shown.len())
+            .filter_map(|row| designer.palette_kind(row))
+            .collect()
+    }
+
     #[test]
     fn the_filter_narrows_the_palette_and_giving_it_up_puts_it_back() {
         let mut designer = designer_on("forms/hello.dform");
-        let all = designer.shown.len();
+        let all = offered(&designer).len();
         assert_eq!(all, denise_ui::widgets::all().len());
 
         set_filter(&mut designer, "prog");
-        let shown: Vec<&str> = (0..designer.shown.len())
-            .filter_map(|row| designer.palette_kind(row))
-            .collect();
-        assert_eq!(shown, vec!["progress", "radial-progress"]);
+        assert_eq!(offered(&designer), vec!["progress", "radial-progress"]);
 
         set_filter(&mut designer, "nothing called this");
         assert!(designer.shown.is_empty());
 
         set_filter(&mut designer, "");
-        assert_eq!(designer.shown.len(), all);
+        assert_eq!(offered(&designer).len(), all);
+    }
+
+    #[test]
+    fn the_palette_is_shelves_rather_than_one_flat_list() {
+        let designer = designer_on("forms/hello.dform");
+
+        // A heading for every group, each with something under it, in the
+        // order `Group::ALL` gives — which is the catalogue's order and not
+        // this file's.
+        let headings: Vec<Group> = designer
+            .shown
+            .iter()
+            .filter_map(|row| match row {
+                Shelf::Heading(group) => Some(*group),
+                Shelf::Widget(_) => None,
+            })
+            .collect();
+        assert_eq!(headings, Group::ALL.to_vec());
+
+        // The first row is a heading, never a widget adrift above one.
+        assert!(matches!(designer.shown.first(), Some(Shelf::Heading(_))));
+
+        // And every widget the toolkit ships is on exactly one shelf.
+        let mut kinds = offered(&designer);
+        assert_eq!(kinds.len(), denise_ui::widgets::all().len());
+        kinds.sort_unstable();
+        kinds.dedup();
+        assert_eq!(kinds.len(), denise_ui::widgets::all().len());
+    }
+
+    #[test]
+    fn a_shelf_the_filter_empties_takes_its_heading_with_it() {
+        let mut designer = designer_on("forms/hello.dform");
+        set_filter(&mut designer, "prog");
+
+        // `progress` and `radial-progress` are both indicators, so exactly one
+        // heading survives — a heading over nothing is worse than no heading.
+        let headings: Vec<Group> = designer
+            .shown
+            .iter()
+            .filter_map(|row| match row {
+                Shelf::Heading(group) => Some(*group),
+                Shelf::Widget(_) => None,
+            })
+            .collect();
+        assert_eq!(headings, vec![Group::Indicator]);
+        assert_eq!(designer.shown.len(), 3, "a heading and its two widgets");
+    }
+
+    #[test]
+    fn the_filter_searches_what_a_widget_is_and_not_only_what_it_is_called() {
+        let mut designer = designer_on("forms/hello.dform");
+
+        // Nothing is called `dropdown`; `select` is one, and says so.
+        set_filter(&mut designer, "dropdown");
+        assert_eq!(offered(&designer), vec!["select"]);
+
+        // Nor `switch`, which is what a `toggle` looks like. `tabs` comes too,
+        // because it is for *switching* what is below — which is the search
+        // working rather than failing: both are reasonable answers, and neither
+        // is reachable by spelling.
+        set_filter(&mut designer, "switch");
+        let found = offered(&designer);
+        assert!(found.contains(&"toggle"), "{found:?}");
+        assert!(
+            !found.iter().any(|kind| kind.contains("switch")),
+            "one of these is called `switch` after all: {found:?}",
+        );
+    }
+
+    #[test]
+    fn a_row_under_the_pointer_says_what_the_widget_is() {
+        let mut designer = designer_on("forms/hello.dform");
+        let at = palette_point(&mut designer, "toggle");
+
+        designer.input(&[InputEvent::PointerMoved { position: at }]);
+        assert_eq!(
+            designer.ui.tooltip(designer.chrome.palette),
+            Some(
+                denise_ui::widgets::all()
+                    .iter()
+                    .find(|w| w.kind == "toggle")
+                    .expect("a toggle")
+                    .doc
+            ),
+            "the palette says nothing about the row under the pointer",
+        );
+
+        // A heading has nothing to say, and must not leave the last row's line
+        // hanging over it.
+        let heading = (0..designer.shown.len())
+            .find(|row| matches!(designer.shown[*row], Shelf::Heading(_)))
+            .expect("a heading");
+        let view = designer
+            .ui
+            .bounds(designer.chrome.palette_view)
+            .expect("a palette");
+        designer.input(&[InputEvent::PointerMoved {
+            position: Point::new(
+                view.x + view.width / 2,
+                view.y + heading as i32 * PALETTE_ROW + PALETTE_ROW / 2,
+            ),
+        }]);
+        assert_eq!(designer.ui.tooltip(designer.chrome.palette), None);
     }
 
     #[test]
