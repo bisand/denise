@@ -62,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut font: Option<String> = None;
     let mut snapshot: Option<String> = None;
     let mut scroll_bench: Option<usize> = None;
+    let mut fb_copy_bench = false;
     let mut keyboard = false;
     // Kiosk builds have no window to close, so a run length is the way out.
     // Zero means "until Escape".
@@ -92,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "gallery.ppm".into())),
             // The measurement behind #46, so that anybody can take it again.
+            "--fb-copy-bench" => fb_copy_bench = true,
             "--scroll-bench" => {
                 scroll_bench = Some(args.next().and_then(|s| s.parse().ok()).unwrap_or(60));
             }
@@ -123,6 +125,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let font = system_font::load(font.as_deref());
+
+    // Needs the display itself, so it exists only where there is one to take.
+    #[cfg(all(feature = "kiosk", target_os = "linux"))]
+    if fb_copy_bench {
+        return kiosk_backend::copy_bench();
+    }
+    #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
+    if fb_copy_bench {
+        eprintln!("--fb-copy-bench needs the kiosk build, on Linux, with a display");
+        return Ok(());
+    }
 
     if let Some(rounds) = scroll_bench {
         scroll_bench_run(size, scale, font, motion, rounds);
@@ -442,6 +455,79 @@ mod kiosk_backend {
     use super::{App, Font, Message};
     use bare_linux::{Display, Waits, capture, mute_console, open_input, poll_timeout};
     use denise::{ElementState, InputEvent, InputSource, KeyCode, Surface};
+
+    /// What the memory a display scans out of costs to *read*.
+    ///
+    /// `--scroll-bench` times the same copy in a `Vec`, which is ordinary cached
+    /// memory. A DRM dumb buffer very often is not: on ARM it is commonly mapped
+    /// write-combined, where writes are gathered and fast and reads are uncached
+    /// and slow. That difference decides whether scrolling by moving pixels
+    /// ([#46](https://github.com/bisand/denise/issues/46)) is a win on the only
+    /// target that matters or a regression, and it is not a thing to assume.
+    ///
+    /// Takes the display for a moment and gives it straight back.
+    pub fn copy_bench() -> Result<(), Box<dyn std::error::Error>> {
+        let mut surface = Display::open(bare_linux::PresentMode::Vsync)?;
+        let size = surface.size();
+        let stride = size.width as usize;
+        // The gallery's viewport at 1080p, so the numbers line up with the ones
+        // `--scroll-bench` prints.
+        let (width, rows, shift) = (1584usize.min(stride), 1016usize, 20usize);
+        let rows = rows.min(size.height as usize);
+
+        let mut frame = surface.acquire()?;
+        let pixels = frame.pixels_mut();
+
+        /// Nine goes at one measurement, in milliseconds, median.
+        ///
+        /// Generic over the closure rather than boxed: the buffer is borrowed
+        /// once and the three measurements take turns with it, which is a
+        /// lifetime the compiler is happier about than a trait object.
+        fn median(pixels: &mut [u32], mut each: impl FnMut(&mut [u32])) -> f64 {
+            let mut runs: Vec<u128> = Vec::with_capacity(9);
+            for _ in 0..9 {
+                let started = Instant::now();
+                each(pixels);
+                runs.push(started.elapsed().as_micros());
+            }
+            runs.sort_unstable();
+            runs[runs.len() / 2] as f64 / 1000.0
+        }
+
+        let moved = median(pixels, |p| {
+            for row in shift..rows {
+                let from = row * stride;
+                let to = (row - shift) * stride;
+                p.copy_within(from..from + width, to);
+            }
+        });
+        let written = median(pixels, |p| {
+            for row in 0..rows {
+                p[row * stride..row * stride + width].fill(0xFF10_1018);
+            }
+        });
+        let read = median(pixels, |p| {
+            let mut sum = 0u64;
+            for row in 0..rows {
+                for word in &p[row * stride..row * stride + width] {
+                    sum = sum.wrapping_add(u64::from(*word));
+                }
+            }
+            core::hint::black_box(sum);
+        });
+
+        drop(frame);
+        surface.present(&[])?;
+
+        let mb = (rows * width * 4) as f64 / (1024.0 * 1024.0);
+        println!("gallery --fb-copy-bench, in the buffer the display scans out of");
+        println!("  surface   {}x{}", size.width, size.height);
+        println!("  region    {width}x{rows} — {mb:.1} MB");
+        println!("  write     median {written:.2} ms");
+        println!("  read      median {read:.2} ms");
+        println!("  memmove   median {moved:.2} ms  (read + write of the same region)");
+        Ok(())
+    }
 
     /// Where F12 writes. `/tmp` because a kiosk image is very often read-only
     /// everywhere else.
