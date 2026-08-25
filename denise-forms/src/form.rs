@@ -1071,7 +1071,8 @@ impl Form {
     /// Every node in the file, depth first, the form node itself first.
     ///
     /// What can be known about a form **without building it**, which is what
-    /// comparing two versions of the same file needs: [`Placed`] is the same
+    /// comparing two versions of the same file needs: [`Placed`](crate::Placed)
+    /// is the same
     /// node after [`build`](Form::build) and carries a `NodeId` that only exists
     /// once there is a tree, so it cannot describe a file nobody has opened.
     ///
