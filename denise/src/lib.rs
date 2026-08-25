@@ -58,7 +58,7 @@ pub mod theme;
 
 pub use color::Color;
 pub use cursor::CursorPlane;
-pub use damage::{DamageTracker, MAX_DAMAGE_RECTS, RectList};
+pub use damage::{DamageTracker, MAX_DAMAGE_RECTS, MAX_TRACKED_FRAMES, RectList};
 pub use geom::{Point, Rect, Size};
 pub use input::{
     ElementState, InputEvent, InputSource, KeyCode, Modifiers, PointerButton, TouchId,
