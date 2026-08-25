@@ -158,6 +158,7 @@ not your job: the derivation aims at WCAG AA by construction.
 cargo run -p gallery                                          # a window
 cargo run -p gallery -- --keyboard                            # with the keyboard up
 cargo run -p gallery --no-default-features --features kiosk   # the display itself
+cargo run -p gallery --release -- --scroll-bench --size 1920x1080   # what a scrolled frame costs
 ```
 
 Its overlays section is where the three kinds are compared side by side: a

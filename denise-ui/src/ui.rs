@@ -5,8 +5,8 @@ use alloc::vec;
 use alloc::vec::{Drain, Vec};
 
 use denise::{
-    Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, MAX_DAMAGE_RECTS, Modifiers,
-    Point, Rect, Role, Size, Surface, SurfaceError, Theme,
+    Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, MAX_DAMAGE_RECTS,
+    MAX_TRACKED_FRAMES, Modifiers, Point, Rect, Role, Size, Surface, SurfaceError, Theme,
 };
 use denise_render::Canvas;
 use denise_text::{FontId, GlyphSource, TextEngine};
@@ -87,6 +87,24 @@ impl LayoutTween {
     }
 }
 
+/// A frame whose damage was nothing but one viewport scrolling.
+///
+/// The damage tracker unions, so a hover highlight *inside* a scrolled viewport
+/// vanishes into the viewport's own rectangle and cannot be told apart from it
+/// afterwards. Scrolling by moving pixels rather than redrawing them needs
+/// exactly that told apart, so it is recorded as it happens rather than
+/// reconstructed later. `None` in the ring means "something else changed too",
+/// which is most frames.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Scrolled {
+    /// The viewport that moved.
+    node: NodeId,
+    /// How far its content moved, this frame.
+    by: Point,
+    /// Where the viewport was, so a relayout in the meantime disqualifies it.
+    clip: Rect,
+}
+
 /// A retained tree of widgets, a stack of scenes, and the damage they generate.
 ///
 /// `M` is the application's message type. Widgets emit `M`; the application drains
@@ -126,6 +144,11 @@ pub struct Ui<M: 'static> {
     theme: Theme,
     text: TextEngine,
     damage: DamageTracker,
+    /// What each of the last few frames was, when it was only a scroll — the
+    /// same ring the damage keeps, advanced in step with it. See [`Scrolled`].
+    scrolled: [Option<Scrolled>; MAX_TRACKED_FRAMES],
+    /// This frame's slot in that ring.
+    scroll_head: usize,
     pointer: Point,
     hovered: Option<NodeId>,
     pressed: Option<NodeId>,
@@ -190,6 +213,8 @@ impl<M: 'static> Ui<M> {
             theme,
             text: TextEngine::new(),
             damage: DamageTracker::new(size),
+            scrolled: [None; MAX_TRACKED_FRAMES],
+            scroll_head: 0,
             pointer: Point::ZERO,
             hovered: None,
             pressed: None,
@@ -263,9 +288,9 @@ impl<M: 'static> Ui<M> {
 
     /// Replaces the cursor sprite, damaging both shapes' footprints.
     pub fn set_cursor_image(&mut self, image: &'static CursorImage) {
-        self.damage.add(self.cursor.bounds());
+        self.dirty(self.cursor.bounds());
         self.cursor.image = image;
-        self.damage.add(self.cursor.bounds());
+        self.dirty(self.cursor.bounds());
     }
 
     /// Shows or hides the cursor sprite, and stops the tree deciding for itself.
@@ -285,9 +310,9 @@ impl<M: 'static> Ui<M> {
         if self.cursor.visible == visible {
             return;
         }
-        self.damage.add(self.cursor.bounds());
+        self.dirty(self.cursor.bounds());
         self.cursor.visible = visible;
-        self.damage.add(self.cursor.bounds());
+        self.dirty(self.cursor.bounds());
     }
 
     // ---------------------------------------------------------------- scenes
@@ -672,7 +697,7 @@ impl<M: 'static> Ui<M> {
                 let id = self.order[i];
                 if let Some(node) = self.nodes.get(id) {
                     let clip = node.clip;
-                    self.damage.add(clip);
+                    self.dirty(clip);
                 }
             }
         }
@@ -913,8 +938,13 @@ impl<M: 'static> Ui<M> {
         if node.scroll == clamped {
             return;
         }
+        let was = node.scroll;
         node.scroll = clamped;
         let clip = node.clip;
+        let by = Point::new(clamped.x - was.x, clamped.y - was.y);
+        // Recorded *before* the damage, and not through `dirty`: this is the
+        // scroll, and the scroll is what the record is about.
+        self.note_scroll(id, by, clip);
         self.damage.add(clip);
         self.reflow(id);
         // The pointer has not moved, but what is under it has.
@@ -995,7 +1025,7 @@ impl<M: 'static> Ui<M> {
             if clamped != scroll {
                 self.nodes[current].scroll = clamped;
                 let clip = self.nodes[current].clip;
-                self.damage.add(clip);
+                self.dirty(clip);
                 self.reflow(current);
             }
         }
@@ -1351,7 +1381,7 @@ impl<M: 'static> Ui<M> {
     /// that one.
     pub fn widget_mut<W: Widget<M>>(&mut self, id: NodeId) -> Option<&mut W> {
         let clip = self.nodes.get(id)?.clip;
-        self.damage.add(clip);
+        self.dirty(clip);
         self.nodes
             .get_mut(id)?
             .widget
@@ -1413,7 +1443,7 @@ impl<M: 'static> Ui<M> {
         // Invalidating unconditionally costs one widget-sized repaint on a
         // no-op, which is the cheap way to be wrong.
         let clip = node.clip;
-        self.damage.add(clip);
+        self.dirty(clip);
         Some(result)
     }
 
@@ -1669,7 +1699,7 @@ impl<M: 'static> Ui<M> {
             };
             let clip = node.clip;
             if animation.repaint {
-                self.damage.add(clip);
+                self.dirty(clip);
             }
             // The scene wakes for the most impatient animation, and everybody is
             // asked again at that point. A widget's `animate` must therefore
@@ -1798,7 +1828,7 @@ impl<M: 'static> Ui<M> {
     fn damage_toasts(&mut self) {
         let now = self.now_ms;
         if let Some(bounds) = self.toasts.bounds(self.size, &mut self.text, now) {
-            self.damage.add(bounds);
+            self.dirty(bounds);
         }
     }
 
@@ -1809,7 +1839,7 @@ impl<M: 'static> Ui<M> {
     /// and again when it goes.
     fn damage_tooltip(&mut self) {
         if let Some(bounds) = self.tooltip.bounds(self.size, &mut self.text) {
-            self.damage.add(bounds);
+            self.dirty(bounds);
         }
     }
 
@@ -1929,6 +1959,37 @@ impl<M: 'static> Ui<M> {
 
     // --------------------------------------------------------------- painting
 
+    /// Marks a rectangle for repaint.
+    ///
+    /// The one door every damaging path in this file goes through, so that
+    /// "this frame was nothing but a scroll" stays knowable: anything landing
+    /// *inside* a scrolled viewport is a change the union would hide, and hides
+    /// it by taking the record away. See [`Scrolled`].
+    fn dirty(&mut self, rect: Rect) {
+        if self.scrolled[self.scroll_head].is_some_and(|it| it.clip.intersects(&rect)) {
+            self.scrolled[self.scroll_head] = None;
+        }
+        self.damage.add(rect);
+    }
+
+    /// Records that a viewport scrolled, for a frame that has done nothing else.
+    ///
+    /// A second viewport scrolling in the same frame gives up rather than
+    /// growing a list: two moving at once is a case worth having and not a case
+    /// worth being clever about the first time.
+    fn note_scroll(&mut self, node: NodeId, by: Point, clip: Rect) {
+        let slot = &mut self.scrolled[self.scroll_head];
+        *slot = match *slot {
+            None if self.damage.is_clean() => Some(Scrolled { node, by, clip }),
+            Some(it) if it.node == node && it.clip == clip => Some(Scrolled {
+                node,
+                by: Point::new(it.by.x + by.x, it.by.y + by.y),
+                clip,
+            }),
+            _ => None,
+        };
+    }
+
     /// Returns `true` if anything has been marked dirty since the last present.
     #[inline]
     pub fn needs_paint(&self) -> bool {
@@ -1938,6 +1999,7 @@ impl<M: 'static> Ui<M> {
     /// Marks the whole surface for repaint.
     #[inline]
     pub fn invalidate_all(&mut self) {
+        self.scrolled[self.scroll_head] = None;
         self.damage.add_full();
     }
 
@@ -1945,7 +2007,7 @@ impl<M: 'static> Ui<M> {
     pub fn invalidate(&mut self, id: NodeId) {
         if let Some(node) = self.nodes.get(id) {
             let clip = node.clip;
-            self.damage.add(clip);
+            self.dirty(clip);
         }
     }
 
@@ -1975,6 +2037,115 @@ impl<M: 'static> Ui<M> {
     #[inline]
     pub fn presented(&mut self) {
         self.damage.end_frame();
+        self.scroll_head = (self.scroll_head + 1) % MAX_TRACKED_FRAMES;
+        self.scrolled[self.scroll_head] = None;
+    }
+
+    /// Moves the rows a scroll left still valid, and hands back the strip that
+    /// came into view.
+    ///
+    /// A viewport scrolled by `dy` has the same content, moved. Copying what is
+    /// still good and drawing only what is new turns a 1584x1016 repaint into a
+    /// 1584x20 one, which on a Pi at 1080p is the difference between 25 ms and
+    /// about 8 — see [#46](https://github.com/bisand/denise/issues/46).
+    ///
+    /// The copy is *within the buffer being drawn into*, which is what makes
+    /// this need nothing new from a backend: that buffer is `age` frames old, so
+    /// it holds the content from `age` frames ago, and the scroll since then is
+    /// what the ring in [`Scrolled`] has been recording.
+    ///
+    /// `None` for anything at all uncertain, and every one of these is a case
+    /// where the caller repaints the viewport exactly as it always has:
+    ///
+    /// - the buffer's age is unknown or older than the ring;
+    /// - any of those frames did something other than scroll that one viewport;
+    /// - the viewport moved or resized in the meantime;
+    /// - the scroll was sideways, or further than the viewport is tall;
+    /// - anything is drawn *over* it — a scene, a tooltip, a toast, the cursor —
+    ///   because an overlay would be copied along with the rows and leave a
+    ///   ghost where it used to be;
+    /// - the damage is anything but that viewport, so the strip would not be
+    ///   the whole of what needs drawing.
+    fn scroll_blit(&mut self, frame: &mut Frame<'_>) -> Option<Rect> {
+        let frames = match frame.age() {
+            denise::BufferAge::Frames(n) if (n as usize) <= MAX_TRACKED_FRAMES => n as usize,
+            _ => return None,
+        };
+        if frames == 0 {
+            return None;
+        }
+
+        // Every frame this buffer is behind by has to have been the same
+        // viewport scrolling, or the content it holds is not what this thinks.
+        let first = self.scrolled[self.scroll_head]?;
+        let mut moved = Point::new(0, 0);
+        for step in 0..frames {
+            let slot = (self.scroll_head + MAX_TRACKED_FRAMES - step) % MAX_TRACKED_FRAMES;
+            let was = self.scrolled[slot]?;
+            if was.node != first.node || was.clip != first.clip {
+                return None;
+            }
+            moved = Point::new(moved.x + was.by.x, moved.y + was.by.y);
+        }
+
+        // Sideways is a different copy and a different strip. The case that
+        // matters is vertical; the other waits until it does.
+        if moved.x != 0 || moved.y == 0 {
+            return None;
+        }
+        if self.scenes.len() > 1 || self.tooltip.is_shown() || self.toasts.len() > 0 {
+            return None;
+        }
+        if self.cursor.bounds().intersects(&first.clip) {
+            return None;
+        }
+
+        let clip = first.clip.intersect(&Rect::from_size(self.size))?;
+        let shift = moved.y.unsigned_abs() as usize;
+        let (width, height) = (clip.width.max(0) as usize, clip.height.max(0) as usize);
+        if shift == 0 || shift >= height || width == 0 {
+            return None;
+        }
+
+        // And nothing else may be dirty, or the strip would not cover it.
+        let only_the_viewport = {
+            let resolved = self.damage.resolve(frame.age());
+            resolved.len() == 1 && resolved[0] == first.clip
+        };
+        if !only_the_viewport {
+            return None;
+        }
+
+        let stride = frame.stride() as usize;
+        let (left, top) = (clip.x.max(0) as usize, clip.y.max(0) as usize);
+        let words = frame.pixels_mut();
+        // Belt and braces: the clip is inside the surface and the stride covers
+        // it, so this holds — and a panic here would be a panic in the paint.
+        if (top + height - 1) * stride + left + width > words.len() {
+            return None;
+        }
+
+        if moved.y > 0 {
+            // The content moved up, so row `y` takes what row `y + shift` had.
+            // Top to bottom, because the destination trails the source.
+            for row in 0..height - shift {
+                let from = (top + row + shift) * stride + left;
+                words.copy_within(from..from + width, (top + row) * stride + left);
+            }
+            Some(Rect::new(
+                clip.x,
+                clip.bottom() - moved.y,
+                clip.width,
+                moved.y,
+            ))
+        } else {
+            // And the other way, bottom to top for the same reason.
+            for row in (shift..height).rev() {
+                let from = (top + row - shift) * stride + left;
+                words.copy_within(from..from + width, (top + row) * stride + left);
+            }
+            Some(Rect::new(clip.x, clip.y, clip.width, -moved.y))
+        }
     }
 
     /// Draws every damaged region of the scene stack into `frame`.
@@ -1985,11 +2156,24 @@ impl<M: 'static> Ui<M> {
     pub fn paint(&mut self, frame: &mut Frame<'_>) {
         self.ensure_order();
 
+        // The rows a scroll left still valid are moved rather than redrawn, and
+        // what comes back is the strip that came into view. What is *reported*
+        // as damage is untouched: the screen still needs the whole viewport,
+        // because the rows moved in this buffer and not in the one on the panel.
+        let blitted = self.scroll_blit(frame);
+
         let mut regions = [Rect::ZERO; MAX_DAMAGE_RECTS];
         let count = {
             let resolved = self.damage.resolve(frame.age());
             regions[..resolved.len()].copy_from_slice(resolved);
             resolved.len()
+        };
+        let count = match blitted {
+            Some(strip) => {
+                regions[0] = strip;
+                1
+            }
+            None => count,
         };
 
         let base = self.theme.color(Role::Base100);
@@ -2237,11 +2421,11 @@ impl<M: 'static> Ui<M> {
             self.cursor.visible
         };
         if self.pointer != position || self.cursor.visible != visible {
-            self.damage.add(self.cursor.bounds());
+            self.dirty(self.cursor.bounds());
             self.pointer = position;
             self.cursor.position = position;
             self.cursor.visible = visible;
-            self.damage.add(self.cursor.bounds());
+            self.dirty(self.cursor.bounds());
         }
         self.update_hover();
     }
@@ -2343,7 +2527,7 @@ impl<M: 'static> Ui<M> {
         let (dirty, wants_focus, wants_animation, reveal) = ctx.finish();
         let clip = node.clip;
         if dirty || handled.is_handled() {
-            self.damage.add(clip);
+            self.dirty(clip);
         }
         if wants_animation {
             self.request_animation(id);
@@ -2413,7 +2597,7 @@ impl<M: 'static> Ui<M> {
         }
         node.state = node.state.set(flag, on);
         let clip = node.clip;
-        self.damage.add(clip);
+        self.dirty(clip);
     }
 
     /// Drops a subtree out of the animating set — used on hide and removal.
@@ -2715,7 +2899,7 @@ impl<M: 'static> Ui<M> {
             };
             let clip = node.clip;
             stack.extend(node.children.iter().copied());
-            self.damage.add(clip);
+            self.dirty(clip);
         }
     }
 

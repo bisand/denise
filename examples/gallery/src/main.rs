@@ -7,6 +7,7 @@
 //! cargo run -p gallery -- --motion off         # reduced motion
 //! cargo run -p gallery -- --snapshot shot.ppm
 //! cargo run -p gallery -- --snapshot 2x.ppm --size 2560x1600 --scale 2
+//! cargo run -p gallery --release -- --scroll-bench --size 1920x1080
 //! cargo run -p gallery -- --keyboard          # the on-screen keyboard, up
 //! cargo run -p gallery --no-default-features --features kiosk     # the display
 //! cargo run -p gallery --no-default-features --features kiosk -- --present vsync
@@ -60,6 +61,8 @@ const WINDOW: Size = Size::new(1280, 800);
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut font: Option<String> = None;
     let mut snapshot: Option<String> = None;
+    let mut scroll_bench: Option<usize> = None;
+    let mut fb_copy_bench = false;
     let mut keyboard = false;
     // Kiosk builds have no window to close, so a run length is the way out.
     // Zero means "until Escape".
@@ -89,6 +92,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "--snapshot" => snapshot = Some(args.next().unwrap_or_else(|| "gallery.ppm".into())),
+            // The measurement behind #46, so that anybody can take it again.
+            "--fb-copy-bench" => fb_copy_bench = true,
+            "--scroll-bench" => {
+                scroll_bench = Some(args.next().and_then(|s| s.parse().ok()).unwrap_or(60));
+            }
             "--seconds" => seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
             "--keyboard" => keyboard = true,
             "--scale" => scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.0),
@@ -118,6 +126,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let font = system_font::load(font.as_deref());
 
+    // Needs the display itself, so it exists only where there is one to take.
+    #[cfg(all(feature = "kiosk", target_os = "linux"))]
+    if fb_copy_bench {
+        return kiosk_backend::copy_bench();
+    }
+    #[cfg(not(all(feature = "kiosk", target_os = "linux")))]
+    if fb_copy_bench {
+        eprintln!("--fb-copy-bench needs the kiosk build, on Linux, with a display");
+        return Ok(());
+    }
+
+    if let Some(rounds) = scroll_bench {
+        scroll_bench_run(size, scale, font, motion, rounds);
+        return Ok(());
+    }
+
     if let Some(out) = snapshot {
         let mut app = App::new(size, scale, font, motion);
         if keyboard {
@@ -133,6 +157,118 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return write_snapshot(&mut app, size, &out).map_err(Into::into);
     }
     backend::run(font, size, seconds, motion, vsync, keyboard)
+}
+
+/// Times `Ui::paint` alone, on a scrolled frame, with no display attached.
+///
+/// The measurement [#46](https://github.com/bisand/denise/issues/46) is about.
+/// Nothing here waits for a vblank, reads an input device or copies a buffer to
+/// a screen: the number is the cost of *rasterising* one scrolled frame of a
+/// real tree, which is the thing that does not fit in a Pi's frame budget at
+/// 1080p.
+///
+/// ```text
+/// gallery --scroll-bench            # 60 scrolled frames at the default size
+/// gallery --scroll-bench 200 --size 1920x1080
+/// ```
+fn scroll_bench_run(size: Size, scale: f32, font: Font, motion: Motion, rounds: usize) {
+    let mut app = App::new(size, scale, font, motion);
+    // The spinner and the clock would both ask for frames of their own, and
+    // this is a measurement of scrolling.
+    app.on_message(Message::Spin(false));
+
+    let mut pixels = vec![0u32; (size.width * size.height) as usize];
+    // Scoped, because the closure borrows the buffer and the measurement after
+    // the loop needs it back.
+    let (viewport, rects, took) = {
+        let mut paint = |app: &mut App, age| {
+            let mut frame = denise::Frame::new(
+                &mut pixels,
+                size,
+                size.width,
+                denise::PixelFormat::Xrgb8888,
+                age,
+            )
+            .expect("frame");
+            let started = std::time::Instant::now();
+            app.ui.paint(&mut frame);
+            let took = started.elapsed();
+            drop(frame);
+            app.ui.presented();
+            took
+        };
+
+        // Settle first, so what is timed below is the scrolled frame alone.
+        for _ in 0..8 {
+            app.ui.tick(0);
+            paint(&mut app, denise::BufferAge::Undefined);
+        }
+
+        let content = app.content_viewport();
+        let viewport = app.ui.bounds(content).unwrap_or(denise::Rect::ZERO);
+
+        let mut took: Vec<u128> = Vec::with_capacity(rounds);
+        let mut rects = 0usize;
+        for round in 0..rounds {
+            // Down, then back up when it runs out, so a long run keeps scrolling
+            // rather than sitting at the bottom repainting nothing.
+            let dy = if (round / 40) % 2 == 0 { 20 } else { -20 };
+            app.ui.scroll_by(content, 0, dy);
+            rects = rects.max(app.ui.pending_damage().len());
+            app.ui.tick(1_000 + round as u64 * 16);
+            took.push(paint(&mut app, denise::BufferAge::Frames(2)).as_micros());
+        }
+        took.sort_unstable();
+        (viewport, rects, took)
+    };
+
+    let surface = i64::from(size.width) * i64::from(size.height);
+    let covered = i64::from(viewport.width) * i64::from(viewport.height);
+
+    // What the fast path in #46 would have to pay instead of rasterising: the
+    // still-valid rows moved within the buffer. Measured here rather than
+    // assumed, because it is the number that decides whether scroll-by-blit can
+    // reach the frame budget at all — and on a write-combined framebuffer a
+    // read is not the same price as a write.
+    let stride = size.width as usize;
+    let rows = viewport.height.max(0) as usize;
+    let width = viewport.width.max(0) as usize;
+    let shift = 20usize;
+    let mut copied: Vec<u128> = Vec::with_capacity(16);
+    for _ in 0..16 {
+        let started = std::time::Instant::now();
+        for row in shift..rows {
+            let from = (viewport.y as usize + row) * stride + viewport.x as usize;
+            let to = (viewport.y as usize + row - shift) * stride + viewport.x as usize;
+            pixels.copy_within(from..from + width, to);
+        }
+        copied.push(started.elapsed().as_micros());
+    }
+    copied.sort_unstable();
+
+    println!("gallery --scroll-bench, {rounds} scrolled frames");
+    println!("  surface   {}x{}", size.width, size.height);
+    println!(
+        "  viewport  {}x{} at {},{} — {}% of the surface",
+        viewport.width,
+        viewport.height,
+        viewport.x,
+        viewport.y,
+        covered * 100 / surface.max(1)
+    );
+    println!("  damage    {rects} rect(s) per scroll");
+    println!(
+        "  paint     median {:.2} ms   min {:.2}   max {:.2}",
+        took[took.len() / 2] as f64 / 1000.0,
+        took[0] as f64 / 1000.0,
+        took[took.len() - 1] as f64 / 1000.0,
+    );
+    println!(
+        "  memmove   median {:.2} ms  — {} rows of {} words, what a blit would cost instead",
+        copied[copied.len() / 2] as f64 / 1000.0,
+        rows.saturating_sub(shift),
+        width,
+    );
 }
 
 /// Draws one frame into a PPM, with no window and no event loop.
@@ -319,6 +455,79 @@ mod kiosk_backend {
     use super::{App, Font, Message};
     use bare_linux::{Display, Waits, capture, mute_console, open_input, poll_timeout};
     use denise::{ElementState, InputEvent, InputSource, KeyCode, Surface};
+
+    /// What the memory a display scans out of costs to *read*.
+    ///
+    /// `--scroll-bench` times the same copy in a `Vec`, which is ordinary cached
+    /// memory. A DRM dumb buffer very often is not: on ARM it is commonly mapped
+    /// write-combined, where writes are gathered and fast and reads are uncached
+    /// and slow. That difference decides whether scrolling by moving pixels
+    /// ([#46](https://github.com/bisand/denise/issues/46)) is a win on the only
+    /// target that matters or a regression, and it is not a thing to assume.
+    ///
+    /// Takes the display for a moment and gives it straight back.
+    pub fn copy_bench() -> Result<(), Box<dyn std::error::Error>> {
+        let mut surface = Display::open(bare_linux::PresentMode::Vsync)?;
+        let size = surface.size();
+        let stride = size.width as usize;
+        // The gallery's viewport at 1080p, so the numbers line up with the ones
+        // `--scroll-bench` prints.
+        let (width, rows, shift) = (1584usize.min(stride), 1016usize, 20usize);
+        let rows = rows.min(size.height as usize);
+
+        let mut frame = surface.acquire()?;
+        let pixels = frame.pixels_mut();
+
+        /// Nine goes at one measurement, in milliseconds, median.
+        ///
+        /// Generic over the closure rather than boxed: the buffer is borrowed
+        /// once and the three measurements take turns with it, which is a
+        /// lifetime the compiler is happier about than a trait object.
+        fn median(pixels: &mut [u32], mut each: impl FnMut(&mut [u32])) -> f64 {
+            let mut runs: Vec<u128> = Vec::with_capacity(9);
+            for _ in 0..9 {
+                let started = Instant::now();
+                each(pixels);
+                runs.push(started.elapsed().as_micros());
+            }
+            runs.sort_unstable();
+            runs[runs.len() / 2] as f64 / 1000.0
+        }
+
+        let moved = median(pixels, |p| {
+            for row in shift..rows {
+                let from = row * stride;
+                let to = (row - shift) * stride;
+                p.copy_within(from..from + width, to);
+            }
+        });
+        let written = median(pixels, |p| {
+            for row in 0..rows {
+                p[row * stride..row * stride + width].fill(0xFF10_1018);
+            }
+        });
+        let read = median(pixels, |p| {
+            let mut sum = 0u64;
+            for row in 0..rows {
+                for word in &p[row * stride..row * stride + width] {
+                    sum = sum.wrapping_add(u64::from(*word));
+                }
+            }
+            core::hint::black_box(sum);
+        });
+
+        drop(frame);
+        surface.present(&[])?;
+
+        let mb = (rows * width * 4) as f64 / (1024.0 * 1024.0);
+        println!("gallery --fb-copy-bench, in the buffer the display scans out of");
+        println!("  surface   {}x{}", size.width, size.height);
+        println!("  region    {width}x{rows} — {mb:.1} MB");
+        println!("  write     median {written:.2} ms");
+        println!("  read      median {read:.2} ms");
+        println!("  memmove   median {moved:.2} ms  (read + write of the same region)");
+        Ok(())
+    }
 
     /// Where F12 writes. `/tmp` because a kiosk image is very often read-only
     /// everywhere else.
