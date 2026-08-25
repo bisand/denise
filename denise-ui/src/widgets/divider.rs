@@ -8,7 +8,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, ORIENTATIONS, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, ORIENTATIONS, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Orientation, interactive_pair};
 
@@ -216,6 +216,8 @@ impl<M: 'static> Widget<M> for Divider {
 
 impl Describe for Divider {
     const KIND: &'static str = "divider";
+    const DOC: &'static str = "A line between things, with an optional label in the middle.";
+    const GROUP: Group = Group::Display;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

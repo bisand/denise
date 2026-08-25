@@ -9,7 +9,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, RADII, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, RADII, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
@@ -622,6 +622,8 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
 
 impl<M> Describe for Button<M> {
     const KIND: &'static str = "button";
+    const DOC: &'static str = "A rectangle somebody presses to make something happen.";
+    const GROUP: Group = Group::Input;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The label."),

@@ -5,7 +5,8 @@ use denise_render::Canvas;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Property, PropertyKind, RADII, ROLES, Value, role_from_name,
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, RADII, ROLES, Value,
+    role_from_name,
 };
 
 /// A filled, optionally bordered rounded rectangle.
@@ -158,6 +159,8 @@ fn role_or_none(value: Value) -> Result<Option<Role>, Mismatch> {
 
 impl Describe for Panel {
     const KIND: &'static str = "panel";
+    const DOC: &'static str = "A themed rectangle: the background other widgets sit on.";
+    const GROUP: Group = Group::Container;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

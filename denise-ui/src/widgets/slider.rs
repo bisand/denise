@@ -5,7 +5,7 @@ use denise_render::Canvas;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{focus_ring, interactive_pair};
 
@@ -404,6 +404,8 @@ impl<M: 'static> Widget<M> for Slider<M> {
 
 impl<M> Describe for Slider<M> {
     const KIND: &'static str = "slider";
+    const DOC: &'static str = "A value in a range, dragged along a track.";
+    const GROUP: Group = Group::Input;
 
     // The bounds on `value` and `step` are the widest a float can be rather
     // than a guess: what an editor should really offer is `min..=max`, and

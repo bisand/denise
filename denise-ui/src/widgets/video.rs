@@ -6,7 +6,9 @@ use denise::Color;
 use denise_render::Canvas;
 
 use crate::widget::{PaintCtx, Widget};
-use crate::widgets::describe::{Describe, DynDescribe, Mismatch, Property, PropertyKind, Value};
+use crate::widgets::describe::{
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, Value,
+};
 
 /// Where a video goes: a placeholder that reserves space in the tree and
 /// paints the letterbox ground. **The video itself never comes through
@@ -100,6 +102,8 @@ fn ground_from_hex(text: &str) -> Option<Color> {
 
 impl Describe for Video {
     const KIND: &'static str = "video";
+    const DOC: &'static str = "The rectangle a video plane is shown in.";
+    const GROUP: Group = Group::Media;
 
     const PROPERTIES: &'static [Property] = &[Property::new(
         "ground",

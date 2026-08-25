@@ -10,7 +10,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 use crate::{NodeId, Ui};
@@ -399,6 +399,8 @@ impl<M: 'static> Widget<M> for Collapse<M> {
 
 impl<M> Describe for Collapse<M> {
     const KIND: &'static str = "collapse";
+    const DOC: &'static str = "A section that folds away to its header and opens again.";
+    const GROUP: Group = Group::Container;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

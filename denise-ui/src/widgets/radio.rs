@@ -9,7 +9,7 @@ use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned, focus_ring, interactive_pair};
 
@@ -392,6 +392,8 @@ impl<M: 'static> Widget<M> for RadioGroup<M> {
 
 impl<M> Describe for RadioGroup<M> {
     const KIND: &'static str = "radio-group";
+    const DOC: &'static str = "One choice out of a few, all of them visible at once.";
+    const GROUP: Group = Group::Input;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

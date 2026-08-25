@@ -8,7 +8,7 @@ use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{Align, draw_aligned, interactive_pair};
 
@@ -312,6 +312,8 @@ impl<M: 'static> Widget<M> for RadialProgress {
 
 impl Describe for RadialProgress {
     const KIND: &'static str = "radial-progress";
+    const DOC: &'static str = "A ring that fills clockwise, with room for a number inside it.";
+    const GROUP: Group = Group::Indicator;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

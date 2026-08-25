@@ -45,11 +45,9 @@
 //! silently, keeping the selection by name, or with one question when there is
 //! unsaved work to lose. See [`watch`].
 //!
-//! The palette is a flat list of names, because the registry carries a name and
-//! a property list and nothing that says what a widget *is* — grouping it and
-//! giving each row a tooltip is [#126].
-//!
-//! [#126]: https://github.com/bisand/denise/issues/126
+//! The palette is six shelves rather than a flat list, and resting on a row says
+//! what the widget is — both declared by the widget through `Describe`, so a
+//! twenty-sixth appears here filed and described without this crate changing.
 
 mod app;
 mod arrange;
@@ -83,6 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut preview = false;
     let mut band: Option<denise::Rect> = None;
     let mut new_form = false;
+    let mut hover: Option<String> = None;
     let mut clash: Option<String> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
@@ -97,6 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--preview" => preview = true,
             "--new" => new_form = true,
+            "--hover" => hover = rest.next().cloned(),
             "--clash" => clash = rest.next().cloned(),
             "--band" => {
                 band = rest.next().and_then(|value| {
@@ -131,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --preview              snapshot: run the form rather than draw it\n\
                      \x20 --band <x,y,w,h>       snapshot: draw a rubber band over the form\n\
                      \x20 --new                  snapshot: put the new-form sheet up\n\
+                     \x20 --hover <kind>         snapshot: rest the pointer on this palette row\n\
                      \x20 --clash <other.dform>  snapshot: the file-changed sheet, against this version"
                 );
                 return Ok(());
@@ -171,6 +172,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if new_form {
             designer.begin_new();
+        }
+        if let Some(kind) = hover
+            && !designer.hover_palette(&kind)
+        {
+            eprintln!("denise-designer: the palette has no row called `{kind}`");
         }
         if let Some(other) = clash {
             let theirs = std::fs::read_to_string(&other)?;

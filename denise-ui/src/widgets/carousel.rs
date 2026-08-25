@@ -8,7 +8,7 @@ use denise_render::Canvas;
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::image::{Fit, Image};
 use crate::widgets::style::{focus_ring, interactive_pair};
@@ -562,6 +562,8 @@ impl<M: 'static> Widget<M> for Carousel<M> {
 
 impl<M> Describe for Carousel<M> {
     const KIND: &'static str = "carousel";
+    const DOC: &'static str = "Pictures shown one at a time, sliding between them.";
+    const GROUP: Group = Group::Media;
 
     // The pictures are not here. They are child nodes of the form — one
     // `picture` per page, loaded by the engine — because this crate decodes

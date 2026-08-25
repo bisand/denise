@@ -7,7 +7,7 @@ use denise_render::{Canvas, PixelView};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, FITS, Mismatch, Property, PropertyKind, Value,
+    Describe, DynDescribe, FITS, Group, Mismatch, Property, PropertyKind, Value,
 };
 
 /// How a picture whose size disagrees with its box gets reconciled.
@@ -222,6 +222,8 @@ impl<M: 'static> Widget<M> for Image {
 
 impl Describe for Image {
     const KIND: &'static str = "image";
+    const DOC: &'static str = "A picture, fitted to a rectangle.";
+    const GROUP: Group = Group::Media;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

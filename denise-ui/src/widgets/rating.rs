@@ -5,7 +5,7 @@ use denise_render::Canvas;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
-    Describe, DynDescribe, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
+    Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{focus_ring, interactive_pair};
 
@@ -413,6 +413,8 @@ pub(crate) fn star_colors(
 
 impl<M> Describe for Rating<M> {
     const KIND: &'static str = "rating";
+    const DOC: &'static str = "Stars, filled to a value and set by pressing one.";
+    const GROUP: Group = Group::Input;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
