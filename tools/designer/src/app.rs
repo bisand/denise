@@ -21,7 +21,7 @@ use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
 use crate::outline::{self, Outline};
 use crate::settings::Settings;
-use crate::watch::differences;
+use crate::watch::{self, differences};
 
 /// How many message names a form can have before the log stops naming them.
 ///
@@ -159,12 +159,6 @@ struct Keepsake {
     name: Option<String>,
     path: Vec<usize>,
 }
-
-/// How long the designer may go without looking at the file under it.
-///
-/// Long enough to cost nothing — two syscalls, twice a second, on a machine
-/// that is otherwise asleep — and short enough for #100's "within a second".
-const WATCH_EVERY: Duration = Duration::from_millis(400);
 
 /// How many changed nodes the conflict sheet names before it stops naming them.
 const NAMED: usize = 8;
@@ -3508,8 +3502,9 @@ impl Designer {
 
     /// Reads the file again if something else has written it.
     ///
-    /// Called once a frame; see [`WATCH_EVERY`] for how often a frame is, and
-    /// [`crate::watch`] for why this is asked rather than subscribed to. With
+    /// Called once a frame; see [`watch::EVERY`] for how often a frame is when
+    /// nothing else is going on, and [`crate::watch`] for why the file is asked
+    /// rather than subscribed to, and read rather than stat-ed. With
     /// nothing unsaved the reload is silent, because there is no question worth
     /// asking: the designer is showing the file, the file changed, so the
     /// designer shows the new one. With unsaved work there is exactly one
@@ -3748,15 +3743,14 @@ impl Designer {
 
     /// *Keep mine*: the designer wins, and the next save writes over the file.
     ///
-    /// The change is taken as agreed on the way through, so the same one is not
-    /// raised again on the next frame — the answer was about that version of the
-    /// file, and it was given.
+    /// Nothing has to be marked as answered. [`crate::watch::Watch::changed`]
+    /// took note of that version of the file when it reported it, so the same
+    /// change is not raised again on the next frame; the next one will be.
     pub fn keep_mine(&mut self) {
-        let Some(clash) = self.clash.take() else {
+        if self.clash.take().is_none() {
             return;
-        };
+        }
         self.ui.pop_scene();
-        self.document.accept_disk(clash.text);
         self.status = String::from("kept what is here — saving will overwrite the file on disk");
         self.refresh_labels();
     }
@@ -3786,7 +3780,7 @@ impl Designer {
     /// is idle *and watching*, which is the whole of #100. Whichever is sooner.
     pub fn next_frame_in(&self) -> Option<Duration> {
         let animating = self.ui.next_wake_ms().map(|_| Duration::from_millis(16));
-        let watching = self.document.path().map(|_| WATCH_EVERY);
+        let watching = self.document.path().map(|_| watch::EVERY);
         match (animating, watching) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (only, None) | (None, only) => only,
@@ -8680,7 +8674,7 @@ mod tests {
         )
         .expect("a temporary form");
         let designer = designer_on_file(&path);
-        assert_eq!(designer.next_frame_in(), Some(WATCH_EVERY));
+        assert_eq!(designer.next_frame_in(), Some(watch::EVERY));
 
         // A form nobody has saved has no file to watch, so nothing wakes the
         // loop for it.
