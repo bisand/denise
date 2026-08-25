@@ -2488,6 +2488,117 @@ mod tests {
         );
     }
 
+    /// The same property again, on a tree that is doing nothing but **scrolling**.
+    ///
+    /// Which the sweep below does not cover, and the count says why: with
+    /// double buffering the buffer being drawn into is two frames old, so
+    /// moving the rows a scroll left valid needs *two consecutive* frames that
+    /// were nothing but that scroll. The sweep interleaves presses and rests,
+    /// so it produced four such frames out of two and a half thousand — enough
+    /// to pass while the fast path was deliberately broken.
+    ///
+    /// A finger on a panel does nothing else for a second at a time, which is
+    /// exactly the case that matters and exactly the case this covers.
+    #[test]
+    fn a_scrolling_tree_is_what_a_full_repaint_would_have_drawn() {
+        const SIZE: Size = Size::new(1280, 800);
+        const PIXELS: usize = (SIZE.width * SIZE.height) as usize;
+
+        fn paint_into(ui: &mut Ui<Message>, buffer: &mut [u32], age: denise::BufferAge) {
+            let mut frame =
+                denise::Frame::new(buffer, SIZE, SIZE.width, denise::PixelFormat::Xrgb8888, age)
+                    .expect("frame");
+            ui.paint(&mut frame);
+            drop(frame);
+            ui.presented();
+        }
+
+        let mut app = App::new(SIZE, 1.0, None, Motion::default());
+        let mut reference = App::new(SIZE, 1.0, None, Motion::default());
+        for tree in [&mut app, &mut reference] {
+            tree.on_message(Message::Spin(false));
+            tree.stop_the_clock();
+        }
+        let content = app.content_viewport();
+
+        let mut buffers = [vec![0u32; PIXELS], vec![0u32; PIXELS]];
+        let mut truth = vec![0u32; PIXELS];
+        let mut frame: u64 = 0;
+        let mut shown = 0usize;
+
+        // Halfway through, the pointer appears over the scrolling content. A
+        // sprite drawn over the viewport would be *copied along with the rows*
+        // and leave a ghost where it used to be, so the fast path has to stand
+        // down while one is up — and nothing here says so unless a cursor is
+        // actually shown somewhere.
+        let over = {
+            let clip = app.ui.bounds(content).expect("laid out");
+            Point::new(clip.x + clip.width / 2, clip.y + clip.height / 2)
+        };
+
+        // Down for a while and then back up, at the sizes a wheel and a finger
+        // actually produce — including one longer than a step of the content,
+        // and one that runs into the end and clamps to nothing.
+        let mut now = 0u64;
+        for (round, dy) in (0..48)
+            .map(|i| {
+                if i < 20 {
+                    20
+                } else if i < 24 {
+                    137
+                } else {
+                    -31
+                }
+            })
+            .enumerate()
+        {
+            if round == 24 {
+                for tree in [&mut app, &mut reference] {
+                    tree.ui.show_cursor(true);
+                    tree.ui
+                        .handle(&[InputEvent::PointerMoved { position: over }]);
+                }
+            }
+            app.ui.scroll_by(content, 0, dy);
+            reference.ui.scroll_by(content, 0, dy);
+            app.ui.tick(now);
+            reference.ui.tick(now);
+            now += 16;
+
+            if app.ui.needs_paint() {
+                let age = if frame < 2 {
+                    denise::BufferAge::Undefined
+                } else {
+                    denise::BufferAge::Frames(2)
+                };
+                shown = (frame % 2) as usize;
+                paint_into(&mut app.ui, &mut buffers[shown], age);
+                frame += 1;
+            }
+
+            reference.ui.invalidate_all();
+            paint_into(&mut reference.ui, &mut truth, denise::BufferAge::Undefined);
+
+            if let Some(at) = buffers[shown]
+                .iter()
+                .zip(truth.iter())
+                .position(|(a, b)| a != b)
+            {
+                let wrong = buffers[shown]
+                    .iter()
+                    .zip(truth.iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                let (x, y) = (at % SIZE.width as usize, at / SIZE.width as usize);
+                panic!(
+                    "scroll {round} by {dy}: the panel is showing stale pixels from \
+                     ({x}, {y}) — {wrong} of them; incremental {:#010x}, full repaint {:#010x}",
+                    buffers[shown][at], truth[at]
+                );
+            }
+        }
+    }
+
     /// The same property, but checked on **every frame of a moving tree**
     /// rather than only once it stops.
     ///
