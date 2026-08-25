@@ -443,6 +443,32 @@ impl Edit {
     }
 }
 
+/// One node of a form file, as the file writes it.
+///
+/// [`Form::written`] is where these come from, and says why they are not
+/// [`Placed`](crate::Placed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Written {
+    /// Child indices from the `form` node down to this one. Empty for the form.
+    pub path: Vec<usize>,
+    /// The node's name in the file — `label`, `panel`, `form`. Whatever the file
+    /// says, which is not necessarily a widget this toolkit has.
+    pub kind: String,
+    /// What `name=` gave it, if it gave one.
+    pub name: Option<String>,
+    /// Its positional argument — the `"Hello"` in `label "Hello"` — if it has
+    /// one. The other half of saying which node this is, to somebody who has
+    /// the file open and never named it.
+    pub argument: Option<String>,
+    /// The node's own entries, spelled canonically: its kind, then every
+    /// argument and property in the order the file writes them, and nothing
+    /// else. No children, no comment above it, and none of the spacing between
+    /// any of it — so a file somebody realigned by hand does not read as though
+    /// every node in it changed. Every string is quoted, whether the file
+    /// bothered to or not, for the same reason.
+    pub line: String,
+}
+
 /// A parsed form file.
 ///
 /// Holds the document rather than a value taken from it — comments, spacing and
@@ -1040,6 +1066,39 @@ impl Form {
         let node = self.node_at(path)?;
         let own = indent_of(node);
         Some(reindent(&node.to_string(), &own, "", false))
+    }
+
+    /// Every node in the file, depth first, the form node itself first.
+    ///
+    /// What can be known about a form **without building it**, which is what
+    /// comparing two versions of the same file needs: [`Placed`](crate::Placed)
+    /// is the same
+    /// node after [`build`](Form::build) and carries a `NodeId` that only exists
+    /// once there is a tree, so it cannot describe a file nobody has opened.
+    ///
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(
+    ///     "form \"F\" version=1 width=99 height=99 {\n    panel name=box x=0 y=0 w=9 h=9 {\n        label \"in\" x=1 y=1 w=2 h=2\n    }\n}\n",
+    /// )?;
+    ///
+    /// let written = form.written();
+    /// let kinds: Vec<&str> = written.iter().map(|node| node.kind.as_str()).collect();
+    /// assert_eq!(kinds, ["form", "panel", "label"]);
+    /// assert_eq!(written[1].name.as_deref(), Some("box"));
+    /// assert_eq!(written[2].argument.as_deref(), Some("in"));
+    /// assert_eq!(written[2].path, vec![0, 0]);
+    /// // The node itself, without the children indented under it.
+    /// assert_eq!(written[1].line, "panel name=\"box\" x=0 y=0 w=9 h=9");
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn written(&self) -> Vec<Written> {
+        let mut out = Vec::new();
+        let Some(root) = self.doc.nodes().first() else {
+            return out;
+        };
+        gather(root, &mut Vec::new(), &mut out);
+        out
     }
 
     /// ```
@@ -1833,6 +1892,46 @@ fn reindent(text: &str, old: &str, new: &str, first: bool) -> String {
 /// What an inserted child is indented one step past. Read from the file rather
 /// than counted from the depth, so a form written with two spaces stays written
 /// with two spaces.
+/// Walks a node and everything under it into [`Written`]s, depth first.
+fn gather(node: &KdlNode, path: &mut Vec<usize>, out: &mut Vec<Written>) {
+    let mut line = String::from(node.name().value());
+    for entry in node.entries() {
+        line.push(' ');
+        line.push_str(&shown(entry));
+    }
+    out.push(Written {
+        path: path.clone(),
+        kind: node.name().value().to_string(),
+        name: node.get("name").map(spell),
+        argument: node
+            .entries()
+            .iter()
+            .find(|entry| entry.name().is_none())
+            .map(|entry| spell(entry.value())),
+        line,
+    });
+    let Some(children) = node.children() else {
+        return;
+    };
+    for (index, child) in children.nodes().iter().enumerate() {
+        path.push(index);
+        gather(child, path, out);
+        path.pop();
+    }
+}
+
+/// One entry as a form file would write it, with none of the file's own spacing.
+fn shown(entry: &KdlEntry) -> String {
+    let value = match entry.value().as_string() {
+        Some(text) => quoted(text),
+        None => entry.value().to_string(),
+    };
+    match entry.name() {
+        Some(name) => format!("{}={value}", name.value()),
+        None => value,
+    }
+}
+
 fn indent_of(node: &KdlNode) -> String {
     let leading = node.format().map_or("", |format| format.leading.as_str());
     let line = leading.rsplit('\n').next().unwrap_or("");

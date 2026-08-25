@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use denise_forms::Form;
 
+use crate::watch::Watch;
+
 /// A form file, open.
 ///
 /// Holds the **source** as well as the parsed form, and saves the source. That
@@ -17,6 +19,11 @@ pub struct Document {
     path: Option<PathBuf>,
     form: Form,
     dirty: bool,
+    /// What this file held the last time the designer and the disk agreed.
+    ///
+    /// See [`crate::watch`]: the other editor is a text editor, and this is how
+    /// its saves are noticed instead of being overwritten.
+    watch: Watch,
 }
 
 impl Document {
@@ -36,6 +43,7 @@ impl Document {
             path: None,
             form,
             dirty: false,
+            watch: Watch::default(),
         }
     }
 
@@ -52,6 +60,7 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
             path: None,
             form,
             dirty: false,
+            watch: Watch::default(),
         }
     }
 
@@ -65,14 +74,16 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
             path: Some(path.to_path_buf()),
             form,
             dirty: false,
+            watch: Watch::agreed(path, &source),
         })
     }
 
     /// Writes the form back, to `to` or to where it came from.
     ///
     /// Through a temporary file and a rename, so a text editor watching this one
-    /// never reads a half-written form — the courtesy #100 asks for, and cheaper
-    /// to do now than to retrofit.
+    /// never reads a half-written form. The reverse courtesy is
+    /// [`Document::changed_on_disk`]: both editors are looking at the same file,
+    /// and neither should catch the other mid-write.
     pub fn save(&mut self, to: Option<PathBuf>) -> Result<(), String> {
         if let Some(path) = to {
             self.path = Some(path);
@@ -82,14 +93,54 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
         };
 
         let temporary = path.with_extension("dform.tmp");
-        std::fs::write(&temporary, self.form.text())
-            .map_err(|e| format!("{}: {e}", temporary.display()))?;
+        let text = self.form.text();
+        std::fs::write(&temporary, &text).map_err(|e| format!("{}: {e}", temporary.display()))?;
         std::fs::rename(&temporary, &path).map_err(|e| {
             let _ = std::fs::remove_file(&temporary);
             format!("{}: {e}", path.display())
         })?;
+        // Stamped *after* the rename, and with what was written, so the
+        // designer's own save is never read back as somebody else's edit.
+        self.watch.accept(&path, text);
         self.dirty = false;
         Ok(())
+    }
+
+    /// The file's text, if it has changed on disk since this designer last
+    /// agreed with it.
+    ///
+    /// Costs a `stat` and nothing else when the answer is no, which it almost
+    /// always is; see [`crate::watch`] for why this is asked rather than
+    /// subscribed to.
+    pub fn changed_on_disk(&mut self) -> Option<String> {
+        let path = self.path.clone()?;
+        self.watch.changed(&path)
+    }
+
+    /// Takes the file's own version of the form, as it was read.
+    ///
+    /// Not [`Document::open`] again: the text has already been read once, and
+    /// reading it a second time would adopt whatever the other editor has done
+    /// in between rather than the version somebody was shown and agreed to.
+    pub fn adopt(&mut self, text: String) -> Result<(), String> {
+        let where_from = self
+            .path
+            .as_deref()
+            .map_or_else(String::new, |path| format!("{}:", path.display()));
+        self.form = Form::parse(&text).map_err(|e| format!("{where_from}{e}"))?;
+        self.dirty = false;
+        self.accept_disk(text);
+        Ok(())
+    }
+
+    /// Takes what is on disk as agreed without reading it as a change.
+    ///
+    /// What *Keep mine* does: the answer has been given, and the same change
+    /// must not be raised again on the next frame.
+    pub fn accept_disk(&mut self, text: String) {
+        if let Some(path) = self.path.clone() {
+            self.watch.accept(&path, text);
+        }
     }
 
     /// The parsed form.

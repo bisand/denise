@@ -75,6 +75,14 @@ person can nudge a button eight pixels down in an editor without opening the
 designer at all — which is the point of the format and is
 [tested](forms.md#hand-editing) rather than hoped for.
 
+**Both can be open at once.** The designer writes through a temporary file and a
+rename, so the editor never reads a half-written form; and it reads the file again
+when the editor saves, within about half a second, keeping the selection by name.
+Nudge the rectangle in Vim and watch it move on the canvas. If there is unsaved
+work in the designer when that happens it asks — naming the nodes that differ —
+rather than one side quietly winning. [The designer's
+README](../tools/designer/README.md#the-other-editor) has the picture.
+
 Before wiring it up, ask the CLI what it thinks:
 
 ```bash

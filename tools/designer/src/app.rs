@@ -1,6 +1,7 @@
 //! The designer: a toolbar, three panes and a status line.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use denise::{
     ElementState, InputEvent, KeyCode, Point, PointerButton, Radius, Rect, Role, Size, theme,
@@ -20,6 +21,7 @@ use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
 use crate::outline::{self, Outline};
 use crate::settings::Settings;
+use crate::watch::differences;
 
 /// How many message names a form can have before the log stops naming them.
 ///
@@ -71,6 +73,10 @@ pub enum Message {
     Create,
     /// Put the new-form sheet away and change nothing.
     Never,
+    /// Take the file on disk and lose what is unsaved here.
+    Reload,
+    /// Keep what is unsaved here, and overwrite the file on the next save.
+    KeepMine,
     /// Turns preview mode on, or off again.
     Preview,
     /// The next theme along.
@@ -129,6 +135,39 @@ struct Making {
     width: NodeId,
     height: NodeId,
 }
+
+/// The other editor's version of the file, while somebody decides about it.
+///
+/// Only ever up when there is unsaved work to lose. With nothing to lose there
+/// is no question worth asking, and the file is simply read again.
+struct Clash {
+    /// What was on disk when the question was asked.
+    ///
+    /// Held rather than re-read on the answer, so that *Reload* takes the
+    /// version that was described in the list — not whatever the other editor
+    /// has done in the seconds since.
+    text: String,
+}
+
+/// How to find a node again after the file has been read afresh.
+///
+/// By the name the file gave it, because that is the one piece of identity a
+/// form node carries and the other editor may have moved it; by where it sat if
+/// it has no name, because that is all there is to go on.
+#[derive(Clone, Debug)]
+struct Keepsake {
+    name: Option<String>,
+    path: Vec<usize>,
+}
+
+/// How long the designer may go without looking at the file under it.
+///
+/// Long enough to cost nothing — two syscalls, twice a second, on a machine
+/// that is otherwise asleep — and short enough for #100's "within a second".
+const WATCH_EVERY: Duration = Duration::from_millis(400);
+
+/// How many changed nodes the conflict sheet names before it stops naming them.
+const NAMED: usize = 8;
 
 /// The sizes offered, which are the panels this toolkit is aimed at.
 const PRESETS: &[(&str, u32, u32)] = &[
@@ -574,6 +613,8 @@ pub struct Designer {
     clipboard: Clipboard,
     /// The new-form sheet, while it is up.
     making: Option<Making>,
+    /// The file-changed-underneath sheet, while it is up.
+    clash: Option<Clash>,
     /// The rest of the selection while one of them is being dragged, with the
     /// rectangle each had when the drag began. A drag moves all of them by the
     /// same amount, and writes all of them as one edit.
@@ -646,6 +687,7 @@ impl Designer {
             band: None,
             clipboard: Clipboard::new(),
             making: None,
+            clash: None,
             carrying: Vec::new(),
             dropping: None,
             overlay: Vec::new(),
@@ -1389,6 +1431,23 @@ impl Designer {
         self.settle();
     }
 
+    /// Whether the caret is in one of the inspector's own fields.
+    ///
+    /// Two things wait on this: rebuilding the canvas after an edit that changed
+    /// the shape of the tree, and reading the file again after somebody else
+    /// wrote it. Both replace the inspector, and replacing it under a caret
+    /// throws away what was being typed.
+    fn typing(&self) -> bool {
+        self.ui.focused().is_some_and(|id| {
+            self.inspector.as_ref().is_some_and(|pane| {
+                pane.rows.iter().any(|row| {
+                    matches!(row.editor, Editor::Field(_) | Editor::Slid { .. })
+                        && row.editor.focusable() == id
+                })
+            })
+        })
+    }
+
     /// Rebuilds the canvas from the file, once the caret is out of the way.
     ///
     /// See [`Designer::stale`] for what is waiting and why it has to.
@@ -1396,15 +1455,7 @@ impl Designer {
         if !self.stale {
             return;
         }
-        let typing = self.ui.focused().is_some_and(|id| {
-            self.inspector.as_ref().is_some_and(|pane| {
-                pane.rows.iter().any(|row| {
-                    matches!(row.editor, Editor::Field(_) | Editor::Slid { .. })
-                        && row.editor.focusable() == id
-                })
-            })
-        });
-        if typing {
+        if self.typing() {
             return;
         }
         self.stale = false;
@@ -1657,6 +1708,22 @@ impl Designer {
     /// While previewing it takes almost nothing: the form is running, and every
     /// press and keystroke is its own. Only the way out is still the designer's.
     fn claim(&mut self, event: &InputEvent) -> bool {
+        // The file-changed sheet, for the same reason as the new-form one below
+        // — and Escape means *Keep mine*, because the safe answer to a question
+        // somebody dismissed is the one that loses nothing.
+        if self.clashing() {
+            return matches!(
+                event,
+                InputEvent::Key {
+                    code: KeyCode::Escape,
+                    state: ElementState::Down,
+                    ..
+                }
+            ) && {
+                self.keep_mine();
+                true
+            };
+        }
         // While the new-form sheet is up, every press belongs to it. It is a
         // modal scene *over* the canvas, and design mode reading the events
         // first would read a press on one of its buttons as a press on the form
@@ -3437,6 +3504,295 @@ impl Designer {
         self.making.is_some()
     }
 
+    // ------------------------------------------------- the file underneath
+
+    /// Reads the file again if something else has written it.
+    ///
+    /// Called once a frame; see [`WATCH_EVERY`] for how often a frame is, and
+    /// [`crate::watch`] for why this is asked rather than subscribed to. With
+    /// nothing unsaved the reload is silent, because there is no question worth
+    /// asking: the designer is showing the file, the file changed, so the
+    /// designer shows the new one. With unsaved work there is exactly one
+    /// question, and it gets asked rather than answered by whoever wrote last.
+    pub fn check_file(&mut self) {
+        // Not mid-gesture. A reload rebuilds the tree, and a drag is holding
+        // `NodeId`s from the tree it started in; the file will still have
+        // changed when the pointer comes up.
+        if self.clash.is_some()
+            || self.making.is_some()
+            || self.drag.is_some()
+            || self.band.is_some()
+            || self.outline_drag.is_some()
+            || self.choosing.is_some()
+            || self.placing != Placing::Idle
+            // Nor under a caret: a reload replaces the inspector, and what is
+            // half typed into it has not reached the file to be kept.
+            || self.typing()
+        {
+            return;
+        }
+        let Some(text) = self.document.changed_on_disk() else {
+            return;
+        };
+        let fresh = match Form::parse(&text) {
+            Ok(form) => form,
+            Err(error) => {
+                // A file halfway through being written is not a conflict, and a
+                // file somebody has broken is theirs to fix. Either way there is
+                // nothing to reload, and saying so is the whole response. The
+                // next write is noticed like any other.
+                self.status = format!("the file on disk does not parse: {error}");
+                self.refresh_labels();
+                return;
+            }
+        };
+        if !self.history.is_dirty() {
+            let changed = differences(self.document.form(), &fresh).len();
+            self.reload(text);
+            self.status = match changed {
+                0 => String::from("the file changed on disk — reloaded"),
+                1 => String::from("the file changed on disk — reloaded, one node differs"),
+                many => format!("the file changed on disk — reloaded, {many} nodes differ"),
+            };
+            self.refresh_labels();
+            return;
+        }
+        self.begin_clash(text, &fresh);
+    }
+
+    /// Takes the file's own version, keeping hold of what the file can name.
+    ///
+    /// The selection, the folded subtrees and the nodes hidden in the designer
+    /// are all remembered **by name** across the reload, because a name is the
+    /// one piece of identity a form node carries and the other editor may well
+    /// have moved things about. A node with no name is remembered by where it
+    /// sat, which is all there is to go on.
+    fn reload(&mut self, text: String) {
+        let selection = self.keepsakes(&self.selection.clone());
+        let folded = self.keepsakes(&self.folded.clone());
+        let hidden = self.keepsakes(&self.hidden.clone());
+
+        if let Err(error) = self.document.adopt(text) {
+            self.status = error;
+            self.refresh_labels();
+            return;
+        }
+        self.history = History::new();
+        self.warned = false;
+        self.stale = false;
+        self.selection.clear();
+        self.selected = None;
+        self.folded.clear();
+        self.hidden.clear();
+        self.show_form();
+
+        self.selection = self.found_again(&selection);
+        self.selected = self.selection.last().and_then(|path| self.node_id(path));
+        self.folded = self.found_again(&folded);
+        self.hidden = self.found_again(&hidden);
+        self.apply_hidden();
+        self.reselected();
+        self.refresh_labels();
+    }
+
+    /// How to find these nodes again in a tree that has been read afresh.
+    fn keepsakes(&self, paths: &[Vec<usize>]) -> Vec<Keepsake> {
+        paths
+            .iter()
+            .map(|path| Keepsake {
+                name: self
+                    .placed
+                    .iter()
+                    .find(|node| node.path == *path)
+                    .and_then(|node| node.name.clone()),
+                path: path.clone(),
+            })
+            .collect()
+    }
+
+    /// Where those nodes are now, dropping the ones that have gone.
+    fn found_again(&self, kept: &[Keepsake]) -> Vec<Vec<usize>> {
+        kept.iter()
+            .filter_map(|keepsake| match &keepsake.name {
+                Some(name) => self
+                    .placed
+                    .iter()
+                    .find(|node| node.name.as_deref() == Some(name.as_str()))
+                    .map(|node| node.path.clone()),
+                None => self
+                    .placed
+                    .iter()
+                    .any(|node| node.path == keepsake.path)
+                    .then(|| keepsake.path.clone()),
+            })
+            .collect()
+    }
+
+    /// Puts up the one question a file changing underneath can raise.
+    fn begin_clash(&mut self, text: String, fresh: &Form) {
+        let found = differences(self.document.form(), fresh);
+        const WIDE: i32 = 520;
+        const ROW: i32 = 18;
+        const HEAD: i32 = 104;
+        const FOOT: i32 = 58;
+        let listed = found.len().min(NAMED) as i32 + i32::from(found.len() > NAMED);
+        let tall = HEAD + listed * ROW + FOOT;
+
+        let scene = self.ui.push_scene(160);
+        let size = self.settings_size();
+        let sheet = Rect::new(
+            (size.width as i32 - WIDE) / 2,
+            (size.height as i32 - tall) / 3,
+            WIDE,
+            tall,
+        );
+        let card = self
+            .ui
+            .add(
+                scene,
+                Panel {
+                    fill: Some(Role::Base100),
+                    border: Some(Role::Warning),
+                    border_width: 1,
+                    radius: Radius::Box,
+                    backdrop: false,
+                },
+                sheet,
+            )
+            .expect("a scene root takes children");
+
+        let label = |ui: &mut Ui<Message>, text: &str, rect: Rect, role, size| {
+            ui.add(card, Label::new(text).with_size(size).with_role(role), rect);
+        };
+        label(
+            &mut self.ui,
+            "The file changed on disk",
+            Rect::new(GAP * 2, GAP * 2, WIDE - GAP * 4, 22),
+            Role::Warning,
+            17,
+        );
+        let name = self.document.label().replace(" •", "");
+        label(
+            &mut self.ui,
+            &format!("{name} was written by something else, and this form has unsaved changes."),
+            Rect::new(GAP * 2, 46, WIDE - GAP * 4, 16),
+            Role::BaseContent,
+            11,
+        );
+        label(
+            &mut self.ui,
+            &match found.len() {
+                0 => String::from("Nothing in it reads differently, but the bytes moved."),
+                1 => String::from("One node reads differently:"),
+                many => format!("{many} nodes read differently:"),
+            },
+            Rect::new(GAP * 2, 70, WIDE - GAP * 4, 16),
+            Role::Base300,
+            11,
+        );
+
+        let mut y = HEAD - 12;
+        for difference in found.iter().take(NAMED) {
+            label(
+                &mut self.ui,
+                &difference.line(),
+                Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW),
+                Role::BaseContent,
+                11,
+            );
+            y += ROW;
+        }
+        if found.len() > NAMED {
+            label(
+                &mut self.ui,
+                &format!("…and {} more", found.len() - NAMED),
+                Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW),
+                Role::Base300,
+                11,
+            );
+        }
+
+        // *Keep mine* is the primary because it is the one that loses nothing
+        // now: the file on disk stays where it is until somebody saves over it,
+        // and the work in the designer is the only copy of itself.
+        self.ui.add(
+            card,
+            Button::new("Reload", Message::Reload)
+                .with_role(Role::Neutral)
+                .with_size(13),
+            Rect::new(WIDE - 216, tall - 44, 96, 32),
+        );
+        self.ui.add(
+            card,
+            Button::new("Keep mine", Message::KeepMine)
+                .with_role(Role::Primary)
+                .with_size(13),
+            Rect::new(WIDE - 112, tall - 44, 96, 32),
+        );
+
+        self.clash = Some(Clash { text });
+        self.status = String::from("the file changed on disk — reload it, or keep what is here?");
+        self.refresh_labels();
+    }
+
+    /// *Reload*: the file wins, and the unsaved edits go.
+    pub fn take_theirs(&mut self) {
+        let Some(clash) = self.clash.take() else {
+            return;
+        };
+        self.ui.pop_scene();
+        self.reload(clash.text);
+        self.status = String::from("reloaded from disk");
+        self.refresh_labels();
+    }
+
+    /// *Keep mine*: the designer wins, and the next save writes over the file.
+    ///
+    /// The change is taken as agreed on the way through, so the same one is not
+    /// raised again on the next frame — the answer was about that version of the
+    /// file, and it was given.
+    pub fn keep_mine(&mut self) {
+        let Some(clash) = self.clash.take() else {
+            return;
+        };
+        self.ui.pop_scene();
+        self.document.accept_disk(clash.text);
+        self.status = String::from("kept what is here — saving will overwrite the file on disk");
+        self.refresh_labels();
+    }
+
+    /// Puts the file-changed sheet up against another version of the file.
+    ///
+    /// For `--snapshot`, which cannot arrange the three things this sheet needs
+    /// — a file open, unsaved work in hand, and another editor having saved one
+    /// of them. Everything it draws is real: the list is [`differences`] between
+    /// the form in hand and the text given here.
+    pub fn clash_over(&mut self, theirs: &str) -> bool {
+        let Ok(fresh) = Form::parse(theirs) else {
+            return false;
+        };
+        self.begin_clash(theirs.to_string(), &fresh);
+        true
+    }
+
+    /// Whether the file-changed sheet is up.
+    pub const fn clashing(&self) -> bool {
+        self.clash.is_some()
+    }
+
+    /// How long the event loop may sleep.
+    ///
+    /// A designer is idle almost all the time — but a designer with a file open
+    /// is idle *and watching*, which is the whole of #100. Whichever is sooner.
+    pub fn next_frame_in(&self) -> Option<Duration> {
+        let animating = self.ui.next_wake_ms().map(|_| Duration::from_millis(16));
+        let watching = self.document.path().map(|_| WATCH_EVERY);
+        match (animating, watching) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (only, None) | (None, only) => only,
+        }
+    }
+
     // ------------------------------------------------- the clipboard
 
     /// Puts the selection on the clipboard, as `.dform` source.
@@ -4238,6 +4594,8 @@ impl Designer {
                 self.status = String::from("no new form, then");
                 self.refresh_labels();
             }
+            Message::Reload => self.take_theirs(),
+            Message::KeepMine => self.keep_mine(),
             Message::Preview => self.toggle_preview(),
             Message::Theme => self.cycle_theme(),
             Message::Key(code) => {
@@ -8036,5 +8394,303 @@ mod tests {
             .expect("a title row");
         assert!(title.written);
         assert!(!title.resettable, "the title offered a reset");
+    }
+
+    // ----------------------------------------- the other editor (#100)
+
+    /// A private copy of a form file, so a test may edit it the way a person's
+    /// text editor would.
+    fn copied(form: &str, tag: u32) -> std::path::PathBuf {
+        let source = std::fs::read_to_string(repo(form)).expect("the form is there");
+        let path = std::env::temp_dir().join(format!(
+            "denise-designer-{}-{tag}.dform",
+            std::process::id()
+        ));
+        std::fs::write(&path, source).expect("a temporary form");
+        path
+    }
+
+    fn designer_on_file(path: &std::path::Path) -> Designer {
+        let document = Document::open(path).expect("the form opens");
+        Designer::new(WINDOW, 1.0, Settings::default(), document)
+    }
+
+    /// What a text editor does: read it, change one thing, write it back.
+    fn edit_in_another_editor(path: &std::path::Path, from: &str, to: &str) {
+        let source = std::fs::read_to_string(path).expect("the file is there");
+        assert!(source.contains(from), "nothing to replace: `{from}`");
+        std::fs::write(path, source.replace(from, to)).expect("the file is writable");
+    }
+
+    #[test]
+    fn a_rectangle_moved_in_a_text_editor_moves_on_the_canvas() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("who"));
+        let who = path_named(&designer, "who");
+        let before = designer.path_bounds(&who).expect("a rectangle");
+
+        edit_in_another_editor(&path, "name=who x=20 y=82", "name=who x=120 y=82");
+        designer.check_file();
+
+        let after = designer.path_bounds(&who).expect("a rectangle");
+        assert_eq!(after.x - before.x, 100, "the node did not move: {after:?}");
+        // And the selection came back, by name rather than by position.
+        assert_eq!(designer.selection, vec![path_named(&designer, "who")]);
+        assert_eq!(designer.selected, designer.node_id(&who));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_selection_survives_a_node_being_inserted_above_it() {
+        // The case a path cannot survive and a name can: everything after the
+        // new node shifts by one, so a selection kept by position would come
+        // back pointing at the wrong widget.
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("greeting"));
+        let was = path_named(&designer, "greeting");
+
+        edit_in_another_editor(
+            &path,
+            "        label \"Hello, Denise\"",
+            "        label \"New\" x=0 y=0 w=10 h=10\n        label \"Hello, Denise\"",
+        );
+        designer.check_file();
+
+        let now = path_named(&designer, "greeting");
+        assert_ne!(now, was, "nothing shifted, so this proves nothing");
+        assert_eq!(designer.selection, vec![now]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unsaved_work_makes_it_ask_instead_of_reloading() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("who"));
+        designer.nudge(0, 8);
+        assert!(designer.history.is_dirty());
+        let mine = text(&designer);
+
+        edit_in_another_editor(&path, "name=who x=20", "name=who x=120");
+        designer.check_file();
+
+        assert!(designer.clashing(), "it reloaded over unsaved work");
+        assert_eq!(text(&designer), mine, "the form changed under the question");
+    }
+
+    #[test]
+    fn keeping_mine_leaves_the_file_alone_and_stops_asking() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("who"));
+        designer.nudge(0, 8);
+        edit_in_another_editor(&path, "name=who x=20", "name=who x=120");
+        designer.check_file();
+        assert!(designer.clashing());
+
+        let theirs = std::fs::read_to_string(&path).expect("the file is there");
+        let mine = text(&designer);
+        designer.keep_mine();
+
+        assert!(!designer.clashing());
+        assert_eq!(text(&designer), mine, "keeping mine changed the form");
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_deref(),
+            Some(theirs.as_str()),
+            "keeping mine wrote to the file",
+        );
+        assert!(
+            designer.history.is_dirty(),
+            "the unsaved work stopped being unsaved"
+        );
+
+        // The question was answered, so it is not asked again on the next frame.
+        designer.check_file();
+        assert!(!designer.clashing(), "it asked twice about one change");
+
+        // And saving now is what overwrites it — with the answer already given.
+        designer.handle(Message::Save);
+        assert_eq!(
+            std::fs::read_to_string(&path).ok().as_deref(),
+            Some(mine.as_str()),
+        );
+        // Which the designer must not then read back as somebody else's edit.
+        designer.check_file();
+        assert!(!designer.clashing(), "its own save came back as a conflict");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reloading_takes_the_file_and_drops_what_was_unsaved() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("who"));
+        designer.nudge(0, 8);
+        edit_in_another_editor(&path, "name=who x=20", "name=who x=120");
+        designer.check_file();
+        assert!(designer.clashing());
+
+        let theirs = std::fs::read_to_string(&path).expect("the file is there");
+        designer.take_theirs();
+
+        assert!(!designer.clashing());
+        assert_eq!(text(&designer), theirs, "reload did not take the file");
+        assert!(
+            !designer.history.is_dirty(),
+            "a freshly read file is not modified"
+        );
+        assert!(
+            !designer.history.can_undo(),
+            "the old history outlived the form"
+        );
+        assert_eq!(designer.selection, vec![path_named(&designer, "who")]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn escape_answers_the_question_the_way_that_loses_nothing() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("who"));
+        designer.nudge(0, 8);
+        let mine = text(&designer);
+        edit_in_another_editor(&path, "name=who x=20", "name=who x=120");
+        designer.check_file();
+        assert!(designer.clashing());
+
+        designer.input(&[InputEvent::Key {
+            code: KeyCode::Escape,
+            state: ElementState::Down,
+            repeat: false,
+            modifiers: Default::default(),
+        }]);
+
+        assert!(!designer.clashing());
+        assert_eq!(text(&designer), mine);
+        assert!(!designer.exit_requested(), "Escape got past the sheet");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_file_caught_halfway_through_being_written_is_not_a_reload() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        let before = text(&designer);
+
+        std::fs::write(
+            &path,
+            "form \"Hello\" version=1 width=460 height=260 {\n    lab",
+        )
+        .expect("a half-written file");
+        designer.check_file();
+
+        assert!(!designer.clashing(), "a broken file put a question up");
+        assert_eq!(text(&designer), before, "a broken file replaced the form");
+        assert!(
+            designer.status.contains("does not parse"),
+            "said nothing about it: {}",
+            designer.status
+        );
+
+        // And the write that finishes it is noticed like any other.
+        std::fs::write(&path, before.replace("name=who x=20", "name=who x=120"))
+            .expect("the rest of it");
+        designer.check_file();
+        assert!(text(&designer).contains("name=who x=120"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn nothing_is_read_from_under_a_drag_in_flight() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("who"));
+        let before = text(&designer);
+
+        // Mid-drag: the pointer is down and the drag is holding ids from the
+        // tree it started in, which a reload would replace under it.
+        designer.drag_selection(0, 12);
+        assert!(designer.drag.is_some());
+        edit_in_another_editor(&path, "name=who x=20", "name=who x=120");
+        designer.check_file();
+        assert_eq!(text(&designer), before, "the tree changed mid-drag");
+
+        // And once the pointer is up, the same change is still there to be
+        // read — and by then the drag is an unsaved edit, so it is asked about
+        // rather than taken.
+        designer.release();
+        designer.check_file();
+        assert!(designer.clashing(), "the change was lost with the drag");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn nothing_is_read_from_under_a_caret() {
+        let path = copied("forms/hello.dform", line!());
+        let mut designer = designer_on_file(&path);
+        assert!(designer.select_named("who"));
+
+        // The caret is in one of the inspector's fields, holding a value that
+        // is not in the file yet. A reload replaces the inspector, and what is
+        // half typed into it has nowhere to have been kept.
+        let index = row(&designer, "x");
+        let pane = designer.inspector.as_ref().expect("a pane");
+        let Editor::Field(field) = pane.rows[index].editor else {
+            panic!("`x` is not a field");
+        };
+        designer.ui.focus(Some(field));
+
+        edit_in_another_editor(&path, "name=who x=20", "name=who x=120");
+        designer.check_file();
+        assert!(
+            !text(&designer).contains("name=who x=120"),
+            "read under the caret"
+        );
+
+        // And the moment the caret is elsewhere, the change is taken.
+        designer.ui.focus(None);
+        designer.check_file();
+        assert!(
+            text(&designer).contains("name=who x=120"),
+            "{}",
+            text(&designer)
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_designer_with_a_file_open_keeps_looking_at_it() {
+        // A form with nothing animating in it: `hello.dform` focuses its field,
+        // and a blinking caret is a wake of its own.
+        let path =
+            std::env::temp_dir().join(format!("denise-watched-{}.dform", std::process::id()));
+        std::fs::write(
+            &path,
+            "form \"F\" version=1 width=200 height=120 {\n    label \"a\" x=0 y=0 w=9 h=9\n}\n",
+        )
+        .expect("a temporary form");
+        let designer = designer_on_file(&path);
+        assert_eq!(designer.next_frame_in(), Some(WATCH_EVERY));
+
+        // A form nobody has saved has no file to watch, so nothing wakes the
+        // loop for it.
+        let blank = Designer::new(WINDOW, 1.0, Settings::default(), Document::blank());
+        assert_eq!(blank.next_frame_in(), None);
+
+        // And whatever animates still sets the pace, because it is sooner.
+        let watched = designer_on_file(&repo("forms/hello.dform"));
+        assert_eq!(watched.next_frame_in(), Some(Duration::from_millis(16)));
+
+        let _ = std::fs::remove_file(&path);
     }
 }
