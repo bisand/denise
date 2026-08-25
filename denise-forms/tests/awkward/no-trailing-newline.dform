@@ -1,0 +1,6 @@
+// A file with no trailing newline, because an editor left it that way and
+// nothing about a form says there has to be one.
+
+form "NoNewline" version=1 kind=screen width=200 height=100 {
+    label "end" x=8 y=8 w=100 h=20
+}

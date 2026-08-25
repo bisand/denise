@@ -1,0 +1,17 @@
+// Shapes rather than spacing: a container written with no braces at all, one
+// written with empty braces, and a nest deep enough that reindenting anything
+// would show.
+
+form "Nesting" version=1 kind=screen width=400 height=300 {
+    panel name=childless x=8 y=8 w=100 h=40
+
+    panel name=empty x=116 y=8 w=100 h=40 { }
+
+    panel name=outer x=8 y=56 w=384 h=200 {
+        panel name=middle x=8 y=8 w=360 h=180 {
+            panel name=inner x=8 y=8 w=340 h=160 {
+                label "four deep" x=8 y=8 w=200 h=20
+            }
+        }
+    }
+}

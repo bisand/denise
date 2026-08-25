@@ -1,0 +1,15 @@
+// Strings written every way the format allows, including the ones a naive
+// re-serialiser would come back differently: a bare name where a string would
+// do, escapes, and characters outside ASCII.
+
+form "Strings — “quoted”, and an em dash —" version=1 kind=screen width=400 height=300 {
+    label "a \"quoted\" word" x=8 y=8 w=300 h=20
+    label "a backslash \\ and a tab \t between" x=8 y=32 w=300 h=20
+    label "æøå ünïcödé 日本語 🇳🇴" x=8 y=56 w=300 h=20
+
+    // `name` takes a bare identifier; `placeholder` takes a string that happens
+    // to be one word. A tool that decided quoting for itself would swap these.
+    text-input name=who x=8 y=88 w=300 h=34 placeholder="name"
+
+    button "Send" x=8 y=132 w=100 h=32 on-press=send tooltip="Sends it"
+}
