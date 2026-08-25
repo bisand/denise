@@ -694,6 +694,11 @@ What survives a designer save, and is tested to:
 What does not survive: nothing. If the designer changes a byte the user did not
 ask it to change, that is a bug with a test waiting for it.
 
+And it is a two-way street while both are open: the designer watches the file it
+has open and reads it again when something else writes it, so an editor and a
+canvas can be pointed at the same form at the same time. See [the designer's
+README](../tools/designer/README.md#the-other-editor).
+
 ## Loading one from Rust
 
 Five lines, and the whole of what an application does with a form:

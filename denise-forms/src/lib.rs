@@ -11,7 +11,8 @@ pub use build::{
 };
 pub use error::{At, Error, Reason};
 pub use form::{
-    Edit, Form, FormKind, Literal, MAX_DEPTH, MAX_SOURCE, THEMES, VERSION, after_removing, fragment,
+    Edit, Form, FormKind, Literal, MAX_DEPTH, MAX_SOURCE, THEMES, VERSION, Written, after_removing,
+    fragment,
 };
 
 pub use denise_ui::widgets::Payload;

@@ -39,6 +39,12 @@
 //! F5 runs it: the scrim goes, the events become the form's, and the strip along
 //! the bottom names every message it fires.
 //!
+//! The file underneath is watched, because the other editor is a text editor and
+//! that was the point of a text format: saving renames a temporary file so it
+//! never reads half a form, and a file written by something else is read again —
+//! silently, keeping the selection by name, or with one question when there is
+//! unsaved work to lose. See [`watch`].
+//!
 //! The palette is a flat list of names, because the registry carries a name and
 //! a property list and nothing that says what a widget *is* — grouping it and
 //! giving each row a tooltip is [#126].
@@ -54,6 +60,7 @@ mod history;
 mod inspector;
 mod outline;
 mod settings;
+mod watch;
 
 use std::time::{Duration, Instant};
 
@@ -76,6 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut preview = false;
     let mut band: Option<denise::Rect> = None;
     let mut new_form = false;
+    let mut clash: Option<String> = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -89,6 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--preview" => preview = true,
             "--new" => new_form = true,
+            "--clash" => clash = rest.next().cloned(),
             "--band" => {
                 band = rest.next().and_then(|value| {
                     let mut parts = value.split(',').map(|part| part.trim().parse::<i32>());
@@ -121,7 +130,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --carry <kind>[,x,y]   snapshot: hold this widget over the form\n\
                      \x20 --preview              snapshot: run the form rather than draw it\n\
                      \x20 --band <x,y,w,h>       snapshot: draw a rubber band over the form\n\
-                     \x20 --new                  snapshot: put the new-form sheet up"
+                     \x20 --new                  snapshot: put the new-form sheet up\n\
+                     \x20 --clash <other.dform>  snapshot: the file-changed sheet, against this version"
                 );
                 return Ok(());
             }
@@ -161,6 +171,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if new_form {
             designer.begin_new();
+        }
+        if let Some(other) = clash {
+            let theirs = std::fs::read_to_string(&other)?;
+            if !designer.clash_over(&theirs) {
+                eprintln!("denise-designer: {other} is not a form file");
+            }
         }
         if let Some((kind, x, y)) = carry
             && !designer.carry(&kind, denise::Point::new(x, y))
@@ -246,6 +262,11 @@ impl DeniseApp for Main {
             }
         }
 
+        // The other editor is a text editor, and it may have just saved. Before
+        // the inspector is read, so a reload does not land on top of a commit
+        // from the tree it replaced.
+        self.designer.check_file();
+
         // Last, so a keystroke that has just reached a field is applied in the
         // same frame it was typed in. Nothing in the inspector emits a message;
         // see `Designer::poll`. There is no inspector while previewing, and no
@@ -273,11 +294,9 @@ impl DeniseApp for Main {
 
     fn next_frame_in(&self) -> Option<Duration> {
         // A designer is idle almost all the time: nothing animates unless a form
-        // under design has a spinner in it, and then only that.
-        self.designer
-            .ui
-            .next_wake_ms()
-            .map(|_| Duration::from_millis(16))
+        // under design has a spinner in it, and then only that — and a file with
+        // an editor open on it is worth a look either way.
+        self.designer.next_frame_in()
     }
 
     fn exit_requested(&self) -> bool {

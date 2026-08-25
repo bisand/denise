@@ -256,6 +256,47 @@ Closing with unsaved work stops once and says so; ask again and it goes. A modal
 would be the better question and needs a second window — this is the honest
 version until then, and it is at least impossible to lose a form to one keystroke.
 
+## The other editor
+
+The point of a text format is that a text editor is the other half of it, so both
+are open on the same file and either may write it. Both halves of that courtesy
+are here.
+
+**Saving writes a temporary file and renames it**, so the editor watching this one
+never reads a form that is halfway written.
+
+**The file is read again when something else writes it**, within about half a
+second. With nothing unsaved that happens silently — the designer was showing the
+file, the file changed, so it shows the new one — and the selection comes back
+**by the name the file gave it**, which survives the other editor having inserted
+a node above it. So does what is folded, and what the eye has hidden. Nudge a
+rectangle in Vim and watch it move on the canvas with the right thing still
+selected.
+
+With unsaved work there is one question, and it gets asked rather than answered by
+whoever wrote last:
+
+![A card over the dimmed designer headed "The file changed on disk", saying that hello.dform was written by something else and this form has unsaved changes, then listing four nodes that read differently — `who` changed, button "Greet" changed, `greeting` removed, `clear` added — with Reload and Keep mine along the bottom](../../assets/screenshots/designer-clash.png)
+
+The list is real — it is the two versions compared node by node, named nodes
+matched by name and the rest by position, so realigned columns and a new comment
+are not changes. **Reload** takes the file and drops what was unsaved. **Keep
+mine** changes nothing now and overwrites the file on the next save; Escape means
+the same, because the safe answer to a question somebody waved away is the one
+that loses nothing. Either way the file is never written without being asked
+about first.
+
+Nothing is read mid-gesture: a drag is holding nodes from the tree it started in,
+and the file will still have changed when the pointer comes up.
+
+This polls rather than subscribing to the platform's file notifications, and that
+is deliberate. A change has to reach the designer *through its event loop*, which
+sleeps until a frame is due — so the loop has to ask on a cadence whatever the
+mechanism, and once it is asking, a `stat` is the whole of what a subscription
+would have told it. Two syscalls twice a second is less than a dependency on three
+platforms' notification APIs, and it works on the network filesystems where those
+quietly do not.
+
 ## Preview
 
 **F5** runs the form. Escape or F5 again goes back to designing it.
@@ -455,6 +496,7 @@ out of the field being typed in.
 | **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, and the theme being simulated. |
 | **Arrange** | Align, same size, space evenly, group and ungroup — greyed one button at a time, each saying in its tooltip what it wants. |
 | **Log** | While previewing: the messages the form has fired, by name. |
+| **The file** | Watched: written by something else, it is read again — silently, or with one question when there is unsaved work. |
 
 Open a form, save it, and `git diff` is empty: the document is what is held, not a
 value taken from it, so a save that changed nothing changes nothing. That is the
@@ -471,7 +513,8 @@ wants a line of documentation on each widget's `Describe`, which is [#126].
 The outline remembers what is folded and what is hidden **by path**, so an edit
 that shifts a path leaves those pointing at whatever moved into its place. A form
 is small and a click puts it right; the alternative is giving every node an
-identity the file does not have.
+identity the file does not have. Reading the file again is the one case that does
+better, because it can afford to: everything with a name is put back by name.
 
 A message field is a field, not a combo box: the name being typed is usually one
 the form has not used yet, and this toolkit has no widget that is both. What the
@@ -482,8 +525,9 @@ form *does* already use is in the row's tooltip.
 ## Elsewhere
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
-`--drag`, `--carry`, `--band`, `--new` and `--preview` to pose it, since a
-snapshot has no pointer to select, drag, carry or band anything with — the same
+`--drag`, `--carry`, `--band`, `--new`, `--clash <other.dform>` and `--preview` to
+pose it, since a snapshot has no pointer to select, drag, carry or band anything
+with, and no second editor to change the file under it — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 

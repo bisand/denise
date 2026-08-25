@@ -196,7 +196,9 @@ Windows and Linux builds on every release, with the `denise-forms` command line
 tool beside it and no Rust toolchain needed.
 
 What it writes is [a `.dform` file](docs/forms.md): text, in `git diff`, that a
-person can hand-edit and that comments survive. What reads one is
+person can hand-edit and that comments survive — and it means it, so the designer
+watches the file it has open and reads it again when your editor saves, keeping
+the selection by name. What reads one is
 [`denise-forms`](denise-forms), in about five lines. The path from a drawing to a
 running screen is [docs/designer.md](docs/designer.md); the panes and every
 gesture are [the designer's own README](tools/designer/README.md).
