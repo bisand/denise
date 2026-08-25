@@ -165,46 +165,73 @@ fn scroll_bench_run(size: Size, scale: f32, font: Font, motion: Motion, rounds: 
     app.on_message(Message::Spin(false));
 
     let mut pixels = vec![0u32; (size.width * size.height) as usize];
-    let mut paint = |app: &mut App, age| {
-        let mut frame = denise::Frame::new(
-            &mut pixels,
-            size,
-            size.width,
-            denise::PixelFormat::Xrgb8888,
-            age,
-        )
-        .expect("frame");
-        let started = std::time::Instant::now();
-        app.ui.paint(&mut frame);
-        let took = started.elapsed();
-        drop(frame);
-        app.ui.presented();
-        took
+    // Scoped, because the closure borrows the buffer and the measurement after
+    // the loop needs it back.
+    let (viewport, rects, took) = {
+        let mut paint = |app: &mut App, age| {
+            let mut frame = denise::Frame::new(
+                &mut pixels,
+                size,
+                size.width,
+                denise::PixelFormat::Xrgb8888,
+                age,
+            )
+            .expect("frame");
+            let started = std::time::Instant::now();
+            app.ui.paint(&mut frame);
+            let took = started.elapsed();
+            drop(frame);
+            app.ui.presented();
+            took
+        };
+
+        // Settle first, so what is timed below is the scrolled frame alone.
+        for _ in 0..8 {
+            app.ui.tick(0);
+            paint(&mut app, denise::BufferAge::Undefined);
+        }
+
+        let content = app.content_viewport();
+        let viewport = app.ui.bounds(content).unwrap_or(denise::Rect::ZERO);
+
+        let mut took: Vec<u128> = Vec::with_capacity(rounds);
+        let mut rects = 0usize;
+        for round in 0..rounds {
+            // Down, then back up when it runs out, so a long run keeps scrolling
+            // rather than sitting at the bottom repainting nothing.
+            let dy = if (round / 40) % 2 == 0 { 20 } else { -20 };
+            app.ui.scroll_by(content, 0, dy);
+            rects = rects.max(app.ui.pending_damage().len());
+            app.ui.tick(1_000 + round as u64 * 16);
+            took.push(paint(&mut app, denise::BufferAge::Frames(2)).as_micros());
+        }
+        took.sort_unstable();
+        (viewport, rects, took)
     };
 
-    // Settle first, so what is timed below is the scrolled frame alone.
-    for _ in 0..8 {
-        app.ui.tick(0);
-        paint(&mut app, denise::BufferAge::Undefined);
-    }
-
-    let content = app.content_viewport();
-    let viewport = app.ui.bounds(content).unwrap_or(denise::Rect::ZERO);
     let surface = i64::from(size.width) * i64::from(size.height);
     let covered = i64::from(viewport.width) * i64::from(viewport.height);
 
-    let mut took: Vec<u128> = Vec::with_capacity(rounds);
-    let mut rects = 0usize;
-    for round in 0..rounds {
-        // Down, then back up when it runs out, so a long run keeps scrolling
-        // rather than sitting at the bottom repainting nothing.
-        let dy = if (round / 40) % 2 == 0 { 20 } else { -20 };
-        app.ui.scroll_by(content, 0, dy);
-        rects = rects.max(app.ui.pending_damage().len());
-        app.ui.tick(1_000 + round as u64 * 16);
-        took.push(paint(&mut app, denise::BufferAge::Frames(2)).as_micros());
+    // What the fast path in #46 would have to pay instead of rasterising: the
+    // still-valid rows moved within the buffer. Measured here rather than
+    // assumed, because it is the number that decides whether scroll-by-blit can
+    // reach the frame budget at all — and on a write-combined framebuffer a
+    // read is not the same price as a write.
+    let stride = size.width as usize;
+    let rows = viewport.height.max(0) as usize;
+    let width = viewport.width.max(0) as usize;
+    let shift = 20usize;
+    let mut copied: Vec<u128> = Vec::with_capacity(16);
+    for _ in 0..16 {
+        let started = std::time::Instant::now();
+        for row in shift..rows {
+            let from = (viewport.y as usize + row) * stride + viewport.x as usize;
+            let to = (viewport.y as usize + row - shift) * stride + viewport.x as usize;
+            pixels.copy_within(from..from + width, to);
+        }
+        copied.push(started.elapsed().as_micros());
     }
-    took.sort_unstable();
+    copied.sort_unstable();
 
     println!("gallery --scroll-bench, {rounds} scrolled frames");
     println!("  surface   {}x{}", size.width, size.height);
@@ -222,6 +249,12 @@ fn scroll_bench_run(size: Size, scale: f32, font: Font, motion: Motion, rounds: 
         took[took.len() / 2] as f64 / 1000.0,
         took[0] as f64 / 1000.0,
         took[took.len() - 1] as f64 / 1000.0,
+    );
+    println!(
+        "  memmove   median {:.2} ms  — {} rows of {} words, what a blit would cost instead",
+        copied[copied.len() / 2] as f64 / 1000.0,
+        rows.saturating_sub(shift),
+        width,
     );
 }
 
