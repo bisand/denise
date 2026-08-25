@@ -310,3 +310,35 @@ impl ClickPair {
         self.last = None;
     }
 }
+
+/// The leading, label and trailing boxes inside one row.
+///
+/// Shared by [`List`](super::List) and [`Tree`](super::Tree), so a row of one
+/// and a row of the other put their columns in the same places.
+///
+/// The label takes what the other two leave. A row too narrow to hold all three
+/// gives it nothing rather than a negative width — each column is clipped to
+/// itself when it is drawn, so the result is text cut short rather than a label
+/// running across the value at the other end of the row.
+pub(crate) fn columns(row: Rect, pad: i32, leading: i32, trailing: i32) -> (Rect, Rect, Rect) {
+    let left = row.x + pad;
+    let right = (row.right() - pad).max(left);
+    let box_of =
+        |start: i32, end: i32| Rect::from_edges(start, row.y, end.max(start), row.bottom());
+
+    let leading_box = box_of(left, (left + leading).min(right));
+    let trailing_box = box_of((right - trailing).max(left), right);
+    // Clamped into the row's own span, so a column that was pushed outside by a
+    // rectangle too narrow for it does not drag the label out with it.
+    let start = if leading > 0 {
+        (leading_box.right() + pad).clamp(left, right)
+    } else {
+        left
+    };
+    let end = if trailing > 0 {
+        (trailing_box.x - pad).clamp(left, right)
+    } else {
+        right
+    };
+    (leading_box, box_of(start, end), trailing_box)
+}

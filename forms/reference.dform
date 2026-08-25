@@ -36,18 +36,30 @@ form "Reference" name=reference version=1 kind=screen width=1024 height=600 them
     // ------------------------------------------------------------------ left
 
     panel name=sidebar x=0 y=56 w=240 h=544 fill=base-100 {
-        list name=nav x=8 y=8 w=224 h=200 selected=0 on-select=navigate on-activate=open activate-on-click=#true row-height=32 role=primary size=14 {
+        list name=nav x=8 y=8 w=224 h=136 selected=0 on-select=navigate on-activate=open activate-on-click=#true row-height=32 role=primary size=14 {
             item "Overview" leading="◆"
             item "Widgets" leading="◇" trailing="25"
             item "Themes" leading="◇"
             item "Not yet written" leading="◇" enabled=#false
         }
 
-        divider x=8 y=216 w=224 h=16 role=base-300
+        divider x=8 y=152 w=224 h=16 role=base-300
 
-        divider "History" x=8 y=236 w=224 h=16 role=base-content size=11
+        // A hierarchy: rows at a depth, opened and shut by their triangle.
+        // `Archive` is shut, so its two children are not drawn and the four
+        // rows that are exactly fill the rectangle.
+        tree name=places x=8 y=176 w=224 h=80 selected=1 on-select=go-to-place on-activate=open-place on-toggle=fold-place row-height=20 indent=12 role=secondary size=12 {
+            item "Sensors"
+            item "Inlet" depth=1 trailing="4 °C"
+            item "Outlet" depth=1 trailing="9 °C"
+            item "Archive" open=#false
+            item "2024" depth=1
+            item "2025" depth=1 enabled=#false
+        }
 
-        timeline name=history x=8 y=256 w=224 h=140 row-height=32 size=12 {
+        divider "History" x=8 y=264 w=224 h=16 role=base-content size=11
+
+        timeline name=history x=8 y=288 w=224 h=112 row-height=28 size=12 {
             event "Parsed" time="09:14" role=success
             event "Built" time="09:14" role=success
             event "Painted" time="09:15" role=info
@@ -57,7 +69,7 @@ form "Reference" name=reference version=1 kind=screen width=1024 height=600 them
         // A vertical rule against the main area, to prove the orientation.
         divider x=232 y=8 w=1 h=520 orientation=vertical role=base-300
 
-        collapse "Advanced" name=advanced x=8 y=404 w=224 h=40 open=#false expanded-height=96 on-toggle=advanced-toggled role=base-200 size=13 {
+        collapse "Advanced" name=advanced x=8 y=408 w=224 h=40 open=#false expanded-height=96 on-toggle=advanced-toggled role=base-200 size=13 {
             checkbox "Verbose logging" x=12 y=8 w=200 h=24 on-change=set-verbose role=info size=12
             toggle "Kiosk mode" x=12 y=36 w=200 h=24 checked=#true on-change=set-kiosk role=warning size=12
         }
@@ -66,7 +78,7 @@ form "Reference" name=reference version=1 kind=screen width=1024 height=600 them
         // overwrites their `y`, which is why they all declare y=0; and the
         // stacked height is more than twice the panel's, which is what `scroll`
         // is here to show.
-        panel name=notes x=8 y=452 w=224 h=84 fill=base-200 radius=box scroll=#true stack=6 z=1 {
+        panel name=notes x=8 y=456 w=224 h=84 fill=base-200 radius=box scroll=#true stack=6 z=1 {
             label "The stack owns y" x=8 y=0 w=200 h=20 size=13 role=base-content
             label "Every child below declares y=0 and is placed by the parent." x=8 y=0 w=200 h=32 size=11 role=base-content valign=center
             divider x=8 y=0 w=200 h=8 role=base-300

@@ -364,7 +364,7 @@ calls `set_rows` afterwards, exactly as `table-editor` does today.
 
 ## The widgets
 
-Twenty-five widgets and one container. Every property is optional unless marked
+Twenty-six widgets and one container. Every property is optional unless marked
 **required**; every default below is the widget's own, and a property at its
 default is not written to the file.
 
@@ -606,6 +606,51 @@ role here would be a fiction.
 Children: `item "Text" leading="›" trailing="⌘K" enabled=#false` — `leading` and
 `trailing` are short strings at either end of the row; `enabled=#false` is a row
 that draws dimmed and cannot be selected.
+
+#### `tree`
+
+| | Type | Default | |
+|---|---|---|---|
+| `selected` | integer | — | The row's position in the file, counting every `item` whether it is currently drawn or not. |
+| `on-select` | message (index) | — | |
+| `on-activate` | message (index) | — | Enter, or a double press. |
+| `on-toggle` | message (index) | — | A branch opened or shut. |
+| `activate-on-click` | bool | `#false` | A single press activates as well as selects. |
+| `row-height` | integer | theme's `size_field` | |
+| `indent` | integer | `14` | How far one level is pushed in from the one above. |
+| `role` | [role](#roles) | `primary` | The selection. |
+| `size` | integer | `16` | |
+
+Children: `item "Text" depth=1 open=#false leading="›" trailing="4 °C" enabled=#false`.
+
+**`depth` is the whole hierarchy.** The items are a flat list and each says how
+deep it sits; a row's parent is the nearest row above it with a smaller depth,
+and its children are the run of deeper rows immediately below. `depth` defaults
+to `0`, so a file that says nothing is a flat list.
+
+Nothing says whether a row *has* children, because in this representation that is
+not an independent fact — a row has children exactly when the next row is deeper.
+A property for it could disagree with the depths, and then one of the two would be
+a lie.
+
+`open` defaults to `#true`: a tree that arrived entirely shut would show one row
+per branch and nothing of what it is for. `open` on a row with no children is
+ignored rather than an error, because a row gains and loses children as the rows
+around it change and neither is the file's mistake.
+
+```kdl
+tree name=places x=8 y=8 w=224 h=80 selected=1 on-select=go-to-place indent=12 {
+    item "Sensors"
+    item "Inlet" depth=1 trailing="4 °C"
+    item "Outlet" depth=1 trailing="9 °C"
+    item "Archive" open=#false
+    item "2024" depth=1
+}
+```
+
+Four rows are drawn: `Archive` is shut, so `2024` is not. It is still row 4 for
+`selected` and for every message — a position that changes when a branch above it
+folds would be unusable.
 
 #### `table`
 

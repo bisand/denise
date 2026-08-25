@@ -903,6 +903,7 @@ static ALL: &[WidgetInfo] = &[
     WidgetInfo::of::<super::TextInput<crate::Void>>(),
     WidgetInfo::of::<super::Timeline>(),
     WidgetInfo::of::<super::Toggle<crate::Void>>(),
+    WidgetInfo::of::<super::Tree<crate::Void>>(),
     WidgetInfo::of::<super::Video>(),
 ];
 

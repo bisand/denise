@@ -11,7 +11,8 @@ use denise::{Role, Size, theme};
 use denise_ui::widgets::{
     Alert, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Divider, DynDescribe, Image, Label,
     List, Mismatch, Panel, Progress, Property, PropertyKind, RadialProgress, RadioGroup, Rating,
-    Select, Slider, Spinner, Table, Tabs, TextInput, Timeline, Toggle, Value, Video, all,
+    Select, Slider, Spinner, Table, Tabs, TextInput, Timeline, Toggle, Tree, TreeItem, Value,
+    Video, all,
 };
 use denise_ui::{Ui, Void};
 
@@ -59,6 +60,13 @@ fn fresh(kind: &str) -> Box<dyn DynDescribe> {
         "text-input" => Box::new(TextInput::<Void>::new()),
         "timeline" => Box::new(Timeline::new(["Started", "Finished"])),
         "toggle" => Box::new(Toggle::<Void>::inert("Switch")),
+        // Deep enough that row 1 is a child, and open, so `selected=1` has a
+        // row it is allowed to land on.
+        "tree" => Box::new(Tree::<Void>::inert([
+            TreeItem::new("Branch"),
+            TreeItem::new("Leaf").at_depth(1),
+            TreeItem::new("Other"),
+        ])),
         "video" => Box::new(Video::new()),
         other => panic!(
             "the catalogue lists `{other}` and this test cannot build one. \

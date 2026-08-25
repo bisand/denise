@@ -12,7 +12,7 @@ use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
 use crate::widgets::style::{
-    Align, ClickPair, Intent, RowKind, draw_aligned, focus_ring, hovered_row, row_colors,
+    Align, ClickPair, Intent, RowKind, columns, draw_aligned, focus_ring, hovered_row, row_colors,
 };
 
 /// One row: a label, and optionally something before and after it.
@@ -532,35 +532,6 @@ fn row_at(bounds: Rect, row_height: i32, count: usize, point: Point) -> Option<u
     }
     let index = (i64::from(point.y - bounds.y) / i64::from(row_height.max(1))) as usize;
     (index < count).then_some(index)
-}
-
-/// The leading, label and trailing boxes inside one row.
-///
-/// The label takes what the other two leave. A row too narrow to hold all three
-/// gives it nothing rather than a negative width — each column is clipped to
-/// itself when it is drawn, so the result is text cut short rather than a label
-/// running across the value at the other end of the row.
-fn columns(row: Rect, pad: i32, leading: i32, trailing: i32) -> (Rect, Rect, Rect) {
-    let left = row.x + pad;
-    let right = (row.right() - pad).max(left);
-    let box_of =
-        |start: i32, end: i32| Rect::from_edges(start, row.y, end.max(start), row.bottom());
-
-    let leading_box = box_of(left, (left + leading).min(right));
-    let trailing_box = box_of((right - trailing).max(left), right);
-    // Clamped into the row's own span, so a column that was pushed outside by a
-    // rectangle too narrow for it does not drag the label out with it.
-    let start = if leading > 0 {
-        (leading_box.right() + pad).clamp(left, right)
-    } else {
-        left
-    };
-    let end = if trailing > 0 {
-        (trailing_box.x - pad).clamp(left, right)
-    } else {
-        right
-    };
-    (leading_box, box_of(start, end), trailing_box)
 }
 
 impl<M: 'static> Widget<M> for List<M> {
