@@ -1496,6 +1496,38 @@ impl<M: 'static> Ui<M> {
 
     // ---------------------------------------------------------------- focus
 
+    /// Every node Tab can reach, in the order it reaches them.
+    ///
+    /// The same list [`Ui::focus_step`](Ui) walks, which is why it is here
+    /// rather than rebuilt by whoever wants it: a tool drawing the tab order
+    /// and the tree walking it must not be able to disagree.
+    ///
+    /// Tree order, depth first, siblings by `z` — a node drawn in front of its
+    /// siblings is also reached after them. Only the topmost scene, because only
+    /// the topmost scene is reachable.
+    ///
+    /// ```
+    /// # use denise::{Rect, Size, theme};
+    /// # use denise_ui::{Ui, Void, widgets::{Button, Label, TextInput}};
+    /// let mut ui: Ui<Void> = Ui::new(Size::new(200, 200), theme::DARK);
+    /// let root = ui.root();
+    /// let field = ui.add(root, TextInput::<Void>::new(), Rect::new(0, 0, 100, 30)).unwrap();
+    /// // A label is drawn and is not a stop.
+    /// ui.add(root, Label::new("Heading"), Rect::new(0, 40, 100, 20));
+    /// let go = ui.add(root, Button::<Void>::inert("Go"), Rect::new(0, 70, 100, 30)).unwrap();
+    ///
+    /// assert_eq!(ui.tab_stops(), vec![field, go]);
+    /// ```
+    pub fn tab_stops(&mut self) -> alloc::vec::Vec<NodeId> {
+        self.ensure_order();
+        let (start, end) = self.input_span();
+        self.order[start..end]
+            .iter()
+            .copied()
+            .filter(|id| self.is_focusable(*id))
+            .collect()
+    }
+
     /// The node holding keyboard focus.
     #[inline]
     pub const fn focused(&self) -> Option<NodeId> {
@@ -2689,14 +2721,10 @@ impl<M: 'static> Ui<M> {
     }
 
     fn focus_step(&mut self, backwards: bool) {
-        self.ensure_order();
-        let (start, end) = self.input_span();
-        let mut candidates = Vec::new();
-        for &id in &self.order[start..end] {
-            if self.is_focusable(id) {
-                candidates.push(id);
-            }
-        }
+        // The same list `tab_stops` hands out, because it is the same call: a
+        // tool drawing the order and the tree walking it cannot drift apart if
+        // there is only one of them.
+        let candidates = self.tab_stops();
         if candidates.is_empty() {
             self.set_focus(None);
             return;

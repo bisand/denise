@@ -242,8 +242,39 @@ primary text, where it has one — and then properties. These apply to all of th
 There is no `id` distinct from `name`, no `class`, and no style attribute. A
 widget's appearance comes from its [role](#roles) and the theme, and nothing else.
 
-Tab order is file order in v1. [#98](https://github.com/bisand/denise/issues/98)
-decides whether that stays true or gains a `tab-index`.
+### Tab order is file order
+
+**Settled, and there is no `tab-index`.** Tab walks the file top to bottom,
+depth first — everything inside a panel comes between the thing before it and the
+thing after it — and Shift-Tab walks it back. A form is a loop, so the last stop
+leads to the first.
+
+That is the whole rule, and it is the reason there is no second number: the file
+already has an order, a person chose it, and [saving keeps it](#hand-editing). A
+`tab-index` would say the same thing a second way, and the two would drift the
+first time somebody edited one of them.
+
+**To change the order, move the node in the file.** Nothing on the canvas moves
+when you do — every rectangle is absolute — so this is a reordering and not a
+relayout. The designer's [tab order mode](../tools/designer/README.md#tab-order)
+is that, with the numbers drawn on.
+
+Three things are not stops: a node that cannot take focus at all (a `label`, a
+`divider`), a node with `enabled=#false`, and a node with `no-focus=#true`, which
+is a widget that takes no focus *and costs none* — a repeat button beside a video
+is not somewhere Tab should stop.
+
+One coupling worth knowing: **`z=` sorts siblings, and the tab order is the
+sibling order**, so raising a node in front of its siblings also makes it a later
+stop. That is defensible — a thing drawn on top is reached after what it covers —
+and it is the one way tab order stops being *file* order. It has a test.
+
+`focus=#true` on one node is where the caret starts. With nothing said, nothing is
+focused, because a form that grabbed the caret unasked would take it from whatever
+put the form up.
+
+All of this is asserted headlessly in `denise-forms/tests/focus.rs`, including the
+reference form's twenty stops in order.
 
 ### Geometry
 
@@ -1082,8 +1113,6 @@ Decided elsewhere, and deliberately not settled here:
 
 - Which collections are design-time placeholder data and which are real, and what
   a `tabs` node's content looks like — [#105](https://github.com/bisand/denise/issues/105).
-- Whether tab order stays "file order" or gains a `tab-index` —
-  [#98](https://github.com/bisand/denise/issues/98).
 - A named registry of built-in icons, which `button icon=` needs before it can
   exist.
 - A font-name resolver, once a form in this repository needs two fonts.
