@@ -1,0 +1,11 @@
+error[E0609]: no field `whom` on type `Hello`
+  --> tests/ui/renamed.rs:21:18
+   |
+21 |     let _ = form.whom;
+   |                  ^^^^ unknown field
+   |
+help: a field with a similar name exists
+   |
+21 -     let _ = form.whom;
+21 +     let _ = form.who;
+   |

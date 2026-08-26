@@ -1,0 +1,24 @@
+[package]
+name = "typed"
+description = "hello again, from a form file the compiler checks: generated fields and a generated message enum."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-forms = { workspace = true }
+denise-ui = { workspace = true, features = ["std"] }
+denise-winit = { workspace = true }
+
+[build-dependencies]
+# Only the build script links the generator; the binary links the engine.
+denise-forms = { workspace = true, features = ["codegen"] }
+
+[lints.rust]
+unsafe_code = "forbid"
