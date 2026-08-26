@@ -265,14 +265,14 @@ jobs:
       # The rasteriser is held to the same standard — it is the other half of what
       # an embedded target actually links.
       #
-      # `denise-layout` and `denise-keyboard` are here for the same reason rather
-      # than because they are core: they exist for panels with no desktop under
-      # them, so a platform dependency arriving through either is precisely the
-      # bug this job is for. Neither has one today.
+      # `denise-layout`, `denise-keyboard` and `denise-arrange` are here for the
+      # same reason rather than because they are core: they exist for panels with
+      # no desktop under them, so a platform dependency arriving through any of
+      # them is precisely the bug this job is for. None has one today.
       - name: Assert the dependency tree stays clean
         run: |
           status=0
-          for crate in denise denise-render denise-text denise-ui denise-layout denise-keyboard; do
+          for crate in denise denise-render denise-text denise-ui denise-layout denise-keyboard denise-arrange; do
             tree=$(cargo tree -p "$crate" --no-default-features --edges normal --prefix none)
             echo "== $crate =="
             echo "$tree"

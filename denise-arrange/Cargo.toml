@@ -1,0 +1,36 @@
+[package]
+name = "denise-arrange"
+description = "Optional content-driven layout for Denise: rows, columns and layers with fixed, flex and hugging children."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# docs.rs builds one configuration and shows it to everybody, so ask for every
+# feature: an item behind a feature gate should be documented and badged, not
+# absent.
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["std"]
+std = ["denise/std", "denise-ui/std"]
+
+[dependencies]
+denise = { workspace = true }
+denise-ui = { workspace = true }
+
+[dev-dependencies]
+# The tests build real trees and ask them where things landed.
+denise-ui = { workspace = true, features = ["std"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"

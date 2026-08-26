@@ -4,6 +4,7 @@ members = [
     "benches",
     "denise",
     "denise-activex",
+    "denise-arrange",
     "denise-drm",
     "denise-evdev",
     "denise-fbdev",
@@ -19,6 +20,7 @@ members = [
     "denise-video",
     "denise-win32",
     "denise-winit",
+    "examples/arranged",
     "examples/bare-linux",
     "examples/browser",
     "examples/designed",
@@ -53,6 +55,7 @@ homepage = "https://github.com/bisand/denise"
 [workspace.dependencies]
 denise = { version = "0.19.0", path = "denise", default-features = false }
 denise-activex = { version = "0.19.0", path = "denise-activex" }
+denise-arrange = { version = "0.19.0", path = "denise-arrange", default-features = false }
 denise-drm = { version = "0.19.0", path = "denise-drm" }
 denise-evdev = { version = "0.19.0", path = "denise-evdev" }
 denise-fbdev = { version = "0.19.0", path = "denise-fbdev" }

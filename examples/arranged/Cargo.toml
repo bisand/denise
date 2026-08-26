@@ -1,0 +1,20 @@
+[package]
+name = "arranged"
+description = "The same screen laid out by hand and by denise-arrange, so the difference is visible."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-arrange = { workspace = true }
+denise-ui = { workspace = true, features = ["std"] }
+denise-winit = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
