@@ -70,6 +70,12 @@ pub struct PositionedGlyph {
 pub struct TextEngine {
     atlas: GlyphAtlas,
     sources: Vec<Box<dyn GlyphSource>>,
+    /// Which registered face [`FontId::DEFAULT`] stands for.
+    ///
+    /// The whole of the default-face mechanism: one indirection, applied where a
+    /// style is turned into glyphs, so no widget and no `TextStyle` has to know
+    /// about it. See [`TextEngine::set_default_font`].
+    default: FontId,
     /// Reused across calls so laying out a line allocates nothing after the
     /// first one, which matters because measurement happens every layout pass.
     run: Vec<ShapedGlyph>,
@@ -106,6 +112,7 @@ impl TextEngine {
         let mut engine = Self {
             atlas,
             sources: Vec::new(),
+            default: FontId::DEFAULT,
             run: Vec::new(),
         };
         engine.add_font(Box::new(BitmapSource::new()));
@@ -119,6 +126,62 @@ impl TextEngine {
         id
     }
 
+    /// Draws every style that names no font in this face.
+    ///
+    /// Without this, `FontId(0)` is the built-in 5x7 bitmap and there is no way
+    /// to ask for anything else: every widget in this workspace carries
+    /// [`TextStyle::built_in`] or [`TextStyle::default`], both of which name
+    /// [`FontId::DEFAULT`], so registering a face with
+    /// [`add_font`](TextEngine::add_font) alone registers something nothing
+    /// refers to. That was [#130].
+    ///
+    /// One indirection, resolved when a style becomes glyphs — so no widget, no
+    /// `TextStyle` and no form file changes, and an application that wants a
+    /// real face says two lines instead of threading a style through everything
+    /// it builds.
+    ///
+    /// An id that was never registered is ignored, because the alternative is a
+    /// panel that draws nothing.
+    ///
+    /// ```
+    /// # use denise_text::{FontId, TextEngine, TextStyle};
+    /// let mut engine = TextEngine::new();
+    /// // Nothing registered but the built-in, so the default is the built-in.
+    /// assert_eq!(engine.default_font(), FontId::DEFAULT);
+    ///
+    /// // An id nobody registered changes nothing.
+    /// engine.set_default_font(FontId(9));
+    /// assert_eq!(engine.default_font(), FontId::DEFAULT);
+    /// ```
+    ///
+    /// [#130]: https://github.com/bisand/denise/issues/130
+    pub fn set_default_font(&mut self, font: FontId) {
+        if (font.0 as usize) < self.sources.len() {
+            self.default = font;
+        }
+    }
+
+    /// Which face [`FontId::DEFAULT`] currently stands for.
+    #[inline]
+    pub const fn default_font(&self) -> FontId {
+        self.default
+    }
+
+    /// The face a style is really drawn in.
+    ///
+    /// [`FontId::DEFAULT`] is a redirection rather than a face; everything else
+    /// is itself. **Every lookup goes through here, and so does every glyph
+    /// cache key** — a key built from the unresolved id would serve the old
+    /// face's glyphs after the default changed.
+    #[inline]
+    const fn resolve(&self, font: FontId) -> FontId {
+        if font.0 == FontId::DEFAULT.0 {
+            self.default
+        } else {
+            font
+        }
+    }
+
     /// Number of registered fonts.
     #[inline]
     pub fn font_count(&self) -> usize {
@@ -127,7 +190,9 @@ impl TextEngine {
 
     /// Name of a registered font.
     pub fn font_name(&self, font: FontId) -> Option<&str> {
-        self.sources.get(font.0 as usize).map(|s| s.name())
+        self.sources
+            .get(self.resolve(font).0 as usize)
+            .map(|s| s.name())
     }
 
     /// Whether a registered font has a glyph of its own for `ch`.
@@ -142,7 +207,7 @@ impl TextEngine {
     /// through shaping — see [`GlyphSource::glyph_id`].
     pub fn font_contains(&self, font: FontId, ch: char) -> bool {
         self.sources
-            .get(font.0 as usize)
+            .get(self.resolve(font).0 as usize)
             .is_some_and(|s| s.contains(ch))
     }
 
@@ -166,7 +231,7 @@ impl TextEngine {
     /// Vertical metrics for a style.
     pub fn metrics(&self, style: TextStyle) -> FontMetrics {
         self.sources
-            .get(style.font.0 as usize)
+            .get(self.resolve(style.font).0 as usize)
             .map(|s| s.metrics(style.size_px))
             .unwrap_or_default()
     }
@@ -174,7 +239,7 @@ impl TextEngine {
     /// The size this style will actually be drawn at.
     pub fn snap_size(&self, style: TextStyle) -> u16 {
         self.sources
-            .get(style.font.0 as usize)
+            .get(self.resolve(style.font).0 as usize)
             .map(|s| s.snap_size(style.size_px))
             .unwrap_or(style.size_px)
     }
@@ -226,7 +291,8 @@ impl TextEngine {
     /// outline computation.
     fn shape_into_run(&mut self, style: TextStyle, text: &str) -> i32 {
         self.run.clear();
-        let Some(source) = self.sources.get_mut(style.font.0 as usize) else {
+        let font = self.resolve(style.font);
+        let Some(source) = self.sources.get_mut(font.0 as usize) else {
             return 0;
         };
         if source.can_shape() {
@@ -239,7 +305,7 @@ impl TextEngine {
                 continue;
             };
             let key = GlyphKey {
-                font: style.font,
+                font,
                 size_px: style.size_px,
                 glyph: id,
             };
@@ -254,9 +320,10 @@ impl TextEngine {
 
     /// The cached placement of one glyph, rasterising it if need be.
     fn placed(&mut self, style: TextStyle, glyph: crate::GlyphId) -> Option<crate::Placed> {
-        let source = self.sources.get_mut(style.font.0 as usize)?;
+        let font = self.resolve(style.font);
+        let source = self.sources.get_mut(font.0 as usize)?;
         let key = GlyphKey {
-            font: style.font,
+            font,
             size_px: style.size_px,
             glyph,
         };

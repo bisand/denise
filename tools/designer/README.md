@@ -585,5 +585,18 @@ under it — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 
+The designer draws itself in **whatever face the machine has** — a regular
+upright sans, found by walking the places systems keep fonts — because it is a
+desktop tool and should look like the desktop it is on. On a board with none
+installed it finds nothing and the built-in 5x7 bitmap stays, which is the right
+answer there rather than a fallback to apologise for. `--font <path.ttf>` names
+one instead.
+
+A `--snapshot` keeps the built-in face unless `--font` says otherwise. A
+snapshot's whole value is being comparable — between two runs, between two
+machines, between the two sides of a pull request — and a face picked up from
+whatever happens to be installed is none of those. Every screenshot in this file
+was drawn that way.
+
 The window size and the pane widths are remembered in the platform's own
 configuration directory, as four `key = value` lines.

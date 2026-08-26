@@ -282,6 +282,43 @@ impl<M: 'static> Ui<M> {
         id
     }
 
+    /// Draws every widget that names no font in this face.
+    ///
+    /// The two lines that give a tree a real face:
+    ///
+    /// ```no_run
+    /// # use denise::{Size, theme};
+    /// # use denise_ui::{Ui, Void};
+    /// # fn load() -> alloc::boxed::Box<dyn denise_text::GlyphSource> { unimplemented!() }
+    /// # extern crate alloc;
+    /// # let mut ui: Ui<Void> = Ui::new(Size::new(64, 64), theme::DARK);
+    /// let id = ui.add_font(load());
+    /// ui.set_default_font(id);
+    /// ```
+    ///
+    /// Every `TextStyle` in this crate names [`FontId::DEFAULT`], which is a
+    /// redirection rather than a face — so this reaches every widget already
+    /// built and every widget built afterwards, without any of them knowing.
+    /// Before it existed, [`add_font`](Ui::add_font) registered a face nothing
+    /// referred to, and an application had to thread a `TextStyle` through
+    /// everything it constructed; that was [#130].
+    ///
+    /// An id that was never registered is ignored, because a panel that drew
+    /// nothing would be worse than one that drew the bitmap face.
+    ///
+    /// [#130]: https://github.com/bisand/denise/issues/130
+    pub fn set_default_font(&mut self, font: FontId) {
+        self.text.set_default_font(font);
+        // Every glyph on screen may be a different shape now.
+        self.damage.add_full();
+    }
+
+    /// Which face a widget that names no font is drawn in.
+    #[inline]
+    pub const fn default_font(&self) -> FontId {
+        self.text.default_font()
+    }
+
     /// The cursor sprite.
     #[inline]
     pub const fn cursor(&self) -> &Cursor {

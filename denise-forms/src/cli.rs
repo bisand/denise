@@ -527,7 +527,12 @@ fn add_font(ui: &mut Ui<Void>, path: &str) -> Result<(), String> {
         .unwrap_or("font");
     let source = denise_text::TrueTypeSource::from_bytes(name, &bytes)
         .map_err(|e| format!("{path}: {e}"))?;
-    ui.add_font(Box::new(source));
+    let id = ui.add_font(Box::new(source));
+    // Registering is not using. Every widget a form builds names no font, and
+    // before `set_default_font` existed this flag registered a face nothing
+    // referred to — so `--font` drew the built-in bitmap and produced a picture
+    // byte-identical to `render` without it. That was #130.
+    ui.set_default_font(id);
     Ok(())
 }
 

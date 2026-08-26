@@ -42,6 +42,16 @@ Measured as the increase in a stripped, statically linked
 | TrueType | `truetype` | +145 KB | Real fonts, proportional metrics, anti-aliasing |
 | Shaped | `shaping` | +3.1 MB | Ligatures, bidi, complex scripts, font fallback |
 
+A style that names no font carries `FontId::DEFAULT`, which is a redirection
+rather than a face. `TextEngine::set_default_font` points it at a registered
+source, and everything drawn from an unnamed style follows — so an application
+registers a face and says one more line, rather than threading a `TextStyle`
+through every widget it builds.
+
+`FontId::DEFAULT` is the built-in bitmap until something says otherwise, which is
+what a board with no fonts installed gets and why the bitmap face is always
+registered first.
+
 For scale: the whole of Denise, DRM, evdev and the widgets is about **840 KB**, so
 the shaping tier is four times the rest of the toolkit put together. It is there
 because some panels genuinely need it, and off by default because most do not — a

@@ -11,6 +11,21 @@ use denise::Size;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FontId(pub u16);
 
+impl FontId {
+    /// The face a style that names none is drawn in.
+    ///
+    /// **Not a face itself — a redirection.** Every [`TextStyle`] this workspace
+    /// builds without naming a font carries this, and it resolves through
+    /// [`TextEngine::default_font`](crate::TextEngine::default_font) at glyph
+    /// time. Until somebody calls
+    /// [`set_default_font`](crate::TextEngine::set_default_font) it is the
+    /// built-in bitmap face, which is what an embedded board with no fonts
+    /// installed gets and why it is always registered first.
+    ///
+    /// [`TextStyle`]: crate::TextStyle
+    pub const DEFAULT: Self = Self(0);
+}
+
 /// Identifies a glyph *within one font*.
 ///
 /// Not a `char`, and the distinction is the whole reason the shaping tier can

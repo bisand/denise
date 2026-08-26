@@ -30,6 +30,12 @@ denise-image = { workspace = true, features = ["png", "jpeg", "gif"] }
 # portal rather than GTK, so this adds no system packages to a build.
 rfd = "0.15"
 
+# The face the designer draws itself in. Not part of the toolkit and not
+# published: a panel ships the one face it was designed around, and this is a
+# desktop tool that should look like the desktop it is on. Falls back to the
+# built-in bitmap when it finds nothing, which is what a Pi gets.
+system-font = { path = "../../examples/system-font" }
+
 # The system clipboard, which is a platform thing the toolkit does not touch and
 # never will: a `no_std` widget library has no business knowing what a desktop
 # is. Text only — the default features pull in the whole `image` crate to put
