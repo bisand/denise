@@ -1,6 +1,9 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "codegen")]
+pub mod codegen;
+
 mod build;
 mod error;
 mod form;

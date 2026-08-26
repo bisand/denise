@@ -34,6 +34,7 @@ members = [
     "examples/splash",
     "examples/system-font",
     "examples/table-editor",
+    "examples/typed",
     "tools/designer",
 ]
 

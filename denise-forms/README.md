@@ -186,6 +186,33 @@ The full argument, including why text scaling is a DPI answer rather than a
 "bigger screen" answer, is in
 [docs/forms.md](https://github.com/bisand/denise/blob/main/docs/forms.md#scaling).
 
+## Or let the compiler check the names
+
+```toml
+[build-dependencies]
+denise-forms = { version = "0.19", features = ["codegen"] }
+```
+
+```text
+// build.rs
+fn main() {
+    denise_forms::codegen::to_out_dir("forms/hello.dform").unwrap();
+}
+```
+
+Out of it comes a `struct Hello` with a `NodeId` field per named node and an
+`enum HelloMessage` with a variant per message the form emits, carrying that
+widget's payload. Rename a node and the application stops compiling; add a
+message and every `match` stops being exhaustive.
+
+A build script rather than a proc macro, deliberately: the output is a file you
+can open, `cargo doc` sees it, and it needs no second crate. The generated
+`build` calls this same engine, so a form loaded at runtime and the same form
+generated behave identically.
+
+Only the build script links the generator — the feature is off by default, and a
+panel links the engine and nothing else.
+
 ## Editing one, byte for byte
 
 The other half of the crate, and the one the [designer](https://github.com/bisand/denise/tree/main/tools/designer)

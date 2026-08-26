@@ -836,8 +836,54 @@ from linking a decoder it will never call.
 
 **What the widgets are called.** `name=who` in the file becomes
 `built.node("who")`, and that is the one place a typo shows up as a `None` rather
-than as a compile error. [#101](https://github.com/bisand/denise/issues/101) is
-where the names get generated instead.
+than as a compile error — unless the names are generated, which is
+[the next section](#or-let-the-compiler-check-it).
+
+### Or let the compiler check it
+
+Everything above is strings checked at load. A build script turns the same file
+into a struct and an enum instead:
+
+```rust
+// build.rs
+fn main() {
+    denise_forms::codegen::to_out_dir("forms/hello.dform").unwrap();
+}
+```
+
+```rust
+include!(concat!(env!("OUT_DIR"), "/hello.rs"));
+
+let form = Hello::build(&mut ui, root)?;      // no `Wiring` to write
+let field = form.who;                          // a field, not a lookup
+
+match message {
+    HelloMessage::Greet => self.greet(),       // exhaustive, and checked
+}
+```
+
+**Rename a node in the designer and the application stops compiling**, naming the
+field that is gone. **Add a message to the form and every `match` stops being
+exhaustive.** Neither is something a string lookup can do, and both are asserted
+with `trybuild` rather than described.
+
+The generated `build` calls the same engine — there is one implementation, and
+this is a typed door onto it — so a form loaded at runtime and the same form
+generated behave identically. `Hello::place` is the door onto `build_fitted`, so
+a generated form still scales by its own [`scaling=`](#scaling).
+
+A **build script rather than a proc macro**, deliberately: the output is a file
+you can open, `cargo doc` sees it, a debugger steps through it, and it needs no
+second crate.
+
+Three things it refuses rather than generating something wrong: a name Rust
+cannot spell (`name="2"`), two names that become one field (`full-name` and
+`full_name`), and one message name used with two payload shapes — the engine is
+happy with the last, because a `match` answers each call separately, and an enum
+variant cannot be both a value and a `fn(bool) -> M`.
+
+[`examples/typed`](../examples/typed) is `hello` a third time, this way. All
+three draw the same pixels, which is checked rather than claimed.
 
 ### Baked in, or read at runtime
 
@@ -848,6 +894,11 @@ the other way, and is what you want when the form is meant to be swapped without
 a rebuild — a panel whose screens are updated by copying files.
 
 Both are the same three lines afterwards. The format does not care.
+
+The **typed** path above is the one place this is a real choice rather than a
+preference: generating the struct bakes the form in at build time, because that
+is what makes the names checkable. A panel whose screens are updated by copying
+files wants the untyped path, and it is not a lesser one.
 
 ## Checking a file
 

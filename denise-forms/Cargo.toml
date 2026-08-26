@@ -26,6 +26,9 @@ path = "src/cli.rs"
 required-features = ["cli"]
 
 [features]
+# A `build.rs` turns a form into a struct and an enum the compiler checks. Not a
+# default: a kiosk links the engine, and only a build script links the generator.
+codegen = []
 cli = ["dep:denise-image"]
 # Passed through, so `render --font` can draw real text. Off by default here for
 # the same reason it is off in `denise-ui`: the built-in bitmap font costs
@@ -55,6 +58,15 @@ denise-image = { workspace = true, features = ["png", "jpeg", "gif"], optional =
 # `render --font` only. `denise-ui` re-exports the text engine's types but not
 # the TrueType source, which is the one thing loading a font by path needs.
 denise-text = { workspace = true, features = ["std", "truetype"], optional = true }
+
+[dev-dependencies]
+# Asserts that a renamed node breaks the build of an application that used the
+# old name — the whole claim of `codegen`, and a thing no ordinary test can say.
+trybuild = "1"
+# Nameable from a `trybuild` fixture, which gets the dev-dependencies rather
+# than the ordinary ones.
+denise = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std"] }
 
 [lints.rust]
 unsafe_code = "forbid"

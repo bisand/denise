@@ -1,0 +1,10 @@
+error[E0599]: no variant, associated function, or constant named `Cancel` found for enum `HelloMessage` in the current scope
+  --> tests/ui/added-message.rs:14:23
+   |
+14 |         HelloMessage::Cancel => {}
+   |                       ^^^^^^ variant, associated function, or constant not found in `HelloMessage`
+   |
+  ::: tests/ui/hello_form.rs
+   |
+   | pub enum HelloMessage {
+   | --------------------- variant, associated function, or constant `Cancel` not found for this enum

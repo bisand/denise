@@ -137,6 +137,43 @@ pub enum Reason {
         /// The child's kind.
         found: String,
     },
+    /// One message name is used with two different payload shapes, so no single
+    /// enum variant can serve both.
+    ///
+    /// Only [`codegen`](crate::codegen) raises this. The engine is happy to
+    /// resolve one name twice, because the application's `match` answers each
+    /// call separately; a generated enum cannot, because `Greet` is either a
+    /// variant or a `fn(bool) -> M` and not both.
+    PayloadClash {
+        /// The name used twice.
+        found: String,
+        /// What it was first seen as.
+        first: &'static str,
+        /// And then as.
+        then: &'static str,
+    },
+    /// A name in the file cannot be turned into a Rust identifier.
+    ///
+    /// Only [`codegen`](crate::codegen). A form loads perfectly well with a node
+    /// called `2`; a struct field cannot be called that.
+    NotAnIdentifier {
+        /// What the file called it.
+        found: String,
+        /// Why it will not do.
+        because: &'static str,
+    },
+    /// Two names in the file become one Rust identifier.
+    ///
+    /// Only [`codegen`](crate::codegen). `full-name` and `full_name` are two
+    /// nodes to a form file and one field to Rust.
+    Collides {
+        /// The second name to arrive.
+        found: String,
+        /// The one already there.
+        with: String,
+        /// What they both became.
+        spelled: String,
+    },
     /// The application's resolver did not know a message name.
     UnknownMessage {
         /// The name in the file.
@@ -303,6 +340,18 @@ impl fmt::Display for Error {
             Reason::UnexpectedChild { parent, found } => {
                 write!(f, "a `{parent}` has no use for a `{found}` inside it")
             }
+            Reason::PayloadClash { found, first, then } => write!(
+                f,
+                "`{found}` is used as {first} and as {then}; one name cannot generate both"
+            ),
+            Reason::NotAnIdentifier { found, because } => {
+                write!(f, "`{found}` cannot name anything in Rust: {because}")
+            }
+            Reason::Collides {
+                found,
+                with,
+                spelled,
+            } => write!(f, "`{found}` and `{with}` are both `{spelled}` in Rust"),
             Reason::UnknownMessage { found } => write!(
                 f,
                 "the application does not know a message called `{found}`"

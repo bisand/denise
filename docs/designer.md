@@ -136,6 +136,13 @@ cmp a.ppm b.ppm       # silent
 The message enum, the `update`, the damage handling and the event loop are the
 same code in both. **A form replaces the tree-building and nothing else.**
 
+And a third way, when the form is baked in rather than swapped: a four-line
+`build.rs` turns it into a struct whose fields are the form's names and an enum
+whose variants are its messages, so renaming a node in the designer stops the
+application compiling instead of returning `None`.
+[`examples/typed`](../examples/typed) is that, and
+[docs/forms.md](forms.md#or-let-the-compiler-check-it) is the argument.
+
 ## 5. Ship it
 
 Which display the application talks to is decided at compile time, and the form
