@@ -305,6 +305,34 @@ invisible. A watcher that misses an edit is worse than no watcher, because it is
 trusted. Reading a form file measures at 29 µs — 0.007% of a second at this
 cadence — so there was nothing worth the risk.
 
+## Tab order
+
+Delphi had this and WinForms kept it. **Tab order** numbers every place Tab can
+land, on the canvas, in the order it will land there.
+
+![The designer with the tab-order overlay on: numbered badges over the reference form's focusable nodes — 1 on the Docs button, 3 on the sidebar list, 4 on the tree, 8 on the tabs, 9 on the name field — in the order Tab reaches them](../../assets/screenshots/designer-tab-order.png)
+
+The numbers come from the tree's own `Ui::tab_stops`, which is the list Tab
+itself walks — so what is drawn is the order the form will really have, including
+the parts this crate has no opinion about: a `label` is not a stop, nor is
+anything `enabled=#false`, nor a button with `no-focus=#true`.
+
+**Click the stops in the order you want.** Each click puts that node after the
+one before it, by moving it in the file — the same one-line edit *bring to front*
+writes. Nothing on the canvas moves, because every rectangle is its own; this is
+a reordering and not a relayout. It is one undo.
+
+**Only within one parent**, and that falls out of the format rather than being a
+shortcut: [tab order is file order](../../docs/forms.md#tab-order-is-file-order)
+read depth first, and a file can only say that one node comes before another
+*inside one parent*. Moving a field from one panel into the sequence inside
+another would mean moving it into that panel — a change to the design, not to the
+order. Clicking across a parent starts a new run there, and the status line says
+which.
+
+There is no `tab-index`, and there is not going to be one. The file already has
+an order, a person chose it, and saving keeps it.
+
 ## Preview
 
 **F5** runs the form. Escape or F5 again goes back to designing it.
@@ -516,7 +544,7 @@ out of the field being typed in.
 | **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
 | **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, copied, pasted and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. With nothing selected: the form's own. |
-| **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, and the theme being simulated. |
+| **Toolbar** | New, Open, Save, Save as, Undo, Redo, Preview, Tab order, and the theme being simulated. |
 | **Arrange** | Align, same size, space evenly, group and ungroup — greyed one button at a time, each saying in its tooltip what it wants. |
 | **Log** | While previewing: the messages the form has fired, by name. |
 | **The file** | Watched: written by something else, it is read again — silently, or with one question when there is unsaved work. |
@@ -550,8 +578,8 @@ form *does* already use is in the row's tooltip.
 ## Elsewhere
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
-`--drag`, `--carry`, `--band`, `--new`, `--hover <kind>`, `--clash <other.dform>`
-and `--preview` to pose it, since a snapshot has no pointer to select, drag,
+`--drag`, `--carry`, `--band`, `--new`, `--hover <kind>`, `--tab-order`,
+`--clash <other.dform>` and `--preview` to pose it, since a snapshot has no pointer to select, drag,
 carry, band or rest on anything with, and no second editor to change the file
 under it — the same
 affordance every example in this repository has, and how this one's own layout

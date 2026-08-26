@@ -79,6 +79,8 @@ pub enum Message {
     KeepMine,
     /// Turns preview mode on, or off again.
     Preview,
+    /// Turns the tab-order overlay on, or off again.
+    TabOrder,
     /// The next theme along.
     Theme,
     /// A key tapped on the on-screen keyboard.
@@ -134,6 +136,25 @@ struct Making {
     /// The two fields, which a preset writes into and a person may overwrite.
     width: NodeId,
     height: NodeId,
+}
+
+/// Numbering the form's tab stops, while somebody is re-sequencing them.
+///
+/// Delphi had this and WinForms kept it: turn it on, and every place Tab can
+/// land is numbered on the canvas in the order it will be reached. Click them in
+/// the order you want instead.
+///
+/// **Only siblings can be re-sequenced**, and that falls out of the format
+/// rather than being a shortcut. Tab order is file order read depth first, and a
+/// file can only say that one node comes before another *within one parent* — so
+/// moving a field from inside one panel to a place in the sequence inside
+/// another would mean moving it into that panel, which is a change to the design
+/// and not to the order. Clicking across a parent starts a new run there, and the
+/// status line says so.
+#[derive(Clone, Debug, Default)]
+struct Ordering {
+    /// The paths clicked so far in this run, in the order they were clicked.
+    picked: Vec<Vec<usize>>,
 }
 
 /// The other editor's version of the file, while somebody decides about it.
@@ -316,6 +337,8 @@ struct Chrome {
     arrange_buttons: Vec<(Command, NodeId)>,
     /// The button that says which mode it is.
     preview_button: NodeId,
+    /// The one that turns the tab-order overlay on.
+    tab_order_button: NodeId,
     /// The button that says which theme is being simulated.
     theme_button: NodeId,
     /// The invisible sheet over the form. Hiding it *is* preview mode.
@@ -361,6 +384,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         ("Undo", Message::Undo),
         ("Redo", Message::Redo),
         ("Design", Message::Preview),
+        ("Tab order", Message::TabOrder),
         (Simulated::Own.name(), Message::Theme),
     ] {
         let width = 8 * text.chars().count() as i32 + 24;
@@ -377,7 +401,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         );
         if matches!(
             message,
-            Message::Undo | Message::Redo | Message::Preview | Message::Theme
+            Message::Undo | Message::Redo | Message::Preview | Message::TabOrder | Message::Theme
         ) && let Some(id) = id
         {
             kept.push(id);
@@ -385,7 +409,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         x += width + 6;
     }
     let (undo_button, redo_button) = (kept[0], kept[1]);
-    let (preview_button, theme_button) = (kept[2], kept[3]);
+    let (preview_button, tab_order_button, theme_button) = (kept[2], kept[3], kept[4]);
     let title = ui
         .add(
             toolbar,
@@ -577,6 +601,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         log_lines,
         arrange_buttons,
         preview_button,
+        tab_order_button,
         theme_button,
         scrim: None,
         surface: None,
@@ -642,6 +667,8 @@ pub struct Designer {
     choosing: Option<(usize, NodeId)>,
     /// Whether the form is being run rather than drawn.
     preview: bool,
+    /// The tab-order overlay, while it is up.
+    ordering: Option<Ordering>,
     /// Which theme the canvas is standing in for.
     simulated: Simulated,
     /// Every message name the open form used, for the log to name them by.
@@ -705,6 +732,7 @@ impl Designer {
             inspector: None,
             choosing: None,
             preview: false,
+            ordering: None,
             simulated: Simulated::Own,
             names: Vec::new(),
             fired: Vec::new(),
@@ -1469,6 +1497,21 @@ impl Designer {
         {
             button.set_label(mode);
         }
+        // The tab-order button says whether it is on, the way the preview
+        // button does: a mode you cannot see the state of is a mode you press
+        // twice.
+        let ordering = self.ordering();
+        if let Some(button) = self
+            .ui
+            .widget_mut::<Button<Message>>(self.chrome.tab_order_button)
+        {
+            button.set_role(if ordering {
+                Role::Primary
+            } else {
+                Role::Neutral
+            });
+        }
+
         let theme = self.simulated.name();
         if let Some(button) = self
             .ui
@@ -2727,6 +2770,13 @@ impl Designer {
             return;
         }
 
+        // While the tab order is showing, a press on the canvas is a place in
+        // the sequence rather than a selection or a drag.
+        if self.ordering.is_some() {
+            self.pick_tab_stop(at);
+            return;
+        }
+
         let hit = topmost(
             &self.placed,
             |p| {
@@ -3609,6 +3659,151 @@ impl Designer {
     /// Whether the new-form sheet is up.
     pub const fn making(&self) -> bool {
         self.making.is_some()
+    }
+
+    // ---------------------------------------------------- the tab order
+
+    /// Turns the tab-order overlay on, or off again.
+    ///
+    /// See [`Ordering`] for what it is and why re-sequencing is per parent.
+    pub fn toggle_tab_order(&mut self) {
+        if self.ordering.take().is_some() {
+            self.status = String::from("designing");
+            self.reselected();
+            self.refresh_labels();
+            return;
+        }
+        // Not while the form is running: the numbers are about the file, and
+        // preview mode is about the form. F5 is the way out of that one.
+        if self.preview {
+            self.toggle_preview();
+        }
+        self.cancel_placing();
+        self.selection.clear();
+        self.selected = None;
+        self.ordering = Some(Ordering::default());
+        self.status = String::from(
+            "tab order — click the stops in the order you want them, within one parent",
+        );
+        self.reselected();
+        self.refresh_labels();
+    }
+
+    /// Whether the tab-order overlay is up.
+    pub const fn ordering(&self) -> bool {
+        self.ordering.is_some()
+    }
+
+    /// Every place Tab can land, in the order it lands there, as file paths.
+    ///
+    /// Asked of the tree rather than worked out here, so the numbers on the
+    /// canvas are the order the form will really have — including the parts
+    /// this crate has no opinion about, like a list with no enabled rows not
+    /// being a stop at all.
+    pub fn tab_stops(&mut self) -> Vec<Vec<usize>> {
+        let stops = self.ui.tab_stops();
+        // Filtered to what the *form* built. The designer's own panes are in
+        // the same tree and are emphatically not the form's tab order, and
+        // `placed` is exactly the form's nodes — so the filter is the check.
+        stops
+            .into_iter()
+            .filter_map(|id| {
+                self.placed
+                    .iter()
+                    .find(|node| node.id == id)
+                    .map(|node| node.path.clone())
+            })
+            .collect()
+    }
+
+    /// A click on the canvas while the tab order is showing.
+    ///
+    /// Each click makes that node the next stop after the one before it. The
+    /// first click of a run is where the run starts; a click on a node with a
+    /// different parent starts a new run there, because the file cannot say
+    /// anything else. See [`Ordering`].
+    fn pick_tab_stop(&mut self, at: Point) {
+        let Some(path) = topmost(
+            &self.placed,
+            |p| {
+                self.ui
+                    .bounds(p.id)
+                    .map(|r| (r, self.ui.visible(p.id), self.ui.z(p.id)))
+            },
+            at,
+        )
+        .map(|p| p.path.clone()) else {
+            return;
+        };
+        if !self.tab_stops().contains(&path) {
+            self.status = format!("{} is not a tab stop", self.describe(&path));
+            self.refresh_labels();
+            return;
+        }
+        let Some(ordering) = self.ordering.as_mut() else {
+            return;
+        };
+
+        let previous = ordering.picked.last().cloned();
+        let same_parent = previous.as_ref().is_some_and(|last| {
+            last.split_last().map(|it| it.1) == path.split_last().map(|it| it.1)
+        });
+        if !same_parent {
+            ordering.picked.clear();
+        }
+        if ordering.picked.contains(&path) {
+            self.status = String::from("already placed in this run");
+            self.refresh_labels();
+            return;
+        }
+
+        match previous.filter(|_| same_parent) {
+            // The first of a run: nothing to move it after yet.
+            None => {
+                if let Some(ordering) = self.ordering.as_mut() {
+                    ordering.picked.push(path.clone());
+                }
+                self.status = format!("{} is first — click the next one", self.describe(&path));
+            }
+            Some(after) => {
+                let landed = self.move_after(&path, &after);
+                if let Some(ordering) = self.ordering.as_mut() {
+                    ordering.picked.push(landed);
+                }
+                self.status = format!("{} placed", self.describe(&path));
+                self.reload_from_document();
+            }
+        }
+        self.refresh_labels();
+        self.refresh_overlay();
+    }
+
+    /// Moves a node so it is the next sibling after `after`, returning where it
+    /// landed.
+    ///
+    /// One `Edit::Move` among siblings, which is the same edit *bring to front*
+    /// writes — so this is a reordering of the file and nothing on the canvas
+    /// moves, every rectangle being its own.
+    fn move_after(&mut self, path: &[usize], after: &[usize]) -> Vec<usize> {
+        let (Some((&from, parent)), Some((&anchor, _))) = (path.split_last(), after.split_last())
+        else {
+            return path.to_vec();
+        };
+        // Landing *after* the anchor: one past it, and one less again when the
+        // node being moved was already before it and vacates a slot on the way.
+        let target = if from < anchor { anchor } else { anchor + 1 };
+        if from == target {
+            return path.to_vec();
+        }
+        let mut landed = parent.to_vec();
+        landed.push(target);
+        self.history.separate();
+        self.edit(Edit::Move {
+            from: path.to_vec(),
+            to: parent.to_vec(),
+            index: target,
+        });
+        landed
     }
 
     // ------------------------------------------------- the file underneath
@@ -4551,6 +4746,66 @@ impl Designer {
             )
         };
 
+        // The numbers, when the tab order is showing. They replace the
+        // selection rather than sitting beside it: this mode is about the
+        // sequence, and eight resize handles over it would be noise.
+        //
+        // Before the closure below, which borrows `self` for the rest of the
+        // function and so cannot be mixed with asking the tree anything.
+        if self.ordering.is_some() {
+            let stops = self.tab_stops();
+            let picked: Vec<Vec<usize>> = self
+                .ordering
+                .as_ref()
+                .map(|it| it.picked.clone())
+                .unwrap_or_default();
+            let mut badges: Vec<NodeId> = Vec::new();
+            for (nth, path) in stops.iter().enumerate() {
+                let Some(bounds) = self.path_bounds(path) else {
+                    continue;
+                };
+                // Done in this run reads as done: a filled badge rather than an
+                // outlined one, so the eye can see how far it has got.
+                let settled = picked.contains(path);
+                let badge = to_canvas(Rect::new(bounds.x, bounds.y, 22, 16));
+                if let Some(id) = self.ui.add(
+                    self.chrome.canvas,
+                    Panel {
+                        fill: Some(if settled {
+                            Role::Primary
+                        } else {
+                            Role::Base300
+                        }),
+                        border: Some(Role::Primary),
+                        border_width: 1,
+                        radius: Radius::Field,
+                        backdrop: false,
+                    },
+                    badge,
+                ) {
+                    self.ui.set_z(id, 210);
+                    badges.push(id);
+                }
+                if let Some(id) = self.ui.add(
+                    self.chrome.canvas,
+                    Label::new(format!("{}", nth + 1))
+                        .with_size(10)
+                        .with_align(denise_ui::Align::Center, denise_ui::Align::Center)
+                        .with_role(if settled {
+                            Role::PrimaryContent
+                        } else {
+                            Role::BaseContent
+                        }),
+                    badge,
+                ) {
+                    self.ui.set_z(id, 215);
+                    badges.push(id);
+                }
+            }
+            self.overlay = badges;
+            return;
+        }
+
         let mut added: Vec<NodeId> = Vec::new();
         let mut add = |ui: &mut Ui<Message>, rect: Rect, panel: Panel, z: i32| {
             if let Some(id) = ui.add(self.chrome.canvas, panel, to_canvas(rect)) {
@@ -4704,6 +4959,7 @@ impl Designer {
             Message::Reload => self.take_theirs(),
             Message::KeepMine => self.keep_mine(),
             Message::Preview => self.toggle_preview(),
+            Message::TabOrder => self.toggle_tab_order(),
             Message::Theme => self.cycle_theme(),
             Message::Key(code) => {
                 let events = self.keyboard.press_key(&mut self.ui, code);
@@ -9025,5 +9281,153 @@ mod tests {
         assert_eq!(watched.next_frame_in(), Some(Duration::from_millis(16)));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ------------------------------------------- the tab order (#98)
+
+    /// The path of the first node of this kind, for the ones the form leaves
+    /// unnamed.
+    fn path_named_kind(designer: &Designer, kind: &str) -> Vec<usize> {
+        designer
+            .placed
+            .iter()
+            .find(|p| p.kind == kind)
+            .unwrap_or_else(|| panic!("no `{kind}` in the form"))
+            .path
+            .clone()
+    }
+
+    /// The kinds of the form's tab stops, in the order Tab reaches them.
+    fn stops(designer: &mut Designer) -> Vec<String> {
+        designer
+            .tab_stops()
+            .iter()
+            .map(|path| {
+                let node = designer
+                    .placed
+                    .iter()
+                    .find(|it| it.path == *path)
+                    .expect("a stop is a placed node");
+                node.name.clone().unwrap_or_else(|| node.kind.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_mode_numbers_the_stops_in_the_order_tab_reaches_them() {
+        let mut designer = designer_on("forms/hello.dform");
+        designer.toggle_tab_order();
+        assert!(designer.ordering());
+
+        // `hello.dform` has a field and a button, in that order, and its two
+        // labels and its panel are not stops.
+        assert_eq!(stops(&mut designer), ["who", "button"]);
+
+        // One badge and one number per stop, drawn over the form.
+        assert_eq!(designer.overlay.len(), 4, "a badge and a label each");
+    }
+
+    #[test]
+    fn clicking_two_siblings_in_order_rewrites_the_file() {
+        let mut designer = designer_on("forms/hello.dform");
+        let before = text(&designer);
+        designer.toggle_tab_order();
+        assert_eq!(stops(&mut designer), ["who", "button"]);
+
+        // Click the button first, then the field: the file is rewritten so the
+        // button comes first, and Tab follows it.
+        let button = path_named_kind(&designer, "button");
+        let who = path_named(&designer, "who");
+        let at = middle(&designer, &button);
+        click_at(&mut designer, at, false);
+        let at = middle(&designer, &who);
+        click_at(&mut designer, at, false);
+
+        assert_eq!(stops(&mut designer), ["button", "who"]);
+        assert_ne!(text(&designer), before, "the file did not change");
+
+        // And it is a *reordering*: every rectangle is where it was, because a
+        // rectangle is its own and nothing here moved on the canvas.
+        for name in ["who", "greeting", "card"] {
+            let path = path_named(&designer, name);
+            let rect = designer.document.form().property(&path, "x");
+            assert!(rect.is_some(), "`{name}` lost its geometry");
+        }
+        // Not a claim about blank lines: a node carries its leading trivia
+        // with it, so moving one that had a blank line above it moves that
+        // blank line too, and where the blanks fall legitimately changes.
+        // What must not change is the design, and undo puts even the trivia
+        // back — `undoing_a_re_sequence_puts_the_file_back_exactly` is that.
+        assert_eq!(
+            text(&designer).matches("name=").count(),
+            before.matches("name=").count(),
+            "reordering lost or gained a node",
+        );
+    }
+
+    #[test]
+    fn undoing_a_re_sequence_puts_the_file_back_exactly() {
+        let mut designer = designer_on("forms/hello.dform");
+        let before = text(&designer);
+        designer.toggle_tab_order();
+        let button = path_named_kind(&designer, "button");
+        let who = path_named(&designer, "who");
+        let at = middle(&designer, &button);
+        click_at(&mut designer, at, false);
+        let at = middle(&designer, &who);
+        click_at(&mut designer, at, false);
+        assert_ne!(text(&designer), before);
+
+        designer.undo();
+        assert_eq!(text(&designer), before, "undo did not restore the file");
+    }
+
+    #[test]
+    fn clicking_something_that_is_not_a_stop_says_so_rather_than_moving_it() {
+        let mut designer = designer_on("forms/hello.dform");
+        designer.toggle_tab_order();
+        let before = text(&designer);
+
+        // The card is a panel: drawn, and not a place Tab lands. Its lower
+        // reaches, because its middle is over the field that *is* one.
+        let card = path_named(&designer, "card");
+        let bounds = designer.path_bounds(&card).expect("the card is placed");
+        let at = Point::new(bounds.x + bounds.width / 2, bounds.bottom() - 8);
+        click_at(&mut designer, at, false);
+
+        assert!(
+            designer.status.contains("not a tab stop"),
+            "said nothing useful: {}",
+            designer.status
+        );
+        assert_eq!(text(&designer), before, "it moved something anyway");
+    }
+
+    #[test]
+    fn the_mode_is_the_sequence_and_leaves_the_selection_alone() {
+        let mut designer = designer_on("forms/hello.dform");
+        assert!(designer.select_named("who"));
+        assert!(!designer.selection.is_empty());
+
+        // Turning it on drops the selection: eight resize handles over the
+        // numbers would be noise, and this mode is about the order.
+        designer.toggle_tab_order();
+        assert!(designer.selection.is_empty());
+
+        designer.toggle_tab_order();
+        assert!(!designer.ordering());
+        assert!(designer.status.contains("designing"));
+    }
+
+    #[test]
+    fn the_mode_and_preview_are_not_both_on() {
+        // The numbers are about the file; preview is about the form running.
+        let mut designer = designer_on("forms/hello.dform");
+        designer.toggle_preview();
+        assert!(designer.previewing());
+
+        designer.toggle_tab_order();
+        assert!(designer.ordering());
+        assert!(!designer.previewing(), "the form was still running");
     }
 }

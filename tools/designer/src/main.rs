@@ -37,7 +37,10 @@
 //! node here without the file learning of it. That is a form built from nothing.
 //!
 //! F5 runs it: the scrim goes, the events become the form's, and the strip along
-//! the bottom names every message it fires.
+//! the bottom names every message it fires. *Tab order* numbers every place Tab
+//! can land, in the order it will land there, and clicking them re-sequences the
+//! file — Delphi's mode, and the numbers come from the tree's own `tab_stops` so
+//! they are the order the form will really have.
 //!
 //! The file underneath is watched, because the other editor is a text editor and
 //! that was the point of a text format: saving renames a temporary file so it
@@ -81,6 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut preview = false;
     let mut band: Option<denise::Rect> = None;
     let mut new_form = false;
+    let mut tab_order = false;
     let mut hover: Option<String> = None;
     let mut clash: Option<String> = None;
     let mut rest = args.iter();
@@ -96,6 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--preview" => preview = true,
             "--new" => new_form = true,
+            "--tab-order" => tab_order = true,
             "--hover" => hover = rest.next().cloned(),
             "--clash" => clash = rest.next().cloned(),
             "--band" => {
@@ -131,6 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --preview              snapshot: run the form rather than draw it\n\
                      \x20 --band <x,y,w,h>       snapshot: draw a rubber band over the form\n\
                      \x20 --new                  snapshot: put the new-form sheet up\n\
+                     \x20 --tab-order            snapshot: number the form's tab stops\n\
                      \x20 --hover <kind>         snapshot: rest the pointer on this palette row\n\
                      \x20 --clash <other.dform>  snapshot: the file-changed sheet, against this version"
                 );
@@ -172,6 +178,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if new_form {
             designer.begin_new();
+        }
+        if tab_order {
+            designer.toggle_tab_order();
         }
         if let Some(kind) = hover
             && !designer.hover_palette(&kind)
