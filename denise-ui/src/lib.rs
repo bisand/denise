@@ -62,7 +62,10 @@ pub use motion::{Motion, Wake};
 pub use node::NodeId;
 pub use overlay::{Side, anchored};
 pub use ui::Ui;
-pub use widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
+pub use widget::{
+    Animation, Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Void,
+    Widget,
+};
 pub use widgets::{
     Alert, Align, Badge, Button, Checkbox, Describe, Divider, DynDescribe, Label, List, ListItem,
     Mismatch, Orientation, Panel, Progress, Property, PropertyError, PropertyKind, RadialProgress,

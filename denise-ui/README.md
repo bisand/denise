@@ -227,13 +227,26 @@ that does.
 ## What is not here
 
 **No layout engine.** Nodes take explicit rectangles relative to their parent,
-which is what a fixed-resolution panel wants. Widgets with a natural size offer
-`preferred_width`/`preferred_height` as *queries the application makes* — the tree
-never calls them, and that is the line. There are two *placement rules* over those
-rectangles — see [Anchors and docking](#anchors-and-docking) — and neither is a
-solver: each derives one rectangle per child in a pass that already runs. Content
--driven sizing, where a label is as wide as its text, is the thing this does not
-do, and it belongs in a crate an application opts into rather than in here.
+which is what a fixed-resolution panel wants. Widgets with a natural size answer
+`Widget::measure` — and `preferred_width`/`preferred_height` where they had one
+first — as *queries the application makes*. **The tree never asks**, and that is
+the line: an intrinsic-size protocol is one where the tree asks every widget how
+big it wants to be and then places it, and nothing in this crate consumes any of
+this.
+
+`ui.measure(id, Offer::NOTHING)` is how a caller who holds a `NodeId` rather than
+the widget asks. It exists because of a borrow — measuring needs the widget and
+the text engine at once, and both live inside `Ui` — and because the inherent
+queries never agreed on a signature. `Offer` and `Measured` are per axis, because
+the widgets are: an `Alert` has a height for a width you promise it and no view
+about its own width; a `Panel` has no view about either, and says so rather than
+inventing one.
+
+There are two *placement rules* over those rectangles — see [Anchors and
+docking](#anchors-and-docking) — and neither is a solver: each derives one
+rectangle per child in a pass that already runs. Content-driven sizing, where a
+label is as wide as its text, is the thing this does not do, and it belongs in a
+crate an application opts into rather than in here.
 
 ## Scrolling
 

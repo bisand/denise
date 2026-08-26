@@ -6,7 +6,7 @@ use denise::{Point, Radius, Role};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
-use crate::widget::{PaintCtx, Widget};
+use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
@@ -163,6 +163,16 @@ impl<M: 'static> Widget<M> for Alert {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, offered: Offer) -> Measured {
+        // Height for a width, and no answer without one: wrapped text has no
+        // height until it knows what it wraps to. A banner is as wide as you
+        // make it, so there is no width to offer back.
+        Measured {
+            width: None,
+            height: offered.width.map(|w| self.preferred_height(ctx.text, w)),
+        }
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {

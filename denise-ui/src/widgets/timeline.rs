@@ -7,7 +7,7 @@ use denise::{Point, Rect, Role, Theme};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
-use crate::widget::{PaintCtx, Widget};
+use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, Value,
 };
@@ -225,6 +225,10 @@ impl<M: 'static> Widget<M> for Timeline {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        Measured::tall(self.preferred_height(ctx.theme))
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.items.is_empty() {

@@ -7,7 +7,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
-use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{
+    Animation, Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
+};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
@@ -266,6 +268,13 @@ impl<M: 'static> Widget<M> for Toggle<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        Measured::both(
+            self.preferred_width(ctx.theme, ctx.text),
+            ctx.theme.metrics.size_selector.max(1),
+        )
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let track = track_rect(ctx.bounds, ctx.theme);
         // A stadium: the radius is half the height, whatever the theme's selector

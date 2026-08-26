@@ -6,7 +6,7 @@ use denise::Role;
 use denise_render::Canvas;
 use denise_text::TextStyle;
 
-use crate::widget::{PaintCtx, Widget};
+use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
 use crate::widgets::describe::{
     ALIGNMENTS, Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
@@ -117,6 +117,15 @@ impl<M: 'static> Widget<M> for Label {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        // The headline case: a label is exactly as wide as its text, because it
+        // draws one line with no padding of its own.
+        Measured::both(
+            ctx.text.measure_line(self.style, &self.text),
+            ctx.text.line_height(self.style),
+        )
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let color = ctx.theme.color(self.role);
         draw_aligned(

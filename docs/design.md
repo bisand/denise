@@ -176,13 +176,21 @@ Three rules hold across all of them:
   because it looks like the same thing. An intrinsic-size *protocol* is one where
   the tree asks every widget how big it wants to be and then places it. Here the
   *application* asks, does its own arithmetic, and passes a rectangle — exactly as
-  it does for a node with no natural size at all. Twelve of the twenty-six offer
-  the query — `alert`, `badge`, `button`, `checkbox`, `list`, `radio-group`,
-  `rating`, `table`, `tabs`, `timeline`, `toggle`, `tree` — and nothing in
-  `denise-ui` consumes it. They do not agree on a signature, because each grew
-  when one example needed it; [docs/arrange.md](arrange.md) is where that is
-  reckoned with, and is the design note for the optional layout crate that would
-  be their first real caller.
+  it does for a node with no natural size at all. Sixteen of the twenty-six answer
+  — the ten that are whatever rectangle they are given say so, which is the honest
+  answer and not a gap — and **nothing in `denise-ui` consumes any of it**.
+
+  `Widget::measure` and `Ui::measure` are the uniform way to ask, added because a
+  caller holding a `NodeId` rather than the widget has no other door: the twelve
+  inherent `preferred_width`/`preferred_height` methods disagree on a signature,
+  each having grown when one example needed it, and
+  `widget.preferred_width(ui.text_mut())` cannot be written at all — both halves
+  borrow the same `Ui`. Those twelve stay, because `examples/gallery` calls them
+  and they are the nicer call when you are holding the widget.
+
+  The protocol changes nothing about the line above. The tree still never asks.
+  [docs/arrange.md](arrange.md) is the design note for the optional layout crate
+  that is its first real caller.
 
 Two widgets share their geometry rather than each inventing it. `Spinner` is
 `RadialProgress`'s ring with the value replaced by a clock, so the centre,

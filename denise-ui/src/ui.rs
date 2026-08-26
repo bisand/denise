@@ -23,7 +23,9 @@ use crate::tooltip::Tooltip;
 const POPUP_GAP: i32 = 4;
 use crate::anchor::{self, Anchors, Dock};
 use crate::motion::{Motion, Wake};
-use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Void, Widget};
+use crate::widget::{
+    Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Void, Widget,
+};
 use crate::widgets::describe::{DynDescribe, Property, PropertyError, Value};
 
 /// A drawer's life, tracked by the tree.
@@ -958,6 +960,51 @@ impl<M: 'static> Ui<M> {
             id,
             Point::new(current.x.saturating_add(dx), current.y.saturating_add(dy)),
         );
+    }
+
+    /// How big a node would like to be, given what the caller can promise.
+    ///
+    /// [`Measured::NOTHING`] when the node has no opinion, which is most of
+    /// them, and when there is no node of that id.
+    ///
+    /// **This exists because of a borrow.** Measuring needs the widget and the
+    /// text engine at once, and both live in this struct — so
+    /// `widget.preferred_width(ui.text_mut())` cannot be written by anybody
+    /// outside it, however much they are holding. An application that *is*
+    /// holding the widget, before it goes in the tree, should keep calling the
+    /// widget's own `preferred_width`/`preferred_height`: they are the nicer
+    /// call and this is a wrapper over the same arithmetic.
+    ///
+    /// **The tree never calls this itself.** See [`Widget::measure`] for why
+    /// that sentence is the whole point.
+    ///
+    /// ```
+    /// # use denise::{Rect, Size, theme};
+    /// # use denise_ui::{Measured, Offer, Ui, Void, widgets::{Label, Panel}};
+    /// let mut ui: Ui<Void> = Ui::new(Size::new(320, 240), theme::DARK);
+    /// let root = ui.root();
+    /// let hello = ui.add(root, Label::new("Hello"), Rect::new(0, 0, 10, 10)).unwrap();
+    /// let panel = ui.add(root, Panel::default(), Rect::new(0, 0, 10, 10)).unwrap();
+    ///
+    /// // A label is as wide as its text, whatever rectangle it was given.
+    /// let wanted = ui.measure(hello, Offer::NOTHING);
+    /// assert!(wanted.width.is_some_and(|w| w > 0));
+    ///
+    /// // A panel is the background other things sit on, and has no view.
+    /// assert_eq!(ui.measure(panel, Offer::NOTHING), Measured::NOTHING);
+    /// ```
+    pub fn measure(&mut self, id: NodeId, offered: Offer) -> Measured {
+        // The disjoint-field borrow the paint path already relies on: `nodes` is
+        // read while `text` is written, which is allowed inside this type and
+        // expressible nowhere else.
+        let Some(node) = self.nodes.get(id) else {
+            return Measured::NOTHING;
+        };
+        let mut ctx = MeasureCtx {
+            theme: &self.theme,
+            text: &mut self.text,
+        };
+        node.widget.measure(&mut ctx, offered)
     }
 
     /// Moves or resizes a node, damaging the rectangles it left and the ones it
