@@ -504,7 +504,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/design.md](docs/design.md) | How it is built and why — architecture, rasteriser, text, keyboards, theming, and the milestone history |
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
-| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all seventeen share one number, and what each guard is for |
+| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all eighteen share one number, and what each guard is for |
 | [docs/forms.md](docs/forms.md) | The `.dform` file: why KDL, the version 1 schema, loading one from Rust, and what a form file deliberately will not do |
 | [docs/designer.md](docs/designer.md) | From a drawing to a running screen: the designer, the file and an application, end to end |
 | [docs/arrange.md](docs/arrange.md) | The design note for `denise-arrange`: content-driven sizing in an optional crate, what it gives up, and why the tree still never measures |

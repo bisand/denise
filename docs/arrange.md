@@ -83,21 +83,38 @@ compile anyway, because both halves borrow the same `Ui`.
 So the crate's real prerequisite is a **uniform measure protocol**, and that lands
 in `denise-ui` before any arranging is possible.
 
-## The model: rows, columns and stacks
+## The model: rows, columns and layers
 
-Containers nest. Each child is a fixed size or a flex weight. Containers have
-padding and a gap.
+Containers nest. Each child is a fixed size, a flex weight, or hugging.
+Containers have padding and a gap.
+
+Three flows: `Row`, `Column`, and `Layer` — every child in the whole content box,
+one on top of another, which is a badge over an avatar. This note first called
+that third one a *stack*, and it is not: `Ui::set_stack` already means
+top-to-bottom, and two meanings of one word in one workspace is the same trap
+`Fit` would have been.
 
 ```rust
-let mut arrange = Arrange::new();
+let mut arrange = Arrange::new(Flow::Row);
+let row = arrange.root();
+arrange.set_padding(row, 12);
+arrange.set_gap(row, 8);
 
-let row = arrange.row().gap(8).padding(12);
-arrange.fixed(row, save, Size::new(80, 32));
-arrange.flex(row, message, 1);
-arrange.hug(row, count);            // as big as it says it wants to be
+arrange.node(row, title, Sizing::Hug);      // as wide as its text
+arrange.node(row, spacer, Sizing::Flex(1)); // everything left over
+arrange.node(row, save, Sizing::Hug);
 
-arrange.apply(&mut ui, toolbar);    // one set_layout per node
+arrange.apply(&mut ui, toolbar);            // one set_layout per node
 ```
+
+The arena takes a parent the way [`Ui::add`] does, rather than the chained
+builder this note first sketched: containers nest, so a child needs to say which
+container it is in, and one shape for that is better than two. `Arrange::group`
+adds a nested container, and it may *be* a node of the tree — a `Panel` holding a
+row of buttons — in which case that node gets the container's rectangle and its
+children are placed inside it.
+
+[`Ui::add`]: https://docs.rs/denise-ui/latest/denise_ui/struct.Ui.html#method.add
 
 Three ways a child can be sized, and that is the whole vocabulary:
 
@@ -247,14 +264,17 @@ and that is a schema change with its own number.
    and answers for the sixteen widgets that have one. Useful on its own: an
    application doing its own arithmetic can ask one question instead of twelve
    differently-shaped ones.
-3. **`denise-arrange`.** The crate, `no_std + alloc`, its own README, doc examples
-   compiled by `cargo test --doc`.
-4. **An example.** The same screen laid out by hand and by the crate, so the
-   difference is visible and the cost is countable.
+3. **`denise-arrange`.** ✅ The crate, `no_std + alloc`, its own README, doc
+   examples compiled by `cargo test --doc`.
+4. **An example.** ✅ [`examples/arranged`](../examples/arranged) is the same
+   screen laid out both ways, and a test asserts they land in **exactly the same
+   rectangles** at three different sizes. Rendered, the two are byte-identical —
+   which is the claim stated as strongly as it can be: the crate computes what
+   the application would have computed.
 
-Steps 2 and 3 are separately useful and separately reviewable, which is why they
-are separate. Step 2 is also the one that touches a published crate, so it is the
-one to get wrong slowly.
+Steps 2 and 3 were separately useful and separately reviewable, which is why they
+were separate. Step 2 is also the one that touched a published crate, so it was
+the one to get wrong slowly.
 
 ## What this will never be
 

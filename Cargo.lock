@@ -116,6 +116,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "arranged"
+version = "0.19.0"
+dependencies = [
+ "denise",
+ "denise-arrange",
+ "denise-ui",
+ "denise-winit",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -790,6 +800,14 @@ dependencies = [
  "denise-win32",
  "windows",
  "windows-core",
+]
+
+[[package]]
+name = "denise-arrange"
+version = "0.19.0"
+dependencies = [
+ "denise",
+ "denise-ui",
 ]
 
 [[package]]

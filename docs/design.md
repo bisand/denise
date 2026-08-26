@@ -21,6 +21,7 @@ A Cargo workspace: a platform-agnostic core, and thin backends behind two traits
 | `denise-text` | Glyph sources, a bounded glyph atlas, line layout, word wrapping | ✅ M4, M6 |
 | `denise-ui` | Scene graph, scene stack, widgets, cursor sprite | ✅ M3 |
 | `denise-forms` | Loads a `.dform` form file into a widget tree at runtime | ◐ M7 |
+| `denise-arrange` | Optional content-driven layout: rows, columns and layers over the tree | ◐ M7 |
 | `denise-image` | PNG, JPEG, GIF and BMP decoding into premultiplied pixels | ✅ M6 |
 | `denise-video` | V4L2 M2M hardware decode onto a DRM plane, zero-copy | ◐ M7 |
 | `denise-winit` | Desktop development and preview backend | ✅ M0 |

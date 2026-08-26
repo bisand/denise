@@ -245,8 +245,9 @@ inventing one.
 There are two *placement rules* over those rectangles — see [Anchors and
 docking](#anchors-and-docking) — and neither is a solver: each derives one
 rectangle per child in a pass that already runs. Content-driven sizing, where a
-label is as wide as its text, is the thing this does not do, and it belongs in a
-crate an application opts into rather than in here.
+label is as wide as its text, is the thing this does not do, and it lives in
+[`denise-arrange`](https://github.com/bisand/denise/tree/main/denise-arrange), a
+crate an application opts into rather than something in here.
 
 ## Scrolling
 
