@@ -7,7 +7,9 @@ use denise_render::Canvas;
 use denise_render::icon::Icon;
 use denise_text::TextStyle;
 
-use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{
+    Animation, Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
+};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, RADII, ROLES, Value,
 };
@@ -391,6 +393,16 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        // Width from the label; height from the theme, because a button is a
+        // field-sized target and that is the theme's number rather than this
+        // widget's.
+        Measured::both(
+            self.preferred_width(ctx.text),
+            ctx.theme.metrics.size_field.max(1),
+        )
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let (background, content) = interactive_pair(ctx.theme, self.role, ctx.state);

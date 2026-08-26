@@ -7,7 +7,9 @@ use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
-use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{
+    Animation, Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
+};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, Value,
 };
@@ -274,6 +276,13 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        // A field is as wide as you make it — that is what a field is — but its
+        // height is one line of its own text in a field-sized box.
+        let line = ctx.text.line_height(self.style);
+        Measured::tall(line.max(ctx.theme.metrics.size_field).max(1))
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let disabled = ctx.state.contains(VisualState::DISABLED);

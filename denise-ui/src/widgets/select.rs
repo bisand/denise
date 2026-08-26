@@ -7,7 +7,9 @@ use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
 use denise_render::Canvas;
 use denise_text::TextStyle;
 
-use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{
+    Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
+};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
@@ -212,6 +214,19 @@ impl<M: Clone + 'static> Widget<M> for Select<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        // As wide as its longest option, so a dropdown does not clip the thing
+        // it exists to show. The chevron and both paddings go on top.
+        let pad = padding(self.style.size_px);
+        // A plain loop rather than an iterator chain: `measure_line` takes the
+        // engine mutably, so a closure over it would hold it for the whole walk.
+        let mut widest = ctx.text.measure_line(self.style, &self.placeholder);
+        for option in self.options() {
+            widest = widest.max(ctx.text.measure_line(self.style, option));
+        }
+        Measured::both(widest + pad * 4, ctx.theme.metrics.size_field.max(1))
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {

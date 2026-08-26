@@ -6,7 +6,7 @@ use denise::Role;
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
-use crate::widget::{PaintCtx, Widget};
+use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, ROLES, Value,
 };
@@ -163,6 +163,13 @@ impl<M: 'static> Widget<M> for Badge {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        Measured::both(
+            self.preferred_width(ctx.text),
+            self.preferred_height(ctx.text),
+        )
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {

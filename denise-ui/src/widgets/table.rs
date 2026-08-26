@@ -7,7 +7,9 @@ use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme
 use denise_render::Canvas;
 use denise_text::TextStyle;
 
-use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{
+    Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
+};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
@@ -484,6 +486,12 @@ impl<M: 'static> Widget<M> for Table<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        // The header plus the rows it holds. No width: the columns divide
+        // whatever they are given, which is what `flex` on a column means.
+        Measured::tall(self.preferred_height(ctx.theme, self.rows.len()))
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.columns.is_empty() {

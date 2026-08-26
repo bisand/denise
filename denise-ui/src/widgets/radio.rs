@@ -7,7 +7,9 @@ use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
-use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{
+    Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
+};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
@@ -247,6 +249,13 @@ impl<M: 'static> Widget<M> for RadioGroup<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
+        Measured::both(
+            self.preferred_width(ctx.theme, ctx.text),
+            self.preferred_height(ctx.theme),
+        )
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let count = self.options.len();
         if count == 0 {

@@ -3,7 +3,9 @@
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role};
 use denise_render::Canvas;
 
-use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
+use crate::widget::{
+    Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
+};
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
@@ -271,6 +273,15 @@ impl<M: 'static> Widget<M> for Rating<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
+    fn measure(&self, _ctx: &mut MeasureCtx<'_>, offered: Offer) -> Measured {
+        // Width for a height, the mirror of `Alert`: stars are square, so how
+        // wide this wants to be is entirely a question about how tall it is.
+        Measured {
+            width: offered.height.map(|h| self.preferred_width(h)),
+            height: None,
+        }
+    }
+
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
         let bounds = ctx.bounds;
         let (side, step) = geometry(bounds, self.max);

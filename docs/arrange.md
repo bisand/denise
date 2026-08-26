@@ -149,28 +149,38 @@ is a second witness that the shape is real rather than one widget being awkward.
 ## What it costs the crates that already exist
 
 `denise-ui` gains **one trait method and one `Ui` method**. Not a solver — a door.
+**Built**, in [#147].
+
+[#147]: https://github.com/bisand/denise/pull/147
 
 ```rust
 pub trait Widget<M> {
-    /// How big this widget would like to be, within what it is offered.
-    ///
-    /// `None` — the default — means it has no opinion, which is most widgets and
-    /// every one that is whatever rectangle it is given.
-    fn measure(&self, ctx: &mut MeasureCtx<'_>, offered: Constraint) -> Option<Size> {
-        None
+    /// How big this widget would like to be, given what the caller can promise.
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, offered: Offer) -> Measured {
+        Measured::NOTHING
     }
 }
 
 impl<M> Ui<M> {
-    /// What the node would like to be. `None` if it has no opinion.
-    pub fn measure(&mut self, id: NodeId, offered: Constraint) -> Option<Size>;
+    pub fn measure(&mut self, id: NodeId, offered: Offer) -> Measured;
 }
 ```
 
-`MeasureCtx` carries what the existing signatures already ask for between them —
-the theme and the text engine — which is why they can all be expressed through it.
+`MeasureCtx` carries the theme and the text engine and nothing else — no bounds,
+because a widget asked how big it wants to be must not answer with how big it
+already is; no state, because a hovered button is not a wider button.
 `Ui::measure` exists because the borrow has to be resolved inside `Ui`, where both
 halves live.
+
+**`Offer` and `Measured` are per axis, and this note's first sketch was wrong to
+say `Option<Size>`.** The widgets are per axis and always were: an `Alert` has an
+opinion about its height and none about its width, a `Table` about its height and
+none about its width, a `Rating` about its width and none about its height. A
+single `Option<Size>` would force a widget with one opinion to invent the other,
+and an invented size is worse than no size — no size, the caller notices and
+decides. `Offer` is likewise not a *constraint*: there is no minimum, no maximum
+and nothing to satisfy, only the one fact a widget may need in order to answer at
+all.
 
 **This does not make the tree a layout engine.** `design.md` draws the line
 precisely, and the line survives:
@@ -190,11 +200,17 @@ call when you *are* holding the widget, and `examples/gallery` is that caller.
 They become thin wrappers over the same arithmetic rather than a second copy of
 it.
 
-The fourteen widgets with no answer get one where there is an honest one to give —
-`label`, `text-input`, `select`, `divider`, `collapse`, `avatar`, `progress`,
-`spinner`, `radial-progress` — and keep `None` where there is not. An `image` is
-whatever rectangle you give it; so is a `video`; so is a `panel`, which is the
-background other things sit on and has no content of its own to measure.
+The fourteen widgets with no answer get one where there is an honest one to give.
+Four did: `label` (as wide as its text — the case that could not be answered at
+all), `select` (as wide as its longest option, so a dropdown does not clip the
+thing it exists to show), `text-input` and `collapse` (a height each, and no view
+about their width).
+
+The rest keep `Measured::NOTHING`, and that is the finding rather than the
+shortfall: an `image`, a `video`, a `panel`, an `avatar`, a `progress`, a
+`spinner`, a `radial-progress`, a `carousel` and a `slider` are all **whatever
+rectangle they are given**. Their paint code derives every number from `bounds`.
+Inventing a size for them would have been a number a caller then silently obeyed.
 
 ## The questions the issue asked
 
@@ -227,9 +243,10 @@ and that is a schema change with its own number.
 
 1. **This note.** It is the deliverable that lets the rest be checked against
    something.
-2. **The measure protocol in `denise-ui`.** `Widget::measure`, `Ui::measure`, and
-   answers for the widgets that have one. Useful on its own: an application doing
-   its own arithmetic today can ask one question instead of twelve.
+2. **The measure protocol in `denise-ui`.** ✅ `Widget::measure`, `Ui::measure`,
+   and answers for the sixteen widgets that have one. Useful on its own: an
+   application doing its own arithmetic can ask one question instead of twelve
+   differently-shaped ones.
 3. **`denise-arrange`.** The crate, `no_std + alloc`, its own README, doc examples
    compiled by `cargo test --doc`.
 4. **An example.** The same screen laid out by hand and by the crate, so the

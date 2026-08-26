@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use denise::{InputEvent, Rect, Theme};
+use denise::{InputEvent, Rect, Size, Theme};
 use denise_render::Canvas;
 use denise_text::TextEngine;
 
@@ -133,6 +133,146 @@ pub enum Event<'a> {
     /// Ordinary widgets need not handle it: the visual pressed state is cleared
     /// by the tree either way.
     PressCancelled,
+}
+
+/// What a caller can promise a widget about the space it will get.
+///
+/// Not a constraint in the layout-engine sense: there is no minimum, no maximum
+/// and nothing to satisfy. It is the one fact a widget may need in order to
+/// answer at all — an [`Alert`](crate::widgets::Alert) has no height until it
+/// knows the width its text wraps to, and a [`Rating`](crate::widgets::Rating)
+/// has no width until it knows how tall its stars are.
+///
+/// `None` on an axis means the caller cannot promise anything there, which is
+/// the usual case and the default.
+///
+/// ```
+/// # use denise_ui::Offer;
+/// // "You will get 300 pixels of width; the height is up to you."
+/// let offer = Offer::wide(300);
+/// assert_eq!(offer.width, Some(300));
+/// assert_eq!(offer.height, None);
+///
+/// assert_eq!(Offer::NOTHING, Offer::default());
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Offer {
+    /// The width the caller can promise, if it can promise one.
+    pub width: Option<i32>,
+    /// The height, likewise.
+    pub height: Option<i32>,
+}
+
+impl Offer {
+    /// Nothing promised on either axis.
+    pub const NOTHING: Self = Self {
+        width: None,
+        height: None,
+    };
+
+    /// This much width, and nothing said about the height.
+    #[must_use]
+    pub const fn wide(width: i32) -> Self {
+        Self {
+            width: Some(width),
+            height: None,
+        }
+    }
+
+    /// This much height, and nothing said about the width.
+    #[must_use]
+    pub const fn tall(height: i32) -> Self {
+        Self {
+            width: None,
+            height: Some(height),
+        }
+    }
+
+    /// Both axes promised.
+    #[must_use]
+    pub const fn exactly(size: Size) -> Self {
+        Self {
+            width: Some(size.width as i32),
+            height: Some(size.height as i32),
+        }
+    }
+}
+
+/// What a widget would like to be, on the axes it has an opinion about.
+///
+/// **Per axis, and both optional**, because that is what the widgets actually
+/// are. A [`List`](crate::widgets::List) has an opinion about both. An
+/// [`Alert`](crate::widgets::Alert) has one about its height and none about its
+/// width — it is a banner, and a banner is as wide as you make it. A
+/// [`Panel`](crate::widgets::Panel) has none about either, because it is the
+/// background other things sit on and has no content of its own.
+///
+/// A single `Option<Size>` would force a widget with an opinion about one axis
+/// to invent one about the other, and an invented size is worse than no size:
+/// no size, the caller notices and decides.
+///
+/// ```
+/// # use denise_ui::Measured;
+/// assert_eq!(Measured::NOTHING, Measured::default());
+/// assert_eq!(Measured::wide(120).width, Some(120));
+/// assert_eq!(Measured::wide(120).height, None);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Measured {
+    /// The width it would like, if it has a view.
+    pub width: Option<i32>,
+    /// The height it would like, if it has a view.
+    pub height: Option<i32>,
+}
+
+impl Measured {
+    /// No opinion on either axis. The default, and what most widgets answer.
+    pub const NOTHING: Self = Self {
+        width: None,
+        height: None,
+    };
+
+    /// An opinion about the width only.
+    #[must_use]
+    pub const fn wide(width: i32) -> Self {
+        Self {
+            width: Some(width),
+            height: None,
+        }
+    }
+
+    /// An opinion about the height only.
+    #[must_use]
+    pub const fn tall(height: i32) -> Self {
+        Self {
+            width: None,
+            height: Some(height),
+        }
+    }
+
+    /// An opinion about both.
+    #[must_use]
+    pub const fn both(width: i32, height: i32) -> Self {
+        Self {
+            width: Some(width),
+            height: Some(height),
+        }
+    }
+}
+
+/// What a widget may consult while measuring itself.
+///
+/// The theme and the fonts, and deliberately nothing else. No bounds, because a
+/// widget being asked how big it wants to be must not answer with how big it
+/// currently is; no state, because a hovered button is not a wider button; no
+/// clock, because a size that changed every frame would be a layout that never
+/// settled.
+#[derive(Debug)]
+pub struct MeasureCtx<'a> {
+    /// The active theme. Sizes come from its metrics.
+    pub theme: &'a Theme,
+    /// Fonts and the glyph cache.
+    pub text: &'a mut TextEngine,
 }
 
 /// What a widget needs in order to draw itself.
@@ -317,6 +457,29 @@ pub trait Widget<M>: AsAny {
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
         let _ = (event, ctx);
         Handled::No
+    }
+
+    /// How big this widget would like to be, given what the caller can promise.
+    ///
+    /// [`Measured::NOTHING`] — the default — means no opinion, which is the
+    /// honest answer for a [`Panel`], an [`Image`] or a [`Video`]: they are
+    /// whatever rectangle they are given.
+    ///
+    /// **The tree never calls this.** It is a query, offered for a caller that
+    /// is not holding the concrete widget and so cannot reach its inherent
+    /// `preferred_width`/`preferred_height`. That distinction is the line
+    /// between this toolkit and a layout engine, and it survives: an
+    /// intrinsic-size *protocol* is one where the tree asks every widget how big
+    /// it wants to be and then places it, and nothing in this crate consumes
+    /// this. See `docs/design.md`, and `docs/arrange.md` for the caller it was
+    /// written for.
+    ///
+    /// [`Panel`]: crate::widgets::Panel
+    /// [`Image`]: crate::widgets::Image
+    /// [`Video`]: crate::widgets::Video
+    fn measure(&self, ctx: &mut MeasureCtx<'_>, offered: Offer) -> Measured {
+        let _ = (ctx, offered);
+        Measured::NOTHING
     }
 
     /// Returns `true` if the pointer can hit this widget.
