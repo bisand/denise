@@ -176,9 +176,13 @@ Three rules hold across all of them:
   because it looks like the same thing. An intrinsic-size *protocol* is one where
   the tree asks every widget how big it wants to be and then places it. Here the
   *application* asks, does its own arithmetic, and passes a rectangle — exactly as
-  it does for a node with no natural size at all. `Button`, `Checkbox`, `Toggle`,
-  `RadioGroup`, `Badge`, `Alert`, `Tabs` and `List` all offer the query; nothing in
-  `denise-ui` consumes it.
+  it does for a node with no natural size at all. Twelve of the twenty-six offer
+  the query — `alert`, `badge`, `button`, `checkbox`, `list`, `radio-group`,
+  `rating`, `table`, `tabs`, `timeline`, `toggle`, `tree` — and nothing in
+  `denise-ui` consumes it. They do not agree on a signature, because each grew
+  when one example needed it; [docs/arrange.md](arrange.md) is where that is
+  reckoned with, and is the design note for the optional layout crate that would
+  be their first real caller.
 
 Two widgets share their geometry rather than each inventing it. `Spinner` is
 `RadialProgress`'s ring with the value replaced by a clock, so the centre,
