@@ -52,6 +52,10 @@
 //! bitmap on a board with none — one call, since #130 made every unnamed
 //! `TextStyle` a redirection through the tree's default face.
 //!
+//! The chrome is drawn at the **display's** scale and the canvas is not: a form
+//! is authored in the panel's own device pixels, so an 800x480 form is 800x480
+//! here whatever this screen does. See [`scale`].
+//!
 //! The palette is six shelves rather than a flat list, and resting on a row says
 //! what the widget is — both declared by the widget through `Describe`, so a
 //! twenty-sixth appears here filed and described without this crate changing.
@@ -64,6 +68,7 @@ mod document;
 mod history;
 mod inspector;
 mod outline;
+mod scale;
 mod settings;
 mod watch;
 
@@ -90,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut new_form = false;
     let mut tab_order = false;
     let mut font: Option<String> = None;
+    let mut scale: f32 = 1.0;
     let mut hover: Option<String> = None;
     let mut clash: Option<String> = None;
     let mut rest = args.iter();
@@ -107,6 +113,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--new" => new_form = true,
             "--tab-order" => tab_order = true,
             "--font" => font = rest.next().cloned(),
+            "--scale" => {
+                scale = rest
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(1.0)
+            }
             "--hover" => hover = rest.next().cloned(),
             "--clash" => clash = rest.next().cloned(),
             "--band" => {
@@ -144,6 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --new                  snapshot: put the new-form sheet up\n\
                      \x20 --tab-order            snapshot: number the form's tab stops\n\
                      \x20 --font <path.ttf>      draw in this face rather than the one found\n\
+                     \x20 --scale <factor>       snapshot: draw the chrome at this display scale\n\
                      \x20 --hover <kind>         snapshot: rest the pointer on this palette row\n\
                      \x20 --clash <other.dform>  snapshot: the file-changed sheet, against this version"
                 );
@@ -167,8 +180,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // affordance every example here has, and the way this one's own layout gets
     // reviewed over SSH or diffed in a pull request.
     if let Some(out) = snapshot {
-        let size = Size::new(settings.width, settings.height);
-        let mut designer = Designer::new(size, 1.0, settings, document);
+        // `--scale` is what a window would have reported. The surface grows
+        // with it, exactly as a real one does: the window is a fixed amount of
+        // desk and a denser display puts more pixels behind it.
+        let physical = |logical: u32| ((logical as f32 * scale) + 0.5) as u32;
+        let size = Size::new(physical(settings.width), physical(settings.height));
+        let mut designer = Designer::new(size, scale, settings, document);
         // A snapshot keeps the built-in face unless one is named. Its whole
         // value is being comparable — between two runs, between two machines,
         // between the two sides of a pull request — and a face picked up from

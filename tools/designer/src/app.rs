@@ -11,7 +11,7 @@ use denise_ui::widgets::{
     Button, Divider, Group, Label, List, ListItem, Panel, Property, PropertyKind, TextInput, Value,
     WidgetInfo, open_select,
 };
-use denise_ui::{Anchors, Dock, NodeId, Ui};
+use denise_ui::{Anchors, Dock, NodeId, TextStyle, Ui};
 
 use crate::arrange::{self, Command, Needs};
 use crate::canvas::{Band, Drag, Grip, Guide, between, place, resting, snap, topmost};
@@ -20,6 +20,7 @@ use crate::document::Document;
 use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
 use crate::outline::{self, Outline};
+use crate::scale::Scale;
 use crate::settings::Settings;
 use crate::watch::{self, differences};
 
@@ -356,20 +357,62 @@ struct Chrome {
     canvas: NodeId,
 }
 
+impl Chrome {
+    /// Every node that belongs to the **chrome**, named, for the test that
+    /// checks the whole of it scales together.
+    ///
+    /// Deliberately not the stage, the scrim or the surface: those three are the
+    /// canvas, which is drawn at 1:1 whatever the display does, because a form
+    /// is authored in the panel's own device pixels. See [`Scale`].
+    #[cfg(test)]
+    fn every(&self) -> Vec<(&'static str, NodeId)> {
+        let mut all = vec![
+            ("title", self.title),
+            ("status", self.status),
+            ("undo", self.undo_button),
+            ("redo", self.redo_button),
+            ("preview", self.preview_button),
+            ("tab order", self.tab_order_button),
+            ("theme", self.theme_button),
+            ("palette viewport", self.palette_view),
+            ("filter", self.filter),
+            ("palette", self.palette),
+            ("outline viewport", self.outline_view),
+            ("inspector viewport", self.inspector_view),
+            ("log", self.log),
+            ("log lines", self.log_lines),
+            ("left column", self.columns[0]),
+            ("right column", self.columns[1]),
+            ("canvas", self.canvas),
+        ];
+        all.extend(
+            self.arrange_buttons
+                .iter()
+                .map(|(command, id)| (command.label(), *id)),
+        );
+        all
+    }
+}
+
 /// Builds every pane, and docks them.
 ///
 /// The whole layout is `Dock`: a toolbar along the top, a status line along the
 /// bottom, two columns against the sides, and the canvas taking what is left. So
 /// the window resizes correctly without this file doing arithmetic on a resize,
 /// which is the thing anchoring and docking were added for.
-fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
+fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrome {
     let root = ui.root();
+    // Every rectangle and every text size below is written in logical units and
+    // multiplied here, on the way in — the pattern `docs/design.md` settles on,
+    // and the reason none of the constants above mention DPI. See [`Scale`].
+    let s = |rect: Rect| scale.r(rect);
+    let px = |size: u16| scale.px(size);
 
     let toolbar = ui
         .add(
             root,
             Panel::filled(Role::Base200),
-            Rect::new(0, 0, 0, TOOLBAR),
+            s(Rect::new(0, 0, 0, TOOLBAR)),
         )
         .expect("root");
     ui.set_dock(toolbar, Some(Dock::Top));
@@ -396,8 +439,8 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
                 } else {
                     Role::Neutral
                 })
-                .with_size(13),
-            Rect::new(x, GAP, width, TOOLBAR - GAP * 2),
+                .with_size(px(13)),
+            s(Rect::new(x, GAP, width, TOOLBAR - GAP * 2)),
         );
         if matches!(
             message,
@@ -414,9 +457,9 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         .add(
             toolbar,
             Label::new("Untitled")
-                .with_size(13)
+                .with_size(px(13))
                 .with_role(Role::BaseContent),
-            Rect::new(x + GAP, GAP, 420, TOOLBAR - GAP * 2),
+            s(Rect::new(x + GAP, GAP, 420, TOOLBAR - GAP * 2)),
         )
         .expect("toolbar");
 
@@ -428,7 +471,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         .add(
             root,
             Panel::filled(Role::Base200),
-            Rect::new(0, 0, 0, ARRANGE),
+            s(Rect::new(0, 0, 0, ARRANGE)),
         )
         .expect("root");
     ui.set_dock(arrange_bar, Some(Dock::Top));
@@ -438,8 +481,8 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         let width = 7 * text.chars().count() as i32 + 6;
         ui.add(
             arrange_bar,
-            Label::new(text).with_size(11).with_role(Role::Base300),
-            Rect::new(*x, 0, width, ARRANGE),
+            Label::new(text).with_size(px(11)).with_role(Role::Base300),
+            s(Rect::new(*x, 0, width, ARRANGE)),
         );
         *x += width;
     };
@@ -458,8 +501,8 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
             arrange_bar,
             Button::new(label, Message::Arrange(command))
                 .with_role(Role::Neutral)
-                .with_size(12),
-            Rect::new(x, 4, width, ARRANGE - 8),
+                .with_size(px(12)),
+            s(Rect::new(x, 4, width, ARRANGE - 8)),
         ) {
             ui.set_tooltip(id, command.what());
             arrange_buttons.push((command, id));
@@ -471,15 +514,15 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         .add(
             root,
             Panel::filled(Role::Base200),
-            Rect::new(0, 0, 0, STATUS),
+            s(Rect::new(0, 0, 0, STATUS)),
         )
         .expect("root");
     ui.set_dock(status_bar, Some(Dock::Bottom));
     let status = ui
         .add(
             status_bar,
-            Label::new("").with_size(11).with_role(Role::Base300),
-            Rect::new(GAP, 0, 4000, STATUS),
+            Label::new("").with_size(px(11)).with_role(Role::Base300),
+            s(Rect::new(GAP, 0, 4000, STATUS)),
         )
         .expect("status bar");
 
@@ -487,18 +530,18 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     // until preview mode gives it some: a strip that was there while designing
     // would be a strip with nothing in it.
     let log = ui
-        .add(root, Panel::filled(Role::Base200), Rect::new(0, 0, 0, 0))
+        .add(root, Panel::filled(Role::Base200), s(Rect::new(0, 0, 0, 0)))
         .expect("root");
     ui.set_dock(log, Some(Dock::Bottom));
     let log_lines = ui
-        .add(log, Panel::default(), Rect::new(0, 0, 1, 1))
+        .add(log, Panel::default(), s(Rect::new(0, 0, 1, 1)))
         .expect("the log strip is there");
 
     let left = ui
         .add(
             root,
             Panel::filled(Role::Base100),
-            Rect::new(0, 0, settings.left, 0),
+            s(Rect::new(0, 0, settings.left, 0)),
         )
         .expect("root");
     ui.set_dock(left, Some(Dock::Left));
@@ -507,13 +550,13 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         .add(
             root,
             Panel::filled(Role::Base100),
-            Rect::new(0, 0, settings.right, 0),
+            s(Rect::new(0, 0, settings.right, 0)),
         )
         .expect("root");
     ui.set_dock(right, Some(Dock::Right));
 
     let canvas = ui
-        .add(root, Panel::filled(Role::Base300), Rect::new(0, 0, 0, 0))
+        .add(root, Panel::filled(Role::Base300), s(Rect::new(0, 0, 0, 0)))
         .expect("root");
     ui.set_dock(canvas, Some(Dock::Fill));
     // Larger than the window is reachable rather than cropped.
@@ -523,15 +566,19 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     let width = settings.left - GAP * 2;
     ui.add(
         left,
-        Label::new("Palette").with_size(11).with_role(Role::Primary),
-        Rect::new(GAP, GAP, width, HEADER),
+        Label::new("Palette")
+            .with_size(px(11))
+            .with_role(Role::Primary),
+        s(Rect::new(GAP, GAP, width, HEADER)),
     );
     let split = GAP + HEADER + FILTER + PALETTE_ROWS + GAP;
-    ui.add(left, Divider::new(), Rect::new(GAP, split, width, 8));
+    ui.add(left, Divider::new(), s(Rect::new(GAP, split, width, 8)));
     ui.add(
         left,
-        Label::new("Outline").with_size(11).with_role(Role::Primary),
-        Rect::new(GAP, split + 12, width, HEADER),
+        Label::new("Outline")
+            .with_size(px(11))
+            .with_role(Role::Primary),
+        s(Rect::new(GAP, split + 12, width, HEADER)),
     );
     // Both lists hold more than their pane: twenty-five widgets will not fit in
     // three hundred pixels, and a form names as many nodes as it likes. So each
@@ -542,23 +589,23 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
             left,
             TextInput::<Message>::new()
                 .with_placeholder("filter")
-                .with_size(12)
+                .with_size(px(12))
                 .with_max_chars(32),
-            Rect::new(GAP, GAP + HEADER, width, FILTER - 2),
+            s(Rect::new(GAP, GAP + HEADER, width, FILTER - 2)),
         )
         .expect("left");
     let palette_view = ui
         .add(
             left,
             Panel::filled(Role::Base100),
-            Rect::new(GAP, GAP + HEADER + FILTER, width, PALETTE_ROWS),
+            s(Rect::new(GAP, GAP + HEADER + FILTER, width, PALETTE_ROWS)),
         )
         .expect("left");
     ui.set_scrollable(palette_view, true);
     // Replaced by the first `fill_palette`; a node has to exist for it to
     // remove.
     let palette = ui
-        .add(palette_view, Panel::default(), Rect::new(0, 0, 1, 1))
+        .add(palette_view, Panel::default(), s(Rect::new(0, 0, 1, 1)))
         .expect("palette viewport");
 
     let outline_top = split + 12 + HEADER;
@@ -566,7 +613,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
         .add(
             left,
             Panel::filled(Role::Base100),
-            Rect::new(GAP, outline_top, width, 240),
+            s(Rect::new(GAP, outline_top, width, 240)),
         )
         .expect("left");
     ui.set_scrollable(outline_view, true);
@@ -576,14 +623,18 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
     // A form node with twenty properties of its own and fourteen the tree owns
     // is taller than any pane, so the rows go in a viewport that scrolls.
     let inspector_view = ui
-        .add(right, Panel::default(), Rect::new(0, 0, settings.right, 0))
+        .add(
+            right,
+            Panel::default(),
+            s(Rect::new(0, 0, settings.right, 0)),
+        )
         .expect("right");
     ui.set_dock(inspector_view, Some(Dock::Fill));
     ui.set_scrollable(inspector_view, true);
 
     // Replaced by the first `show_form`; a node has to exist for it to remove.
     let stage = ui
-        .add(canvas, Panel::default(), Rect::new(0, 0, 1, 1))
+        .add(canvas, Panel::default(), s(Rect::new(0, 0, 1, 1)))
         .expect("canvas");
 
     Chrome {
@@ -613,6 +664,12 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings) -> Chrome {
 /// The designer.
 pub struct Designer {
     pub ui: Ui<Message>,
+    /// What the display multiplies logical units by.
+    ///
+    /// The chrome is written in logical units and scaled on the way into the
+    /// tree; the canvas is not scaled at all, because a form is authored in the
+    /// panel's own device pixels. See [`Scale`].
+    scale: Scale,
     chrome: Chrome,
     document: Document,
     settings: Settings,
@@ -698,13 +755,21 @@ pub struct Designer {
 
 impl Designer {
     /// Builds the designer's own tree.
-    pub fn new(size: Size, _scale: f32, settings: Settings, document: Document) -> Self {
-        let mut ui: Ui<Message> = Ui::new(size, theme::DARK);
-        let chrome = build_chrome(&mut ui, settings);
+    pub fn new(size: Size, scale: f32, settings: Settings, document: Document) -> Self {
+        // The one multiplication, at construction, as `docs/design.md` requires:
+        // the theme's furniture here, and every chrome rectangle and text size
+        // through the `Scale` this keeps. `size` is already physical.
+        let scale = Scale::new(scale);
+        let mut ui: Ui<Message> = Ui::new(size, theme::DARK.scaled(scale.factor()));
+        // The tree draws tooltips itself, so this is the only way to say how big
+        // they are — and the palette's whole answer to #126 is a tooltip.
+        ui.set_tooltip_size(scale.px(14));
+        let chrome = build_chrome(&mut ui, settings, scale);
         let palette: Vec<&'static str> = denise_ui::widgets::all().iter().map(|w| w.kind).collect();
 
         let mut designer = Self {
             ui,
+            scale,
             chrome,
             document,
             settings,
@@ -759,8 +824,12 @@ impl Designer {
 
     /// Records a new window size, to be written out on the way to exiting.
     pub fn remember_size(&mut self, size: Size) {
-        self.settings.width = size.width;
-        self.settings.height = size.height;
+        // The event carries the surface, which is physical; `Settings` holds a
+        // window, which is logical, and hands it straight back to
+        // `WindowConfig`. Without the division the remembered size grows by the
+        // scale factor on every run, until `Settings::sane` stops it at 16,384.
+        self.settings.width = self.scale.logical(size.width);
+        self.settings.height = self.scale.logical(size.height);
     }
 
     /// Asks the loop to stop after this frame.
@@ -853,18 +922,29 @@ impl Designer {
                 .iter()
                 .position(|row| matches!(row, Shelf::Widget(i) if self.palette[*i] == kind))
         });
+        // The list's height is `rows` times the *scaled* row rather than the
+        // scaled height of `rows` logical ones: at a fractional factor those two
+        // differ by a pixel, and the one that matters is the one the rows add up
+        // to, or the viewport scrolls a sliver past the last of them.
+        let row_height = self.scale.n(PALETTE_ROW);
+        // The size has to be said out loud. A widget defaults its text to 16 px
+        // and knows nothing about the display, so the one list here that never
+        // named a size was the one thing in the chrome that stayed 16 px while
+        // everything around it doubled. `docs/design.md` calls this out as the
+        // rough edge the DPI decision leaves to the application.
         let list = List::new(items, Message::Palette)
-            .with_row_height(PALETTE_ROW)
+            .with_row_height(row_height)
+            .with_style(TextStyle::built_in(self.scale.px(16)))
             .with_selected(armed);
 
-        let width = self.settings.left - GAP * 2;
+        let width = self.scale.n(self.settings.left - GAP * 2);
         self.ui.remove(self.chrome.palette);
         self.chrome.palette = self
             .ui
             .add(
                 self.chrome.palette_view,
                 list,
-                Rect::new(0, 0, width, rows * PALETTE_ROW),
+                Rect::new(0, 0, width, rows * row_height),
             )
             .expect("the palette viewport is there");
     }
@@ -881,7 +961,7 @@ impl Designer {
     fn palette_row(&self, at: Point) -> Option<usize> {
         let view = self.ui.bounds(self.chrome.palette_view)?;
         let scroll = self.ui.scroll(self.chrome.palette_view);
-        usize::try_from((at.y - view.y + scroll.y) / PALETTE_ROW).ok()
+        usize::try_from((at.y - view.y + scroll.y) / self.scale.n(PALETTE_ROW)).ok()
     }
 
     /// Hovers a palette row by the widget's name, and waits out the tooltip.
@@ -900,15 +980,16 @@ impl Designer {
         // Scrolled to, because the viewport holds eleven rows and there are
         // thirty-one: a `--hover video` that quietly hovered nothing would be a
         // picture of the palette with the pointer in the wrong place.
-        let top = row as i32 * PALETTE_ROW;
+        let row_height = self.scale.n(PALETTE_ROW);
+        let top = row as i32 * row_height;
         let scroll = self.ui.scroll(self.chrome.palette_view);
-        let wanted = scroll.y.clamp(top - view.height + PALETTE_ROW, top);
+        let wanted = scroll.y.clamp(top - view.height + row_height, top);
         self.ui
             .set_scroll(self.chrome.palette_view, Point::new(scroll.x, wanted));
         let scroll = self.ui.scroll(self.chrome.palette_view);
         let at = Point::new(
             view.x + view.width / 2,
-            view.y + top - scroll.y + PALETTE_ROW / 2,
+            view.y + top - scroll.y + row_height / 2,
         );
         let moved = [InputEvent::PointerMoved { position: at }];
         self.input(&moved);
@@ -1121,12 +1202,13 @@ impl Designer {
                 .is_some_and(|value| value == "#false")
         };
         let rows = outline::rows(&self.placed, &self.folded, &self.hidden, hides);
-        let width = self.settings.left - GAP * 2;
+        let width = self.scale.n(self.settings.left - GAP * 2);
         let view = outline::View {
             rows: &rows,
             selection: &self.selection,
             drag: self.outline_drag.as_ref(),
             width,
+            scale: self.scale,
         };
         self.outline = Some(Outline::build(&mut self.ui, self.chrome.outline_view, view));
     }
@@ -1158,7 +1240,7 @@ impl Designer {
             self.ui.remove(inspector.content);
         }
         self.close_choice();
-        let width = self.settings.right;
+        let width = self.scale.n(self.settings.right);
         let paths = self.selection.clone();
         let ids: Vec<NodeId> = paths.iter().filter_map(|path| self.node_id(path)).collect();
 
@@ -1184,6 +1266,7 @@ impl Designer {
                 width,
                 &header,
                 &fields,
+                self.scale,
             ));
             return;
         }
@@ -1218,6 +1301,7 @@ impl Designer {
             width,
             &header,
             &fields,
+            self.scale,
         ));
     }
 
@@ -2064,7 +2148,7 @@ impl Designer {
 
     /// Gives the log strip its height, or takes it away again.
     fn resize_log(&mut self) {
-        let height = if self.preview { LOG } else { 0 };
+        let height = if self.preview { self.scale.n(LOG) } else { 0 };
         self.ui
             .set_layout(self.chrome.log, Rect::new(0, 0, 0, height));
         self.refresh_log();
@@ -2073,13 +2157,17 @@ impl Designer {
     /// Redraws the log for the messages the form has fired.
     fn refresh_log(&mut self) {
         self.ui.remove(self.chrome.log_lines);
+        // `width` comes back out of the tree, so it is already physical while
+        // every constant beside it is logical — the asymmetry `Scale` documents,
+        // and why these scale a length at a time rather than a whole rectangle.
         let width = self.ui.bounds(self.chrome.log).unwrap_or(Rect::ZERO).width;
+        let (gap, line_height) = (self.scale.n(GAP), self.scale.n(13));
         let lines = self
             .ui
             .add(
                 self.chrome.log,
                 Panel::default(),
-                Rect::new(0, 0, width.max(1), LOG.max(1)),
+                Rect::new(0, 0, width.max(1), self.scale.n(LOG).max(1)),
             )
             .expect("the log strip is there");
         self.chrome.log_lines = lines;
@@ -2091,9 +2179,9 @@ impl Designer {
             self.ui.add(
                 lines,
                 Label::new("no messages yet — press something on the form")
-                    .with_size(11)
+                    .with_size(self.scale.px(11))
                     .with_role(Role::Base300),
-                Rect::new(GAP, 4, width - GAP * 2, 14),
+                Rect::new(gap, self.scale.n(4), width - gap * 2, self.scale.n(14)),
             );
             return;
         }
@@ -2102,12 +2190,19 @@ impl Designer {
             let last = index + 1 == self.fired.len();
             self.ui.add(
                 lines,
-                Label::new(line.clone()).with_size(11).with_role(if last {
-                    Role::Accent
-                } else {
-                    Role::BaseContent
-                }),
-                Rect::new(GAP, 4 + index as i32 * 13, width - GAP * 2, 13),
+                Label::new(line.clone())
+                    .with_size(self.scale.px(11))
+                    .with_role(if last {
+                        Role::Accent
+                    } else {
+                        Role::BaseContent
+                    }),
+                Rect::new(
+                    gap,
+                    self.scale.n(4) + index as i32 * line_height,
+                    width - gap * 2,
+                    line_height,
+                ),
             );
         }
     }
@@ -2151,7 +2246,11 @@ impl Designer {
             Simulated::Light => theme::LIGHT,
             Simulated::HighContrast => theme::HIGH_CONTRAST,
         };
-        self.ui.set_theme(theme);
+        // Scaled on the way in, like the one `Designer::new` starts with. Only
+        // the colours are being simulated here; the furniture is this display's
+        // and stays this display's, or every theme but the first would put the
+        // chrome back at half size.
+        self.ui.set_theme(theme.scaled(self.scale.factor()));
     }
 
     /// Lets the on-screen keyboard see the events before the tree does.
@@ -2212,11 +2311,14 @@ impl Designer {
     fn outline_hit(&self, at: Point) -> Option<(usize, outline::Hit)> {
         let view = self.ui.bounds(self.chrome.outline_view)?;
         let scroll = self.ui.scroll(self.chrome.outline_view);
-        let row = usize::try_from((at.y - view.y + scroll.y) / outline::ROW).ok()?;
+        let row = usize::try_from((at.y - view.y + scroll.y) / self.scale.n(outline::ROW)).ok()?;
         let pane = self.outline.as_ref()?;
         let held = pane.rows.get(row)?;
-        let width = self.settings.left - GAP * 2;
-        Some((row, outline::hit(at.x - view.x + scroll.x, width, held)))
+        let width = self.scale.n(self.settings.left - GAP * 2);
+        Some((
+            row,
+            outline::hit(at.x - view.x + scroll.x, width, held, self.scale),
+        ))
     }
 
     /// A press in the outline.
@@ -2302,7 +2404,11 @@ impl Designer {
         let Some(drag) = self.outline_drag.as_mut() else {
             return;
         };
-        if !drag.moved && (at.y - drag.from.y).abs() + (at.x - drag.from.x).abs() < THRESHOLD {
+        // A chrome threshold, so it scales; the canvas ones do not, because a
+        // pointer pixel there *is* a form pixel.
+        if !drag.moved
+            && (at.y - drag.from.y).abs() + (at.x - drag.from.x).abs() < self.scale.n(THRESHOLD)
+        {
             return;
         }
         drag.moved = true;
@@ -2412,14 +2518,22 @@ impl Designer {
 
         let width = self.settings.left - GAP * 2;
         let x = depth * 10 + 13;
+        // Logical throughout, so the whole rectangle scales at once — and the
+        // row height has to be the scaled one the pane laid the rows out with.
+        let row_height = self.scale.n(outline::ROW);
         let Some(id) = self.ui.add(
             content,
             TextInput::<Message>::new()
-                .with_size(11)
+                .with_size(self.scale.px(11))
                 .with_max_chars(64)
                 .with_placeholder("name")
                 .with_submit(Message::Renamed),
-            Rect::new(x, row as i32 * outline::ROW, width - x, outline::ROW),
+            Rect::new(
+                self.scale.n(x),
+                row as i32 * row_height,
+                self.scale.n(width - x),
+                row_height,
+            ),
         ) else {
             return;
         };
@@ -3411,12 +3525,18 @@ impl Designer {
         // `close_new` pops: a modal over a modal is not a thing this designer
         // does.
         let scene = self.ui.push_scene(160);
+        // The card's own children are logical and scale together; the sheet is
+        // placed against the window, which is already physical.
+        let scale = self.scale;
+        let s = |rect: Rect| scale.r(rect);
+        let px = |size: u16| scale.px(size);
         let size = self.settings_size();
+        let (wide, tall) = (scale.n(WIDE), scale.n(TALL));
         let sheet = Rect::new(
-            (size.width as i32 - WIDE) / 2,
-            (size.height as i32 - TALL) / 3,
-            WIDE,
-            TALL,
+            (size.width as i32 - wide) / 2,
+            (size.height as i32 - tall) / 3,
+            wide,
+            tall,
         );
         let card = self
             .ui
@@ -3434,19 +3554,23 @@ impl Designer {
             .expect("a scene root takes children");
 
         let label = |ui: &mut Ui<Message>, text: &str, rect: Rect, role, size| {
-            ui.add(card, Label::new(text).with_size(size).with_role(role), rect)
+            ui.add(
+                card,
+                Label::new(text).with_size(px(size)).with_role(role),
+                rect,
+            )
         };
         label(
             &mut self.ui,
             "New form",
-            Rect::new(GAP * 2, GAP * 2, 300, 22),
+            s(Rect::new(GAP * 2, GAP * 2, 300, 22)),
             Role::Primary,
             17,
         );
         label(
             &mut self.ui,
             "What is it?",
-            Rect::new(GAP * 2, 48, 300, 16),
+            s(Rect::new(GAP * 2, 48, 300, 16)),
             Role::Base300,
             11,
         );
@@ -3466,8 +3590,8 @@ impl Designer {
                     } else {
                         Role::Neutral
                     })
-                    .with_size(12),
-                Rect::new(x, 68, width, 26),
+                    .with_size(px(12)),
+                s(Rect::new(x, 68, width, 26)),
             ) {
                 kinds.push(id);
             }
@@ -3476,7 +3600,7 @@ impl Designer {
         let note = label(
             &mut self.ui,
             FormKind::Screen.what(),
-            Rect::new(GAP * 2, 100, WIDE - GAP * 4, 16),
+            s(Rect::new(GAP * 2, 100, WIDE - GAP * 4, 16)),
             Role::Base300,
             11,
         )
@@ -3485,7 +3609,7 @@ impl Designer {
         label(
             &mut self.ui,
             "How big?",
-            Rect::new(GAP * 2, 130, 300, 16),
+            s(Rect::new(GAP * 2, 130, 300, 16)),
             Role::Base300,
             11,
         );
@@ -3496,8 +3620,8 @@ impl Designer {
                 card,
                 Button::new(*name, Message::NewSize(index))
                     .with_role(Role::Neutral)
-                    .with_size(12),
-                Rect::new(x, 150, width, 26),
+                    .with_size(px(12)),
+                s(Rect::new(x, 150, width, 26)),
             );
             x += width + 5;
         }
@@ -3505,8 +3629,8 @@ impl Designer {
         let field = |ui: &mut Ui<Message>, x: i32, text: &str| {
             let id = ui.add(
                 card,
-                TextInput::<Message>::new().with_size(12),
-                Rect::new(x, 186, 90, ROW),
+                TextInput::<Message>::new().with_size(px(12)),
+                s(Rect::new(x, 186, 90, ROW)),
             )?;
             if let Some(input) = ui.widget_mut::<TextInput<Message>>(id) {
                 input.set_text(text.to_string());
@@ -3516,7 +3640,7 @@ impl Designer {
         label(
             &mut self.ui,
             "width",
-            Rect::new(GAP * 2, 192, 44, 16),
+            s(Rect::new(GAP * 2, 192, 44, 16)),
             Role::BaseContent,
             11,
         );
@@ -3524,7 +3648,7 @@ impl Designer {
         label(
             &mut self.ui,
             "height",
-            Rect::new(GAP * 2 + 150, 192, 50, 16),
+            s(Rect::new(GAP * 2 + 150, 192, 50, 16)),
             Role::BaseContent,
             11,
         );
@@ -3534,15 +3658,15 @@ impl Designer {
             card,
             Button::new("Cancel", Message::Never)
                 .with_role(Role::Neutral)
-                .with_size(13),
-            Rect::new(WIDE - 200, TALL - 46, 88, 32),
+                .with_size(px(13)),
+            s(Rect::new(WIDE - 200, TALL - 46, 88, 32)),
         );
         self.ui.add(
             card,
             Button::new("Create", Message::Create)
                 .with_role(Role::Primary)
-                .with_size(13),
-            Rect::new(WIDE - 104, TALL - 46, 88, 32),
+                .with_size(px(13)),
+            s(Rect::new(WIDE - 104, TALL - 46, 88, 32)),
         );
 
         self.making = Some(Making {
@@ -3942,12 +4066,19 @@ impl Designer {
         let tall = HEAD + listed * ROW + FOOT;
 
         let scene = self.ui.push_scene(160);
+        // As in `begin_new`: `tall` stays logical, because the card's children
+        // are placed against it and scale with them; the sheet is placed against
+        // the window, which is physical already.
+        let scale = self.scale;
+        let s = |rect: Rect| scale.r(rect);
+        let px = |size: u16| scale.px(size);
         let size = self.settings_size();
+        let (wide_px, tall_px) = (scale.n(WIDE), scale.n(tall));
         let sheet = Rect::new(
-            (size.width as i32 - WIDE) / 2,
-            (size.height as i32 - tall) / 3,
-            WIDE,
-            tall,
+            (size.width as i32 - wide_px) / 2,
+            (size.height as i32 - tall_px) / 3,
+            wide_px,
+            tall_px,
         );
         let card = self
             .ui
@@ -3965,12 +4096,16 @@ impl Designer {
             .expect("a scene root takes children");
 
         let label = |ui: &mut Ui<Message>, text: &str, rect: Rect, role, size| {
-            ui.add(card, Label::new(text).with_size(size).with_role(role), rect);
+            ui.add(
+                card,
+                Label::new(text).with_size(px(size)).with_role(role),
+                rect,
+            );
         };
         label(
             &mut self.ui,
             "The file changed on disk",
-            Rect::new(GAP * 2, GAP * 2, WIDE - GAP * 4, 22),
+            s(Rect::new(GAP * 2, GAP * 2, WIDE - GAP * 4, 22)),
             Role::Warning,
             17,
         );
@@ -3978,7 +4113,7 @@ impl Designer {
         label(
             &mut self.ui,
             &format!("{name} was written by something else, and this form has unsaved changes."),
-            Rect::new(GAP * 2, 46, WIDE - GAP * 4, 16),
+            s(Rect::new(GAP * 2, 46, WIDE - GAP * 4, 16)),
             Role::BaseContent,
             11,
         );
@@ -3989,7 +4124,7 @@ impl Designer {
                 1 => String::from("One node reads differently:"),
                 many => format!("{many} nodes read differently:"),
             },
-            Rect::new(GAP * 2, 70, WIDE - GAP * 4, 16),
+            s(Rect::new(GAP * 2, 70, WIDE - GAP * 4, 16)),
             Role::Base300,
             11,
         );
@@ -3999,7 +4134,7 @@ impl Designer {
             label(
                 &mut self.ui,
                 &difference.line(),
-                Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW),
+                s(Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW)),
                 Role::BaseContent,
                 11,
             );
@@ -4009,7 +4144,7 @@ impl Designer {
             label(
                 &mut self.ui,
                 &format!("…and {} more", found.len() - NAMED),
-                Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW),
+                s(Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW)),
                 Role::Base300,
                 11,
             );
@@ -4022,15 +4157,15 @@ impl Designer {
             card,
             Button::new("Reload", Message::Reload)
                 .with_role(Role::Neutral)
-                .with_size(13),
-            Rect::new(WIDE - 216, tall - 44, 96, 32),
+                .with_size(px(13)),
+            s(Rect::new(WIDE - 216, tall - 44, 96, 32)),
         );
         self.ui.add(
             card,
             Button::new("Keep mine", Message::KeepMine)
                 .with_role(Role::Primary)
-                .with_size(13),
-            Rect::new(WIDE - 112, tall - 44, 96, 32),
+                .with_size(px(13)),
+            s(Rect::new(WIDE - 112, tall - 44, 96, 32)),
         );
 
         self.clash = Some(Clash { text });
@@ -4641,7 +4776,10 @@ impl Designer {
             .ui
             .bounds(self.chrome.palette_view)
             .map_or(Point::new(0, 0), |view| {
-                Point::new(view.x + view.width / 2, view.y + PALETTE_ROW / 2)
+                Point::new(
+                    view.x + view.width / 2,
+                    view.y + self.scale.n(PALETTE_ROW) / 2,
+                )
             });
         self.placing = Placing::Pressed { kind, from };
         self.carry_to(Point::new(stage.x + over.x, stage.y + over.y));
@@ -5311,6 +5449,177 @@ mod tests {
     fn designer_on(form: &str) -> Designer {
         let document = Document::open(repo(form)).expect("the form opens");
         Designer::new(WINDOW, 1.0, Settings::default(), document)
+    }
+
+    /// The whole chrome at 2x is the 1x layout doubled, node for node.
+    ///
+    /// This is the test the DPI fix is worth having. The designer took the scale
+    /// factor from `run_with` and dropped it from its first commit, so on a
+    /// Retina Mac every pane, row and label came out at half the size it was
+    /// drawn at — correct on a Pi, which is why nothing caught it. Half the
+    /// crate's rectangles now go through [`Scale`] on the way into the tree, and
+    /// the one that does not is invisible at 1x, which is where the rest of
+    /// these tests live. So it is checked at 2x, against arithmetic rather than
+    /// against a blessed picture.
+    #[test]
+    fn the_chrome_at_twice_the_scale_is_the_same_layout_doubled() {
+        let (one, two) = (at_scale(1.0), at_scale(2.0));
+        let (mine, theirs) = (one.chrome.every(), two.chrome.every());
+        assert_eq!(mine.len(), theirs.len());
+
+        for ((name, here), (_, there)) in mine.iter().zip(&theirs) {
+            let here = one.ui.bounds(*here).expect(name);
+            let there = two.ui.bounds(*there).expect(name);
+            assert_eq!(
+                there,
+                here.scaled(2.0),
+                "{name} is not where twice the scale puts it"
+            );
+        }
+
+        // And the text in them, which a rectangle cannot show. A widget defaults
+        // its text to 16 px and knows nothing about the display, so one that is
+        // never told a size stays 16 px while everything around it doubles —
+        // which is exactly what the palette's list did.
+        for ((name, here), (_, there)) in mine.iter().zip(&theirs) {
+            let (Some(here), Some(there)) = (
+                one.ui.get_property(*here, "size"),
+                two.ui.get_property(*there, "size"),
+            ) else {
+                continue;
+            };
+            let sized = |value: Value| match value {
+                Value::Int(size) => size,
+                other => panic!("{name} reports a size of {other:?}"),
+            };
+            assert_eq!(
+                sized(there),
+                sized(here) * 2,
+                "{name} draws its text at the same size on a display of twice the density"
+            );
+        }
+    }
+
+    /// And the two panes that are rebuilt rather than built once.
+    ///
+    /// The outline and the inspector are torn down and drawn again on every
+    /// selection, from their own constants, so they can be wrong in a way the
+    /// docked panes above cannot.
+    #[test]
+    fn the_panes_that_are_rebuilt_scale_with_the_rest() {
+        let (mut one, mut two) = (at_scale(1.0), at_scale(2.0));
+        // Something selected, so the inspector has rows rather than the form's.
+        for designer in [&mut one, &mut two] {
+            assert!(
+                designer.select_named("busy"),
+                "the reference form has a node called `busy`"
+            );
+        }
+
+        let content = |designer: &Designer| {
+            (
+                designer.outline.as_ref().expect("an outline").content,
+                designer.inspector.as_ref().expect("an inspector").content,
+            )
+        };
+        let (outline_one, inspector_one) = content(&one);
+        let (outline_two, inspector_two) = content(&two);
+
+        for (name, here, there) in [
+            ("the outline", outline_one, outline_two),
+            ("the inspector", inspector_one, inspector_two),
+        ] {
+            let here = one.ui.bounds(here).expect(name);
+            let there = two.ui.bounds(there).expect(name);
+            assert_eq!(
+                there,
+                here.scaled(2.0),
+                "{name} is not where twice the scale puts it"
+            );
+        }
+    }
+
+    /// The canvas is the exception, and stays the exception.
+    ///
+    /// A form is authored in the panel's own device pixels: an 800x480 screen is
+    /// 800x480 here whatever this display does, so the numbers in the inspector
+    /// are the numbers in the file and a drag of four pixels moves a node four
+    /// pixels. Making it legible on a dense display is a zoom control, which is
+    /// a different feature with a coordinate mapping of its own.
+    #[test]
+    fn the_form_on_the_canvas_is_not_scaled_with_the_chrome() {
+        let (one, two) = (at_scale(1.0), at_scale(2.0));
+        let size = one.document.form().size();
+
+        for (name, designer) in [("1x", &one), ("2x", &two)] {
+            let stage = designer
+                .ui
+                .bounds(designer.chrome.stage)
+                .expect("the stage is there");
+            assert_eq!(
+                (stage.width, stage.height),
+                (size.width as i32, size.height as i32),
+                "the form is not its own size at {name}"
+            );
+        }
+    }
+
+    /// Simulating another theme does not put the chrome back at half size.
+    ///
+    /// `Theme::scaled` carries the display's metrics, and `set_theme` replaces
+    /// the whole theme — so a switch that passes the constant straight through
+    /// silently undoes the one multiplication the application is supposed to do.
+    #[test]
+    fn simulating_a_theme_keeps_this_displays_metrics() {
+        let mut designer = at_scale(2.0);
+        assert_eq!(
+            designer.ui.theme().metrics,
+            theme::DARK.metrics.scaled(2.0),
+            "the designer did not start at this display's metrics"
+        );
+
+        // Each theme's own furniture, at this display's scale — not the same
+        // numbers for all of them, because high contrast draws a thicker border
+        // on purpose and that is the part being simulated.
+        for expected in [theme::DARK, theme::LIGHT, theme::HIGH_CONTRAST] {
+            while designer.ui.theme().name != expected.name {
+                designer.cycle_theme();
+            }
+            assert_eq!(
+                designer.ui.theme().metrics,
+                expected.metrics.scaled(2.0),
+                "{} lost the display's metrics",
+                expected.name
+            );
+        }
+    }
+
+    /// The remembered window size is logical, and a run does not inflate it.
+    ///
+    /// `Settings` hands its size straight back to `WindowConfig`, which is
+    /// logical, while the resize event that fills it in is physical. Storing one
+    /// as the other doubles the window on every launch until `Settings::sane`
+    /// stops it at 16,384.
+    #[test]
+    fn a_run_on_a_dense_display_does_not_grow_the_window() {
+        let mut designer = at_scale(2.0);
+        designer.remember_size(Size::new(2560, 1600));
+        let settings = designer.settings();
+        assert_eq!((settings.width, settings.height), (1280, 800));
+    }
+
+    /// A designer on the reference form at a display scale.
+    ///
+    /// The surface grows with the factor, exactly as a real one does: the window
+    /// is a fixed amount of desk, and a denser display puts more pixels behind
+    /// it.
+    fn at_scale(scale: f32) -> Designer {
+        let document = Document::open(repo("forms/reference.dform")).expect("the form opens");
+        let size = Size::new(
+            (WINDOW.width as f32 * scale) as u32,
+            (WINDOW.height as f32 * scale) as u32,
+        );
+        Designer::new(size, scale, Settings::default(), document)
     }
 
     fn press(designer: &mut Designer, at: Point) {

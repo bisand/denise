@@ -26,8 +26,13 @@ use denise_ui::widgets::{Panel, TextInput};
 use denise_ui::{NodeId, TextStyle, Ui};
 
 use crate::app::Message;
+use crate::scale::Scale;
 
 /// A row's height, and what separates it from the next.
+///
+/// Logical, like every constant in this crate; [`Scale`] multiplies them on the
+/// way into the tree. `width` and the rectangles handed to `build_editor` are
+/// already physical, so those two meet in the middle.
 const ROW: i32 = 24;
 const GAP: i32 = 4;
 /// The property's name, down the left.
@@ -136,30 +141,42 @@ impl Inspector {
         width: i32,
         header: &[(String, Role, u16)],
         fields: &[Field],
+        scale: Scale,
     ) -> Self {
+        let (row, gap) = (scale.n(ROW), scale.n(GAP));
+        let (name_width, reset) = (scale.n(NAME), scale.n(RESET));
+        // A header line is twenty logical pixels of pitch holding an
+        // eighteen-pixel label.
+        let (header_pitch, header_height) = (scale.n(20), scale.n(18));
+        let label = scale.px(11);
+
         // Tall enough for everything, inside a viewport that scrolls: a form
         // node with twenty properties and fourteen the tree owns does not fit a
         // pane, and a row quietly cut off at the bottom is worse than a wheel.
-        let height =
-            header.len() as i32 * 20 + fields.len() as i32 * (ROW + GAP) + ROW * 2 + GAP * 4;
+        let height = header.len() as i32 * header_pitch
+            + fields.len() as i32 * (row + gap)
+            + row * 2
+            + gap * 4;
         let content = ui
             .add(parent, Panel::default(), Rect::new(0, 0, width, height))
             .expect("the inspector's viewport is there");
 
-        let mut y = GAP;
+        let mut y = gap;
         for (text, role, size) in header {
             ui.add(
                 content,
-                Label::new(text.clone()).with_role(*role).with_size(*size),
-                Rect::new(GAP, y, width - GAP * 2, 18),
+                Label::new(text.clone())
+                    .with_role(*role)
+                    .with_size(scale.px(*size)),
+                Rect::new(gap, y, width - gap * 2, header_height),
             );
-            y += 20;
+            y += header_pitch;
         }
-        y += GAP;
+        y += gap;
 
-        let inner = width - GAP * 2;
-        let editor_x = GAP + NAME + GAP;
-        let editor_w = inner - NAME - GAP - RESET - GAP;
+        let inner = width - gap * 2;
+        let editor_x = gap + name_width + gap;
+        let editor_w = inner - name_width - gap - reset - gap;
 
         let mut rows = Vec::with_capacity(fields.len());
         for (index, field) in fields.iter().enumerate() {
@@ -179,8 +196,8 @@ impl Inspector {
                 content,
                 Label::new(field.property.name)
                     .with_role(role)
-                    .with_size(11),
-                Rect::new(GAP, y + 5, NAME, 14),
+                    .with_size(label),
+                Rect::new(gap, y + scale.n(5), name_width, scale.n(14)),
             );
             if let Some(id) = name {
                 let mut doc = field.property.doc.to_string();
@@ -198,7 +215,8 @@ impl Inspector {
                 index,
                 field,
                 &shown,
-                Rect::new(editor_x, y, editor_w, ROW),
+                Rect::new(editor_x, y, editor_w, row),
+                scale,
             );
 
             // Something to reset only when there is something to reset: a
@@ -208,8 +226,8 @@ impl Inspector {
                     content,
                     Button::new("×", Message::Reset(index))
                         .with_role(Role::Neutral)
-                        .with_size(11),
-                    Rect::new(GAP + inner - RESET, y + 2, RESET, ROW - 4),
+                        .with_size(label),
+                    Rect::new(gap + inner - reset, y + scale.n(2), reset, row - scale.n(4)),
                 )
             {
                 ui.set_tooltip(id, "Back to the default, which takes it out of the file");
@@ -221,14 +239,14 @@ impl Inspector {
                 editor,
                 shown,
             });
-            y += ROW + GAP;
+            y += row + gap;
         }
 
         let complaint = ui
             .add(
                 content,
-                Label::new("").with_role(Role::Error).with_size(11),
-                Rect::new(GAP, y + GAP, inner, ROW * 2),
+                Label::new("").with_role(Role::Error).with_size(label),
+                Rect::new(gap, y + gap, inner, row * 2),
             )
             .expect("the content panel is there");
 
@@ -310,8 +328,11 @@ fn build_editor(
     field: &Field,
     shown: &str,
     rect: Rect,
+    scale: Scale,
 ) -> Editor {
+    // `rect` arrives physical, so the constants below are the ones that move.
     let (x, y, width) = (rect.x, rect.y, rect.width);
+    let (row, gap) = (scale.n(ROW), scale.n(GAP));
     match field.property.kind {
         PropertyKind::Bool => {
             let id = ui
@@ -319,7 +340,7 @@ fn build_editor(
                     parent,
                     Checkbox::<Message>::inert("")
                         .with_checked(shown == "#true")
-                        .with_size(12),
+                        .with_size(scale.px(12)),
                     rect,
                 )
                 .expect("the content panel is there");
@@ -337,7 +358,7 @@ fn build_editor(
                     Select::new(options.iter().copied(), Message::OpenChoice(index))
                         .with_selected(at)
                         .with_placeholder("—")
-                        .with_style(TextStyle::built_in(12)),
+                        .with_style(TextStyle::built_in(scale.px(12))),
                     rect,
                 )
                 .expect("the content panel is there");
@@ -357,13 +378,17 @@ fn build_editor(
                     parent,
                     Button::new("…", Message::Browse(index))
                         .with_role(Role::Neutral)
-                        .with_size(11),
-                    Rect::new(x, y + 2, BROWSE, ROW - 4),
+                        .with_size(scale.px(11)),
+                    Rect::new(x, y + scale.n(2), scale.n(BROWSE), row - scale.n(4)),
                 )
             });
-            let taken = if browse.is_some() { BROWSE + GAP } else { 0 };
+            let taken = if browse.is_some() {
+                scale.n(BROWSE) + gap
+            } else {
+                0
+            };
             let field_w = if slidable.is_some() {
-                56
+                scale.n(56)
             } else {
                 width - taken
             };
@@ -371,9 +396,9 @@ fn build_editor(
                 .add(
                     parent,
                     TextInput::<Message>::new()
-                        .with_size(12)
+                        .with_size(scale.px(12))
                         .with_max_chars(512),
-                    Rect::new(x + width - field_w, y, field_w, ROW),
+                    Rect::new(x + width - field_w, y, field_w, row),
                 )
                 .expect("the content panel is there");
             if let Some(input) = ui.widget_mut::<TextInput<Message>>(id) {
@@ -394,7 +419,7 @@ fn build_editor(
                 .add(
                     parent,
                     slider,
-                    Rect::new(x, y + 4, width - field_w - GAP, ROW - 8),
+                    Rect::new(x, y + scale.n(4), width - field_w - gap, row - scale.n(8)),
                 )
                 .expect("the content panel is there");
             Editor::Slid { field: id, slider }

@@ -525,6 +525,28 @@ and all three are now resolved:
   edge left open on purpose: widgets default their text to 16 px, so a
   scale-aware application sets text sizes explicitly; theme-driven typography
   would be its own design conversation.
+
+  The designer did the thing this decision forbids from its first commit: it
+  took the factor from `run_with` and dropped it, so every pane, row and label
+  came out at half its drawn size on a 2x display — correct on a Pi, and
+  invisible to a test suite that runs entirely at 1x, where a rectangle nobody
+  scaled looks exactly like one somebody did. What made it *look* like a
+  font bug rather than a layout one is that it was tolerable while the chrome
+  was drawn in the built-in bitmap, which quantises 16 px to a doubled 8 px cell
+  and so draws two-pixel strokes; [#130](https://github.com/bisand/denise/issues/130)
+  gave it a real face at a true 16 px em, and half-size thin antialiased stems
+  are not the same thing at all. The fix is the three calls above, behind one
+  `Scale` so the constants stay logical, and the test is arithmetic at 2x rather
+  than a blessed picture: every node of the chrome, and every text size, exactly
+  twice what it is at 1x. The rough edge above is precisely what that test
+  caught — one `List` that never named a size, and so stayed 16 px while the
+  rest of the pane doubled.
+
+  Its canvas is the deliberate exception, and worth stating because it is the
+  shape of the general answer: a form is authored in the panel's own device
+  pixels, so the designer draws it at 1:1 whatever the display does. The
+  alternative is a coordinate mapping between what is drawn and what is written
+  to the file, which is a zoom control — a feature, not a scale factor.
 - **The desktop backends cost what a desktop costs, not what a panel costs** —
   found by looking at Activity Monitor rather than by any test. One spinner on a
   Retina Mac burned 48.8% of a core; the same tree on a Pi 3A+ moved the needle
