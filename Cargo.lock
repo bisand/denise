@@ -833,6 +833,7 @@ dependencies = [
  "denise-ui",
  "denise-winit",
  "rfd",
+ "system-font",
 ]
 
 [[package]]

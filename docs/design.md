@@ -928,6 +928,28 @@ measured rather than estimated.
 For scale, the whole of Denise, DRM, evdev and the widgets is **848 KB**, so the
 shaping tier is four times the rest of the toolkit put together.
 
+**Which tier a widget gets is not a widget's decision.** Every `TextStyle` in this
+workspace names `FontId::DEFAULT`, which is a *redirection* rather than a face —
+resolved to a registered source when a style becomes glyphs. `Ui::set_default_font`
+points it somewhere, and every widget already built and every widget built after
+follows, without any of them knowing.
+
+Before that existed, `FontId(0)` *was* the built-in bitmap and nothing else, so
+`Ui::add_font` registered a face nothing referred to: a form could not be drawn in
+any face but the 5x7 one, whatever the machine had installed, and an application
+that wanted a real one had to thread a `TextStyle` through every widget it
+constructed. That was [#130](https://github.com/bisand/denise/issues/130), and the
+gallery had that workaround written out twenty times.
+
+**No face is embedded, and none will be.** A default that shipped in the crate
+would cost more than the binary it went into — a Nerd Font is 2.5 MB against the
+1.6 MB of the whole `denise-forms` tool — and would force the `truetype` tier on
+everybody, including the boards that chose the bitmap one deliberately. The
+position is the one `examples/system-font` already states: a panel ships the one
+face it was designed around, because what it would find on the machine is not what
+the layout was measured against. The examples go looking because they run on a
+reader's machine; a panel does not.
+
 The numbers that decide between them are stark in both directions. On a Norwegian
 pangram, `truetype` and `shaping` produce lines **two pixels** different in total
 width — three megabytes for two pixels. On Arabic they are not comparable at all:

@@ -134,7 +134,8 @@ with no layout engine nothing else ever will. `--no-lint` turns that off,
 `render` draws one frame with no display attached. Deterministic: without
 `--font` it uses the built-in bitmap font rather than whatever the machine has
 installed, so two renders of one file are the same bytes and a snapshot is worth
-committing. `--font` needs the `truetype` feature.
+committing. `--font` draws the whole form in that face instead, and needs the
+`truetype` feature.
 
 `--scale` and `--size` ask different questions. `--scale 2` is *the same panel at
 twice the density*: one factor, and the picture grows with the form. `--size

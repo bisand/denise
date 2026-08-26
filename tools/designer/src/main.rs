@@ -48,6 +48,10 @@
 //! silently, keeping the selection by name, or with one question when there is
 //! unsaved work to lose. See [`watch`].
 //!
+//! It draws itself in whatever face the machine has, falling back to the built-in
+//! bitmap on a board with none — one call, since #130 made every unnamed
+//! `TextStyle` a redirection through the tree's default face.
+//!
 //! The palette is six shelves rather than a flat list, and resting on a row says
 //! what the widget is — both declared by the widget through `Describe`, so a
 //! twenty-sixth appears here filed and described without this crate changing.
@@ -85,6 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut band: Option<denise::Rect> = None;
     let mut new_form = false;
     let mut tab_order = false;
+    let mut font: Option<String> = None;
     let mut hover: Option<String> = None;
     let mut clash: Option<String> = None;
     let mut rest = args.iter();
@@ -101,6 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--preview" => preview = true,
             "--new" => new_form = true,
             "--tab-order" => tab_order = true,
+            "--font" => font = rest.next().cloned(),
             "--hover" => hover = rest.next().cloned(),
             "--clash" => clash = rest.next().cloned(),
             "--band" => {
@@ -137,6 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --band <x,y,w,h>       snapshot: draw a rubber band over the form\n\
                      \x20 --new                  snapshot: put the new-form sheet up\n\
                      \x20 --tab-order            snapshot: number the form's tab stops\n\
+                     \x20 --font <path.ttf>      draw in this face rather than the one found\n\
                      \x20 --hover <kind>         snapshot: rest the pointer on this palette row\n\
                      \x20 --clash <other.dform>  snapshot: the file-changed sheet, against this version"
                 );
@@ -162,6 +169,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(out) = snapshot {
         let size = Size::new(settings.width, settings.height);
         let mut designer = Designer::new(size, 1.0, settings, document);
+        // A snapshot keeps the built-in face unless one is named. Its whole
+        // value is being comparable — between two runs, between two machines,
+        // between the two sides of a pull request — and a face picked up from
+        // whatever is installed is none of those. `--font` is how a committed
+        // screenshot pins one. The same reason `scripts/screenshot-browser.sh`
+        // renders in a container.
+        if let Some(path) = &font {
+            use_font(&mut designer, Some(path));
+        }
         if let Some(name) = select
             && !designer.select_named(&name)
         {
@@ -212,9 +228,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             resizable: true,
             ..WindowConfig::default()
         },
-        move |size, scale| Main::new(size, scale, settings, document),
+        move |size, scale| {
+            let mut main = Main::new(size, scale, settings, document);
+            // On the way up, so every pane is drawn in it from the first frame.
+            use_font(&mut main.designer, font.as_deref());
+            main
+        },
     )?;
     Ok(())
+}
+
+/// Draws the designer in a real face, if this machine has one.
+///
+/// The designer is a desktop tool and should look like the desktop it is on.
+/// `system_font::load` walks the places systems keep fonts and prefers a regular
+/// upright sans; on a board that has none — a Pi with no fonts installed — it
+/// finds nothing and the built-in 5x7 bitmap stays, which is the right answer
+/// there rather than a fallback to apologise for.
+///
+/// One call reaches every widget, already built or not, because every
+/// `TextStyle` in the workspace names `FontId::DEFAULT` and that is a
+/// redirection. Before #130 this needed a `TextStyle` threaded through every
+/// widget the designer constructs, which is why it was never done.
+fn use_font(designer: &mut Designer, requested: Option<&str>) {
+    let Some((name, source)) = system_font::load(requested) else {
+        return;
+    };
+    let id = designer.ui.add_font(source);
+    designer.ui.set_default_font(id);
+    eprintln!("drawing in {name}");
 }
 
 struct Main {

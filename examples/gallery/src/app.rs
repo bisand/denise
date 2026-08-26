@@ -326,25 +326,25 @@ impl App {
         ui.set_motion(motion);
         let px = |v: u16| ((v as f32) * scale + 0.5) as u16;
 
-        // Registered before the first node exists, so every widget is built
-        // with its final style and nothing needs restyling afterwards.
+        // One call, and every widget in the tree follows — including the ones
+        // this file never names, like the labels a `Select` puts in its popup.
+        // It used to be three `TextStyle`s carrying the id, threaded through
+        // every widget constructed below, and a note that this had to happen
+        // before the first node existed. Neither is true now: `set_default_font`
+        // reaches what is already built as well as what comes after, because
+        // every style that names no font is a redirection through it (#130).
+        //
+        // The three sizes stay, because they are *sizes* — a heading is bigger
+        // than body text whatever face it is in — and they now name no font.
         let (body, heading, small) = match font {
             Some((name, source)) => {
                 eprintln!("using {name}");
                 let id = ui.add_font(source);
+                ui.set_default_font(id);
                 (
-                    TextStyle {
-                        font: id,
-                        size_px: px(15),
-                    },
-                    TextStyle {
-                        font: id,
-                        size_px: px(22),
-                    },
-                    TextStyle {
-                        font: id,
-                        size_px: px(12),
-                    },
+                    TextStyle::built_in(px(15)),
+                    TextStyle::built_in(px(22)),
+                    TextStyle::built_in(px(12)),
                 )
             }
             None => {
