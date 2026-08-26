@@ -434,8 +434,11 @@ is in [docs/design.md](docs/design.md).
   their parent, which is what a fixed-resolution panel wants. The one placement
   rule the tree owns is the opt-in vertical stack (`set_stack`), which places a
   node's children top-to-bottom — the piece that makes an animated collapse move
-  its siblings. A constraint solver can still be added over all of this without
-  changing anything below it.
+  its siblings. Content-driven sizing — a label as wide as its text, a row that
+  grows with what is in it — is a layer *over* this rather than a change to it,
+  in an optional crate an application depends on or does not:
+  [docs/arrange.md](docs/arrange.md) is the design note, and nothing is built
+  yet.
 - **Twenty-six widgets**, plus tree-owned tooltips, toasts and drawers. Label,
   button, panel, text field, checkbox, toggle, radio group, progress bar,
   slider, divider, badge, alert, tabs, list, tree, radial progress, spinner,
@@ -504,6 +507,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all seventeen share one number, and what each guard is for |
 | [docs/forms.md](docs/forms.md) | The `.dform` file: why KDL, the version 1 schema, loading one from Rust, and what a form file deliberately will not do |
 | [docs/designer.md](docs/designer.md) | From a drawing to a running screen: the designer, the file and an application, end to end |
+| [docs/arrange.md](docs/arrange.md) | The design note for `denise-arrange`: content-driven sizing in an optional crate, what it gives up, and why the tree still never measures |
 
 ## Constraints
 

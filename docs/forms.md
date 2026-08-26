@@ -934,7 +934,7 @@ separate problems that are easy to run together:
 |---|---|---|
 | **Scale** | Same design, more pixels. A 1024×600 form on a 2048×1200 panel, or on a 2× display. | **Done** — [`scaling=`](#scaling) below ([#111](https://github.com/bisand/denise/issues/111)): the engine multiplies on the way in, exactly as `hello` does by hand, and the form declares whether it consents to being scaled at all. |
 | **Resize** | A window being dragged, a different aspect ratio, a panel turned to portrait. Scaling alone letterboxes or distorts. | **Done** — `anchor=` and `dock=` per node ([#110](https://github.com/bisand/denise/issues/110)): Delphi's and WinForms' own answer, one derived rectangle per child in the reflow pass the tree already runs, and [#86](https://github.com/bisand/denise/issues/86) builds them from the file. |
-| **Content-driven sizing** | A label as wide as its text, a row that grows with what is in it. | [#112](https://github.com/bisand/denise/issues/112) — a real measure-and-arrange engine, in a crate of its own that an application opts into, so the core keeps costing nothing. |
+| **Content-driven sizing** | A label as wide as its text, a row that grows with what is in it. | [#112](https://github.com/bisand/denise/issues/112) — a real measure-and-arrange engine, in a crate of its own that an application opts into, so the core keeps costing nothing. **Designed, not built**: [docs/arrange.md](arrange.md). A form file will not describe it — a file that meant different things depending on the reader's dependency graph is the worst property a format can have. |
 
 Both of the first two are **properties added to existing nodes**, which
 `version 1` allows without a bump — nesting, naming, roles, messages and
