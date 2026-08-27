@@ -793,6 +793,86 @@ fn a_node_moved_to_the_front_and_back_again_leaves_no_blank_line() {
     assert_eq!(form.text(), NESTED);
 }
 
+/// A form written with blank lines keeps them when something is re-sequenced.
+///
+/// The other half of the test above, and #151: a node's leading trivia is *part
+/// of it*, which is what carries the comment along — and the blank line was part
+/// of the same trivia and was being dropped. The designer's bring-to-front and
+/// #98's tab-order mode are both `Edit::Move` among siblings, so somebody who
+/// grouped their form with blank lines watched them disappear one at a time.
+#[test]
+fn a_move_keeps_the_blank_lines_that_travel_with_the_node() {
+    // Three groups, separated the way a person separates them.
+    const SPACED: &str = "\
+form \"Spaced\" version=1 width=400 height=300 {
+    label \"one\" x=0 y=0 w=10 h=10
+
+    // why `two` is here
+    label \"two\" x=0 y=20 w=10 h=10
+
+    label \"three\" x=0 y=40 w=10 h=10
+}
+";
+    let lines = |text: &str| text.lines().count();
+
+    // Every position a node can be moved to, and back again.
+    for (from, to) in [(1usize, 0usize), (2, 1), (0, 2), (2, 0)] {
+        let mut form = Form::parse(SPACED).expect("parses");
+        form.apply(Edit::move_to(&[from], &[], to)).expect("moved");
+        let after = form.text();
+
+        assert_eq!(
+            lines(&after),
+            lines(SPACED),
+            "moving [{from}] to {to} changed the line count:\n{after}"
+        );
+        assert_eq!(
+            after.matches("\n\n").count(),
+            SPACED.matches("\n\n").count(),
+            "moving [{from}] to {to} lost or invented a blank line:\n{after}"
+        );
+        // The comment still travels with the node it explains.
+        let two = after
+            .find("label \"two\"")
+            .expect("`two` is still in the file");
+        let comment = after.find("// why `two` is here").expect("the comment too");
+        assert!(comment < two, "the comment left its node behind:\n{after}");
+
+        // And what it wrote reads back the same, so the blank lines are really
+        // in the trivia rather than only in the string.
+        let reread = Form::parse(&after).expect("still a form");
+        assert_eq!(reread.text(), after);
+    }
+}
+
+/// There and back is where it started, with no undo, for a form that has them.
+///
+/// `a_node_moved_to_the_front_and_back_again_leaves_no_blank_line` makes this
+/// claim for a fixture with no blank lines in it, where stripping them is
+/// indistinguishable from keeping them. This is the same claim where it bites.
+#[test]
+fn a_move_and_a_move_back_is_where_it_started_even_with_blank_lines() {
+    const SPACED: &str = "\
+form \"Spaced\" version=1 width=400 height=300 {
+    label \"one\" x=0 y=0 w=10 h=10
+
+    label \"two\" x=0 y=20 w=10 h=10
+
+    label \"three\" x=0 y=40 w=10 h=10
+}
+";
+    for (from, to) in [(0usize, 2usize), (2, 0), (1, 2), (2, 1)] {
+        let mut form = Form::parse(SPACED).expect("parses");
+        form.apply(Edit::move_to(&[from], &[], to)).expect("there");
+        form.apply(Edit::move_to(&[to], &[], from)).expect("back");
+        assert_eq!(
+            form.text(),
+            SPACED,
+            "[{from}] to {to} and back is not where it started"
+        );
+    }
+}
+
 #[test]
 fn a_node_that_changes_depth_is_reindented_and_undone_back() {
     let mut form = Form::parse(NESTED).expect("parses");

@@ -1611,7 +1611,29 @@ impl Form {
                 let leaving = from.len() == to.len() + 1 && from.starts_with(&to);
                 let index = index.min(held - usize::from(leaving && held > 0));
 
+                // The blank lines that stood above it, which travel with it.
+                //
+                // A node's leading newlines are **one structural** — the line
+                // the brace opened, carried by whichever node is first in the
+                // block — plus one for every blank line above it. Nothing in the
+                // trivia says which is which; only the node's position does. So
+                // the count is taken here, where the old position is still
+                // known, and put back below against the new one.
+                let had = text.len() - text.trim_start_matches('\n').len();
+                let blanks = had.saturating_sub(usize::from(from.last() == Some(&0)));
+
                 let text = reindent(&text, &old, &new, index == 0);
+                // `reindent` leaves exactly the structural newline the landing
+                // calls for; the blank lines go back on top of it. Pure newlines,
+                // so the order among them does not matter — what matters is how
+                // many.
+                let text = if blanks == 0 {
+                    text
+                } else {
+                    let mut with = "\n".repeat(blanks);
+                    with.push_str(&text);
+                    with
+                };
                 // Two edits as one, so the inverse is the pair reversed: put the
                 // node back where it came from, with the text it had there, and
                 // take away any braces this had to make. `Many` already does all
@@ -1671,11 +1693,18 @@ impl Form {
                 // back puts all of that back too.
                 let text = children.remove(last).to_string();
                 if opener && let Some(first) = children.first_mut() {
+                    // Unconditionally, and that is the whole of the other half
+                    // of #151. The node that is now first never held the line
+                    // the brace opened, so it always needs one — and a leading
+                    // newline it *already* has is a blank line somebody wrote,
+                    // not the structural one. Skipping the insert when it starts
+                    // with `\n` looked like idempotence and was a blank line
+                    // being quietly promoted into the structural newline, so a
+                    // node moved away from the front took the blank line above
+                    // its neighbour with it.
                     let mut format = first.format().cloned().unwrap_or_default();
-                    if !format.leading.starts_with('\n') {
-                        format.leading.insert(0, '\n');
-                        first.set_format(format);
-                    }
+                    format.leading.insert(0, '\n');
+                    first.set_format(format);
                 }
                 if emptied {
                     self.drop_block(&above);
