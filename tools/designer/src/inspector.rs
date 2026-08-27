@@ -71,15 +71,30 @@ pub enum Editor {
         /// What it offers, in the order it offers them.
         options: &'static [&'static str],
     },
+    /// A collection written as child nodes: a field per item, and the controls
+    /// that reorder, remove and add.
+    ///
+    /// The fields are polled like any other, joined by newlines — an item is one
+    /// line, and a `TextInput` is one line, so nothing can contain the joiner.
+    /// Adding, removing and reordering are **buttons** instead, because those
+    /// carry an index and a polled string cannot: two items swapping is
+    /// indistinguishable from two items being retyped.
+    Items {
+        /// One field per item, in file order.
+        fields: Vec<NodeId>,
+    },
 }
 
 impl Editor {
     /// The node that takes the caret, for telling when somebody has moved on.
-    pub const fn focusable(&self) -> NodeId {
+    pub fn focusable(&self) -> NodeId {
         match self {
             Editor::Field(id) | Editor::Slid { field: id, .. } => *id,
             Editor::Flag(id) => *id,
             Editor::Choice { select, .. } => *select,
+            // The first item. A list with none has no field to take the caret,
+            // and the pane it is in is about to be rebuilt anyway.
+            Editor::Items { fields } => fields.first().copied().unwrap_or_default(),
         }
     }
 }
@@ -119,6 +134,9 @@ pub struct Field {
     /// A line under the property's own documentation, when there is something
     /// worth adding — the message names this form already uses, say.
     pub hint: Option<String>,
+    /// The items, for a [`PropertyKind::List`] property. Empty for every other
+    /// kind, and the reason a list row is taller than one row.
+    pub items: Vec<String>,
 }
 
 /// The pane.
@@ -157,10 +175,10 @@ impl Inspector {
         // Tall enough for everything, inside a viewport that scrolls: a form
         // node with twenty properties and fourteen the tree owns does not fit a
         // pane, and a row quietly cut off at the bottom is worse than a wheel.
-        let height = header.len() as i32 * header_pitch
-            + fields.len() as i32 * (row + gap)
-            + row * 2
-            + gap * 4;
+        // A list property is as tall as it has items, plus the row that adds
+        // one; every other property is a single row.
+        let tall: i32 = fields.iter().map(rows_for).sum();
+        let height = header.len() as i32 * header_pitch + tall * (row + gap) + row * 2 + gap * 4;
         let content = ui
             .add(parent, Panel::default(), Rect::new(0, 0, width, height))
             .expect("the inspector's viewport is there");
@@ -213,15 +231,15 @@ impl Inspector {
             }
 
             let shown = field.value.clone().unwrap_or_default();
-            let editor = build_editor(
-                ui,
-                content,
-                index,
-                field,
-                &shown,
-                Rect::new(editor_x, y, editor_w, row),
-                scale,
-            );
+            // A list uses the full width of the pane rather than the editor
+            // column: its items are the content, and the property's name is a
+            // heading over them rather than a label beside them.
+            let space = if matches!(field.property.kind, PropertyKind::List) {
+                Rect::new(gap, y + row, inner, row)
+            } else {
+                Rect::new(editor_x, y, editor_w, row)
+            };
+            let editor = build_editor(ui, content, index, field, &shown, space, scale);
 
             // Something to reset only when there is something to reset: a
             // property the file does not write is already at its default.
@@ -243,7 +261,7 @@ impl Inspector {
                 editor,
                 shown,
             });
-            y += row + gap;
+            y += rows_for(field) * (row + gap);
         }
 
         let complaint = ui
@@ -306,6 +324,10 @@ impl Inspector {
                     box_.set_checked(text == "#true");
                 }
             }
+            // A list is never *shown* into: the four rectangle rows are what
+            // this exists for, and adding, removing or reordering an item
+            // rebuilds the pane rather than writing back into it.
+            Editor::Items { .. } => {}
             Editor::Choice { select, options } => {
                 let at = options.iter().position(|option| *option == text);
                 if let Some(widget) = ui.widget_mut::<Select<Message>>(*select) {
@@ -324,6 +346,18 @@ impl Inspector {
     }
 }
 
+/// How many rows tall this field is.
+///
+/// One, unless it is a list — which is a heading, one row per item, and the row
+/// that adds another.
+fn rows_for(field: &Field) -> i32 {
+    if matches!(field.property.kind, PropertyKind::List) {
+        2 + field.items.len() as i32
+    } else {
+        1
+    }
+}
+
 /// The editor a property's kind calls for.
 fn build_editor(
     ui: &mut Ui<Message>,
@@ -338,6 +372,64 @@ fn build_editor(
     let (x, y, width) = (rect.x, rect.y, rect.width);
     let (row, gap) = (scale.n(ROW), scale.n(GAP));
     match field.property.kind {
+        // A run of child nodes. One field per item with the controls that
+        // reorder and remove it, and a row underneath that adds another —
+        // `space` is the first item's row, and each one after is a row lower.
+        PropertyKind::List => {
+            let (small, step) = (scale.n(22), row + gap);
+            let controls = small * 3 + gap * 2;
+            let mut fields = Vec::with_capacity(field.items.len());
+
+            for (nth, item) in field.items.iter().enumerate() {
+                let y = rect.y + nth as i32 * step;
+                let id = ui.add(
+                    parent,
+                    TextInput::<Message>::new()
+                        .with_size(scale.text(Text::Body))
+                        .with_max_chars(256),
+                    Rect::new(rect.x, y, rect.width - controls - gap, row),
+                );
+                if let Some(id) = id {
+                    if let Some(input) = ui.widget_mut::<TextInput<Message>>(id) {
+                        input.set_text(item.clone());
+                    }
+                    fields.push(id);
+                }
+                // Up, down, and away. Up on the first and down on the last do
+                // nothing and say so by being disabled, rather than moving
+                // something somewhere surprising.
+                let last = nth + 1 == field.items.len();
+                let mut x = rect.right() - controls;
+                for (label, message, on) in [
+                    ("↑", Message::ItemUp(index, nth), nth > 0),
+                    ("↓", Message::ItemDown(index, nth), !last),
+                    ("×", Message::ItemRemove(index, nth), true),
+                ] {
+                    if let Some(id) = ui.add(
+                        parent,
+                        Button::new(label, message)
+                            .with_role(Role::Neutral)
+                            .with_size(scale.text(Text::Caption)),
+                        Rect::new(x, y + scale.n(2), small, row - scale.n(4)),
+                    ) {
+                        ui.set_enabled(id, on);
+                    }
+                    x += small + gap;
+                }
+            }
+
+            let y = rect.y + field.items.len() as i32 * step;
+            if let Some(id) = ui.add(
+                parent,
+                Button::new("+ add", Message::ItemAdd(index))
+                    .with_role(Role::Neutral)
+                    .with_size(scale.text(Text::Caption)),
+                Rect::new(rect.x, y + scale.n(2), scale.n(64), row - scale.n(4)),
+            ) {
+                ui.set_tooltip(id, "Adds one to the end of the list");
+            }
+            Editor::Items { fields }
+        }
         PropertyKind::Bool => {
             let id = ui
                 .add(
@@ -435,6 +527,15 @@ fn build_editor(
 fn read(ui: &Ui<Message>, editor: &Editor) -> Option<String> {
     Some(match editor {
         Editor::Field(id) => ui.widget::<TextInput<Message>>(*id)?.text().to_string(),
+        Editor::Items { fields } => fields
+            .iter()
+            .map(|id| {
+                ui.widget::<TextInput<Message>>(*id)
+                    .map(|field| field.text().to_string())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         Editor::Slid { field, slider } => {
             // The slider is the coarse control and the field is the exact one,
             // so whichever moved last wins — and a slider that has not moved

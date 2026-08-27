@@ -362,6 +362,23 @@ pub enum PropertyKind {
     /// else names a [`Role`] and lets the theme decide, which is what keeps a
     /// theme swap from leaving one widget the wrong colour.
     Color,
+    /// The widget's **collection**, written as child nodes rather than a value.
+    ///
+    /// A `select` holds `option`s, a `tabs` holds `tab`s. The property's name is
+    /// the child node's name, and its items are the nodes' arguments — so a
+    /// property called `option` means *the `option` nodes under this one*.
+    ///
+    /// Never settable here, for the third of the reasons in the [module
+    /// docs](self): the items are not one value but a run of nodes, each with
+    /// its own place in the file and its own comments above it. An inspector
+    /// edits them where they live — `Edit::Argument` for one item's text,
+    /// `Insert`, `Remove` and `Move` for the rest — which is what keeps a
+    /// comment written above the third option above the third option.
+    ///
+    /// Which collections are a widget's **real data** and which are a
+    /// designer's placeholder is a question per widget, not per kind; see
+    /// `docs/forms.md`.
+    List,
 }
 
 impl PropertyKind {
@@ -376,6 +393,7 @@ impl PropertyKind {
             PropertyKind::Message(_) => "a message name",
             PropertyKind::Asset => "a path",
             PropertyKind::Color => "a colour like #RRGGBB",
+            PropertyKind::List => "a run of child nodes",
         }
     }
 }
@@ -448,7 +466,10 @@ impl Property {
     /// construction because this crate can hold neither. See the
     /// [module docs](self).
     pub const fn is_settable(&self) -> bool {
-        !matches!(self.kind, PropertyKind::Message(_) | PropertyKind::Asset)
+        !matches!(
+            self.kind,
+            PropertyKind::Message(_) | PropertyKind::Asset | PropertyKind::List
+        )
     }
 }
 

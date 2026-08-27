@@ -406,6 +406,11 @@ impl<M> Describe for RadioGroup<M> {
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
+            "option",
+            PropertyKind::List,
+            "The choices, as `option` child nodes. A group's are the real ones: it always has an answer.",
+        ),
+        Property::new(
             "selected",
             PropertyKind::Int {
                 min: 0,
@@ -445,7 +450,10 @@ impl<M> Describe for RadioGroup<M> {
             // Through the setter, which clamps into the options: unlike a list,
             // this widget cannot represent nothing chosen.
             "selected" => self.set_selected(value.as_index()?),
-            "on-change" => return Err(Mismatch::Supplied),
+            // The engine builds these from the child nodes, and an
+            // inspector edits them where they live. See
+            // `PropertyKind::List`.
+            "on-change" | "option" => return Err(Mismatch::Supplied),
             "role" => self.role = value.as_role()?,
             "size" => self.style.size_px = value.as_size()?,
             _ => return Err(Mismatch::Unknown),

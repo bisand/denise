@@ -66,6 +66,14 @@ pub enum Message {
     Chose(usize),
     /// Find a picture for an inspector row, through the platform's dialog.
     Browse(usize),
+    /// Appends an item to the collection a row edits.
+    ItemAdd(usize),
+    /// Takes one out: the row, and which item.
+    ItemRemove(usize, usize),
+    /// Moves one earlier in the file, and so earlier in the widget.
+    ItemUp(usize, usize),
+    /// And later.
+    ItemDown(usize, usize),
     /// One of the arrange commands: align, size, space, group.
     Arrange(Command),
     /// A kind picked in the new-form sheet.
@@ -1500,6 +1508,8 @@ impl Designer {
                     resettable: property.name != "title"
                         && self.document.form().property(&[], property.name).is_some(),
                     hint: None,
+                    // The form node has no collection of its own.
+                    items: Vec::new(),
                 }
             })
             .collect()
@@ -1624,8 +1634,16 @@ impl Designer {
         for (path, id) in paths.iter().zip(ids) {
             let mine = self.value_of(path, *id, property, node);
             let entry = self.document.form().property(path, property.name).is_some();
-            resettable &= entry;
-            written &= entry || self.argument_for(path, *id, property, node).is_some();
+            // A collection is written as child nodes, so there is no entry to
+            // find and none to take away: it counts as written when it holds
+            // something, and it is emptied one item at a time.
+            let list = matches!(property.kind, PropertyKind::List);
+            resettable &= entry && !list;
+            written &= if list {
+                !self.items_of(path, property.name).is_empty()
+            } else {
+                entry || self.argument_for(path, *id, property, node).is_some()
+            };
             match &value {
                 None => value = Some(mine),
                 Some(seen) if *seen != mine => agreed = false,
@@ -1642,6 +1660,15 @@ impl Designer {
             written,
             resettable,
             hint,
+            // A list's items come from the file, like a message's name and an
+            // asset's path: they are child nodes, not a value the widget holds.
+            // With several selected they are the first one's, and editing goes
+            // to that one — a list is the node's content, and merging two
+            // nodes' content is not something an inspector can mean.
+            items: match (property.kind, paths.first()) {
+                (PropertyKind::List, Some(path)) => self.items_of(path, property.name),
+                _ => Vec::new(),
+            },
         }
     }
 
@@ -1670,6 +1697,16 @@ impl Designer {
                 .form()
                 .property(path, property.name)
                 .unwrap_or_default(),
+            // A list's row shows how many there are; the items themselves are
+            // the editor, one field each.
+            PropertyKind::List => {
+                let items = self.items_of(path, property.name);
+                match items.len() {
+                    0 => String::new(),
+                    1 => format!("1 {}", property.name),
+                    many => format!("{many} {}s", property.name),
+                }
+            }
             _ => {
                 // A length the **file** writes is read from the file. The
                 // builder multiplied it into the widget and the rounding is not
@@ -1692,6 +1729,141 @@ impl Designer {
                     .unwrap_or_default()
             }
         }
+    }
+
+    // --------------------------------------------------------- collections
+
+    /// Writes back whatever item's text was changed.
+    ///
+    /// Compared item by item and written one at a time, so an option nobody
+    /// touched keeps the comment above it and the spelling it was written with.
+    /// The counts always agree here: the pane is rebuilt whenever the length
+    /// changes, and only a field can have been typed into since.
+    fn commit_items(&mut self, row: usize, kind: &'static str, joined: &str) {
+        let Some((path, _)) = self.list_row(row) else {
+            return;
+        };
+        let was = self.document.form().items(&path, kind);
+        let now: Vec<&str> = joined.split('\n').collect();
+        if now.len() != was.len() {
+            return;
+        }
+
+        let mut edits = Vec::new();
+        for (nth, (before, after)) in was.iter().zip(&now).enumerate() {
+            if before == after {
+                continue;
+            }
+            let Some(item) = self.document.form().item_path(&path, kind, nth) else {
+                continue;
+            };
+            edits.push(Edit::Argument {
+                path: item,
+                value: Literal::text(*after),
+            });
+        }
+        match edits.len() {
+            0 => return,
+            1 => self.edit(edits.remove(0)),
+            _ => self.edit(Edit::Many(edits)),
+        }
+        // The widget is built from its children, so the canvas follows only
+        // once the form is read again — and that cannot happen under the caret.
+        self.stale = true;
+    }
+
+    /// The node a list row edits, and which child kind it holds.
+    ///
+    /// One node, never several: a list is the node's **content**, and merging
+    /// two nodes' content is not something an inspector can mean. The pane
+    /// already shows the first selected node's items for the same reason.
+    fn list_row(&self, row: usize) -> Option<(Vec<usize>, &'static str)> {
+        let pane = self.inspector.as_ref()?;
+        let property = pane.rows.get(row)?.property;
+        if !matches!(property.kind, PropertyKind::List) {
+            return None;
+        }
+        Some((self.selection.first()?.clone(), property.name))
+    }
+
+    /// Appends one to a collection.
+    ///
+    /// Seeded with the property's own name, so the new row says what it is and
+    /// can be found again — the same reason `seed` gives a dropped `label` the
+    /// word "label".
+    fn add_item(&mut self, row: usize) {
+        let Some((path, kind)) = self.list_row(row) else {
+            return;
+        };
+        let at = self.document.form().items(&path, kind).len();
+        // Past every child, not past every *item*: a node may hold more than one
+        // collection — a `table` holds columns and rows — and the index an edit
+        // takes is the one among children.
+        let index = self.document.form().child_count(&path);
+        self.history.separate();
+        self.edit(Edit::Insert {
+            parent: path,
+            index,
+            text: format!("{kind} {:?}", kind),
+        });
+        self.status = format!("added {kind} {}", at + 1);
+        self.reload_from_document();
+    }
+
+    /// Takes one out.
+    fn remove_item(&mut self, row: usize, nth: usize) {
+        let Some((path, kind)) = self.list_row(row) else {
+            return;
+        };
+        let Some(item) = self.document.form().item_path(&path, kind, nth) else {
+            return;
+        };
+        self.history.separate();
+        self.edit(Edit::remove(&item));
+        self.status = format!("removed {kind} {}", nth + 1);
+        self.reload_from_document();
+    }
+
+    /// Moves one earlier or later among its siblings.
+    ///
+    /// `Edit::Move` reaches a collection's children like any other node, and
+    /// carries a comment written above one along with it — which is the whole
+    /// reason the items are edited where they live rather than rewritten as a
+    /// block.
+    fn move_item(&mut self, row: usize, nth: usize, to: usize) {
+        let Some((path, kind)) = self.list_row(row) else {
+            return;
+        };
+        let items = self.document.form().items(&path, kind).len();
+        if nth >= items || to >= items {
+            return;
+        }
+        let (Some(from), Some(landing)) = (
+            self.document.form().item_path(&path, kind, nth),
+            self.document.form().item_path(&path, kind, to),
+        ) else {
+            return;
+        };
+        // Among children, which is the index `Move` takes.
+        let index = *landing.last().expect("an item is a child of its node");
+        self.history.separate();
+        self.edit(Edit::Move {
+            from,
+            to: path,
+            index,
+        });
+        self.status = format!("moved {kind} {} to {}", nth + 1, to + 1);
+        self.reload_from_document();
+    }
+
+    /// The items of a node's collection, in file order.
+    ///
+    /// A [`PropertyKind::List`] property is named after the child nodes that
+    /// *are* it — a `select`'s `option`s, a `tabs`'s `tab`s — so this reads them
+    /// straight out of the document. Each item is the node's argument, which is
+    /// how every collection in this format writes its text.
+    fn items_of(&self, path: &[usize], name: &str) -> Vec<String> {
+        self.document.form().items(path, name)
     }
 
     /// A property's value as the **file** writes it.
@@ -1954,6 +2126,15 @@ impl Designer {
         }) else {
             return;
         };
+
+        // A list is a run of child nodes, so what came back is the items joined
+        // by newlines rather than one value. Only the text of an item can arrive
+        // this way — adding, removing and reordering are buttons, which carry an
+        // index a polled string cannot.
+        if matches!(property.kind, PropertyKind::List) {
+            self.commit_items(row, property.name, &text);
+            return;
+        }
 
         let paths = self.selection.clone();
         if paths.is_empty() {
@@ -5431,6 +5612,10 @@ impl Designer {
             Message::TabOrder => self.toggle_tab_order(),
             Message::Theme => self.cycle_theme(),
             Message::Zoom => self.cycle_zoom(),
+            Message::ItemAdd(row) => self.add_item(row),
+            Message::ItemRemove(row, nth) => self.remove_item(row, nth),
+            Message::ItemUp(row, nth) => self.move_item(row, nth, nth.wrapping_sub(1)),
+            Message::ItemDown(row, nth) => self.move_item(row, nth, nth + 1),
             Message::Key(code) => {
                 let events = self.keyboard.press_key(&mut self.ui, code);
                 self.ui.handle(&events);
@@ -7194,6 +7379,160 @@ mod tests {
                 .unwrap_or_default()
         };
         Rect::new(axis("x"), axis("y"), axis("w"), axis("h"))
+    }
+
+    // --------------------------------------------------------- collections
+
+    /// A form with a select whose options carry a comment.
+    fn with_options() -> Designer {
+        let source = concat!(
+            "form \"Opts\" version=1 width=300 height=200 {\n",
+            "    select name=job x=4 y=4 w=120 h=24 {\n",
+            "        option \"Reader\"\n",
+            "        // the usual one\n",
+            "        option \"Author\"\n",
+            "    }\n",
+            "}\n",
+        );
+        scratch("opts", source)
+    }
+
+    /// The row a list property is on, for the selected node.
+    fn list_row_of(designer: &Designer, name: &str) -> usize {
+        designer
+            .inspector
+            .as_ref()
+            .expect("an inspector")
+            .rows
+            .iter()
+            .position(|row| row.property.name == name)
+            .expect("the widget describes its collection")
+    }
+
+    /// The inspector shows a `select`'s options, and adds one.
+    ///
+    /// #105's own acceptance: a collection is the widget's content, written as
+    /// child nodes, and the pane edits it where it lives.
+    #[test]
+    fn the_inspector_edits_the_options_a_select_holds() {
+        let mut designer = with_options();
+        assert!(designer.select_named("job"));
+        let row = list_row_of(&designer, "option");
+
+        let pane = designer.inspector.as_ref().expect("an inspector");
+        assert_eq!(
+            pane.rows[row].shown, "2 options",
+            "the row does not say how many there are"
+        );
+
+        designer.add_item(row);
+        assert_eq!(
+            designer
+                .document
+                .form()
+                .items(&path_named(&designer, "job"), "option"),
+            ["Reader", "Author", "option"],
+            "adding did not append one"
+        );
+        assert!(
+            text(&designer).contains("// the usual one"),
+            "the comment went"
+        );
+    }
+
+    /// Removing and reordering reach the file, and carry the comment.
+    ///
+    /// The reason the items are edited where they live rather than rewritten as
+    /// a block: `Edit::Move` takes a node's leading trivia with it, so a comment
+    /// written above the second option stays above the second option.
+    #[test]
+    fn removing_and_reordering_an_option_carries_what_was_written_above_it() {
+        let mut designer = with_options();
+        assert!(designer.select_named("job"));
+        let row = list_row_of(&designer, "option");
+        let job = path_named(&designer, "job");
+
+        designer.move_item(row, 1, 0);
+        assert_eq!(
+            designer.document.form().items(&job, "option"),
+            ["Author", "Reader"],
+            "the reorder did not reach the file"
+        );
+        let moved = text(&designer);
+        let comment = moved
+            .find("// the usual one")
+            .expect("the comment is still there");
+        let author = moved
+            .find("option \"Author\"")
+            .expect("`Author` is still there");
+        assert!(
+            comment < author,
+            "the comment left its option behind:\n{moved}"
+        );
+
+        designer.remove_item(row, 0);
+        assert_eq!(
+            designer.document.form().items(&job, "option"),
+            ["Reader"],
+            "the removal did not reach the file"
+        );
+        // And the comment went with the option it explained.
+        assert!(!text(&designer).contains("// the usual one"));
+    }
+
+    /// Retyping one option writes that option, and leaves the others alone.
+    #[test]
+    fn retyping_one_option_writes_only_that_one() {
+        let mut designer = with_options();
+        assert!(designer.select_named("job"));
+        let row = list_row_of(&designer, "option");
+
+        designer.commit_items(row, "option", "Reader\nEditor");
+        let after = text(&designer);
+        assert_eq!(
+            designer
+                .document
+                .form()
+                .items(&path_named(&designer, "job"), "option"),
+            ["Reader", "Editor"]
+        );
+        assert!(
+            after.contains("// the usual one"),
+            "the untouched comment went:\n{after}"
+        );
+
+        // A list of a different length is not something a poll can mean, and is
+        // refused rather than guessed at.
+        designer.commit_items(row, "option", "Reader");
+        assert_eq!(
+            designer
+                .document
+                .form()
+                .items(&path_named(&designer, "job"), "option"),
+            ["Reader", "Editor"],
+            "a shorter list was taken as an edit"
+        );
+    }
+
+    /// Every collection edit is one undo step, and undo is byte-exact.
+    #[test]
+    fn a_collection_edit_undoes_to_the_byte() {
+        for step in 0..3 {
+            let mut designer = with_options();
+            assert!(designer.select_named("job"));
+            let row = list_row_of(&designer, "option");
+            let before = text(&designer);
+
+            match step {
+                0 => designer.add_item(row),
+                1 => designer.remove_item(row, 0),
+                _ => designer.move_item(row, 1, 0),
+            }
+            assert_ne!(text(&designer), before, "step {step} changed nothing");
+
+            designer.undo();
+            assert_eq!(text(&designer), before, "step {step} did not undo exactly");
+        }
     }
 
     /// A designer on a form file of this test's own, so two tests running at

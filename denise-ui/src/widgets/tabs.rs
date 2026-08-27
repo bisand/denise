@@ -359,6 +359,11 @@ impl<M> Describe for Tabs<M> {
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
+            "tab",
+            PropertyKind::List,
+            "The section names, as `tab` child nodes. Real data: a form's sections are the form's.",
+        ),
+        Property::new(
             "selected",
             PropertyKind::Int {
                 min: 0,
@@ -398,7 +403,10 @@ impl<M> Describe for Tabs<M> {
             // Through the setter, which clamps into the labels: a tab strip has
             // no way to show nothing selected.
             "selected" => self.set_selected(value.as_index()?),
-            "on-change" => return Err(Mismatch::Supplied),
+            // The engine builds these from the child nodes, and an
+            // inspector edits them where they live. See
+            // `PropertyKind::List`.
+            "on-change" | "tab" => return Err(Mismatch::Supplied),
             "role" => self.role = value.as_role()?,
             "size" => self.style.size_px = value.as_size()?,
             _ => return Err(Mismatch::Unknown),

@@ -1238,6 +1238,110 @@ impl Form {
         Some(spell(self.node_at(path)?.get(name)?))
     }
 
+    /// The arguments of a node's children of one kind, in file order.
+    ///
+    /// What a **collection** holds: a `select`'s `option`s, a `tabs`'s `tab`s, a
+    /// `table`'s `column`s. Each item is the child's own argument, which is how
+    /// every collection in this format writes its text.
+    ///
+    /// Named by the child node rather than by a plural, because that is what the
+    /// file says and what [`PropertyKind::List`](denise_ui::widgets::PropertyKind::List)
+    /// names: a property called `option` *is* the `option` nodes under it.
+    ///
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(
+    ///     "form \"F\" version=1 width=99 height=99 {\n    select name=job x=0 y=0 w=9 h=9 {\n        option \"Reader\"\n        option \"Author\"\n    }\n}\n",
+    /// )?;
+    ///
+    /// assert_eq!(form.items(&[0], "option"), ["Reader", "Author"]);
+    /// // A kind the node does not hold, and a node that is not there.
+    /// assert!(form.items(&[0], "tab").is_empty());
+    /// assert!(form.items(&[9], "option").is_empty());
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn items(&self, path: &[usize], kind: &str) -> Vec<String> {
+        let Some(node) = self.node_at(path) else {
+            return Vec::new();
+        };
+        node.children()
+            .map(|block| {
+                block
+                    .nodes()
+                    .iter()
+                    .filter(|child| child.name().value() == kind)
+                    .map(|child| {
+                        child
+                            .entries()
+                            .iter()
+                            .find(|entry| entry.name().is_none())
+                            .map_or_else(String::new, |entry| spell(entry.value()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// How many children a node has, of every kind.
+    ///
+    /// Where an appended child goes. Not the same as `items(path, kind).len()`:
+    /// a `table` holds `column`s *and* `row`s, so the index among one kind is
+    /// not the index among children — which is the index every edit takes.
+    ///
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(
+    ///     "form \"F\" version=1 width=99 height=99 {\n    table name=t x=0 y=0 w=9 h=9 {\n        column \"A\"\n        row \"1\"\n        row \"2\"\n    }\n}\n",
+    /// )?;
+    ///
+    /// assert_eq!(form.child_count(&[0]), 3);
+    /// assert_eq!(form.items(&[0], "row").len(), 2);
+    /// assert_eq!(form.child_count(&[9]), 0);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn child_count(&self, path: &[usize]) -> usize {
+        self.node_at(path)
+            .and_then(KdlNode::children)
+            .map_or(0, |block| block.nodes().len())
+    }
+
+    /// Where a node's `n`th child of one kind sits, for an edit that means it.
+    ///
+    /// A collection's items are addressed like any other node — see
+    /// [`Edit::Argument`], [`Edit::Insert`], [`Edit::Remove`] and
+    /// [`Edit::Move`], all of which already reach them — but the index among
+    /// *`option`s* is not the index among children when a node holds more than
+    /// one kind. This translates.
+    ///
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(
+    ///     "form \"F\" version=1 width=99 height=99 {\n    table name=t x=0 y=0 w=9 h=9 {\n        column \"A\"\n        row \"1\"\n        row \"2\"\n    }\n}\n",
+    /// )?;
+    ///
+    /// // The second `row` is the table's *third* child.
+    /// assert_eq!(form.item_path(&[0], "row", 1), Some(vec![0, 2]));
+    /// assert_eq!(form.item_path(&[0], "column", 0), Some(vec![0, 0]));
+    /// // Past the end, and a kind the node does not hold.
+    /// assert_eq!(form.item_path(&[0], "row", 2), None);
+    /// assert_eq!(form.item_path(&[0], "option", 0), None);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn item_path(&self, path: &[usize], kind: &str, nth: usize) -> Option<Vec<usize>> {
+        let node = self.node_at(path)?;
+        let at = node
+            .children()?
+            .nodes()
+            .iter()
+            .enumerate()
+            .filter(|(_, child)| child.name().value() == kind)
+            .map(|(index, _)| index)
+            .nth(nth)?;
+        let mut full = path.to_vec();
+        full.push(at);
+        Some(full)
+    }
+
     /// The source of one node, as it stands in the file, with its own
     /// indentation taken off.
     ///

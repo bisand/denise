@@ -287,6 +287,51 @@ numbers, and nothing has to parse inside a value. Delphi wrote `Left`, `Top`,
 Negative values are allowed and mean what they say — a node partly outside its
 parent, clipped by it. That is the rendered truth and the designer draws it.
 
+### Collections
+
+Six widgets hold **content** as child nodes rather than as a value: a `select`
+holds `option`s, a `table` holds `column`s and `row`s. That is not the same as
+holding *children* — dropping a button on a `select` has missed, and dropping
+one on a `panel` means it, which is what `owns_children` answers.
+
+Each collection is one of two things, and which one it is decides who may edit
+it and whether it ships:
+
+| child | in | | |
+|---|---|---|---|
+| `option` | `select`, `radio-group` | **real** | A dropdown's choices are the choices. |
+| `tab` | `tabs` | **real** | A form's sections are the form's. |
+| `item` | `list`, `tree` | **real** | A navigation list is content, not sample data. |
+| `column` | `table` | **real** | A table's columns are its *shape*; its rows are not. |
+| `picture` | `carousel` | **real** | A kiosk's slideshow is the slideshow. |
+| `row` | `table` | **placeholder** | Never the records — the application supplies those. |
+| `event` | `timeline` | **placeholder** | Likewise. |
+
+**Real** content is the widget's own and is edited where it lives. Each is a
+`PropertyKind::List` property named after the child node — a property called
+`option` *is* the `option` nodes under it — so the designer's inspector shows it
+as a run of fields with the controls that add, remove and reorder.
+
+The items are edited **one node at a time**: retyping one writes that one's
+argument, and adding, removing or reordering is an insert, a removal or a move.
+Nothing rewrites the block, which is why a comment written above the third
+option is still above the third option afterwards, and why every one of those is
+a single undo step that restores the file to the byte.
+
+A collection whose item is more than one string is real content that this
+editor cannot yet edit: a `row` has an argument per column and a `picture` has a
+path rather than an argument. They are read and written by the engine as they
+always were.
+
+**Placeholder** content is what the *designer* needs to show the widget
+convincingly — four rows of names so a table looks like a table. It is still
+written as child nodes today and still loaded by the engine, which means a kiosk
+ships them. Moving it under a `design` child node the engine ignores unless
+asked is [#160]; until then, keep placeholder rows short and remember they are
+in the binary.
+
+[#160]: https://github.com/bisand/denise/issues/160
+
 ### Value types
 
 #### Roles
