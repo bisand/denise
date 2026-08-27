@@ -269,7 +269,10 @@ is underneath — with focus returning to the anchor.
 A tooltip is neither, and is not a node either: `ui.set_tooltip(id, "text")`
 stores a string, and the tree runs the dwell timer, places the bubble, dismisses
 it on any press or key and draws it above every widget. It needs hover, so it
-does nothing on a touch-only panel.
+does nothing on a touch-only panel. The one thing the tree cannot decide for
+itself is how big the text is, because it does not know the display's scale
+factor: `ui.set_tooltip_size(px)` is the lever, and a scale-aware application
+pulls it once alongside its other sizes.
 
 `ui.toast(text, role)` is the same arrangement for notifications: the tree
 stacks them from the bottom edge, fades them in and out, dismisses one that is

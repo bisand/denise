@@ -70,6 +70,15 @@ impl Tooltip {
         }
     }
 
+    /// Sets the size the text is drawn at. See
+    /// [`Ui::set_tooltip_size`](crate::Ui::set_tooltip_size).
+    ///
+    /// Never zero: a tooltip that measures nothing is a bubble with no text in
+    /// it, which is worse than one at the wrong size.
+    pub(crate) fn set_size(&mut self, size_px: u16) {
+        self.style.size_px = size_px.max(1);
+    }
+
     /// Whether a bubble is on screen right now.
     ///
     /// The caller damages what it covers **before** changing anything, because
@@ -323,6 +332,37 @@ mod tests {
         assert!(
             !tooltip.tick(DELAY_MS, Some(""), ANCHOR),
             "nor an empty one"
+        );
+    }
+
+    /// A tooltip is drawn at the size it was told, so it scales with everything
+    /// else.
+    ///
+    /// The tree has no idea what the display's scale factor is — an application
+    /// multiplies its sizes once, at construction — and this was the last thing
+    /// on the screen with no way to be told. A designer at 2x had a chrome at
+    /// twice the size and a tooltip still at fourteen pixels.
+    #[test]
+    fn a_bubble_is_drawn_at_the_size_it_was_given() {
+        let mut engine = engine();
+        let mut tooltip = Tooltip::new();
+        tooltip.hover_changed(true, 0);
+        tooltip.tick(DELAY_MS, Some("Lagre"), ANCHOR);
+        let small = tooltip.bounds(SURFACE, &mut engine).expect("a bubble");
+
+        tooltip.set_size(28);
+        let large = tooltip.bounds(SURFACE, &mut engine).expect("a bubble");
+        assert!(
+            large.width > small.width && large.height > small.height,
+            "{large:?} is no larger than {small:?}"
+        );
+
+        tooltip.set_size(0);
+        assert!(
+            tooltip
+                .bounds(SURFACE, &mut engine)
+                .is_some_and(|r| r.height > 0),
+            "a bubble with no text in it is worse than one at the wrong size"
         );
     }
 

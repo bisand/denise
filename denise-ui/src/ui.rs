@@ -896,6 +896,23 @@ impl<M: 'static> Ui<M> {
         }
     }
 
+    /// The size every tooltip's text is drawn at, in physical pixels.
+    ///
+    /// The one thing about a tooltip the tree does not decide for itself, and it
+    /// has to be sayable for the same reason a widget's own text size does: the
+    /// tree has no idea what the display's scale factor is, and a
+    /// scale-aware application multiplies its sizes once, at construction. A
+    /// tooltip left at the default on a 2x display is the only thing on the
+    /// screen still drawn at half size — which is exactly what it was on the
+    /// designer until this existed.
+    ///
+    /// Takes effect on the next bubble; one already on screen keeps the size it
+    /// was measured at, because its footprint is what the damage tracker was
+    /// told about.
+    pub fn set_tooltip_size(&mut self, size_px: u16) {
+        self.tooltip.set_size(size_px);
+    }
+
     /// Removes a node's tooltip.
     pub fn clear_tooltip(&mut self, id: NodeId) {
         if let Some(node) = self.nodes.get_mut(id) {

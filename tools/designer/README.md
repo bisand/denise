@@ -579,11 +579,35 @@ form *does* already use is in the row's tooltip.
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
 `--drag`, `--carry`, `--band`, `--new`, `--hover <kind>`, `--tab-order`,
-`--clash <other.dform>` and `--preview` to pose it, since a snapshot has no pointer to select, drag,
+`--clash <other.dform>`, `--scale <factor>` and `--preview` to pose it, since a snapshot has no pointer to select, drag,
 carry, band or rest on anything with, and no second editor to change the file
 under it — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
+
+## The display's scale, and the one place that is not scaled
+
+The chrome is written in logical units and multiplied once, on the way into the
+tree: `Theme::scaled` for the widgets' furniture, `Rect::scaled` for every
+rectangle, and a scaled size wherever text names one. That is the pattern
+`docs/design.md` settles on, and the designer is the application it was written
+against — it took the factor from `run_with` and dropped it, so from its first
+commit every pane, row and label came out at **half** the size it was drawn at
+on a 2x display. Correct on a Pi, which is why nothing caught it: the whole test
+suite runs at 1x, where a rectangle that was never scaled looks exactly like one
+that was.
+
+So it is checked at 2x instead, against arithmetic rather than a blessed
+picture — every node of the chrome, and the text size of every node that has
+one, has to be exactly twice what it is at 1x. `--scale <factor>` is the same
+lever for a snapshot, and grows the surface with it, the way a real window does.
+
+**The canvas is not scaled.** A form is authored in the panel's own device
+pixels, and an 800x480 form is 800x480 here whatever this display does: the
+numbers in the inspector are the numbers in the file, and a drag of four pixels
+moves a node four pixels. That makes a form small on a dense display, which is
+what a zoom control is for — a different feature, with a coordinate mapping of
+its own, and not one to fake by scaling the stage.
 
 The designer draws itself in **whatever face the machine has** — a regular
 upright sans, found by walking the places systems keep fonts — because it is a

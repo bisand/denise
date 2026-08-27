@@ -23,8 +23,13 @@ use denise_ui::widgets::{Label, Panel};
 use denise_ui::{NodeId, TextStyle, Ui};
 
 use crate::app::Message;
+use crate::scale::Scale;
 
 /// A row's height, and how far one step of nesting moves it across.
+///
+/// Logical, like every constant in this crate — [`Scale`] multiplies them on the
+/// way into the tree, and the pane's own arithmetic works in the scaled copies
+/// taken at the top of [`Outline::build`].
 pub const ROW: i32 = 22;
 const INDENT: i32 = 12;
 /// The triangle, and the eye.
@@ -75,12 +80,16 @@ pub enum Hit {
 }
 
 /// Where a press at `x` within a row of `width` landed.
-pub fn hit(x: i32, width: i32, row: &Row) -> Hit {
-    let fold = row.depth as i32 * INDENT;
-    if row.parent && x >= fold && x < fold + FOLD {
+///
+/// `x` and `width` are physical, because they came from a pointer and from
+/// `Ui::bounds`, so the constants they are measured against are scaled to meet
+/// them rather than the other way round.
+pub fn hit(x: i32, width: i32, row: &Row, scale: Scale) -> Hit {
+    let fold = row.depth as i32 * scale.n(INDENT);
+    if row.parent && x >= fold && x < fold + scale.n(FOLD) {
         return Hit::Fold;
     }
-    if x >= width - EYE {
+    if x >= width - scale.n(EYE) {
         return Hit::Eye;
     }
     Hit::Body
@@ -120,21 +129,33 @@ pub struct View<'a> {
     pub selection: &'a [Vec<usize>],
     /// A drag in progress, for the insertion marker.
     pub drag: Option<&'a Drag>,
-    /// How wide the pane is.
+    /// How wide the pane is, in physical pixels.
     pub width: i32,
+    /// What the display multiplies this crate's logical constants by.
+    pub scale: Scale,
 }
 
 impl Outline {
     /// Builds the pane inside `parent`.
     pub fn build(ui: &mut Ui<Message>, parent: NodeId, view: View<'_>) -> Self {
+        // Taken once, at the top, so the rows below add up to exactly the height
+        // the content panel was given: `rows * scale.n(ROW)` and
+        // `scale.n(rows * ROW)` differ by a pixel at a fractional factor, and
+        // the rows are the ones that have to agree.
+        let scale = view.scale;
+        let (row_height, indent) = (scale.n(ROW), scale.n(INDENT));
+        let (fold_width, eye_width, gap) = (scale.n(FOLD), scale.n(EYE), scale.n(GAP));
+        // A row's label sits four logical pixels down and is fourteen tall.
+        let (text_size, text_top, text_height) = (scale.px(11), scale.n(4), scale.n(14));
+
         let width = view.width;
-        let height = (view.rows.len() as i32 * ROW).max(ROW);
+        let height = (view.rows.len() as i32 * row_height).max(row_height);
         let content = ui
             .add(parent, Panel::default(), Rect::new(0, 0, width, height))
             .expect("the outline's viewport is there");
 
         for (index, row) in view.rows.iter().enumerate() {
-            let y = index as i32 * ROW;
+            let y = index as i32 * row_height;
             let selected = view.selection.contains(&row.path);
             let hidden = row.by_file || row.by_hand;
 
@@ -142,7 +163,7 @@ impl Outline {
                 ui.add(
                     content,
                     Panel::filled(Role::Primary),
-                    Rect::new(0, y, width, ROW),
+                    Rect::new(0, y, width, row_height),
                 );
             }
 
@@ -161,33 +182,41 @@ impl Outline {
             // covers ASCII and Latin-1 and nothing else, so `▾` draws the
             // missing-character box. Which is what every tree control drew
             // before it had the glyphs for anything else.
-            let mut x = row.depth as i32 * INDENT;
+            let mut x = row.depth as i32 * indent;
             if row.parent {
                 ui.add(
                     content,
                     Label::new(if row.open { "-" } else { "+" })
-                        .with_size(11)
+                        .with_size(text_size)
                         .with_role(dim),
-                    Rect::new(x + 2, y + 4, FOLD, 14),
+                    Rect::new(x + scale.n(2), y + text_top, fold_width, text_height),
                 );
             }
-            x += FOLD;
+            x += fold_width;
 
             // The kind, then the name: what it *is* and what it is *called*, in
             // that order, because a form full of panels is read by kind.
             let (kind, name) = row.label();
-            let style = TextStyle::built_in(11);
-            let taken = ui.text_mut().measure_line(style, kind) + GAP * 2;
+            // Measured at the size it will be drawn at: the engine works in
+            // physical pixels, so measuring the logical size would lay the name
+            // over the kind at anything but 1x.
+            let style = TextStyle::built_in(text_size);
+            let taken = ui.text_mut().measure_line(style, kind) + gap * 2;
             ui.add(
                 content,
-                Label::new(kind).with_size(11).with_role(dim),
-                Rect::new(x, y + 4, taken, 14),
+                Label::new(kind).with_size(text_size).with_role(dim),
+                Rect::new(x, y + text_top, taken, text_height),
             );
             if let Some(name) = name {
                 ui.add(
                     content,
-                    Label::new(name).with_size(11).with_role(ink),
-                    Rect::new(x + taken, y + 4, width - x - taken - EYE, 14),
+                    Label::new(name).with_size(text_size).with_role(ink),
+                    Rect::new(
+                        x + taken,
+                        y + text_top,
+                        width - x - taken - eye_width,
+                        text_height,
+                    ),
                 );
             }
 
@@ -201,8 +230,8 @@ impl Outline {
             };
             if let Some(id) = ui.add(
                 content,
-                Label::new(eye).with_size(11).with_role(dim),
-                Rect::new(width - EYE, y + 4, EYE, 14),
+                Label::new(eye).with_size(text_size).with_role(dim),
+                Rect::new(width - eye_width, y + text_top, eye_width, text_height),
             ) {
                 ui.set_tooltip(id, why);
             }
@@ -222,12 +251,16 @@ impl Outline {
                     radius: denise::Radius::Box,
                     backdrop: false,
                 };
-                ui.add(content, outline, Rect::new(0, at * ROW, width, ROW));
+                ui.add(
+                    content,
+                    outline,
+                    Rect::new(0, at * row_height, width, row_height),
+                );
             } else {
                 ui.add(
                     content,
                     Panel::filled(Role::Accent),
-                    Rect::new(0, at * ROW, width, 2),
+                    Rect::new(0, at * row_height, width, scale.n(2).max(1)),
                 );
             }
         }
@@ -363,17 +396,46 @@ mod tests {
         let all = rows(&nodes, &[], &[], |_| false);
         let (parent, leaf) = (&all[0], &all[1]);
 
-        assert_eq!(hit(2, 224, parent), Hit::Fold);
-        assert_eq!(hit(60, 224, parent), Hit::Body);
-        assert_eq!(hit(220, 224, parent), Hit::Eye);
+        let one = Scale::ONE;
+        assert_eq!(hit(2, 224, parent, one), Hit::Fold);
+        assert_eq!(hit(60, 224, parent, one), Hit::Body);
+        assert_eq!(hit(220, 224, parent, one), Hit::Eye);
         // A leaf has no triangle, so the same press is the row.
-        assert_eq!(hit(INDENT + 2, 224, leaf), Hit::Body);
+        assert_eq!(hit(INDENT + 2, 224, leaf, one), Hit::Body);
         // And the triangle of a nested row is indented with it.
         let nested = Row {
             parent: true,
             ..leaf.clone()
         };
-        assert_eq!(hit(INDENT + 2, 224, &nested), Hit::Fold);
-        assert_eq!(hit(2, 224, &nested), Hit::Body);
+        assert_eq!(hit(INDENT + 2, 224, &nested, one), Hit::Fold);
+        assert_eq!(hit(2, 224, &nested, one), Hit::Body);
+    }
+
+    /// The press that finds the eye at 1x finds the pane's edge at 2x.
+    ///
+    /// `x` and `width` come from a pointer and from `Ui::bounds`, so they double
+    /// with the display while `EYE` and `INDENT` do not. A `hit` that compared
+    /// the physical one against the logical one would put the eye a third of the
+    /// way across a wide pane, and hide a node whenever somebody clicked to the
+    /// right of its name.
+    #[test]
+    fn the_parts_of_a_row_are_where_the_display_puts_them() {
+        let nodes = placed(&[&[0], &[0, 0]]);
+        let all = rows(&nodes, &[], &[], |_| false);
+        let (parent, leaf) = (&all[0], &all[1]);
+        let two = Scale::new(2.0);
+
+        // Everything that was true at 1x, at twice the distance.
+        assert_eq!(hit(4, 448, parent, two), Hit::Fold);
+        assert_eq!(hit(120, 448, parent, two), Hit::Body);
+        assert_eq!(hit(440, 448, parent, two), Hit::Eye);
+        assert_eq!(hit(2 * INDENT + 4, 448, leaf, two), Hit::Body);
+
+        // And the press that was the eye at 1x is nowhere near it at 2x.
+        assert_eq!(
+            hit(220, 448, parent, two),
+            Hit::Body,
+            "the eye moved with the pane, not with the constant"
+        );
     }
 }
