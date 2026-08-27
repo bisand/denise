@@ -254,6 +254,15 @@ by hand, a property written three times, strings with escapes and emoji in them,
 a panel with no braces and a file with no trailing newline. The tests walk the
 directory, so defending a new way of writing a form by hand is adding a file.
 
+A corpus only covers what somebody thought of, so [`Form::parse`] does not take
+the round trip on trust: it writes the document back out and compares it to the
+source, and a file it cannot reproduce is **refused** ([`Reason::NotPreserved`])
+rather than accepted and corrupted on the first save. That check is also what
+the fuzz target `parse_form` asserts on, which is how the two shapes kdl was
+quietly eating — trailing whitespace after a closing brace, and a comment
+written on the brace's line — were found and put back. See
+[`fuzz/README.md`](https://github.com/bisand/denise/tree/main/fuzz).
+
 `Edit::Move` reparents a node — its children, its indentation and the comment
 above it all going with it — and `Edit::Many` makes a run of edits one step, so a
 gesture that changes four numbers is one thing to undo. The empty path is the
@@ -266,6 +275,8 @@ you have the nodes.
 
 [`Form::node_text`]: https://docs.rs/denise-forms/latest/denise_forms/struct.Form.html#method.node_text
 [`fragment`]: https://docs.rs/denise-forms/latest/denise_forms/fn.fragment.html
+[`Form::parse`]: https://docs.rs/denise-forms/latest/denise_forms/struct.Form.html#method.parse
+[`Reason::NotPreserved`]: https://docs.rs/denise-forms/latest/denise_forms/enum.Reason.html#variant.NotPreserved
 
 ## What this crate does not do
 
