@@ -763,8 +763,24 @@ fn nonsense_on_the_clipboard_is_reported_rather_than_pasted() {
         &mut taken,
     )
     .expect_err("refused");
-    assert!(matches!(error.reason, Reason::Syntax(_)), "{error}");
+    // Three braces and nothing to close them, which the byte scan names before
+    // kdl is asked -- and naming it early is what keeps a malformed paste from
+    // costing minutes rather than microseconds (#104).
+    assert!(
+        matches!(error.reason, Reason::Unbalanced { open: true }),
+        "{error}"
+    );
     assert_eq!(error.at.line, 2, "the line is the fragment's own: {error}");
+    assert!(taken.is_empty(), "a refused paste took names anyway");
+
+    // And text that is broken some other way is still kdl's to explain.
+    let mut taken = Vec::new();
+    let error = fragment(
+        "label \"a\" x=0 y=0 w=1 h=1\nlabel \"unterminated",
+        &mut taken,
+    )
+    .expect_err("refused");
+    assert!(matches!(error.reason, Reason::Syntax(_)), "{error}");
     assert!(taken.is_empty(), "a refused paste took names anyway");
 }
 

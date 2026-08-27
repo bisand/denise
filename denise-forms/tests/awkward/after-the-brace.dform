@@ -1,0 +1,37 @@
+// Everything kdl's parser eats after a closing brace, in one file. Trailing
+// whitespace is invisible in any editor and gets left behind by a hand or by a
+// paste; a note on the brace's line is something a person writes on purpose.
+// kdl swallowed all of it -- the trivia and the newline after it both, gluing
+// the next node onto the brace's line -- and Form::parse now puts the bytes
+// back. This file is the proof it keeps doing so: two spaces after one brace,
+// a tab after another, a line comment, a block comment that spans lines, a
+// note on the last brace of a block, a brace inside a comment, and spaces
+// after the last brace in the file.
+
+form "After the brace" version=1 kind=screen width=400 height=360 {
+    label "first" x=8 y=8 w=100 h=20
+
+    panel name=box x=8 y=40 w=176 h=100 {
+        label "inside" x=8 y=8 w=100 h=20
+    }  
+
+    panel name=lower x=8 y=150 w=176 h=60 {
+        label "deeper" x=8 y=8 w=100 h=20
+    }	
+    panel name=noted x=8 y=220 w=176 h=60 { // and a note on the opening brace
+        label "noted" x=8 y=8 w=100 h=20
+    } // the note that cost a fuzzing hour
+
+    panel name=spanned x=216 y=40 w=176 h=100 { /* the block comment
+       carries on over a line of its own */
+        panel name=inner x=8 y=8 w=100 h=40 {
+            label "nested" x=8 y=8 w=80 h=20
+        } // a note on the last brace of a block, found by the outer brace
+    }
+
+    panel name=braced x=216 y=150 w=176 h=60 {
+        label "braced" x=8 y=8 w=100 h=20
+    } // this comment closes with a } that is not the one being looked for
+
+    button "Go" x=8 y=300 w=100 h=32
+}  

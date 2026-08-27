@@ -19,10 +19,26 @@ arbitrary = { version = "1", features = ["derive"] }
 denise = { path = "../denise", features = ["std"] }
 denise-image = { path = "../denise-image" }
 denise-ffi = { path = "../denise-ffi" }
+denise-forms = { path = "../denise-forms" }
+denise-ui = { path = "../denise-ui", features = ["std"] }
 
 [[bin]]
 name = "decode_image"
 path = "fuzz_targets/decode_image.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_form"
+path = "fuzz_targets/parse_form.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "build_form"
+path = "fuzz_targets/build_form.rs"
 test = false
 doc = false
 bench = false

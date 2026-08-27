@@ -123,8 +123,16 @@ their files in it.
 [`kdl`](https://docs.rs/kdl) (6.7, Apache-2.0, MSRV 1.95 — the workspace's own)
 is document-oriented: `KdlDocument` keeps the comments, the whitespace and the
 entry order, lets nodes be edited in place, and `to_string()` gives back what was
-parsed byte for byte. Requirement 3 is then met by the library rather than by our
-discipline, which is the only way it stays met.
+parsed. Requirement 3 is then most of the way met by the library rather than by
+our discipline, which is the only way it stays met.
+
+Most of the way, not all of it. Fuzzing (#104) found kdl dropping the trivia
+between a closing brace and the next node — trailing whitespace, and a comment
+written on the brace's line — so `Form::parse` puts those bytes back and then
+**checks**: it writes the document out, compares it to the source, and refuses a
+file it cannot reproduce rather than accepting one that would lose bytes on the
+first save. A guarantee this load-bearing is worth verifying on every file
+rather than believing about a dependency.
 
 The consequence for the designer is architectural, and it is the reason this note
 comes before any code: **the designer's model is the document.** It does not own
@@ -844,6 +852,13 @@ changes exactly the line that node is written on — the same line, with the num
 changed, every other property still in the order the file wrote them and whatever
 comment was on the end still on the end.
 
+A corpus only defends what somebody thought of, so the fuzz target `parse_form`
+([`fuzz/README.md`](../fuzz/README.md)) throws bytes at `Form::parse` and asserts
+the round trip on whatever comes back — which is how the two shapes kdl was
+quietly eating got found in the first place, and how the corpus gained
+`after-the-brace.dform`. `Form::parse` also verifies each file for itself, so a
+shape nobody has fuzzed yet is refused rather than corrupted.
+
 An **unknown property is an error at load**, not something kept and shown as
 unknown. That is the deliberate choice described [above](#the-document) and it is
 the same error a typo produces, with the same fix; refusing to open is louder than
@@ -1016,6 +1031,29 @@ There is no `fmt`. There was going to be
 own formatter turns out to delete a comment written at the end of a node's line —
 which is not a thing to ship into a format whose first promise is that comments
 survive. [#119](https://github.com/bisand/denise/issues/119) is where that sits.
+The parser dropping a comment written on a closing brace's line, found later by
+fuzzing and [repaired](#round-tripping-is-the-requirement-that-picks-the-format),
+is the same bug wearing different clothes: comments in kdl are well kept in the
+common positions and lost in the corners, which is the argument for checking
+every file rather than trusting the round trip.
+
+### Three limits, all of them about the parser
+
+`MAX_SOURCE` (4 MB), `MAX_DEPTH` (64) and `MAX_COMMENTED_DEPTH` (1), plus a
+check that the braces balance at all, are applied by a byte scan **before** the
+file reaches `kdl`, and none of them is about what a form is allowed to mean. Each one is a place where the parser costs more than
+a `Result` can express: an enormous file costs memory, nesting past 64 overflows
+a recursive descent, and — found by fuzzing (#104) — a commented-out block
+nested inside another commented-out block sends `kdl` exponential, at about a
+hundred bytes for twenty seconds. Unbalanced braces are the bluntest of them:
+such a file cannot parse however long `kdl` spends deciding that, and the
+fuzzer's slow inputs are unbalanced to a one. A guard a caller cannot install
+for itself belongs in the crate that knows why it is there.
+
+That last one bounds a shape, not the parser. `kdl` 6.7.1 has other exponential
+corners, so an application reading a form it did not write — downloaded, pasted,
+handed over on a stick — should still bound how long a parse may take. This
+crate is `no_std + alloc` and has neither a thread nor a clock to do it with.
 
 ## What the format will not do
 

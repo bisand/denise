@@ -131,7 +131,7 @@ jobs:
       - run: cargo miri test -p denise-ffi --lib
 
   fuzz:
-    name: the decoders and the ABI survive a minute of nonsense
+    name: the decoders, the ABI and the form parser survive a minute of nonsense
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -188,6 +188,46 @@ jobs:
               exit 1
             }
           grep -E '^stat::' abi_session.log
+
+      - name: Fuzz the form parser
+        working-directory: fuzz
+        # Seeded with the repository's own forms, so a sixty-second run starts
+        # deep in the parser rather than rediscovering that `f` is not a form.
+        # The awkward corpus goes in too: those files are already every shape a
+        # tired person writes, which is the neighbourhood both findings so far
+        # came out of. The corpus directory is gitignored — a crash worth
+        # keeping becomes a unit test — so the seeding happens here, not in the
+        # tree.
+        run: |
+          mkdir -p corpus/parse_form
+          cp ../forms/*.dform corpus/parse_form/
+          cp ../denise-forms/tests/awkward/*.dform corpus/parse_form/
+          cargo fuzz run --target x86_64-unknown-linux-gnu parse_form -- \
+            -max_total_time=60 -rss_limit_mb=4096 -verbosity=0 -print_final_stats=1 \
+            > parse_form.log 2>&1 || {
+              echo "::error::parse_form found an input that breaks Form::parse"
+              tail -60 parse_form.log
+              exit 1
+            }
+          grep -E '^stat::' parse_form.log
+
+      - name: Fuzz the form builder
+        working-directory: fuzz
+        # No `-timeout` on the form targets, deliberately. kdl parses some
+        # malformed files in exponential time (see fuzz/README.md), which is
+        # upstream and unbounded, so a timing gate here would go red on a bug
+        # nobody in this repository can fix -- and a gate that is red for
+        # reasons nobody acts on teaches people to ignore red. libFuzzer still
+        # saves `slow-unit-*` for whoever looks.
+        run: |
+          cargo fuzz run --target x86_64-unknown-linux-gnu build_form -- \
+            -max_total_time=60 -rss_limit_mb=4096 -verbosity=0 -print_final_stats=1 \
+            > build_form.log 2>&1 || {
+              echo "::error::build_form found a form that breaks Form::build"
+              tail -60 build_form.log
+              exit 1
+            }
+          grep -E '^stat::' build_form.log
 
       # A fuzz failure is worth nothing without the bytes that caused it, and
       # those live in `fuzz/artifacts` on the runner that is about to be thrown

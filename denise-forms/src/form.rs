@@ -2,7 +2,7 @@
 
 use denise::{Rect, Role, Size, Theme, theme};
 use denise_ui::Side;
-use kdl::{KdlDocument, KdlEntry, KdlEntryFormat, KdlNode, KdlValue};
+use kdl::{KdlDocument, KdlEntry, KdlEntryFormat, KdlNode, KdlNodeFormat, KdlValue};
 
 use crate::error::{At, Error, Reason};
 
@@ -32,6 +32,30 @@ pub const MAX_DEPTH: usize = 64;
 /// enough that a panel with a few megabytes of headroom cannot be talked into
 /// exhausting them by something claiming to be a form.
 pub const MAX_SOURCE: usize = 1 << 22;
+
+/// How deeply a form may nest a **commented-out children block** — a `{ … }`
+/// belonging to a node a `/-` has commented out.
+///
+/// Its own limit because neither [`MAX_SOURCE`] nor [`MAX_DEPTH`] bounds it in
+/// any useful way. `kdl` takes time that **doubles with every level** of one of
+/// these inside another: twenty levels is about a hundred bytes and twenty
+/// seconds, thirty is six hours, and the sixty-four [`MAX_DEPTH`] would permit
+/// is longer than the universe has been running. Found by the fuzz target
+/// `parse_form`, which kept reporting three-kilobyte inputs that took a second
+/// and a half to *fail* on.
+///
+/// One level is kept, because commenting a widget and its children out is a
+/// real thing to do while editing. Two is refused, because a block commented
+/// out inside a block that is already commented out changes nothing about what
+/// the file means — the fix is deleting an inner `/-` that was doing no work —
+/// and every one of the slow inputs the fuzzer found is past this line while
+/// every form in this repository is nowhere near it.
+///
+/// This bounds the shapes that have been found, and it is not a bound on the
+/// parser: `kdl` 6.7.1 has more exponential corners than this one, and a caller
+/// reading a form it did not write should still bound how long a parse may take.
+/// See `fuzz/README.md`.
+pub const MAX_COMMENTED_DEPTH: usize = 1;
 
 /// What a form is for.
 ///
@@ -594,6 +618,11 @@ pub struct Form {
 impl Form {
     /// Parses a form file.
     ///
+    /// The source is kept, and what is kept is checked: the parsed document is
+    /// written back out and compared to the input, so a file that would not
+    /// reproduce is refused with [`Reason::NotPreserved`] rather than accepted
+    /// and corrupted on the first save.
+    ///
     /// ```
     /// # use denise_forms::{Form, FormKind};
     /// let form = Form::parse(r#"
@@ -612,11 +641,8 @@ impl Form {
                 Reason::TooLarge { limit: MAX_SOURCE },
             ));
         }
-        if let Some(at) = too_deep(source) {
-            return Err(Error::new(
-                At::of(source, at),
-                Reason::TooDeep { limit: MAX_DEPTH },
-            ));
+        if let Some(refusal) = unparseable(source) {
+            return Err(refusal.error(source));
         }
 
         let doc: KdlDocument = source.parse().map_err(|error: kdl::KdlError| {
@@ -637,6 +663,24 @@ impl Form {
             };
             Error::new(at, Reason::Syntax(message))
         })?;
+
+        let mut doc = doc;
+        restore_after_close(&mut doc, source);
+        // What was accepted must be reproducible, or the first save silently
+        // loses bytes. The repair above covers every way kdl is known to drop
+        // trivia; anything it does not cover is refused here, at the first
+        // byte that differs — and the fuzz target `parse_form` treats this
+        // error as a finding, so the next lossy shape becomes a repair rather
+        // than a refusal.
+        let reproduced = doc.to_string();
+        if reproduced != source {
+            let at = source
+                .bytes()
+                .zip(reproduced.bytes())
+                .position(|(a, b)| a != b)
+                .unwrap_or_else(|| source.len().min(reproduced.len()));
+            return Err(Error::new(At::of(source, at), Reason::NotPreserved));
+        }
 
         let form = Self {
             source: source.to_string(),
@@ -1933,18 +1977,106 @@ impl Form {
     }
 }
 
-/// The offset of the brace that goes one level too deep, if there is one.
+/// Whether what follows an opening `"""` is the rest of its line and then a
+/// newline, which is what makes it a multi-line string rather than an error.
+fn opens_a_line(rest: &[u8]) -> bool {
+    rest.iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))
+        .is_none_or(|at| rest[at] == b'\n')
+}
+
+/// Whether a closing `"""` has only a line's own indentation in front of it,
+/// which is what KDL requires of one. Anything may follow it.
+fn closes_a_line(before: &[u8]) -> bool {
+    before
+        .iter()
+        .rposition(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))
+        .is_some_and(|at| before[at] == b'\n')
+}
+
+/// What a scan of the source can refuse without parsing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unparseable {
+    /// A `{` that opens one level past [`MAX_DEPTH`], and its offset.
+    TooDeep(usize),
+    /// A brace with no partner, and its offset. `true` for a `{` that is never
+    /// closed, `false` for a `}` that closes nothing.
+    Unbalanced { at: usize, open: bool },
+    /// The `{` of a commented-out block that opens one level past
+    /// [`MAX_COMMENTED_DEPTH`], and its offset. Commented out either way round:
+    /// `/-{` on the block, or a `/-` on the node the block belongs to.
+    CommentedTooDeep(usize),
+}
+
+impl Unparseable {
+    /// The error to refuse the file with.
+    fn error(self, source: &str) -> Error {
+        match self {
+            Self::TooDeep(at) => {
+                Error::new(At::of(source, at), Reason::TooDeep { limit: MAX_DEPTH })
+            }
+            Self::Unbalanced { at, open } => {
+                Error::new(At::of(source, at), Reason::Unbalanced { open })
+            }
+            Self::CommentedTooDeep(at) => Error::new(
+                At::of(source, at),
+                Reason::CommentedTooDeep {
+                    limit: MAX_COMMENTED_DEPTH,
+                },
+            ),
+        }
+    }
+}
+
+/// The brace that puts the file past a limit the parser must not be asked to
+/// reach, if there is one.
 ///
 /// A scanner rather than a parse, because it has to run *before* the parser: it
 /// skips comments and every shape of KDL string so that a `{` inside one is not
 /// counted, and counts nothing else. Braces cannot appear in a bare identifier,
 /// so what is left is structure.
-fn too_deep(source: &str) -> Option<usize> {
+///
+/// **It should never recognise a string that `kdl` would not.** Every skip is a
+/// stretch of bytes not counted as structure, so a string this scan believes in
+/// and the parser does not is a hole through the limits below. The fuzzer found
+/// three, and each one is now a condition here: a quote must close (thirty-four
+/// `#` and a quote with no partner hid twenty-four slashdashes and twenty-eight
+/// braces), a `"""` must open a line (one that did not hid a hundred and twenty
+/// braces), and its closing `"""` must lead one.
+///
+/// It is not a complete agreement and cannot cheaply be made one: KDL also
+/// requires every line of a multi-line string to carry the closing `"""`'s
+/// indentation, and a string that breaks that rule is an error to `kdl` and a
+/// string to this scan. The consequence is bounded — such a file reaches the
+/// parser, which is slow on it and then refuses it — and it is the same
+/// unbounded-time problem [`MAX_COMMENTED_DEPTH`] describes rather than a new
+/// one. What matters is the direction of the error: being wrong the *other*
+/// way, and counting the insides of something that turns out to be a string,
+/// would refuse a file that parses, and none of these conditions can do that.
+///
+/// Two things are counted, and both are about what the parser costs rather than
+/// about what a form means. Plain nesting past [`MAX_DEPTH`] overflows `kdl`'s
+/// recursive descent; commented-out blocks nested past [`MAX_COMMENTED_DEPTH`]
+/// send it exponential. Neither is a `Result` the parser could hand back — one
+/// is a stack overflow and the other never returns — so both have to be refused
+/// out here, where a byte scan is all it costs.
+fn unparseable(source: &str) -> Option<Unparseable> {
     let b = source.as_bytes();
     let mut i = 0;
     let mut depth = 0usize;
+    // Whether each open block was commented out, so that closing one puts the
+    // count back, and how many of them are open right now.
+    let mut blocks: Vec<bool> = Vec::new();
+    // Where each open block's `{` is, for an error that points at the brace
+    // rather than at the end of the file.
+    let mut opened: Vec<usize> = Vec::new();
+    let mut commented = 0usize;
+    // Set by a `/-` and cleared at the end of the node it commented out, so a
+    // `{` reached while it is set is that node's own children block.
+    let mut next_commented = false;
 
     while i < b.len() {
+        let before = i;
         match b[i] {
             // A line comment.
             b'/' if b.get(i + 1) == Some(&b'/') => {
@@ -1977,55 +2109,118 @@ fn too_deep(source: &str) -> Option<usize> {
                     i += 1;
                 }
                 if b.get(i) == Some(&b'"') {
-                    i += 1;
-                    while i < b.len() {
-                        if b[i] == b'"' {
-                            let mut end = i + 1;
+                    let mut at = i + 1;
+                    let mut end = None;
+                    while at < b.len() {
+                        if b[at] == b'"' {
+                            let mut past = at + 1;
                             let mut seen = 0usize;
-                            while seen < hashes && b.get(end) == Some(&b'#') {
-                                end += 1;
+                            while seen < hashes && b.get(past) == Some(&b'#') {
+                                past += 1;
                                 seen += 1;
                             }
                             if seen == hashes {
-                                i = end;
+                                end = Some(past);
                                 break;
                             }
                         }
-                        i += 1;
+                        at += 1;
                     }
+                    // A run of hashes with no matching close is not a raw
+                    // string, so the scan must not swallow the rest of the file
+                    // on the strength of it.
+                    i = end.unwrap_or(i);
                 }
             }
-            b'"' => {
-                if b[i..].starts_with(b"\"\"\"") {
-                    i += 3;
-                    while i < b.len() && !b[i..].starts_with(b"\"\"\"") {
-                        i += 1;
+            // A multi-line string, which KDL spells `"""` *and a newline*. A
+            // `"""` with anything else after it is a parse error to kdl rather
+            // than a string, so treating it as one here would skip over
+            // structure kdl is going to read.
+            b'"' if b[i..].starts_with(b"\"\"\"") && opens_a_line(&b[i + 3..]) => {
+                // And it ends at the first `\"\"\"` that a line's own whitespace
+                // leads up to. Not simply the next one anywhere: `hi\"\"\"` on the
+                // end of a line does not close a multi-line string, and reading
+                // it as one would skip whatever came after -- five braces, in
+                // the input that found this.
+                let mut at = i + 3;
+                let mut end = None;
+                while at + 3 <= b.len() {
+                    if b[at..].starts_with(b"\"\"\"") && closes_a_line(&b[i + 3..at]) {
+                        end = Some(at + 3);
+                        break;
                     }
-                    i = i.saturating_add(3).min(b.len());
-                } else {
-                    i += 1;
-                    while i < b.len() && b[i] != b'"' {
-                        // An escaped character, including an escaped quote.
-                        i += if b[i] == b'\\' { 2 } else { 1 };
-                    }
-                    i += 1;
+                    at += 1;
                 }
+                i = end.unwrap_or(i + 1);
+            }
+            b'"' => {
+                let mut at = i + 1;
+                while at < b.len() && b[at] != b'"' {
+                    // An escaped character, including an escaped quote.
+                    at += if b[at] == b'\\' { 2 } else { 1 };
+                }
+                // `at` can overshoot on a trailing backslash, which is one
+                // more way for a quote not to close.
+                i = if at < b.len() { at + 1 } else { i + 1 };
+            }
+            // A slashdash. It comments out the node that follows it, and when
+            // that node carries a children block with anything in it, `kdl`
+            // pays for the block twice over at every level of nesting.
+            b'/' if b.get(i + 1) == Some(&b'-') => {
+                next_commented = true;
+                i += 2;
             }
             b'{' => {
                 depth += 1;
                 if depth > MAX_DEPTH {
-                    return Some(i);
+                    return Some(Unparseable::TooDeep(i));
                 }
+                blocks.push(next_commented);
+                opened.push(i);
+                if next_commented {
+                    commented += 1;
+                    if commented > MAX_COMMENTED_DEPTH {
+                        return Some(Unparseable::CommentedTooDeep(i));
+                    }
+                }
+                next_commented = false;
                 i += 1;
             }
             b'}' => {
-                depth = depth.saturating_sub(1);
+                // A `}` with nothing open cannot be parsed by anything, and
+                // saying so here costs one byte of lookback.
+                let Some(was_commented) = blocks.pop() else {
+                    return Some(Unparseable::Unbalanced { at: i, open: false });
+                };
+                opened.pop();
+                depth -= 1;
+                if was_commented {
+                    commented -= 1;
+                }
                 i += 1;
             }
             _ => i += 1,
         }
+        // A node ends at a newline or a `;`, and so does the reach of a
+        // slashdash waiting for a block. Reading it off the bytes just skipped
+        // covers the newline in the open and the one inside a block comment or
+        // a multi-line string alike.
+        //
+        // `min` because an unterminated string leaves `i` past the end — the
+        // arms above step over the closing quote whether or not it was there,
+        // which the loop condition forgives and a slice would not.
+        let skipped = &b[before..i.min(b.len())];
+        if next_commented && skipped.iter().any(|byte| *byte == b'\n' || *byte == b';') {
+            next_commented = false;
+        }
     }
-    None
+    // A `{` still open at the end of the file is the other half of the same
+    // thing. `opened` holds where each one started, so the error points at the
+    // brace that was never closed rather than at the end of the file.
+    opened.last().map(|at| Unparseable::Unbalanced {
+        at: *at,
+        open: true,
+    })
 }
 
 /// Parses form-file text that must be exactly one node.
@@ -2082,11 +2277,8 @@ pub fn fragment(text: &str, taken: &mut Vec<String>) -> Result<Vec<String>, Erro
             Reason::TooLarge { limit: MAX_SOURCE },
         ));
     }
-    if let Some(at) = too_deep(text) {
-        return Err(Error::new(
-            At::of(text, at),
-            Reason::TooDeep { limit: MAX_DEPTH },
-        ));
+    if let Some(refusal) = unparseable(text) {
+        return Err(refusal.error(text));
     }
 
     let mut doc: KdlDocument = text.parse().map_err(|error: kdl::KdlError| {
@@ -2380,21 +2572,392 @@ fn set_literal(node: &mut KdlNode, name: &str, literal: &Literal) -> Result<(), 
     Ok(())
 }
 
+/// Puts back the bytes kdl eats after a closing brace.
+///
+/// `}  \n` parses and serialises back as `}` — the spaces *and* the newline
+/// both gone, so the next node lands on the brace's line; `}  // a note` and
+/// `} /* a note */` lose the comment the same way. All found by the fuzz
+/// target `parse_form` within its first hour. A plain node's terminator keeps
+/// its trivia, but whatever stands between a `}` and the next node is consumed
+/// into a terminator that is then stored empty.
+///
+/// The bytes are recoverable because kdl still records where every node
+/// *starts*, and its leading trivia with it. So the rule is a simple one, and
+/// it is the same rule for a loss and for a file with nothing wrong: a node's
+/// terminator is every byte between the end of what it renders as and the
+/// beginning of what the next node owns. Applying it to a file kdl kept
+/// intact reproduces the terminator kdl already stored.
+///
+/// Children first, because a repaired child grows its parent's rendering and
+/// the end of that rendering is what the arithmetic measures from.
+///
+/// `Form::parse` verifies the whole document against the source afterwards, so
+/// a shape this gets wrong is refused there rather than saved back corrupted.
+fn restore_after_close(doc: &mut KdlDocument, source: &str) {
+    for node in doc.nodes_mut() {
+        restore_subtree(node, source);
+    }
+    // The document's own trailing trivia is kept as it is; the last node runs
+    // up to where that begins.
+    let trailing = doc.format().map_or(0, |format| format.trailing.len());
+    let Some(limit) = source.len().checked_sub(trailing) else {
+        return;
+    };
+    terminate_block(doc, limit, source);
+}
+
+/// Repairs the children of `node`, and theirs, but not `node`'s own
+/// terminator — that belongs to whoever owns the block `node` sits in.
+///
+/// See [`restore_after_close`].
+fn restore_subtree(node: &mut KdlNode, source: &str) {
+    let Some(block) = node.children_mut() else {
+        return;
+    };
+    if block.nodes().is_empty() {
+        // Nothing after `{` to bound, and an empty block keeps its own bytes;
+        // anything lost after the `}` is this node's terminator, one level up.
+        return;
+    }
+    for child in block.nodes_mut() {
+        restore_subtree(child, source);
+    }
+    // Only now does the last child render in full, so only now is the end of
+    // it the true byte offset that the walk to the closing brace starts from.
+    let trailing = block
+        .format()
+        .map_or_else(String::new, |format| format.trailing.clone());
+    let last = block.nodes().last().expect("the block is not empty");
+    let Some(limit) = end_of_nodes(source, content_end(last), &trailing) else {
+        return;
+    };
+    terminate_block(block, limit, source);
+}
+
+/// Gives every node in one block the bytes that stand between it and the next.
+fn terminate_block(block: &mut KdlDocument, limit: usize, source: &str) {
+    let bounds: Vec<usize> = (0..block.nodes().len())
+        .map(|i| block.nodes().get(i + 1).map_or(limit, owned_start))
+        .collect();
+    for (node, bound) in block.nodes_mut().iter_mut().zip(bounds) {
+        let from = content_end(node);
+        // A bound below the node's end, or one that lands inside a character,
+        // means the arithmetic missed; leave the node alone and let the verify
+        // in `Form::parse` refuse the file.
+        let Some(terminator) = source.get(from..bound) else {
+            continue;
+        };
+        let format = node.format().cloned().unwrap_or_default();
+        if terminator != format.terminator {
+            node.set_format(KdlNodeFormat {
+                terminator: terminator.to_string(),
+                ..format
+            });
+        }
+    }
+}
+
+/// The first byte of a node — its leading trivia, not its name.
+fn owned_start(node: &KdlNode) -> usize {
+    let leading = node.format().map_or(0, |format| format.leading.len());
+    node.span().offset().saturating_sub(leading)
+}
+
+/// The byte just past what a node renders as, which for a node with children
+/// is the byte just past its `}`.
+fn content_end(node: &KdlNode) -> usize {
+    let format = node.format().cloned().unwrap_or_default();
+    let rendered = node.to_string().len();
+    let inner = rendered.saturating_sub(format.leading.len() + format.terminator.len());
+    node.span().offset() + inner
+}
+
+/// Where a block's nodes stop and the block's own trailing trivia begins.
+///
+/// Walking from `from` — the end of the block's last node — to the closing
+/// brace crosses only trivia, and the block keeps the tail of it in `trailing`
+/// already. So the answer is the first point at which `trailing` and then `}`
+/// stand next in the source. Testing that before each step of the walk rather
+/// than after it is what lets `trailing` start with whitespace of its own.
+///
+/// `None` when the walk meets something it does not recognise, which leaves
+/// the block untouched and the file refused if kdl did lose bytes there.
+fn end_of_nodes(source: &str, from: usize, trailing: &str) -> Option<usize> {
+    let mut at = from;
+    loop {
+        let rest = source.get(at..)?;
+        if rest
+            .strip_prefix(trailing)
+            .is_some_and(|past| past.starts_with('}'))
+        {
+            return Some(at);
+        }
+        at += trivia_width(rest)?;
+    }
+}
+
+/// The length of the one piece of trivia at the front of `rest`, or `None` if
+/// what stands there is not trivia. A slashdash never reaches this: kdl keeps
+/// commented-out nodes in the block's `trailing`, so the walk stops at the `/`
+/// and the match against `trailing` has already succeeded there.
+fn trivia_width(rest: &str) -> Option<usize> {
+    let first = rest.chars().next()?;
+    if first.is_whitespace() {
+        return Some(first.len_utf8());
+    }
+    if let Some(body) = rest.strip_prefix("//") {
+        return Some(2 + body.find('\n').map_or(body.len(), |end| end + 1));
+    }
+    if !rest.starts_with("/*") {
+        return None;
+    }
+    // KDL's block comments nest, so this counts rather than searching for the
+    // first `*/`. Every delimiter is ASCII, so the returned width lands on a
+    // character boundary however the comment is spelled.
+    let bytes = rest.as_bytes();
+    let mut depth = 0usize;
+    let mut at = 0usize;
+    while at + 1 < bytes.len() {
+        match &bytes[at..at + 2] {
+            b"/*" => {
+                depth += 1;
+                at += 2;
+            }
+            b"*/" => {
+                depth -= 1;
+                at += 2;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => at += 1,
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Parses as kdl does, repairs, and hands back what would be saved.
+    fn reproduced(source: &str) -> String {
+        let mut doc: KdlDocument = source.parse().expect("the shape under test parses");
+        restore_after_close(&mut doc, source);
+        doc.to_string()
+    }
+
+    #[test]
+    fn a_brace_keeps_what_follows_it_to_the_end_of_the_line() {
+        // Every one of these loses bytes in kdl itself. The first was found by
+        // hand, the rest by the fuzz target `parse_form`.
+        for source in [
+            // Whitespace after a closing brace, then a sibling.
+            "a {\n  b 1\n}  \nc 3\n",
+            // A line comment in the same place.
+            "a {\n  b 1\n}  // x\nc 3\n",
+            // And a block comment, which may span lines of its own.
+            "a {\n  b 1\n} /* p\nq */\nc 3\n",
+            // The brace ends the file, with and without a final newline.
+            "a {\n  b 1\n}  // x\n",
+            "a {\n  b 1\n}  // x",
+            // A blank line after the comment must survive as a blank line.
+            "a {\n  b 1\n}  // x\n\nc 3\n",
+            // The lossy brace is the last node of a block, so the walk to the
+            // outer `}` is what finds the bound.
+            "o {\n  a {\n    b 1\n  } // x\n}\n",
+            "o {\n  a {\n    b 1\n  } /* p\nq */\n}\n",
+            // The block's own trailing trivia stands between the two, both as
+            // indentation and as a commented-out node.
+            "a {\n  b {\n    c 1\n  }  // x\n}\n",
+            "a {\n  b {\n    c 1\n  } /-d 2\n}\n",
+            // A brace inside the comment is not the brace being looked for.
+            "a {\n  b 1\n} // closes }\nc 3\n",
+            // Nested block comments, which KDL counts rather than terminating
+            // at the first `*/`.
+            "a {\n  b 1\n} /* p /* q */ r */\nc 3\n",
+            // An empty block, whose loss is the node's own terminator.
+            "a {}  // x\nc 3\n",
+        ] {
+            assert_eq!(reproduced(source), source, "in {source:?}");
+        }
+    }
+
+    /// A shape the repair cannot reach, and the refusal that covers it.
+    ///
+    /// `kdl` records `before_ty_name`, `after_ty_name` and `after_ty` when it
+    /// reads a node's type annotation and then writes none of them, so `(Z) h`
+    /// comes back as `(Z)h`. Nothing this crate can set to a `KdlNodeFormat`
+    /// changes that, which is what `Reason::NotPreserved` is *for*: the file is
+    /// refused rather than accepted and corrupted on the first save. Found by
+    /// the fuzz target `parse_form` in six bytes.
+    ///
+    /// If kdl ever writes those fields, this test fails and the refusal can go.
+    #[test]
+    fn a_type_annotation_kdl_cannot_write_back_is_refused_rather_than_mangled() {
+        for source in ["(Z) h", "( Z )h", "(Z) h\n", "(Z)h { (Y) i }\n"] {
+            let doc: KdlDocument = source.parse().expect("kdl reads it");
+            let mut repaired = doc;
+            restore_after_close(&mut repaired, source);
+            assert_ne!(
+                repaired.to_string(),
+                source,
+                "kdl now keeps {source:?} -- the refusal below can go"
+            );
+        }
+        // And the door this crate actually puts in front of that.
+        let error = Form::parse("(Z) h").expect_err("cannot be reproduced");
+        assert!(matches!(error.reason, Reason::NotPreserved), "{error}");
+        // The type annotation itself is fine when nothing is lost around it.
+        let kept = "(Z)h\n";
+        let doc: KdlDocument = kept.parse().expect("kdl reads it");
+        assert_eq!(doc.to_string(), kept);
+    }
+
+    #[test]
+    fn a_file_kdl_keeps_intact_is_left_exactly_as_it_was() {
+        // The repair runs over every file, so the shapes with nothing wrong
+        // matter as much as the shapes with something wrong.
+        for source in [
+            "a {\n  b 1\n}\nc 3\n",
+            "a 1; b 2\n",
+            "a { b 1 }; c 2\n",
+            "a \\\n  1\nc 3\n",
+            "a {\n  b 1\n  /-c 2\n}\n",
+            "a {\n}\nc 3\n",
+            "// a leading comment\na 1\n",
+            "a 1\n// and a trailing one\n",
+            "\n\na 1\n\n\nb 2\n",
+            "a \"a string with } and // in it\"\n",
+        ] {
+            assert_eq!(reproduced(source), source, "in {source:?}");
+        }
+    }
+
     #[test]
     fn nesting_within_the_limit_is_allowed() {
         let source = "a ".to_string() + &"{ b ".repeat(MAX_DEPTH) + &"}".repeat(MAX_DEPTH);
-        assert_eq!(too_deep(&source), None);
+        assert_eq!(unparseable(&source), None);
     }
 
     #[test]
     fn one_level_past_the_limit_is_caught_before_the_parser_sees_it() {
         let deep = MAX_DEPTH + 1;
         let source = "a ".to_string() + &"{ b ".repeat(deep) + &"}".repeat(deep);
-        assert!(too_deep(&source).is_some());
+        assert!(matches!(
+            unparseable(&source),
+            Some(Unparseable::TooDeep(_))
+        ));
+    }
+
+    #[test]
+    fn commented_out_blocks_are_allowed_until_they_nest() {
+        // One is a person taking a widget and its children out for a minute.
+        for levels in 0..=MAX_COMMENTED_DEPTH {
+            let source = "a /-{ ".repeat(levels) + &"}".repeat(levels);
+            assert_eq!(unparseable(&source), None, "at {levels} levels");
+        }
+        // Side by side is not nesting, however many there are: the cost is the
+        // nesting, so the limit is on the nesting.
+        let side_by_side = "a /-{ }\n".repeat(32);
+        assert_eq!(unparseable(&side_by_side), None);
+        // A slashdash on a node that carries no block is not counted at all,
+        // which is the shape a person actually writes -- one widget taken out.
+        let plain = "/- label \"x\" y=1\n".repeat(32);
+        assert_eq!(unparseable(&plain), None);
+        // Nor is a slashdash whose node ends before any block begins: the `{`
+        // on the next line belongs to the node after it.
+        let separated = "/- a\nb {\n}\n".repeat(16);
+        assert_eq!(unparseable(&separated), None);
+        assert_eq!(unparseable(&"/- a; b {\n}\n".repeat(16)), None);
+        // And a `{` inside a string after a slashdash is not a block.
+        let quoted = "/- a \"{{{{\"\n".repeat(16);
+        assert_eq!(unparseable(&quoted), None);
+    }
+
+    #[test]
+    fn commented_out_blocks_nested_past_the_limit_never_reach_the_parser() {
+        // Twenty of these is twenty seconds inside kdl, and the sixty-four
+        // MAX_DEPTH would otherwise allow does not finish at all. The scan that
+        // refuses them costs one pass over a hundred bytes.
+        let deep = MAX_COMMENTED_DEPTH + 1;
+        let source = "a /-{ ".repeat(deep) + &"}".repeat(deep);
+        assert!(matches!(
+            unparseable(&source),
+            Some(Unparseable::CommentedTooDeep(_))
+        ));
+        // Unclosed, spaced out, and with the whole file around it, the same.
+        assert!(matches!(
+            unparseable(&"a /-  {\n".repeat(deep)),
+            Some(Unparseable::CommentedTooDeep(_))
+        ));
+        // And the shape the fuzzer actually found: the slashdash is on the
+        // node, the block is the node's own, and there is something in it.
+        assert!(matches!(
+            unparseable(&"/- a b c {\n  d 1\n".repeat(deep)),
+            Some(Unparseable::CommentedTooDeep(_))
+        ));
+    }
+
+    #[test]
+    fn a_triple_quote_is_only_a_string_when_it_opens_a_line() {
+        // KDL spells a multi-line string `"""` and then a newline. kdl refuses
+        // `""" x`, so a scan that read it as a string would skip whatever came
+        // next -- which is how one fuzzed input hid a hundred and twenty braces.
+        let hidden = String::from("a x=\"\"\" y\n") + &"b {\n".repeat(MAX_DEPTH + 1);
+        assert!(
+            matches!(unparseable(&hidden), Some(Unparseable::TooDeep(_))),
+            "a `\"\"\"` that opens no line must hide nothing"
+        );
+        // Nor does a `\"\"\"` on the end of a line close one, so what follows
+        // that line is structure and gets counted.
+        let closed_wrong = String::from("a x=\"\"\"\nhi\"\"\"\n") + &"b {\n".repeat(MAX_DEPTH + 1);
+        assert!(
+            matches!(unparseable(&closed_wrong), Some(Unparseable::TooDeep(_))),
+            "a `\"\"\"` that closes no line must hide nothing"
+        );
+        // The real thing still hides what is inside it, newline and all.
+        let real = "a x=\"\"\"\n{{{{{{{{\n\"\"\"\nb 1\n";
+        assert_eq!(unparseable(real), None);
+        // Trailing spaces before the newline are still opening a line, and
+        // indentation in front of the closer is still closing one.
+        let padded = "a x=\"\"\"   \n{{{{{{{{\n   \"\"\"\nb 1\n";
+        assert_eq!(unparseable(padded), None);
+        // Something after the closing `\"\"\"` is allowed and changes nothing.
+        let after = "a x=\"\"\"\n{{{{{{{{\n\"\"\" y=2\nb 1\n";
+        assert_eq!(unparseable(after), None);
+    }
+
+    #[test]
+    fn a_brace_with_no_partner_is_refused_before_the_parser_looks_for_one() {
+        // Neither of these can parse however long kdl spends deciding so, and
+        // kdl can spend an unbounded amount of time on exactly this shape --
+        // every slow input the fuzzer has found is wildly unbalanced.
+        assert!(matches!(
+            unparseable("a {\n  b 1\n"),
+            Some(Unparseable::Unbalanced { open: true, .. })
+        ));
+        assert!(matches!(
+            unparseable("a 1\n}\n"),
+            Some(Unparseable::Unbalanced { open: false, .. })
+        ));
+        // The position is the brace itself, not the end of the file.
+        let Some(Unparseable::Unbalanced { at, open: true }) = unparseable("a {\n  b {\n  }\n")
+        else {
+            panic!("the outer brace is never closed")
+        };
+        assert_eq!(at, 2, "the outer `{{`, not the inner one");
+        // Balanced is balanced, however it is spelled.
+        for source in [
+            "a { }",
+            "a {\n}\n",
+            "a { b { c { } } }",
+            "a 1",
+            "",
+            "// nothing\n",
+        ] {
+            assert_eq!(unparseable(source), None, "in {source:?}");
+        }
     }
 
     #[test]
@@ -2402,18 +2965,56 @@ mod tests {
         for source in [
             r#"a "{{{{{{{{{{{{{{{{" b"#,
             r##"a #"{{{{{{{{{{{{{{{{"# b"##,
-            r#"a ""{{{{{{{{{{{{{{{{" b"#,
+            "a \"\"\"\n{{{{{{{{{{{{{{{{\n\"\"\" b",
             "a // {{{{{{{{{{{{{{{{{{{{{{{{{{{{\n b",
             "a /* {{{{{{{{{{{{{{{{{{{{{{{{{{ */ b",
         ] {
-            assert_eq!(too_deep(source), None, "in {source}");
+            assert_eq!(unparseable(source), None, "in {source}");
         }
     }
 
     #[test]
     fn an_unterminated_string_does_not_loop_forever() {
-        assert_eq!(too_deep("a \"unterminated"), None);
-        assert_eq!(too_deep("a #\"unterminated"), None);
-        assert_eq!(too_deep("a /* unterminated"), None);
+        assert_eq!(unparseable("a \"unterminated"), None);
+        assert_eq!(unparseable("a #\"unterminated"), None);
+        assert_eq!(unparseable("a /* unterminated"), None);
+        // Stepping over a closing quote that is not there leaves the scan past
+        // the end of the source, which only a slashdash makes visible: it is
+        // what asks for the bytes just read. Eighteen of them used to panic.
+        assert_eq!(unparseable("/- a \"unterminated"), None);
+        assert_eq!(unparseable("/- a #\"unterminated"), None);
+        assert_eq!(unparseable("/- a /* unterminated"), None);
+        assert_eq!(unparseable("/- \"x\\"), None);
+        assert_eq!(unparseable("/- a \"\"\"unterminated"), None);
+    }
+
+    #[test]
+    fn a_quote_that_never_closes_hides_nothing_behind_it() {
+        // Every one of these opens a string the file never closes, and every
+        // one of them used to blind the scan to the whole rest of the file --
+        // which is how a fuzzed input walked twenty-four slashdashes and
+        // twenty-eight braces past both limits. kdl does not stop reading at an
+        // unclosed quote either, so neither may this.
+        for opener in ["\"", "###############\"", "\"\"\"", "#\""] {
+            // (a bare `"""` closes nothing and opens no line, so it hides
+            // nothing either way round)
+            let hidden = format!("a {opener}\n") + &"b /-{ ".repeat(8);
+            assert!(
+                matches!(unparseable(&hidden), Some(Unparseable::CommentedTooDeep(_))),
+                "behind {opener:?}"
+            );
+            let deep = format!("a {opener}\n") + &"{ b ".repeat(MAX_DEPTH + 1);
+            assert!(
+                matches!(unparseable(&deep), Some(Unparseable::TooDeep(_))),
+                "behind {opener:?}"
+            );
+        }
+        // A string that *does* close still hides what is inside it.
+        let closed = String::from("a \"{ { { { \"\n") + &"b /-{ ".repeat(8);
+        assert!(matches!(
+            unparseable(&closed),
+            Some(Unparseable::CommentedTooDeep(_))
+        ));
+        assert_eq!(unparseable("a \"{ { { { { { { { \" b"), None);
     }
 }

@@ -193,9 +193,35 @@ fn the_reference_layout_is_what_it_was() {
 
 #[test]
 fn a_file_that_is_not_kdl_says_where() {
-    let error = Form::parse("form \"x\" version=1 {").unwrap_err();
+    // An unterminated string is kdl's to complain about, and it does.
+    let error = Form::parse("form \"x version=1").unwrap_err();
     assert!(matches!(error.reason, Reason::Syntax(_)), "{error}");
     assert!(error.to_string().starts_with('1'), "{error}");
+}
+
+/// A brace with no partner is named, and named before the parser runs.
+///
+/// The scan that counts depth counts balance for the same cost, and it beats
+/// kdl to it with a better answer: the offending brace rather than wherever
+/// the recovery gave up. It also matters more than tidiness — a file whose
+/// braces do not balance is where kdl's exponential corners live (#104), so
+/// this refusal is what keeps a malformed paste from costing minutes.
+#[test]
+fn a_brace_with_no_partner_is_named_and_pointed_at() {
+    let error = Form::parse("form \"x\" version=1 {").unwrap_err();
+    assert!(
+        matches!(error.reason, Reason::Unbalanced { open: true }),
+        "{error}"
+    );
+    // Column 20 is the `{` itself.
+    assert!(error.to_string().starts_with("1:20"), "{error}");
+
+    let error = Form::parse("form \"x\" version=1 {\n}\n}\n").unwrap_err();
+    assert!(
+        matches!(error.reason, Reason::Unbalanced { open: false }),
+        "{error}"
+    );
+    assert!(error.to_string().starts_with("3:1"), "{error}");
 }
 
 #[test]
@@ -510,6 +536,64 @@ fn a_form_deeper_than_the_limit_is_refused_rather_than_overflowing() {
         source.push('}');
     }
     assert!(matches!(failure(&source), Reason::TooDeep { .. }));
+}
+
+/// Commented-out blocks nested inside one another never reach `kdl`.
+///
+/// This test proves itself by finishing. `kdl` 6.7.1 takes time that doubles
+/// with every level of this shape, so the sixty-four below would take longer
+/// than the age of the universe if the guard let them through — a regression
+/// here does not fail the assertion, it hangs the suite, which is the loudest
+/// a test can be. Found by the fuzz target `parse_form`.
+#[test]
+fn a_form_that_would_take_forever_to_parse_is_refused_before_parsing() {
+    let deep = denise_forms::MAX_DEPTH;
+    let source = format!(
+        "form \"x\" version=1 width=9 height=9 {{\n{}{}\n}}",
+        "/- panel {\n".repeat(deep),
+        "}".repeat(deep),
+    );
+    let error = Form::parse(&source).expect_err("a shape kdl cannot be asked to read");
+    assert!(
+        matches!(
+            error.reason,
+            Reason::CommentedTooDeep { limit } if limit == denise_forms::MAX_COMMENTED_DEPTH
+        ),
+        "{:?}",
+        error.reason
+    );
+    // One level of it is a person taking a widget out for a minute, and that
+    // still opens.
+    let fine = "form \"x\" version=1 width=99 height=99 {\n    \
+        /- panel name=box x=1 y=1 w=9 h=9 {\n        label \"gone\" x=1 y=1 w=5 h=5\n    }\n\
+        \n    label \"here\" x=1 y=20 w=50 h=9\n}\n";
+    let form = Form::parse(fine).expect("one commented-out block is ordinary");
+    assert_eq!(form.text(), fine);
+}
+
+/// A file over the size limit is an error before it is a parse.
+///
+/// The guard fires on the byte count, ahead of the parser — a pathological
+/// file must cost an `Error` rather than however long a 100 MB parse takes.
+/// The fuzz target `parse_form` asserts the same limit from the other side:
+/// nothing larger may *succeed*.
+#[test]
+fn a_form_larger_than_the_limit_is_refused_by_size() {
+    let mut source = String::from("form \"x\" version=1 width=9 height=9 {\n");
+    let filler = "    label \"padding padding padding\" x=0 y=0 w=1 h=1\n";
+    while source.len() <= denise_forms::MAX_SOURCE {
+        source.push_str(filler);
+    }
+    source.push('}');
+    let error = Form::parse(&source).expect_err("over the limit");
+    assert!(
+        matches!(error.reason, Reason::TooLarge { limit } if limit == denise_forms::MAX_SOURCE),
+        "{:?}",
+        error.reason
+    );
+    // And it points at 1:1 rather than at a span the parser never produced,
+    // because nothing was parsed at all.
+    assert!(error.to_string().starts_with("1:1"), "{error}");
 }
 
 // ------------------------------------------------------------- what it applies

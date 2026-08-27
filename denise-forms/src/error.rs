@@ -210,6 +210,45 @@ pub enum Reason {
         /// The limit, in bytes.
         limit: usize,
     },
+    /// A brace has no partner.
+    ///
+    /// Refused by the same byte scan that counts depth, and for the same
+    /// reason: a file whose braces do not balance cannot parse whatever the
+    /// parser does with it, and `kdl` can spend an unbounded amount of time
+    /// discovering that. Saying it up front costs one pass and gives a better
+    /// position than the recovery would.
+    Unbalanced {
+        /// `true` for a `{` that is never closed, `false` for a `}` that
+        /// closes nothing.
+        open: bool,
+    },
+    /// The file nests commented-out children blocks past what the parser can
+    /// be asked to read.
+    ///
+    /// `kdl` takes time that doubles with every commented-out block nested
+    /// inside another: a hundred bytes of them is twenty seconds, and three
+    /// hundred is longer than anyone will wait. So this is refused by a byte
+    /// scan before the parser is handed the file at all — the same treatment,
+    /// and for the same reason, as nesting past
+    /// [`MAX_DEPTH`](crate::MAX_DEPTH), which overflows its stack. See
+    /// [`MAX_COMMENTED_DEPTH`](crate::MAX_COMMENTED_DEPTH).
+    CommentedTooDeep {
+        /// The limit, in levels.
+        limit: usize,
+    },
+    /// The parser could not keep the file byte-for-byte.
+    ///
+    /// Everything this crate does — undo, the designer's save, a text editor
+    /// alongside — stands on [`Form::text`](crate::Form::text) reproducing what
+    /// was opened, and a file that cannot be reproduced would silently lose
+    /// bytes on the first save. Refusing it is the honest alternative.
+    ///
+    /// The known causes are all one thing — kdl dropping the trivia between a
+    /// closing brace and the next node, whether that is trailing whitespace or
+    /// a comment written on the brace's line — and all of it is put back before
+    /// this is ever raised. So reaching this means a shape nobody has seen yet,
+    /// which is what the fuzz target `parse_form` is hunting for.
+    NotPreserved,
     /// An edit named a node that is not there.
     NoSuchNode {
         /// The child path that went nowhere.
@@ -375,6 +414,23 @@ impl fmt::Display for Error {
                 f,
                 "this form nests more than {limit} deep, which is past what a \
                  form is and into what a stack overflow is"
+            ),
+            Reason::Unbalanced { open } => {
+                if *open {
+                    write!(f, "this `{{` is never closed")
+                } else {
+                    write!(f, "this `}}` closes nothing")
+                }
+            }
+            Reason::CommentedTooDeep { limit } => write!(
+                f,
+                "this nests commented-out blocks more than {limit} deep, and \
+                 every level of that doubles what reading the file costs"
+            ),
+            Reason::NotPreserved => write!(
+                f,
+                "the parser cannot keep this file byte-for-byte, so saving it \
+                 would corrupt it; the difference starts here"
             ),
             Reason::TooLarge { limit } => {
                 write!(
