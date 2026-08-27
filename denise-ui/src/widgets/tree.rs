@@ -963,6 +963,11 @@ impl<M> Describe for Tree<M> {
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
+            "item",
+            PropertyKind::List,
+            "The rows, as `item` child nodes, each at its own `depth`. Real data, like a list's.",
+        ),
+        Property::new(
             "selected",
             PropertyKind::Int { min: 0, max: 9999 },
             "Which row is selected, by its position in the file.",
@@ -1029,7 +1034,9 @@ impl<M> Describe for Tree<M> {
             // Through the setter, so a row that is hidden or disabled selects
             // nothing here exactly as it does everywhere else.
             "selected" => self.set_selected(Some(value.as_index()?)),
-            "on-select" | "on-activate" | "on-toggle" => return Err(Mismatch::Supplied),
+            // Built from the child nodes; an inspector edits them
+            // where they live. See `PropertyKind::List`.
+            "on-select" | "on-activate" | "on-toggle" | "item" => return Err(Mismatch::Supplied),
             "activate-on-click" => self.single_click = value.as_bool()?,
             "row-height" => self.row_height = Some(value.as_int()?.max(1)),
             "indent" => self.indent = value.as_int()?.max(0),

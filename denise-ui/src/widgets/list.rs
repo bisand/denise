@@ -718,6 +718,11 @@ impl<M> Describe for List<M> {
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
+            "item",
+            PropertyKind::List,
+            "The rows, as `item` child nodes. Real data: a navigation list's rows are the form's own.",
+        ),
+        Property::new(
             "selected",
             PropertyKind::Int {
                 min: 0,
@@ -778,7 +783,9 @@ impl<M> Describe for List<M> {
             // Through the setter, so a row that is not there selects nothing
             // here exactly as it does everywhere else.
             "selected" => self.set_selected(Some(value.as_index()?)),
-            "on-select" | "on-activate" => return Err(Mismatch::Supplied),
+            // Built from the child nodes; an inspector edits them
+            // where they live. See `PropertyKind::List`.
+            "on-select" | "on-activate" | "item" => return Err(Mismatch::Supplied),
             "activate-on-click" => self.single_click = value.as_bool()?,
             "row-height" => self.row_height = Some(value.as_int()?.max(1)),
             "role" => self.role = value.as_role()?,

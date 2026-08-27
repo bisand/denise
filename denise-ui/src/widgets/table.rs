@@ -719,6 +719,11 @@ impl<M> Describe for Table<M> {
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
+            "column",
+            PropertyKind::List,
+            "The columns, as `column` child nodes. Real data: a table's columns are its shape, not its contents.",
+        ),
+        Property::new(
             "selected",
             PropertyKind::Int {
                 min: 0,
@@ -778,7 +783,9 @@ impl<M> Describe for Table<M> {
             // Through the setter, which drops a row that is not there rather
             // than remembering an index nothing can draw.
             "selected" => self.set_selected(Some(value.as_index()?)),
-            "on-select" | "on-activate" => return Err(Mismatch::Supplied),
+            // Built from the child nodes; an inspector edits them
+            // where they live. See `PropertyKind::List`.
+            "on-select" | "on-activate" | "column" => return Err(Mismatch::Supplied),
             "activate-on-click" => self.single_click = value.as_bool()?,
             "row-height" => self.row_height = Some(value.as_int()?.max(1)),
             "role" => self.role = value.as_role()?,
