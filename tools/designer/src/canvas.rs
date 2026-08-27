@@ -30,6 +30,11 @@ use denise_forms::Placed;
 use denise_ui::Side;
 
 /// How far from an edge a drag starts a resize rather than a move.
+///
+/// **Logical**, and the one thing on the canvas that is: a grab handle is
+/// something a hand aims at, so it keeps the same apparent size at every zoom
+/// level and grows with the display. Everything else here is in the form's own
+/// pixels. See [`Zoom`](crate::zoom::Zoom).
 pub const HANDLE: i32 = 7;
 
 /// How near a sibling's edge counts as lined up with it.
@@ -67,8 +72,13 @@ impl Grip {
     ];
 
     /// Where a handle sits, given the rectangle it belongs to.
-    pub fn handle_rect(bounds: Rect, (left, top, right, bottom): (bool, bool, bool, bool)) -> Rect {
-        let half = HANDLE / 2;
+    pub fn handle_rect(
+        bounds: Rect,
+        (left, top, right, bottom): (bool, bool, bool, bool),
+        reach: i32,
+    ) -> Rect {
+        let reach = reach.max(1);
+        let half = reach / 2;
         let x = if left {
             bounds.x
         } else if right {
@@ -83,15 +93,15 @@ impl Grip {
         } else {
             bounds.y + bounds.height / 2
         };
-        Rect::new(x - half, y - half, HANDLE, HANDLE)
+        Rect::new(x - half, y - half, reach, reach)
     }
 
     /// What a press at `at` takes hold of, for a selection at `bounds`.
     ///
     /// `None` when the press is outside the node altogether.
-    pub fn at(bounds: Rect, at: Point) -> Option<Self> {
+    pub fn at(bounds: Rect, at: Point, reach: i32) -> Option<Self> {
         for corner in Self::HANDLES {
-            if Self::handle_rect(bounds, corner).contains(at) {
+            if Self::handle_rect(bounds, corner, reach).contains(at) {
                 let (left, top, right, bottom) = corner;
                 return Some(Grip::Resize {
                     left,
@@ -394,9 +404,9 @@ mod tests {
 
     #[test]
     fn a_press_in_the_middle_moves_and_one_on_a_corner_resizes() {
-        assert_eq!(Grip::at(NODE, Point::new(70, 50)), Some(Grip::Move));
+        assert_eq!(Grip::at(NODE, Point::new(70, 50), HANDLE), Some(Grip::Move));
         assert_eq!(
-            Grip::at(NODE, Point::new(20, 30)),
+            Grip::at(NODE, Point::new(20, 30), HANDLE),
             Some(Grip::Resize {
                 left: true,
                 top: true,
@@ -405,7 +415,7 @@ mod tests {
             })
         );
         assert_eq!(
-            Grip::at(NODE, Point::new(120, 70)),
+            Grip::at(NODE, Point::new(120, 70), HANDLE),
             Some(Grip::Resize {
                 left: false,
                 top: false,
@@ -413,14 +423,14 @@ mod tests {
                 bottom: true
             })
         );
-        assert_eq!(Grip::at(NODE, Point::new(400, 400)), None);
+        assert_eq!(Grip::at(NODE, Point::new(400, 400), HANDLE), None);
     }
 
     #[test]
     fn the_eight_handles_are_eight_distinct_places() {
         let mut seen: Vec<Rect> = Vec::new();
         for corner in Grip::HANDLES {
-            let rect = Grip::handle_rect(NODE, corner);
+            let rect = Grip::handle_rect(NODE, corner, HANDLE);
             assert!(!seen.contains(&rect), "two handles at {rect:?}");
             seen.push(rect);
         }

@@ -368,18 +368,13 @@ recolours **the whole window**, not only the canvas, because there is one tree a
 one theme — the same reason the canvas is pixel-exact about what the panel will
 draw. Going back to designing puts the designer's own theme back.
 
-Two of the four simulations #99 asks for are not here:
-
-- **Font.** A form cannot be drawn in any face but the built-in 5×7 one, whatever
-  the machine has installed — `denise-forms render --font <a real .ttf>` produces
-  byte-identical output, because `TextStyle::built_in` names `FontId(0)` and every
-  widget the builder makes carries it. There is no default face to point
-  elsewhere. That is [#130], and this control arrives with it.
-- **Scaled down to fit, with the scale shown.** There is no transform: nothing in
-  the toolkit draws a subtree at anything but 1:1. The canvas scrolls instead,
-  which is the other half of what the issue asks for.
+Both of the simulations #99 listed as missing are now here. **Font** waited on
+[#130], which made `FontId::DEFAULT` a redirection so a form could be drawn in
+something other than the built-in 5×7. **Scaled down to fit, with the scale
+shown** is the zoom control below, which arrived with [#154].
 
 [#130]: https://github.com/bisand/denise/issues/130
+[#154]: https://github.com/bisand/denise/issues/154
 
 ## The palette
 
@@ -579,13 +574,13 @@ form *does* already use is in the row's tooltip.
 
 `--snapshot out.ppm` draws one frame and exits, with no window — with `--select`,
 `--drag`, `--carry`, `--band`, `--new`, `--hover <kind>`, `--tab-order`,
-`--clash <other.dform>`, `--scale <factor>` and `--preview` to pose it, since a snapshot has no pointer to select, drag,
+`--clash <other.dform>`, `--scale <factor>`, `--zoom <percent|fit>` and `--preview` to pose it, since a snapshot has no pointer to select, drag,
 carry, band or rest on anything with, and no second editor to change the file
 under it — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 
-## The display's scale, and the one place that is not scaled
+## The display's scale, and the canvas's own
 
 The chrome is written in logical units and multiplied once, on the way into the
 tree: `Theme::scaled` for the widgets' furniture, `Rect::scaled` for every
@@ -602,12 +597,48 @@ picture — every node of the chrome, and the text size of every node that has
 one, has to be exactly twice what it is at 1x. `--scale <factor>` is the same
 lever for a snapshot, and grows the surface with it, the way a real window does.
 
-**The canvas is not scaled.** A form is authored in the panel's own device
-pixels, and an 800x480 form is 800x480 here whatever this display does: the
-numbers in the inspector are the numbers in the file, and a drag of four pixels
-moves a node four pixels. That makes a form small on a dense display, which is
-what a zoom control is for — a different feature, with a coordinate mapping of
-its own, and not one to fake by scaling the stage.
+**The canvas does not follow the display.** A form is authored in the panel's
+own device pixels, and the density of the screen it is being drawn on is not a
+reason to change them. What magnifies it is the zoom control, which is a
+separate choice — the toolbar says what it is at, `+`, `-` and `0` step it, and
+`9` fits the whole form in the window.
+
+### The numbers never change
+
+That is the whole rule, and everything below follows from it. `width 800` in the
+inspector means 800 at 25% and at 400%; a drag of one form pixel writes one form
+pixel; the grid snaps to the grid the *file* records, so the same gesture settles
+on the same numbers at every magnification. Zoom changes what a form pixel looks
+like and nothing else.
+
+It is one conversion, stated once and used in both directions. `Form::build_scaled`
+puts the whole form subtree in screen units, which is what lets the tree's own
+hit testing, painting and handle placement carry on knowing nothing about any of
+this. What needs converting is every number crossing to or from the **file**:
+a drag committing, a widget dropped, a reparent, and the four rectangle rows in
+the inspector going each way.
+
+Below 100% a form pixel is less than a screen pixel and the round trip stops
+being free — `in_form(on_screen(11))` is 12 at 50%. So a drag keeps its own form
+rectangle as the thing it is really editing and hands the tree a copy, rather
+than reading back what it just wrote. Nothing drifts because somebody zoomed out
+and nudged something else.
+
+Rectangles are not the only numbers that cross. `Form::build_scaled` multiplies
+every property *measured in pixels* into the widget — that is how a magnified
+form gets thicker borders and larger text rather than the same ones in a bigger
+box — so a spinner whose file says `thickness=3` really is holding 12 at 400%.
+The inspector divides them back out, and for a length the file actually writes
+it reads the **file** instead: the builder's rounding is not reversible, and 3
+at 50% is held as 2, which divides back out as 4. The file still has the 3.
+Typing into such a row goes the other way, so the live preview stays right until
+the next rebuild. `Property::in_pixels` is what says which properties these are,
+and no code here has a list of them.
+
+The one thing over the canvas that does **not** scale with the form is the grab
+handles: they are aimed at by a hand, and a hand does not get smaller when the
+form does. They are the display's size at every magnification, and `Grip::at` is
+given the same reach, so what can be pressed is what can be seen.
 
 The designer draws itself in **whatever face the machine has** — a regular
 upright sans, found by walking the places systems keep fonts — because it is a

@@ -544,9 +544,17 @@ and all three are now resolved:
 
   Its canvas is the deliberate exception, and worth stating because it is the
   shape of the general answer: a form is authored in the panel's own device
-  pixels, so the designer draws it at 1:1 whatever the display does. The
-  alternative is a coordinate mapping between what is drawn and what is written
-  to the file, which is a zoom control — a feature, not a scale factor.
+  pixels, so the display's density is not a reason to change them. What
+  magnifies it is a zoom control — a feature with a coordinate mapping, not a
+  scale factor — and keeping the two apart is what let each be built and tested
+  on its own. [#154](https://github.com/bisand/denise/issues/154) added it, with
+  one rule: **the numbers never change.** `width 800` means 800 at every
+  magnification, a drag of one form pixel writes one, and the grid snaps to the
+  grid the file records. `Form::build_scaled` puts the form's whole subtree in
+  screen units, so the tree's hit testing and painting need to know nothing; the
+  conversion lives only where a number crosses to or from the document. The one
+  thing over the canvas that does not scale with the form is the grab handles,
+  which are aimed at by a hand and stay the display's size.
 - **The desktop backends cost what a desktop costs, not what a panel costs** —
   found by looking at Activity Monitor rather than by any test. One spinner on a
   Retina Mac burned 48.8% of a core; the same tree on a Pi 3A+ moved the needle

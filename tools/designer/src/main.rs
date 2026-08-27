@@ -52,9 +52,10 @@
 //! bitmap on a board with none — one call, since #130 made every unnamed
 //! `TextStyle` a redirection through the tree's default face.
 //!
-//! The chrome is drawn at the **display's** scale and the canvas is not: a form
-//! is authored in the panel's own device pixels, so an 800x480 form is 800x480
-//! here whatever this screen does. See [`scale`].
+//! The chrome is drawn at the **display's** scale ([`scale`]) and the canvas at
+//! its own magnification ([`zoom`]) — two multiplications that look alike and
+//! are not. The form's numbers never move: `width 800` means 800 at 25% and at
+//! 400%, and a drag of one form pixel writes one.
 //!
 //! The palette is six shelves rather than a flat list, and resting on a row says
 //! what the widget is — both declared by the widget through `Describe`, so a
@@ -71,6 +72,7 @@ mod outline;
 mod scale;
 mod settings;
 mod watch;
+mod zoom;
 
 use std::time::{Duration, Instant};
 
@@ -80,6 +82,7 @@ use denise_winit::{DeniseApp, WindowConfig, run_with};
 use app::{Designer, Message};
 use document::Document;
 use settings::Settings;
+use zoom::Zoom;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -96,6 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tab_order = false;
     let mut font: Option<String> = None;
     let mut scale: f32 = 1.0;
+    let mut zoom: Option<String> = None;
     let mut hover: Option<String> = None;
     let mut clash: Option<String> = None;
     let mut rest = args.iter();
@@ -113,6 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--new" => new_form = true,
             "--tab-order" => tab_order = true,
             "--font" => font = rest.next().cloned(),
+            "--zoom" => zoom = rest.next().cloned(),
             "--scale" => {
                 scale = rest
                     .next()
@@ -157,6 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      \x20 --tab-order            snapshot: number the form's tab stops\n\
                      \x20 --font <path.ttf>      draw in this face rather than the one found\n\
                      \x20 --scale <factor>       snapshot: draw the chrome at this display scale\n\
+                     \x20 --zoom <percent|fit>   draw the form at this magnification\n\
                      \x20 --hover <kind>         snapshot: rest the pointer on this palette row\n\
                      \x20 --clash <other.dform>  snapshot: the file-changed sheet, against this version"
                 );
@@ -186,6 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let physical = |logical: u32| ((logical as f32 * scale) + 0.5) as u32;
         let size = Size::new(physical(settings.width), physical(settings.height));
         let mut designer = Designer::new(size, scale, settings, document);
+        use_zoom(&mut designer, zoom.as_deref());
         // A snapshot keeps the built-in face unless one is named. Its whole
         // value is being comparable — between two runs, between two machines,
         // between the two sides of a pull request — and a face picked up from
@@ -249,6 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut main = Main::new(size, scale, settings, document);
             // On the way up, so every pane is drawn in it from the first frame.
             use_font(&mut main.designer, font.as_deref());
+            use_zoom(&mut main.designer, zoom.as_deref());
             main
         },
     )?;
@@ -267,6 +275,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// `TextStyle` in the workspace names `FontId::DEFAULT` and that is a
 /// redirection. Before #130 this needed a `TextStyle` threaded through every
 /// widget the designer constructs, which is why it was never done.
+/// Sets the canvas's magnification from `--zoom`.
+///
+/// `fit` or a percentage. Anything else is refused out loud rather than quietly
+/// taken as 100%: a snapshot drawn at the wrong magnification is a picture that
+/// looks right and is not.
+fn use_zoom(designer: &mut Designer, requested: Option<&str>) {
+    let Some(text) = requested else {
+        return;
+    };
+    let asked = text.trim().trim_end_matches('%');
+    if asked.eq_ignore_ascii_case("fit") {
+        designer.zoom_to_fit();
+        return;
+    }
+    match asked.parse::<u16>() {
+        Ok(percent) => designer.set_zoom(Zoom::at(percent)),
+        Err(_) => eprintln!("denise-designer: --zoom takes a percentage or `fit`, not `{text}`"),
+    }
+}
+
 fn use_font(designer: &mut Designer, requested: Option<&str>) {
     let Some((name, source)) = system_font::load(requested) else {
         return;

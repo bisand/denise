@@ -14,7 +14,7 @@ use denise_ui::widgets::{
 use denise_ui::{Anchors, Dock, NodeId, TextStyle, Ui};
 
 use crate::arrange::{self, Command, Needs};
-use crate::canvas::{Band, Drag, Grip, Guide, between, place, resting, snap, topmost};
+use crate::canvas::{self, Band, Drag, Grip, Guide, between, place, resting, snap, topmost};
 use crate::clipboard::Clipboard;
 use crate::document::Document;
 use crate::history::History;
@@ -23,6 +23,7 @@ use crate::outline::{self, Outline};
 use crate::scale::Scale;
 use crate::settings::Settings;
 use crate::watch::{self, differences};
+use crate::zoom::Zoom;
 
 /// How many message names a form can have before the log stops naming them.
 ///
@@ -84,6 +85,8 @@ pub enum Message {
     TabOrder,
     /// The next theme along.
     Theme,
+    /// The zoom control: the next step round, and back to fit after the widest.
+    Zoom,
     /// A key tapped on the on-screen keyboard.
     Key(KeyCode),
     /// A message the **form under design** emitted, by the index of its name.
@@ -342,6 +345,8 @@ struct Chrome {
     tab_order_button: NodeId,
     /// The button that says which theme is being simulated.
     theme_button: NodeId,
+    /// The one that says what magnification the canvas is at.
+    zoom_button: NodeId,
     /// The invisible sheet over the form. Hiding it *is* preview mode.
     scrim: Option<NodeId>,
     /// What the form is shown *over*, for the kinds that are shown over
@@ -374,6 +379,7 @@ impl Chrome {
             ("preview", self.preview_button),
             ("tab order", self.tab_order_button),
             ("theme", self.theme_button),
+            ("zoom", self.zoom_button),
             ("palette viewport", self.palette_view),
             ("filter", self.filter),
             ("palette", self.palette),
@@ -429,6 +435,10 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         ("Design", Message::Preview),
         ("Tab order", Message::TabOrder),
         (Simulated::Own.name(), Message::Theme),
+        // Built at its widest and relabelled on the first frame: a toolbar
+        // button takes its width from the text it is built with, and `fit
+        // (100%)` is longer than the `100%` it opens saying.
+        (Zoom::WIDEST_LABEL, Message::Zoom),
     ] {
         let width = 8 * text.chars().count() as i32 + 24;
         let id = ui.add(
@@ -444,7 +454,12 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         );
         if matches!(
             message,
-            Message::Undo | Message::Redo | Message::Preview | Message::TabOrder | Message::Theme
+            Message::Undo
+                | Message::Redo
+                | Message::Preview
+                | Message::TabOrder
+                | Message::Theme
+                | Message::Zoom
         ) && let Some(id) = id
         {
             kept.push(id);
@@ -452,7 +467,8 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         x += width + 6;
     }
     let (undo_button, redo_button) = (kept[0], kept[1]);
-    let (preview_button, tab_order_button, theme_button) = (kept[2], kept[3], kept[4]);
+    let (preview_button, tab_order_button) = (kept[2], kept[3]);
+    let (theme_button, zoom_button) = (kept[4], kept[5]);
     let title = ui
         .add(
             toolbar,
@@ -654,6 +670,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         preview_button,
         tab_order_button,
         theme_button,
+        zoom_button,
         scrim: None,
         surface: None,
         stage,
@@ -667,9 +684,17 @@ pub struct Designer {
     /// What the display multiplies logical units by.
     ///
     /// The chrome is written in logical units and scaled on the way into the
-    /// tree; the canvas is not scaled at all, because a form is authored in the
-    /// panel's own device pixels. See [`Scale`].
+    /// tree. See [`Scale`], and [`Designer::zoom`] for the canvas, which is a
+    /// different multiplication for a different reason.
     scale: Scale,
+    /// How many screen pixels the canvas draws one form pixel as.
+    ///
+    /// Everything under the stage is built at this — `Form::build_scaled` puts
+    /// the whole subtree in screen units — so hit testing, the handles and the
+    /// tree's own painting need no conversion at all. What does need one is
+    /// every number on its way to the **file** or the **inspector**, and every
+    /// number arriving from them. See [`Zoom`].
+    zoom: Zoom,
     chrome: Chrome,
     document: Document,
     settings: Settings,
@@ -709,7 +734,18 @@ pub struct Designer {
     /// The rest of the selection while one of them is being dragged, with the
     /// rectangle each had when the drag began. A drag moves all of them by the
     /// same amount, and writes all of them as one edit.
+    ///
+    /// **Form** rectangles, like [`Designer::dragged_to`] and `Drag::origin`:
+    /// the file is what a drag is really editing, and the tree is given a copy.
     carrying: Vec<(Vec<usize>, Rect)>,
+    /// Where the drag in flight has put each node, in **form** coordinates.
+    ///
+    /// The rectangle a drag commits, rather than one read back out of the tree.
+    /// Below 100% zoom a form pixel is less than a screen pixel, so what the
+    /// tree holds cannot say what the file should: `in_form(on_screen(11))` is
+    /// 12 at 50%. Keeping the form rectangle means a node lands exactly where
+    /// the arithmetic put it at every magnification. See [`Zoom`].
+    dragged_to: Vec<(Vec<usize>, Rect)>,
     /// The container a drag would drop into, while one is in flight. Drawn on
     /// the canvas so a reparent is never a surprise.
     dropping: Option<Vec<usize>>,
@@ -770,6 +806,7 @@ impl Designer {
         let mut designer = Self {
             ui,
             scale,
+            zoom: Zoom::default(),
             chrome,
             document,
             settings,
@@ -790,6 +827,7 @@ impl Designer {
             making: None,
             clash: None,
             carrying: Vec::new(),
+            dragged_to: Vec::new(),
             dropping: None,
             overlay: Vec::new(),
             snapping: true,
@@ -1020,6 +1058,108 @@ impl Designer {
         }
     }
 
+    // ---------------------------------------------------------------- zoom
+
+    /// A form rectangle as the tree holds it.
+    ///
+    /// The direction a number travels on its way *out* of the file. See
+    /// [`Zoom`] for why the two directions are named rather than multiplied
+    /// inline.
+    fn on_screen(&self, form: Rect) -> Rect {
+        self.zoom.on_screen(form)
+    }
+
+    /// A tree rectangle as the file writes it, and as the inspector shows it.
+    ///
+    /// The direction every number bound for the document travels. Below 100%
+    /// this loses precision — see [`Zoom`] — which is why a drag keeps its own
+    /// form rectangle rather than reading back what it wrote.
+    fn in_form(&self, screen: Rect) -> Rect {
+        self.zoom.in_form(screen)
+    }
+
+    /// A node's rectangle as the **file** has it.
+    ///
+    /// The tree holds it on screen, because that is where the form was built.
+    /// Every command that reads a rectangle in order to write one — nudging,
+    /// aligning, grouping — goes through here, and none of them mention zoom.
+    fn form_layout(&self, id: NodeId) -> Option<Rect> {
+        self.ui.layout(id).map(|rect| self.in_form(rect))
+    }
+
+    /// A pointer position in form coordinates, relative to the stage's corner.
+    ///
+    /// The stage is where the form's origin is on screen, so this is the one
+    /// conversion that needs to know where the canvas has scrolled to — and it
+    /// is why every caller takes the stage from `Ui::bounds` rather than
+    /// remembering it.
+    fn in_form_point(&self, screen: Point) -> Point {
+        let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
+        Point::new(
+            self.zoom.in_form_n(screen.x - stage.x),
+            self.zoom.in_form_n(screen.y - stage.y),
+        )
+    }
+
+    /// Draws the form at another magnification, keeping everything else.
+    ///
+    /// The form is rebuilt because the whole subtree is in screen units, and
+    /// `Form::build_scaled` is what puts it there. Nothing about the *document*
+    /// changes, so this is not an edit and never touches the history.
+    pub fn set_zoom(&mut self, zoom: Zoom) {
+        if zoom == self.zoom {
+            return;
+        }
+        self.zoom = zoom;
+        self.show_form();
+        self.status = format!("zoom {}", self.zoom.label());
+        self.refresh_labels();
+    }
+
+    /// One step in, one step out, and back to actual size.
+    pub fn zoom_in(&mut self) {
+        self.set_zoom(self.zoom.wider());
+    }
+
+    /// See [`Designer::zoom_in`].
+    pub fn zoom_out(&mut self) {
+        self.set_zoom(self.zoom.narrower());
+    }
+
+    /// Back to one screen pixel per form pixel.
+    pub fn zoom_actual(&mut self) {
+        self.set_zoom(Zoom::ACTUAL);
+    }
+
+    /// As large as the canvas can show the whole form.
+    pub fn zoom_to_fit(&mut self) {
+        self.set_zoom(self.fitted());
+    }
+
+    /// The next step round, and back to *fit* after the widest.
+    ///
+    /// One control rather than three, for the same reason the theme is one: the
+    /// toolbar says what the state **is**, and pressing it changes it. The
+    /// keyboard has the separate ones, which is where somebody who wants a
+    /// particular magnification reaches anyway.
+    pub fn cycle_zoom(&mut self) {
+        let next = if self.zoom.is_fit() {
+            Zoom::at(Zoom::STEPS[0])
+        } else if self.zoom.percent() >= Zoom::STEPS[Zoom::STEPS.len() - 1] {
+            self.fitted()
+        } else {
+            self.zoom.wider()
+        };
+        self.set_zoom(next);
+    }
+
+    /// What "fit" works out to for the form and canvas as they are now.
+    fn fitted(&self) -> Zoom {
+        let view = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
+        let room = Size::new(view.width.max(0) as u32, view.height.max(0) as u32);
+        Zoom::to_fit(self.document.form().size(), room, self.scale.n(GAP))
+    }
+
     /// Rebuilds the canvas from the open document.
     ///
     /// The old stage goes and a new one takes its place, because a form's tree is
@@ -1037,20 +1177,32 @@ impl Designer {
         self.drag = None;
         self.band = None;
         self.carrying.clear();
+        self.dragged_to.clear();
         self.dropping = None;
         self.outline_drag = None;
 
         let size = self.document.form().size();
         let kind = self.document.form().kind();
+        // A zoom that follows the viewport is worked out again here, because
+        // this is the one place that runs both when the form changes size and
+        // when the window does.
+        if self.zoom.is_fit() {
+            self.zoom = self.fitted();
+        }
         // Centred in the viewport if it fits, and at the margin if it does not —
         // the canvas scrolls, so a form larger than the window is reachable
         // rather than cropped.
         // Bounds, not layout: the canvas is docked, so its `layout` is the
         // placeholder it was added with and its `bounds` is where it ended up.
         let view = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
-        let x = ((view.width - size.width as i32) / 2).max(GAP);
-        let y = ((view.height - size.height as i32) / 2).max(GAP);
-        let designed = Rect::new(x, y, size.width as i32, size.height as i32);
+        // On screen from here down: the stage is how big the form *looks*, and
+        // everything placed against it is in the same units the form's own
+        // subtree will be built in.
+        let shown = self.zoom.on_screen_size(size);
+        let margin = self.scale.n(GAP);
+        let x = ((view.width - shown.width as i32) / 2).max(margin);
+        let y = ((view.height - shown.height as i32) / 2).max(margin);
+        let designed = Rect::new(x, y, shown.width as i32, shown.height as i32);
 
         // A form is not always the whole surface, and the kinds that are not say
         // so on the canvas rather than in a property nobody looks at. What the
@@ -1061,7 +1213,9 @@ impl Designer {
             // `extent` mean for these two.
             FormKind::Drawer | FormKind::Shelf => {
                 let side = self.document.form().side();
-                let extent = self.document.form().extent();
+                // `extent` is a form length — how far the drawer comes in — so
+                // it is drawn at the zoom the rest of the form is.
+                let extent = self.zoom.on_screen_n(self.document.form().extent());
                 (Some(designed), resting(designed, side, extent))
             }
             // Whatever is behind a dialog is the application's, so the canvas
@@ -1071,8 +1225,8 @@ impl Designer {
                 Some(Rect::new(
                     0,
                     0,
-                    view.width.max(designed.right() + GAP),
-                    view.height.max(designed.bottom() + GAP),
+                    view.width.max(designed.right() + margin),
+                    view.height.max(designed.bottom() + margin),
                 )),
                 designed,
             ),
@@ -1115,10 +1269,13 @@ impl Designer {
             missing: Vec::new(),
             names: Vec::new(),
         };
+        // The whole subtree in screen units, which is what makes the tree's own
+        // hit testing, painting and handle placement need no conversion at all.
+        // What needs one is every number crossing to or from the file.
         let outcome = self
             .document
             .form()
-            .build(&mut self.ui, stage, &mut wiring)
+            .build_scaled(&mut self.ui, stage, self.zoom.factor(), &mut wiring)
             .map(|built| {
                 self.placed = built.placed().to_vec();
             });
@@ -1483,9 +1640,10 @@ impl Designer {
     fn value_of(&self, path: &[usize], id: NodeId, property: &Property, node: bool) -> String {
         if node {
             // The rectangle comes from the tree rather than the file, so the
-            // four fields follow a drag on the canvas as it happens.
+            // four fields follow a drag on the canvas as it happens — in the
+            // file's units, because that is what the row is for.
             if let Some(axis) = axis_of(property.name) {
-                let rect = self.ui.layout(id).unwrap_or(Rect::ZERO);
+                let rect = self.form_layout(id).unwrap_or(Rect::ZERO);
                 return [rect.x, rect.y, rect.width, rect.height][axis].to_string();
             }
             return self
@@ -1503,11 +1661,71 @@ impl Designer {
                 .form()
                 .property(path, property.name)
                 .unwrap_or_default(),
-            _ => self
-                .ui
-                .get_property(id, property.name)
-                .map(|value| show_value(&value))
-                .unwrap_or_default(),
+            _ => {
+                // A length the **file** writes is read from the file. The
+                // builder multiplied it into the widget and the rounding is not
+                // reversible: `thickness=3` at 50% is held as 2, which divides
+                // back out as 4. The file still has the 3, so it answers.
+                //
+                // A length the file does *not* write is the widget's own
+                // default, which the file cannot supply — dividing that back
+                // out is exact enough for a number nobody typed, and it is
+                // dimmed in the pane anyway.
+                if property.pixels
+                    && !self.zoom.is_actual()
+                    && let Some(written) = self.document.form().property(path, property.name)
+                {
+                    return written;
+                }
+                self.ui
+                    .get_property(id, property.name)
+                    .map(|value| show_value(&self.unlengthened(property, value)))
+                    .unwrap_or_default()
+            }
+        }
+    }
+
+    /// A property's value as the **file** writes it.
+    ///
+    /// `Form::build_scaled` multiplies every property measured in pixels into
+    /// the widget — that is what `Property::in_pixels` is for, and it is how a
+    /// magnified form gets thicker borders and larger text rather than the same
+    /// ones in a bigger box. So a spinner whose file says `thickness=3` really
+    /// does hold 12 at 400%, and an inspector that showed what it holds would be
+    /// showing a number nobody wrote.
+    ///
+    /// The rectangle is not one of these: it is not a *property* of the widget
+    /// but the tree's own geometry, and it goes through [`Designer::form_layout`].
+    fn unlengthened(&self, property: &Property, value: Value) -> Value {
+        if !property.pixels || self.zoom.is_actual() {
+            return value;
+        }
+        match value {
+            Value::Int(n) => Value::Int(self.zoom.in_form_n(n)),
+            Value::Float(f) => Value::Float(f / self.zoom.factor()),
+            other => other,
+        }
+    }
+
+    /// The same value on its way back in, for the live preview.
+    ///
+    /// The row edits the file's number and the widget wants the magnified one.
+    /// Without this, typing `3` into `thickness` at 400% would write 3 to the
+    /// file — correctly — and then draw a hairline until the next rebuild.
+    fn lengthened(&self, property: &Property, value: Value) -> Value {
+        if !property.pixels || self.zoom.is_actual() {
+            return value;
+        }
+        match value {
+            // At least one, as the builder does: a border that rounded away at
+            // 25% has been deleted rather than scaled. Zero stays zero, because
+            // zero was somebody saying "none".
+            Value::Int(n) if n != 0 => {
+                let scaled = self.zoom.on_screen_n(n);
+                Value::Int(if n > 0 { scaled.max(1) } else { scaled.min(-1) })
+            }
+            Value::Float(f) => Value::Float(f * self.zoom.factor()),
+            other => other,
         }
     }
 
@@ -1602,6 +1820,22 @@ impl Designer {
             .widget_mut::<Button<Message>>(self.chrome.theme_button)
         {
             button.set_label(theme);
+        }
+
+        let zoom = self.zoom.label();
+        let fitting = self.zoom.is_fit();
+        if let Some(button) = self
+            .ui
+            .widget_mut::<Button<Message>>(self.chrome.zoom_button)
+        {
+            button.set_label(zoom);
+            // Marked when it is following the window rather than sitting on a
+            // step, because that is the state that will change by itself.
+            button.set_role(if fitting {
+                Role::Primary
+            } else {
+                Role::Neutral
+            });
         }
 
         // Each arrange command wants a different selection, so they go grey one
@@ -1752,8 +1986,9 @@ impl Designer {
                     }
                     match value {
                         Some(value) if !node => {
+                            let value = self.lengthened(property, value.clone());
                             if let Some(Err(refused)) =
-                                self.ui.set_property(id, property.name, value.clone())
+                                self.ui.set_property(id, property.name, value)
                             {
                                 self.complain(&refused.to_string());
                                 return;
@@ -1803,10 +2038,15 @@ impl Designer {
         let Some(was) = self.ui.layout(id) else {
             return false;
         };
+        // `value` was typed into the inspector, so it is a form number; the
+        // tree's rectangle is on screen. The other three axes go back out
+        // unchanged, which they only do if the whole rectangle makes the round
+        // trip together.
+        let was = self.in_form(was);
         let mut axes = [was.x, was.y, was.width, was.height];
         axes[axis] = value;
-        self.ui
-            .set_layout(id, Rect::new(axes[0], axes[1], axes[2], axes[3]));
+        let form = Rect::new(axes[0], axes[1], axes[2], axes[3]);
+        self.ui.set_layout(id, self.on_screen(form));
         true
     }
 
@@ -1895,7 +2135,7 @@ impl Designer {
         let (Some(mut pane), Some(id)) = (self.inspector.take(), self.selected()) else {
             return;
         };
-        if let Some(rect) = self.ui.layout(id) {
+        if let Some(rect) = self.ui.layout(id).map(|rect| self.in_form(rect)) {
             let axes = [rect.x, rect.y, rect.width, rect.height];
             for index in 0..pane.rows.len() {
                 let name = pane.rows[index].property.name;
@@ -2621,7 +2861,9 @@ impl Designer {
                 if (at.x - from.x).abs() + (at.y - from.y).abs() < THRESHOLD {
                     return;
                 }
-                let size = denise_forms::default_size(kind);
+                // The ghost is how big the widget will *look* once it lands, so
+                // it is the default size at the canvas's magnification.
+                let size = self.zoom.on_screen_size(denise_forms::default_size(kind));
                 let rect = Rect::new(at.x, at.y, size.width as i32, size.height as i32);
                 let Some(ghost) = self.add_ghost(kind, rect) else {
                     return;
@@ -2629,7 +2871,7 @@ impl Designer {
                 self.placing = Placing::Carrying { kind, ghost };
             }
             Placing::Carrying { kind, ghost } => {
-                let size = denise_forms::default_size(kind);
+                let size = self.zoom.on_screen_size(denise_forms::default_size(kind));
                 let rect = Rect::new(at.x, at.y, size.width as i32, size.height as i32);
                 self.ui.set_layout(ghost, self.to_client(rect));
             }
@@ -2764,12 +3006,17 @@ impl Designer {
             .as_ref()
             .and_then(|path| self.path_bounds(path))
             .unwrap_or(stage);
-        let mut rect = Rect::new(
+        // Screen on the way in, because that is where the pointer left it, and
+        // form on the way out, because that is what the file takes. Snapping
+        // happens after the conversion: the grid is the file's, not the
+        // screen's, so a widget dropped at 200% still lands on a multiple of
+        // four.
+        let mut rect = self.in_form(Rect::new(
             screen.x - origin.x,
             screen.y - origin.y,
             screen.width,
             screen.height,
-        );
+        ));
         if self.snapping {
             rect = snap(rect, self.grid);
         }
@@ -2877,7 +3124,7 @@ impl Designer {
         // "select whatever is under there".
         if let Some(path) = self.selection.last().cloned()
             && let Some(bounds) = self.path_bounds(&path)
-            && let Some(grip) = Grip::at(bounds, at)
+            && let Some(grip) = Grip::at(bounds, at, self.scale.n(canvas::HANDLE))
             && matches!(grip, Grip::Resize { .. })
         {
             self.begin(grip, at, path);
@@ -2942,7 +3189,7 @@ impl Designer {
         self.reselected();
 
         if let Some(bounds) = self.path_bounds(&path)
-            && let Some(grip) = Grip::at(bounds, at)
+            && let Some(grip) = Grip::at(bounds, at, self.scale.n(canvas::HANDLE))
         {
             self.begin(grip, at, path);
         }
@@ -2952,7 +3199,13 @@ impl Designer {
     fn begin(&mut self, grip: Grip, at: Point, path: Vec<usize>) {
         // A drag is its own step, whatever was being nudged before it.
         self.history.separate();
-        let Some(origin) = self.node_id(&path).and_then(|id| self.ui.layout(id)) else {
+        // In form coordinates from here: what a drag edits is the file, and
+        // the tree gets shown the result.
+        let Some(origin) = self
+            .node_id(&path)
+            .and_then(|id| self.ui.layout(id))
+            .map(|rect| self.in_form(rect))
+        else {
             return;
         };
         // Everything else selected comes along, at the offset it already has.
@@ -2964,7 +3217,7 @@ impl Designer {
                 .filter(|other| **other != path)
                 .filter_map(|other| {
                     let was = self.node_id(other).and_then(|id| self.ui.layout(id))?;
-                    Some((other.clone(), was))
+                    Some((other.clone(), self.in_form(was)))
                 })
                 .collect()
         } else {
@@ -2995,9 +3248,20 @@ impl Designer {
         };
 
         let siblings = self.siblings_of(&drag.path);
-        let placement = place(&drag, to, &siblings, self.grid, self.snapping);
+        // `place` works entirely in form coordinates — the grid it snaps to is
+        // the grid the file records, and the edges it lines up with are the ones
+        // the file gives. So the pointer is converted on the way in and the
+        // answer on the way out, and zoom never reaches the arithmetic.
+        let in_form = Drag {
+            from: self.in_form_point(drag.from),
+            to: self.in_form_point(drag.to),
+            ..drag.clone()
+        };
+        let landed = self.in_form_point(to);
+        let placement = place(&in_form, landed, &siblings, self.grid, self.snapping);
         // Where it would land if the button came up here. Worked out on every
         // step so the canvas can draw it: a reparent is never a surprise.
+        // `to` and not `landed`, because this asks what is under the *pointer*.
         self.dropping = matches!(drag.grip, Grip::Move)
             .then(|| self.reparent_target(to, &drag.path))
             .flatten();
@@ -3005,18 +3269,18 @@ impl Designer {
         // The tree moves so the person can see it. The *file* does not, until
         // the button comes up: one drag is one edit, which is what keeps a move
         // to a one-line diff and will make it one undo step.
-        self.ui.set_layout(id, placement.rect);
+        self.ui.set_layout(id, self.on_screen(placement.rect));
         let (dx, dy) = (
             placement.rect.x - drag.origin.x,
             placement.rect.y - drag.origin.y,
         );
+        self.dragged_to = vec![(drag.path.clone(), placement.rect)];
         for (path, origin) in self.carrying.clone() {
+            let moved = Rect::new(origin.x + dx, origin.y + dy, origin.width, origin.height);
             if let Some(id) = self.node_id(&path) {
-                self.ui.set_layout(
-                    id,
-                    Rect::new(origin.x + dx, origin.y + dy, origin.width, origin.height),
-                );
+                self.ui.set_layout(id, self.on_screen(moved));
             }
+            self.dragged_to.push((path, moved));
         }
         self.refresh_overlay_with(&placement.guides, &drag.path);
         self.sync_rect();
@@ -3066,10 +3330,17 @@ impl Designer {
         // The primary and everything it carried, as one edit: one gesture is
         // one step to put back.
         let mut moved: Vec<(Vec<usize>, Rect, Rect)> = Vec::new();
+        // What the drag decided, not what the tree was shown: below 100% zoom
+        // those differ, and the file must have the former. See `dragged_to`.
+        let landed = std::mem::take(&mut self.dragged_to);
         for (path, was) in std::iter::once((drag.path.clone(), drag.origin))
             .chain(std::mem::take(&mut self.carrying))
         {
-            if let Some(rect) = self.node_id(&path).and_then(|id| self.ui.layout(id)) {
+            if let Some(rect) = landed
+                .iter()
+                .find(|(other, _)| *other == path)
+                .map(|(_, rect)| *rect)
+            {
                 moved.push((path, rect, was));
             }
         }
@@ -3248,12 +3519,14 @@ impl Designer {
             let Some(bounds) = self.path_bounds(path) else {
                 return;
             };
-            let mut rect = Rect::new(
+            // As in `insert_widget`: the tree's rectangles are on screen and
+            // the file's are not, and the grid belongs to the file.
+            let mut rect = self.in_form(Rect::new(
                 bounds.x - origin.x,
                 bounds.y - origin.y,
                 bounds.width,
                 bounds.height,
-            );
+            ));
             if self.snapping {
                 rect = snap(rect, self.grid);
             }
@@ -3450,6 +3723,25 @@ impl Designer {
                 self.toggle_snapping();
                 true
             }
+            // The magnification shortcuts every drawing program has. Guarded on
+            // `command` so that typing a `0` or a `-` into a property field is
+            // still typing one.
+            KeyCode::Equal | KeyCode::NumpadAdd if command => {
+                self.zoom_in();
+                true
+            }
+            KeyCode::Minus | KeyCode::NumpadSubtract if command => {
+                self.zoom_out();
+                true
+            }
+            KeyCode::Digit0 | KeyCode::Numpad0 if command => {
+                self.zoom_actual();
+                true
+            }
+            KeyCode::Digit9 | KeyCode::Numpad9 if command => {
+                self.zoom_to_fit();
+                true
+            }
             KeyCode::Escape if !self.selection.is_empty() => {
                 self.selection.clear();
                 self.selected = None;
@@ -3478,11 +3770,13 @@ impl Designer {
             let Some(id) = self.node_id(&path) else {
                 continue;
             };
-            let Some(was) = self.ui.layout(id) else {
+            let Some(was) = self.form_layout(id) else {
                 continue;
             };
+            // Form pixels: an arrow key moves a node one pixel in the *file*,
+            // whatever the canvas is showing.
             let rect = Rect::new(was.x + dx, was.y + dy, was.width, was.height);
-            self.ui.set_layout(id, rect);
+            self.ui.set_layout(id, self.on_screen(rect));
             moved.push((path, rect, was));
         }
         self.write_rects(&moved);
@@ -4476,7 +4770,7 @@ impl Designer {
         let anchor = paths.iter().position(|path| *path == primary).unwrap_or(0);
         let rects: Vec<Rect> = paths
             .iter()
-            .filter_map(|path| self.node_id(path).and_then(|id| self.ui.layout(id)))
+            .filter_map(|path| self.node_id(path).and_then(|id| self.form_layout(id)))
             .collect();
         if rects.len() != paths.len() {
             return;
@@ -4549,7 +4843,7 @@ impl Designer {
         let parent = parent.to_vec();
         let rects: Vec<Rect> = paths
             .iter()
-            .filter_map(|path| self.node_id(path).and_then(|id| self.ui.layout(id)))
+            .filter_map(|path| self.node_id(path).and_then(|id| self.form_layout(id)))
             .collect();
         if rects.len() != paths.len() {
             return;
@@ -4599,7 +4893,7 @@ impl Designer {
             return;
         };
         let parent = parent.to_vec();
-        let Some(origin) = self.node_id(&panel).and_then(|id| self.ui.layout(id)) else {
+        let Some(origin) = self.node_id(&panel).and_then(|id| self.form_layout(id)) else {
             return;
         };
         let held = self.child_count(&panel);
@@ -4607,7 +4901,7 @@ impl Designer {
             .filter_map(|child| {
                 let mut path = panel.clone();
                 path.push(child);
-                self.node_id(&path).and_then(|id| self.ui.layout(id))
+                self.node_id(&path).and_then(|id| self.form_layout(id))
             })
             .collect();
         if rects.len() != held {
@@ -4782,6 +5076,8 @@ impl Designer {
                 )
             });
         self.placing = Placing::Pressed { kind, from };
+        // `over` is where in the *form* to hold it, so it travels with the zoom.
+        let over = Point::new(self.zoom.on_screen_n(over.x), self.zoom.on_screen_n(over.y));
         self.carry_to(Point::new(stage.x + over.x, stage.y + over.y));
         matches!(self.placing, Placing::Carrying { .. })
     }
@@ -4795,6 +5091,7 @@ impl Designer {
     /// select it.
     pub fn band_over(&mut self, rect: Rect) {
         let stage = self.ui.bounds(self.chrome.stage).unwrap_or(Rect::ZERO);
+        let rect = self.on_screen(rect);
         let from = Point::new(stage.x + rect.x, stage.y + rect.y);
         let to = Point::new(from.x + rect.width, from.y + rect.height);
         let scope = self.container_at(from, &[]).unwrap_or_default();
@@ -4835,6 +5132,10 @@ impl Designer {
         };
         let from = Point::new(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
         self.press(from, false);
+        // `dx` and `dy` are given in the form's own pixels — the units the
+        // caller is thinking in — so the pointer has to travel further than that
+        // when the canvas is magnified.
+        let (dx, dy) = (self.zoom.on_screen_n(dx), self.zoom.on_screen_n(dy));
         self.drag_to(Point::new(from.x + dx, from.y + dy));
     }
 
@@ -4856,6 +5157,7 @@ impl Designer {
             .iter()
             .filter(|p| p.path.len() == path.len() && p.path.starts_with(parent) && p.path != path)
             .filter_map(|p| self.ui.layout(p.id))
+            .map(|rect| self.in_form(rect))
             .collect()
     }
 
@@ -4873,6 +5175,12 @@ impl Designer {
         for id in std::mem::take(&mut self.overlay) {
             self.ui.remove(id);
         }
+        // A grab handle is aimed at by a hand, so it is the display's size and
+        // not the form's: the same seven logical pixels at 25% as at 400%. It
+        // is the one thing drawn over the canvas that does not scale with what
+        // is under it, and `Grip::at` is given the same reach so that what can
+        // be pressed is what can be seen.
+        let reach = self.scale.n(canvas::HANDLE);
         let canvas = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
         let scroll = self.ui.scroll(self.chrome.canvas);
         let to_canvas = |r: Rect| {
@@ -4960,11 +5268,18 @@ impl Designer {
             .and_then(|p| p.parent)
             .and_then(|id| self.ui.bounds(id))
         {
+            // `guide.at` is an offset in the parent's own form coordinates,
+            // because that is the space `place` lined the edges up in; `parent`
+            // came out of the tree and is on screen. The line itself is one
+            // screen pixel at any zoom — it marks an edge rather than measuring
+            // one.
+            let zoom = self.zoom;
             for guide in guides {
+                let at = zoom.on_screen_n(guide.at);
                 let line = if guide.vertical {
-                    Rect::new(parent.x + guide.at, parent.y, 1, parent.height)
+                    Rect::new(parent.x + at, parent.y, 1, parent.height)
                 } else {
-                    Rect::new(parent.x, parent.y + guide.at, parent.width, 1)
+                    Rect::new(parent.x, parent.y + at, parent.width, 1)
                 };
                 add(&mut self.ui, line, Panel::filled(Role::Accent), 190);
             }
@@ -5012,7 +5327,7 @@ impl Designer {
                 for corner in Grip::HANDLES {
                     add(
                         &mut self.ui,
-                        Grip::handle_rect(bounds, corner),
+                        Grip::handle_rect(bounds, corner, reach),
                         Panel::filled(Role::Primary),
                         210,
                     );
@@ -5099,6 +5414,7 @@ impl Designer {
             Message::Preview => self.toggle_preview(),
             Message::TabOrder => self.toggle_tab_order(),
             Message::Theme => self.cycle_theme(),
+            Message::Zoom => self.cycle_zoom(),
             Message::Key(code) => {
                 let events = self.keyboard.press_key(&mut self.ui, code);
                 self.ui.handle(&events);
@@ -5539,16 +5855,17 @@ mod tests {
         }
     }
 
-    /// The canvas is the exception, and stays the exception.
+    /// The canvas does not follow the **display**, at either scale factor.
     ///
-    /// A form is authored in the panel's own device pixels: an 800x480 screen is
-    /// 800x480 here whatever this display does, so the numbers in the inspector
-    /// are the numbers in the file and a drag of four pixels moves a node four
-    /// pixels. Making it legible on a dense display is a zoom control, which is
-    /// a different feature with a coordinate mapping of its own.
+    /// A form is authored in the panel's own device pixels, and the display's
+    /// density is not a reason to change them. What magnifies it is the zoom
+    /// control, which is a separate choice with a conversion of its own — see
+    /// the tests above — and this pins the two apart: at 100% the form is its
+    /// own size on a 1x display and on a 2x one alike.
     #[test]
     fn the_form_on_the_canvas_is_not_scaled_with_the_chrome() {
         let (one, two) = (at_scale(1.0), at_scale(2.0));
+        assert!(one.zoom.is_actual() && two.zoom.is_actual());
         let size = one.document.form().size();
 
         for (name, designer) in [("1x", &one), ("2x", &two)] {
@@ -6506,6 +6823,361 @@ mod tests {
             "}\n",
         );
         scratch("two", source)
+    }
+
+    // ---------------------------------------------------------------- zoom
+
+    /// **The numbers never change.** This is the whole of #154.
+    ///
+    /// A drag of twenty form pixels writes twenty, at 50%, at 100% and at 400%.
+    /// If the conversion were missing anywhere the file would move by the
+    /// screen distance instead — twice as far at 200%, half as far at 50% — and
+    /// the file would silently disagree with what was drawn.
+    #[test]
+    fn a_drag_writes_form_pixels_at_every_magnification() {
+        for percent in [50, 100, 200, 400] {
+            let mut designer = two_panels();
+            // Snapping off, so this measures the conversion rather than the
+            // grid: with it on a twenty-pixel drag is *supposed* to land
+            // somewhere else. That it lands on the same somewhere else at every
+            // magnification is the next test.
+            designer.snapping = false;
+            designer.set_zoom(Zoom::at(percent));
+            let was = rect_of(&designer, "loose");
+
+            assert!(designer.select_named("loose"));
+            designer.drag_selection(20, 12);
+            designer.release();
+
+            let now = rect_of(&designer, "loose");
+            assert_eq!(
+                (now.x - was.x, now.y - was.y),
+                (20, 12),
+                "at {percent}% a drag of 20,12 form pixels wrote {},{}",
+                now.x - was.x,
+                now.y - was.y
+            );
+            assert_eq!(
+                (now.width, now.height),
+                (was.width, was.height),
+                "at {percent}% a move resized it"
+            );
+        }
+    }
+
+    /// And with snapping on, the magnification still does not reach the file.
+    ///
+    /// The grid and the sibling edges are the **file's**, so the same gesture
+    /// has to settle on the same numbers whatever the canvas is showing. A
+    /// `SNAP` measured on screen instead would make a form four times stickier
+    /// at 400%, and the file would record where the pointer happened to be
+    /// rather than where it was aimed.
+    #[test]
+    fn snapping_settles_on_the_same_numbers_at_every_magnification() {
+        let mut landed: Vec<(u16, Rect)> = Vec::new();
+        for percent in [50, 100, 200, 400] {
+            let mut designer = two_panels();
+            designer.set_zoom(Zoom::at(percent));
+            assert!(designer.select_named("loose"));
+            designer.drag_selection(20, 12);
+            designer.release();
+            landed.push((percent, rect_of(&designer, "loose")));
+        }
+        let (_, first) = landed[0];
+        for (percent, rect) in &landed {
+            assert_eq!(
+                *rect, first,
+                "at {percent}% the same drag snapped somewhere else"
+            );
+        }
+        // And it really did snap, or this would be testing nothing.
+        assert_ne!(first, rect_of(&two_panels(), "loose"));
+    }
+
+    /// And what the inspector shows is what the file says, at any zoom.
+    ///
+    /// The pane reads the *tree*, which is in screen units — so without the
+    /// conversion a 300x200 form would report 600x400 at 200%, and typing into
+    /// the field would then write that back.
+    #[test]
+    fn the_inspector_reports_design_pixels_at_every_magnification() {
+        for percent in [50, 100, 200, 400] {
+            let mut designer = two_panels();
+            designer.set_zoom(Zoom::at(percent));
+            // Selecting alone, so this is the pane as `value_of` builds it. An
+            // earlier version called `sync_rect` here and tested only the path
+            // that redraws the four rows during a drag — which was already
+            // converted, so it passed while the build path was still showing
+            // magnified numbers.
+            assert!(designer.select_named("right"));
+
+            assert_eq!(
+                shown_rect(&designer),
+                rect_of(&designer, "right"),
+                "at {percent}% the inspector and the file disagree"
+            );
+
+            // And again through the drag path, which is a different reader.
+            designer.sync_rect();
+            assert_eq!(
+                shown_rect(&designer),
+                rect_of(&designer, "right"),
+                "at {percent}% a redraw of the rows disagrees with the file"
+            );
+        }
+    }
+
+    /// Every property measured in pixels reads as the file wrote it, too.
+    ///
+    /// `Form::build_scaled` multiplies them into the widget — that is how a
+    /// magnified form gets thicker borders rather than the same ones in a bigger
+    /// box — so the inspector has to divide them back out. A spinner whose file
+    /// says `thickness=3` holds 12 at 400%, and showing 12 would be showing a
+    /// number nobody wrote and inviting somebody to edit it.
+    #[test]
+    fn a_property_measured_in_pixels_reads_as_the_file_wrote_it() {
+        for percent in [50, 100, 200, 400] {
+            let mut designer = designer_on("forms/reference.dform");
+            designer.set_zoom(Zoom::at(percent));
+            assert!(designer.select_named("busy"));
+
+            let pane = designer.inspector.as_ref().expect("an inspector");
+            let row = pane
+                .rows
+                .iter()
+                .find(|row| row.property.name == "thickness")
+                .expect("a spinner has a thickness");
+            assert!(row.property.pixels, "thickness is a length");
+            assert_eq!(
+                row.shown,
+                designer
+                    .document
+                    .form()
+                    .property(&path_named(&designer, "busy"), "thickness")
+                    .expect("the file writes it"),
+                "at {percent}% the inspector shows a thickness nobody wrote"
+            );
+        }
+    }
+
+    /// Typing a number into the inspector means that number, at any zoom.
+    ///
+    /// The other direction of the same conversion: `place` takes a form number
+    /// and the tree wants a screen one.
+    #[test]
+    fn a_typed_rectangle_means_form_pixels_at_every_magnification() {
+        for percent in [50, 100, 200, 400] {
+            let mut designer = two_panels();
+            designer.set_zoom(Zoom::at(percent));
+            assert!(designer.select_named("right"));
+            let id = designer.selected().expect("selected");
+
+            assert!(designer.place(id, "x", "160"));
+            let layout = designer.ui.layout(id).expect("a layout");
+            assert_eq!(
+                designer.in_form(layout).x,
+                160,
+                "at {percent}% typing x=160 put it somewhere else"
+            );
+        }
+    }
+
+    /// Every command that reads a rectangle to write one is in form pixels too.
+    ///
+    /// A drag is the obvious crossing and not the only one: nudging, aligning,
+    /// grouping and ungrouping all take what the tree holds and put it in the
+    /// file. Each was written when those were the same thing.
+    #[test]
+    fn the_commands_that_move_nodes_write_form_pixels_at_every_magnification() {
+        // Nudging: one arrow key is one pixel in the file.
+        for percent in [50, 100, 200, 400] {
+            let mut designer = two_panels();
+            designer.set_zoom(Zoom::at(percent));
+            let was = rect_of(&designer, "right");
+            assert!(designer.select_named("right"));
+            designer.nudge(3, -2);
+            let now = rect_of(&designer, "right");
+            assert_eq!(
+                (now.x - was.x, now.y - was.y),
+                (3, -2),
+                "at {percent}% a nudge of 3,-2 moved it {},{}",
+                now.x - was.x,
+                now.y - was.y
+            );
+        }
+
+        // Aligning: the anchor does not move and the others land on it.
+        for percent in [50, 100, 200, 400] {
+            let mut designer = two_panels();
+            designer.set_zoom(Zoom::at(percent));
+            designer.selection = vec![
+                path_named(&designer, "right"),
+                path_named(&designer, "left"),
+            ];
+            designer.selected = designer.selection.last().and_then(|p| designer.node_id(p));
+            let anchor = rect_of(&designer, "left");
+            designer.arrange(Command::Left);
+            assert_eq!(
+                rect_of(&designer, "right").x,
+                anchor.x,
+                "at {percent}% aligning left did not line them up in the file"
+            );
+            assert_eq!(rect_of(&designer, "left"), anchor, "the anchor moved");
+        }
+
+        // Grouping: the panel is the bounding box, in form pixels, and nothing
+        // inside it appears to move.
+        for percent in [50, 100, 200, 400] {
+            let mut designer = two_panels();
+            designer.set_zoom(Zoom::at(percent));
+            let (left, right) = (rect_of(&designer, "left"), rect_of(&designer, "right"));
+            designer.selection = vec![
+                path_named(&designer, "left"),
+                path_named(&designer, "right"),
+            ];
+            designer.selected = designer.selection.last().and_then(|p| designer.node_id(p));
+            designer.arrange(Command::Group);
+
+            let held = rect_of(&designer, "left");
+            assert_eq!(
+                (held.x, held.y),
+                (0, 0),
+                "at {percent}% the first node is not at the group's corner"
+            );
+            let other = rect_of(&designer, "right");
+            assert_eq!(
+                (other.x, other.y),
+                (right.x - left.x, right.y - left.y),
+                "at {percent}% grouping moved the second one"
+            );
+        }
+    }
+
+    /// And typing into such a row writes the file's number, not the screen's.
+    ///
+    /// The other direction of the same conversion. Without it, typing `6` into
+    /// `thickness` at 400% would write 6 to the file — correctly — and then draw
+    /// a hairline until something rebuilt the form.
+    #[test]
+    fn typing_a_length_writes_what_was_typed_and_draws_it_magnified() {
+        for percent in [100, 200, 400] {
+            let mut designer = designer_on("forms/reference.dform");
+            designer.set_zoom(Zoom::at(percent));
+            assert!(designer.select_named("busy"));
+            let id = designer.selected().expect("selected");
+
+            let row = designer
+                .inspector
+                .as_ref()
+                .expect("an inspector")
+                .rows
+                .iter()
+                .position(|row| row.property.name == "thickness")
+                .expect("a spinner has a thickness");
+            designer.commit(row, String::from("6"));
+
+            assert_eq!(
+                designer
+                    .document
+                    .form()
+                    .property(&path_named(&designer, "busy"), "thickness")
+                    .as_deref(),
+                Some("6"),
+                "at {percent}% the file did not get the number that was typed"
+            );
+            assert_eq!(
+                designer.ui.get_property(id, "thickness"),
+                Some(Value::Int(Zoom::at(percent).on_screen_n(6))),
+                "at {percent}% the widget is not drawing it magnified"
+            );
+        }
+    }
+
+    /// The stage is the form's own size, magnified — and nothing else is.
+    #[test]
+    fn the_stage_is_the_form_at_the_magnification_asked_for() {
+        let mut designer = two_panels();
+        let design = designer.document.form().size();
+
+        for percent in [50, 100, 200, 400] {
+            designer.set_zoom(Zoom::at(percent));
+            let stage = designer
+                .ui
+                .bounds(designer.chrome.stage)
+                .expect("the stage is there");
+            let want = Zoom::at(percent).on_screen_size(design);
+            assert_eq!(
+                (stage.width, stage.height),
+                (want.width as i32, want.height as i32),
+                "the stage is the wrong size at {percent}%"
+            );
+            // And the document is untouched by any of it.
+            assert_eq!(designer.document.form().size(), design);
+        }
+    }
+
+    /// Magnifying is not an edit: nothing to undo, and nothing written.
+    #[test]
+    fn changing_the_magnification_does_not_touch_the_document() {
+        let mut designer = two_panels();
+        let before = text(&designer);
+
+        designer.zoom_in();
+        designer.zoom_in();
+        designer.zoom_out();
+        designer.zoom_to_fit();
+        designer.zoom_actual();
+
+        assert_eq!(text(&designer), before, "zooming wrote to the file");
+        assert!(!designer.stale, "zooming left the form behind the file");
+    }
+
+    /// A grab handle is the display's size, not the form's.
+    ///
+    /// The one thing over the canvas that does not scale with what is under it:
+    /// it is aimed at by a hand, and a hand does not get smaller when the form
+    /// does. At 25% a handle that scaled with the form would be under two
+    /// pixels across.
+    #[test]
+    fn a_grab_handle_keeps_its_size_however_far_the_form_is_zoomed() {
+        for percent in [25, 100, 400] {
+            let mut designer = two_panels();
+            designer.set_zoom(Zoom::at(percent));
+            assert!(designer.select_named("right"));
+            designer.refresh_overlay();
+
+            let bounds = designer
+                .path_bounds(&path_named(&designer, "right"))
+                .expect("bounds");
+            let handle = Grip::handle_rect(bounds, Grip::HANDLES[0], canvas::HANDLE);
+            assert_eq!(
+                (handle.width, handle.height),
+                (canvas::HANDLE, canvas::HANDLE),
+                "the handle changed size at {percent}%"
+            );
+            // And what can be pressed is what is drawn: the corner is a grip.
+            let corner = Point::new(bounds.x, bounds.y);
+            assert!(
+                matches!(
+                    Grip::at(bounds, corner, canvas::HANDLE),
+                    Some(Grip::Resize { .. })
+                ),
+                "the corner is not a resize grip at {percent}%"
+            );
+        }
+    }
+
+    /// What the four rectangle rows are showing.
+    fn shown_rect(designer: &Designer) -> Rect {
+        let pane = designer.inspector.as_ref().expect("an inspector");
+        let axis = |what: &str| {
+            pane.rows
+                .iter()
+                .find(|row| row.property.name == what && row.node)
+                .and_then(|row| row.shown.parse::<i32>().ok())
+                .unwrap_or_default()
+        };
+        Rect::new(axis("x"), axis("y"), axis("w"), axis("h"))
     }
 
     /// A designer on a form file of this test's own, so two tests running at
