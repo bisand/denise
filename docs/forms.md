@@ -1004,6 +1004,7 @@ cargo install denise-forms --features cli
 
 denise-forms check settings.dform            # exit 1, with positions
 denise-forms render settings.dform out.ppm   # --theme light, --font path.ttf
+denise-forms fmt   settings.dform            # --check to report and write nothing
 ```
 
 `check` parses the file, **builds it into a real widget tree** — the same code a
@@ -1026,16 +1027,31 @@ somewhere other than where the rectangles say. `--no-lint` turns it off. Writing
 [`reference.dform`](../forms/reference.dform) by hand produced two of each within
 an hour, which is the argument for it.
 
-There is no `fmt`. There was going to be
-([#87](https://github.com/bisand/denise/issues/87) asked for one), and `kdl`'s
-own formatter turns out to delete a comment written at the end of a node's line —
-which is not a thing to ship into a format whose first promise is that comments
-survive. [#119](https://github.com/bisand/denise/issues/119) is where that sits.
-The parser dropping a comment written on a closing brace's line, found later by
-fuzzing and [repaired](#round-tripping-is-the-requirement-that-picks-the-format),
-is the same bug wearing different clothes: comments in kdl are well kept in the
-common positions and lost in the corners, which is the argument for checking
-every file rather than trusting the round trip.
+`fmt` lays a file's indentation out again and changes nothing else. One step of
+indent per level of nesting, trailing whitespace gone, and **only the whitespace
+at the two ends of a line is ever touched** — so comments keep their text and
+their position, strings keep their quoting, properties keep their order, blank
+lines stay blank lines, and columns lined up by hand inside a line stay lined
+up. The step is the file's own, whatever the first node inside `form` uses, so a
+file written with two spaces stays a two-space file. `--check` writes nothing and
+exits non-zero if anything would change, which is what CI runs.
+
+It is deliberately not a canonical formatter, and that is the story of
+[#87](https://github.com/bisand/denise/issues/87) and
+[#119](https://github.com/bisand/denise/issues/119). A canonical one was written
+first, on `kdl`'s own `autoformat`, and not shipped: it **deletes a comment
+written at the end of a node's line**
+([kdl-org/kdl-rs#179](https://github.com/kdl-org/kdl-rs/issues/179)), and it
+unquotes strings and drops blank lines besides. A tool in this repository that
+silently eats a comment is worse than no tool — somebody runs it over a form they
+annotated, the annotations go, and the loss is buried in a diff of a hundred
+reformatted lines. Re-indenting is the thing hand-editing actually breaks, and it
+is the thing that can be done without touching a byte anybody wrote.
+
+Two properties are tested over every `.dform` in the repository rather than by
+example, because the point of the tool is that it can be run without reading the
+diff: every line of the output is a line of the input with its ends trimmed, and
+laying out a laid-out file changes nothing.
 
 ### Three limits, all of them about the parser
 

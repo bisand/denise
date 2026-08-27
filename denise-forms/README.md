@@ -123,6 +123,7 @@ denise-forms check $(git ls-files '*.dform')
 denise-forms render settings.dform out.ppm   # --theme light, --font path.ttf
 denise-forms render --scale 2 settings.dform out.ppm
 denise-forms render --size 1920x1080 settings.dform panel.ppm
+denise-forms fmt   settings.dform            # --check to report and write nothing
 ```
 
 `check` parses the file **and builds it**, so it catches everything a panel
@@ -130,6 +131,21 @@ would, and prints `file:line:column: message`. It also lints geometry — a node
 outside its parent, a pair of siblings on top of each other — as warnings, since
 with no layout engine nothing else ever will. `--no-lint` turns that off,
 `--quiet` says nothing unless something is wrong.
+
+`fmt` lays the indentation out again and changes nothing else: one step per level
+of nesting, trailing whitespace gone, and **only the whitespace at the two ends
+of a line is ever touched**. Comments keep their text and their place, strings
+keep their quoting, properties keep their order, blank lines stay blank lines,
+and columns lined up by hand inside a line stay lined up. The step is the file's
+own — whatever the first node inside `form` uses — so a two-space file stays a
+two-space file. `--check` writes nothing and exits non-zero if anything would
+change.
+
+It is not a canonical formatter on purpose. `kdl`'s own deletes a comment written
+at the end of a node's line, which is not a thing to ship into a format whose
+first promise is that comments survive; re-indenting is the part hand-editing
+actually breaks, and the part that can be done without touching a byte anybody
+wrote. See [`tidy`], which is the same thing from Rust.
 
 `render` draws one frame with no display attached. Deterministic: without
 `--font` it uses the built-in bitmap font rather than whatever the machine has
@@ -275,6 +291,7 @@ you have the nodes.
 
 [`Form::node_text`]: https://docs.rs/denise-forms/latest/denise_forms/struct.Form.html#method.node_text
 [`fragment`]: https://docs.rs/denise-forms/latest/denise_forms/fn.fragment.html
+[`tidy`]: https://docs.rs/denise-forms/latest/denise_forms/fn.tidy.html
 [`Form::parse`]: https://docs.rs/denise-forms/latest/denise_forms/struct.Form.html#method.parse
 [`Reason::NotPreserved`]: https://docs.rs/denise-forms/latest/denise_forms/enum.Reason.html#variant.NotPreserved
 
