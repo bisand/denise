@@ -484,11 +484,16 @@ pub fn default_size(kind: &str) -> Size {
 ///
 /// What a designer writes when somebody drops a widget on the canvas. A rectangle
 /// is the most of it — but "a rect and nothing else" is not true of every widget,
-/// because five of them have a property the builder *requires*: an `alert` has no
-/// colour to draw itself in without a `role`, a `slider` has no range without
-/// `min` and `max`, and `select` and `collapse` have no inert constructor to fall
-/// back on. A node missing one of those parses and then will not build, so a
-/// designer that wrote one would place a widget and break the form.
+/// because three of them have a property the builder *requires*: an `alert` has
+/// no colour to draw itself in without a `role`, a `slider` has no range without
+/// `min` and `max`, and an `image` has nothing to draw without a `src`. A node
+/// missing one of those parses and then will not build, so a designer that wrote
+/// one would place a widget and break the form.
+///
+/// `select` and `collapse` were a fourth and fifth until #118, and they were the
+/// awkward ones: what they lacked was not a number but a *message*, so the seed
+/// had to invent a name nobody had asked for. Both have an inert constructor
+/// now, so a dropped one carries no message at all.
 ///
 /// This lives beside the code that raises those requirements, so the two cannot
 /// drift; a test seeds every widget in [`all`](denise_ui::widgets::all), builds
@@ -515,14 +520,13 @@ pub fn seed(kind: &str, rect: Rect) -> String {
         " x={} y={} w={} h={}",
         rect.x, rect.y, rect.width, rect.height
     ));
+    // Only what the engine *requires*, and nothing a person would have to
+    // delete. `select` and `collapse` were here until #118 gave them inert
+    // constructors: they had to be seeded with a message nobody wanted, named
+    // after nothing, because a form file could not build either without one.
     node.push_str(match kind {
         "alert" => " role=info",
         "slider" => " min=0 max=100",
-        // Neither has an inert constructor: both hold a plain message, and there
-        // is no message a form file could invent. The name is a placeholder the
-        // application will rename.
-        "select" => " on-change=changed",
-        "collapse" => " on-toggle=toggled",
         // A path that is not there yet. An engine that cannot load it says so;
         // a designer draws a hole and carries on.
         "image" => " src=\"picture.png\"",
@@ -1160,20 +1164,22 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
             }
             "select" => {
                 let options = self.strings(node, "option");
-                // `Select` has no inert constructor: it holds a plain message and
-                // there is no message a form file could invent.
-                let handler = self
-                    .handler(node, "on-change", Payload::None)?
-                    .ok_or_else(|| self.required(node, "on-change"))?;
-                let widget = Select::new(options, self.plain(node, "on-change", handler)?);
+                // Without `on-change` the list cannot be opened — the popup is a
+                // scene the application pushes — so an inert one shows what is
+                // chosen and stays shut. See `Select::inert`.
+                let widget = match self.handler(node, "on-change", Payload::None)? {
+                    Some(h) => Select::new(options, self.plain(node, "on-change", h)?),
+                    None => Select::inert(options),
+                };
                 self.ui.add(parent, widget, rect)
             }
             "collapse" => {
-                // Likewise: `Collapse` has no inert constructor.
-                let handler = self
-                    .handler(node, "on-toggle", Payload::Bool)?
-                    .ok_or_else(|| self.required(node, "on-toggle"))?;
-                let widget = Collapse::new(text, self.on_bool(node, "on-toggle", handler)?);
+                // An inert one folds itself, so a decorative section needs no
+                // message. See `Collapse::inert`.
+                let widget = match self.handler(node, "on-toggle", Payload::Bool)? {
+                    Some(h) => Collapse::new(text, self.on_bool(node, "on-toggle", h)?),
+                    None => Collapse::inert(text),
+                };
                 self.ui.add(parent, widget, rect)
             }
             "list" => {

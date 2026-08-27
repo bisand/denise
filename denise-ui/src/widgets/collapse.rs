@@ -85,6 +85,29 @@ impl<M> Collapse<M> {
         }
     }
 
+    /// A section that folds and reports nothing, for one the application never
+    /// reads the state of.
+    ///
+    /// **It drives its own height**, which the one built with a message does
+    /// not: a message *is* the application saying it will answer with
+    /// [`set_open`], and one without has nobody else to. So a decorative
+    /// section on a panel folds when pressed and nothing has to be wired to it —
+    /// which is what a form file wants, since a form file has no application to
+    /// name.
+    ///
+    /// [`Accordion`] is still the way to make a run of them exclusive; it drives
+    /// them through `set_open` and works with these too.
+    pub fn inert(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            open: true,
+            expanded: None,
+            message: None,
+            role: Role::Base200,
+            style: TextStyle::built_in(16),
+        }
+    }
+
     /// Starts the section collapsed. Pair with
     /// [`with_expanded_height`](Collapse::with_expanded_height), since a
     /// section that has never been open has no height to remember.
@@ -396,8 +419,23 @@ impl<M: 'static> Widget<M> for Collapse<M> {
         // the chevron answers the press immediately, and `set_open` flips it
         // again to the same value — idempotent, not doubled.
         self.open = !self.open;
-        if let Some(message) = self.message {
-            ctx.emit(message(self.open));
+        match self.message {
+            Some(message) => ctx.emit(message(self.open)),
+            // Nobody else is going to. `set_open` does exactly this arithmetic
+            // with `&mut Ui` in hand; here the current height comes from
+            // `ctx.bounds`, which is the same number a moment earlier.
+            None => {
+                let header = self.header_height(ctx.theme);
+                let target = if self.open {
+                    self.expanded.unwrap_or(header)
+                } else {
+                    // The height at the moment of folding is where opening
+                    // returns to — see `set_open`.
+                    self.expanded = Some(ctx.bounds.height);
+                    header
+                };
+                ctx.resize_height(target, FOLD_MS);
+            }
         }
         Handled::Yes
     }
@@ -407,7 +445,11 @@ impl<M: 'static> Widget<M> for Collapse<M> {
     }
 
     fn focusable(&self) -> bool {
-        self.message.is_some()
+        // Every other widget here is focusable whether or not it carries a
+        // message, because an inert one still does something when pressed. This
+        // used to be the exception, and an inert section that folds itself is
+        // no longer one.
+        true
     }
 }
 
@@ -488,7 +530,134 @@ impl<M> Describe for Collapse<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use denise::theme;
+    use denise::{ElementState, InputEvent, Modifiers, PointerButton, Size, theme};
+
+    use crate::Ui;
+
+    /// An inert section folds itself, because nothing else is going to.
+    ///
+    /// A `Collapse` with a message is telling the application it will answer
+    /// with [`set_open`]; one without has nobody to tell. Before #118 the widget
+    /// only flipped its chevron and the height stayed where it was, which is why
+    /// there was no inert constructor to offer.
+    #[test]
+    fn an_inert_section_folds_and_opens_and_reports_nothing() {
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        struct Never;
+
+        let mut ui: Ui<Never> = Ui::new(Size::new(400, 300), theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(root, Collapse::inert("Avansert"), Rect::new(0, 0, 200, 120))
+            .expect("a root takes children");
+
+        let press = |ui: &mut Ui<Never>| {
+            let at = Point::new(20, 8);
+            ui.handle(&[
+                InputEvent::PointerMoved { position: at },
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state: ElementState::Down,
+                    position: at,
+                    modifiers: Modifiers::NONE,
+                },
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state: ElementState::Up,
+                    position: at,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+        };
+        let settle = |ui: &mut Ui<Never>, from: u64| {
+            for step in 0..=4 {
+                ui.tick(from + step * FOLD_MS / 2);
+            }
+        };
+
+        let open_height = ui.layout(id).expect("laid out").height;
+        press(&mut ui);
+        assert!(
+            ui.drain_messages().next().is_none(),
+            "an inert section emitted something"
+        );
+        settle(&mut ui, 0);
+
+        let header = ui
+            .widget::<Collapse<Never>>(id)
+            .expect("a collapse")
+            .header_height(&theme::DARK);
+        assert_eq!(
+            ui.layout(id).expect("laid out").height,
+            header,
+            "it did not fold to its header"
+        );
+        assert!(
+            !ui.widget::<Collapse<Never>>(id)
+                .expect("a collapse")
+                .is_open()
+        );
+
+        // And back to exactly where it folded from: the height at the moment of
+        // folding is where opening returns to, as `set_open` puts it.
+        press(&mut ui);
+        settle(&mut ui, 10 * FOLD_MS);
+        assert_eq!(
+            ui.layout(id).expect("laid out").height,
+            open_height,
+            "opening it again did not return to the height it folded from"
+        );
+        assert!(
+            ui.widget::<Collapse<Never>>(id)
+                .expect("a collapse")
+                .is_open()
+        );
+    }
+
+    /// The one with a message still leaves the height to the application.
+    ///
+    /// The other half of the rule, and the half that must not have changed: an
+    /// accordion refuses folds, animates them at its own duration and closes the
+    /// section beside the one that opened. A widget that folded itself anyway
+    /// would fight it.
+    #[test]
+    fn a_section_with_a_message_still_waits_to_be_told() {
+        let mut ui: Ui<bool> = Ui::new(Size::new(400, 300), theme::DARK);
+        let root = ui.root();
+        let id = ui
+            .add(
+                root,
+                Collapse::new("Nettverk", |open| open),
+                Rect::new(0, 0, 200, 120),
+            )
+            .expect("a root takes children");
+
+        let at = Point::new(20, 8);
+        ui.handle(&[
+            InputEvent::PointerMoved { position: at },
+            InputEvent::PointerButton {
+                button: PointerButton::Left,
+                state: ElementState::Down,
+                position: at,
+                modifiers: Modifiers::NONE,
+            },
+            InputEvent::PointerButton {
+                button: PointerButton::Left,
+                state: ElementState::Up,
+                position: at,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![false]);
+        for step in 0..=4 {
+            ui.tick(step * FOLD_MS / 2);
+        }
+        assert_eq!(
+            ui.layout(id).expect("laid out").height,
+            120,
+            "it folded itself instead of waiting for `set_open`"
+        );
+    }
 
     #[test]
     fn the_header_height_is_the_folded_height() {
@@ -511,11 +680,19 @@ mod tests {
         assert_eq!(c.expanded_height(), Some(0));
     }
 
+    /// A section is a tab stop whether or not it carries a message.
+    ///
+    /// It was not, until #118: a `Collapse` with no message did nothing when
+    /// pressed but flip its chevron, so there was no reason for the keyboard to
+    /// stop on it. An inert one folds itself now, which makes it as interactive
+    /// as every other inert widget here — `Checkbox`, `Toggle` and `Slider` are
+    /// all focusable without a message for the same reason.
     #[test]
-    fn a_collapse_without_a_listener_is_not_a_tab_stop() {
+    fn a_section_is_a_tab_stop_with_or_without_a_listener() {
         let mut c: Collapse<usize> = Collapse::new("x", |o| o as usize);
         assert!(Widget::<usize>::focusable(&c));
         c.message = None;
-        assert!(!Widget::<usize>::focusable(&c));
+        assert!(Widget::<usize>::focusable(&c));
+        assert!(Widget::<usize>::focusable(&Collapse::<usize>::inert("x")));
     }
 }

@@ -422,32 +422,81 @@ fn a_collection_node_outside_its_parent_is_not_silently_dropped() {
 }
 
 #[test]
-fn a_select_and_a_collapse_need_their_message() {
-    // Neither widget has an inert constructor: one holds a plain message and the
-    // other a `fn(bool) -> M`, and a form file can invent neither.
-    let select = failure("form \"x\" version=1 width=9 height=9 { select x=0 y=0 w=1 h=1 }");
-    assert!(
-        matches!(
-            select,
-            Reason::Missing {
-                name: "on-change",
-                ..
-            }
-        ),
-        "{select:?}"
+fn a_select_and_a_collapse_build_without_a_message_and_say_nothing() {
+    // Both used to require one, because neither had an inert constructor: a
+    // form file cannot invent a plain message or a `fn(bool) -> M`. #118 gave
+    // them one each, so a decorative section and a display-only dropdown no
+    // longer have to name a message nobody wanted.
+    let source = concat!(
+        "form \"x\" version=1 width=200 height=200 {\n",
+        "    select name=chosen x=0 y=0 w=120 h=24 { option \"one\"; option \"two\" }\n",
+        "    collapse \"Section\" name=fold x=0 y=40 w=180 h=120\n",
+        "}\n",
     );
-    let collapse =
-        failure("form \"x\" version=1 width=9 height=9 { collapse \"S\" x=0 y=0 w=1 h=1 }");
+    let (mut ui, built) = build_str::<Void>(source, &mut Anything).expect("it builds");
+
+    let select = built.node("chosen").expect("the select is named");
+    let fold = built.node("fold").expect("the collapse is named");
+
+    // A press on each, and nothing comes back: there is no message to come.
+    for id in [select, fold] {
+        let bounds = ui.bounds(id).expect("bounds");
+        let at = Point::new(bounds.x + 4, bounds.y + 4);
+        ui.handle(&press_at(at));
+        ui.handle(&[release_at(at)]);
+    }
+    let fired: Vec<Void> = ui.drain_messages().collect();
+    assert!(fired.is_empty(), "an inert widget emitted something");
+
+    // The section really folds, rather than only flipping its chevron: nothing
+    // else is going to drive it. See `Collapse::inert`.
+    let tall = ui.bounds(fold).expect("bounds").height;
+    for now in [0, 100, 200, 400] {
+        ui.tick(now);
+    }
+    let folded = ui.bounds(fold).expect("bounds").height;
     assert!(
-        matches!(
-            collapse,
-            Reason::Missing {
-                name: "on-toggle",
-                ..
-            }
-        ),
-        "{collapse:?}"
+        folded < tall,
+        "an inert collapse did not fold: {tall} then {folded}"
     );
+
+    // And opening it again returns to exactly where it was.
+    let at = {
+        let bounds = ui.bounds(fold).expect("bounds");
+        Point::new(bounds.x + 4, bounds.y + 4)
+    };
+    ui.handle(&press_at(at));
+    ui.handle(&[release_at(at)]);
+    for now in [500, 600, 700, 900] {
+        ui.tick(now);
+    }
+    assert_eq!(
+        ui.bounds(fold).expect("bounds").height,
+        tall,
+        "opening it again did not return to the height it folded from"
+    );
+}
+
+/// A press, as two events.
+fn press_at(at: Point) -> [InputEvent; 2] {
+    [
+        InputEvent::PointerMoved { position: at },
+        InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state: ElementState::Down,
+            position: at,
+            modifiers: denise::Modifiers::NONE,
+        },
+    ]
+}
+
+fn release_at(at: Point) -> InputEvent {
+    InputEvent::PointerButton {
+        button: PointerButton::Left,
+        state: ElementState::Up,
+        position: at,
+        modifiers: denise::Modifiers::NONE,
+    }
 }
 
 #[test]
