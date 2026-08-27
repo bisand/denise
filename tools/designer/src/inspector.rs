@@ -27,6 +27,7 @@ use denise_ui::{NodeId, TextStyle, Ui};
 
 use crate::app::Message;
 use crate::scale::Scale;
+use crate::text::Text;
 
 /// A row's height, and what separates it from the next.
 ///
@@ -139,7 +140,7 @@ impl Inspector {
         ui: &mut Ui<Message>,
         parent: NodeId,
         width: i32,
-        header: &[(String, Role, u16)],
+        header: &[(String, Role, Text)],
         fields: &[Field],
         scale: Scale,
     ) -> Self {
@@ -147,8 +148,11 @@ impl Inspector {
         let (name_width, reset) = (scale.n(NAME), scale.n(RESET));
         // A header line is twenty logical pixels of pitch holding an
         // eighteen-pixel label.
-        let (header_pitch, header_height) = (scale.n(20), scale.n(18));
-        let label = scale.px(11);
+        let (header_pitch, header_height) = (scale.n(20), scale.n(Text::Heading.line()));
+        let label = scale.text(Text::Body);
+        // Tall enough for the step it holds — see `Text::line`. A box sized for
+        // the old eleven-pixel text clipped `Body`'s descenders.
+        let label_height = scale.n(Text::Body.line());
 
         // Tall enough for everything, inside a viewport that scrolls: a form
         // node with twenty properties and fourteen the tree owns does not fit a
@@ -167,7 +171,7 @@ impl Inspector {
                 content,
                 Label::new(text.clone())
                     .with_role(*role)
-                    .with_size(scale.px(*size)),
+                    .with_size(scale.text(*size)),
                 Rect::new(gap, y, width - gap * 2, header_height),
             );
             y += header_pitch;
@@ -197,7 +201,7 @@ impl Inspector {
                 Label::new(field.property.name)
                     .with_role(role)
                     .with_size(label),
-                Rect::new(gap, y + scale.n(5), name_width, scale.n(14)),
+                Rect::new(gap, y + scale.n(4), name_width, label_height),
             );
             if let Some(id) = name {
                 let mut doc = field.property.doc.to_string();
@@ -340,7 +344,7 @@ fn build_editor(
                     parent,
                     Checkbox::<Message>::inert("")
                         .with_checked(shown == "#true")
-                        .with_size(scale.px(12)),
+                        .with_size(scale.text(Text::Body)),
                     rect,
                 )
                 .expect("the content panel is there");
@@ -358,7 +362,7 @@ fn build_editor(
                     Select::new(options.iter().copied(), Message::OpenChoice(index))
                         .with_selected(at)
                         .with_placeholder("—")
-                        .with_style(TextStyle::built_in(scale.px(12))),
+                        .with_style(TextStyle::built_in(scale.text(Text::Body))),
                     rect,
                 )
                 .expect("the content panel is there");
@@ -378,7 +382,7 @@ fn build_editor(
                     parent,
                     Button::new("…", Message::Browse(index))
                         .with_role(Role::Neutral)
-                        .with_size(scale.px(11)),
+                        .with_size(scale.text(Text::Body)),
                     Rect::new(x, y + scale.n(2), scale.n(BROWSE), row - scale.n(4)),
                 )
             });
@@ -396,7 +400,7 @@ fn build_editor(
                 .add(
                     parent,
                     TextInput::<Message>::new()
-                        .with_size(scale.px(12))
+                        .with_size(scale.text(Text::Body))
                         .with_max_chars(512),
                     Rect::new(x + width - field_w, y, field_w, row),
                 )

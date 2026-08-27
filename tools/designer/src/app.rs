@@ -22,6 +22,7 @@ use crate::inspector::{Editor, Field, Inspector, show_value};
 use crate::outline::{self, Outline};
 use crate::scale::Scale;
 use crate::settings::Settings;
+use crate::text::Text;
 use crate::watch::{self, differences};
 use crate::zoom::Zoom;
 
@@ -412,7 +413,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
     // multiplied here, on the way in — the pattern `docs/design.md` settles on,
     // and the reason none of the constants above mention DPI. See [`Scale`].
     let s = |rect: Rect| scale.r(rect);
-    let px = |size: u16| scale.px(size);
+    let px = |text: Text| scale.text(text);
 
     let toolbar = ui
         .add(
@@ -449,7 +450,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
                 } else {
                     Role::Neutral
                 })
-                .with_size(px(13)),
+                .with_size(px(Text::Body)),
             s(Rect::new(x, GAP, width, TOOLBAR - GAP * 2)),
         );
         if matches!(
@@ -473,7 +474,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         .add(
             toolbar,
             Label::new("Untitled")
-                .with_size(px(13))
+                .with_size(px(Text::Body))
                 .with_role(Role::BaseContent),
             s(Rect::new(x + GAP, GAP, 420, TOOLBAR - GAP * 2)),
         )
@@ -497,7 +498,9 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         let width = 7 * text.chars().count() as i32 + 6;
         ui.add(
             arrange_bar,
-            Label::new(text).with_size(px(11)).with_role(Role::Base300),
+            Label::new(text)
+                .with_size(px(Text::Caption))
+                .with_role(Role::Base300),
             s(Rect::new(*x, 0, width, ARRANGE)),
         );
         *x += width;
@@ -517,7 +520,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
             arrange_bar,
             Button::new(label, Message::Arrange(command))
                 .with_role(Role::Neutral)
-                .with_size(px(12)),
+                .with_size(px(Text::Body)),
             s(Rect::new(x, 4, width, ARRANGE - 8)),
         ) {
             ui.set_tooltip(id, command.what());
@@ -537,7 +540,9 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
     let status = ui
         .add(
             status_bar,
-            Label::new("").with_size(px(11)).with_role(Role::Base300),
+            Label::new("")
+                .with_size(px(Text::Caption))
+                .with_role(Role::Base300),
             s(Rect::new(GAP, 0, 4000, STATUS)),
         )
         .expect("status bar");
@@ -583,7 +588,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
     ui.add(
         left,
         Label::new("Palette")
-            .with_size(px(11))
+            .with_size(px(Text::Heading))
             .with_role(Role::Primary),
         s(Rect::new(GAP, GAP, width, HEADER)),
     );
@@ -592,7 +597,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
     ui.add(
         left,
         Label::new("Outline")
-            .with_size(px(11))
+            .with_size(px(Text::Heading))
             .with_role(Role::Primary),
         s(Rect::new(GAP, split + 12, width, HEADER)),
     );
@@ -605,7 +610,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
             left,
             TextInput::<Message>::new()
                 .with_placeholder("filter")
-                .with_size(px(12))
+                .with_size(px(Text::Body))
                 .with_max_chars(32),
             s(Rect::new(GAP, GAP + HEADER, width, FILTER - 2)),
         )
@@ -799,7 +804,7 @@ impl Designer {
         let mut ui: Ui<Message> = Ui::new(size, theme::DARK.scaled(scale.factor()));
         // The tree draws tooltips itself, so this is the only way to say how big
         // they are — and the palette's whole answer to #126 is a tooltip.
-        ui.set_tooltip_size(scale.px(14));
+        ui.set_tooltip_size(scale.text(Text::Body));
         let chrome = build_chrome(&mut ui, settings, scale);
         let palette: Vec<&'static str> = denise_ui::widgets::all().iter().map(|w| w.kind).collect();
 
@@ -972,7 +977,7 @@ impl Designer {
         // rough edge the DPI decision leaves to the application.
         let list = List::new(items, Message::Palette)
             .with_row_height(row_height)
-            .with_style(TextStyle::built_in(self.scale.px(16)))
+            .with_style(TextStyle::built_in(self.scale.text(Text::Body)))
             .with_selected(armed);
 
         let width = self.scale.n(self.settings.left - GAP * 2);
@@ -1412,9 +1417,9 @@ impl Designer {
                 (
                     String::from(denise_forms::FormKind::NAMES[form.kind() as usize]),
                     Role::Primary,
-                    15,
+                    Text::Heading,
                 ),
-                (form.title().to_string(), Role::BaseContent, 11),
+                (form.title().to_string(), Role::BaseContent, Text::Caption),
             ];
             let fields = self.form_fields();
             self.inspector = Some(Inspector::build(
@@ -1435,18 +1440,22 @@ impl Designer {
                 .and_then(|p| p.name.clone())
                 .unwrap_or_else(|| String::from("(this node has no name)"));
             [
-                (kind.to_string(), Role::Primary, 15),
+                (kind.to_string(), Role::Primary, Text::Heading),
                 // The node's own name, which is worth reading: it is what the
                 // application will ask the form for.
-                (name, Role::BaseContent, 11),
+                (name, Role::BaseContent, Text::Caption),
             ]
         } else {
             [
-                (format!("{} selected", ids.len()), Role::Primary, 15),
+                (
+                    format!("{} selected", ids.len()),
+                    Role::Primary,
+                    Text::Heading,
+                ),
                 (
                     String::from("What they have in common; an edit goes to all of them."),
                     Role::Base300,
-                    11,
+                    Text::Caption,
                 ),
             ]
         };
@@ -2419,7 +2428,7 @@ impl Designer {
             self.ui.add(
                 lines,
                 Label::new("no messages yet — press something on the form")
-                    .with_size(self.scale.px(11))
+                    .with_size(self.scale.text(Text::Caption))
                     .with_role(Role::Base300),
                 Rect::new(gap, self.scale.n(4), width - gap * 2, self.scale.n(14)),
             );
@@ -2431,7 +2440,7 @@ impl Designer {
             self.ui.add(
                 lines,
                 Label::new(line.clone())
-                    .with_size(self.scale.px(11))
+                    .with_size(self.scale.text(Text::Caption))
                     .with_role(if last {
                         Role::Accent
                     } else {
@@ -2764,7 +2773,7 @@ impl Designer {
         let Some(id) = self.ui.add(
             content,
             TextInput::<Message>::new()
-                .with_size(self.scale.px(11))
+                .with_size(self.scale.text(Text::Body))
                 .with_max_chars(64)
                 .with_placeholder("name")
                 .with_submit(Message::Renamed),
@@ -2962,10 +2971,14 @@ impl Designer {
         let root = self.ui.root();
         let ghost = self.ui.add(root, outline, self.to_client(rect))?;
         self.ui.set_z(ghost, 1000);
+        // Caption, and the display's size rather than the form's: like the
+        // grab handles, this decorates the canvas rather than living on it.
         self.ui.add(
             ghost,
-            Label::new(kind).with_size(11).with_role(Role::Accent),
-            Rect::new(2, 2, 200, 14),
+            Label::new(kind)
+                .with_size(self.scale.text(Text::Caption))
+                .with_role(Role::Accent),
+            self.scale.r(Rect::new(2, 2, 200, Text::Caption.line())),
         );
         Some(ghost)
     }
@@ -3823,7 +3836,7 @@ impl Designer {
         // placed against the window, which is already physical.
         let scale = self.scale;
         let s = |rect: Rect| scale.r(rect);
-        let px = |size: u16| scale.px(size);
+        let px = |text: Text| scale.text(text);
         let size = self.settings_size();
         let (wide, tall) = (scale.n(WIDE), scale.n(TALL));
         let sheet = Rect::new(
@@ -3859,14 +3872,14 @@ impl Designer {
             "New form",
             s(Rect::new(GAP * 2, GAP * 2, 300, 22)),
             Role::Primary,
-            17,
+            Text::Title,
         );
         label(
             &mut self.ui,
             "What is it?",
             s(Rect::new(GAP * 2, 48, 300, 16)),
             Role::Base300,
-            11,
+            Text::Caption,
         );
 
         // A button each rather than a dropdown: there are six, they all fit,
@@ -3884,7 +3897,7 @@ impl Designer {
                     } else {
                         Role::Neutral
                     })
-                    .with_size(px(12)),
+                    .with_size(px(Text::Body)),
                 s(Rect::new(x, 68, width, 26)),
             ) {
                 kinds.push(id);
@@ -3896,7 +3909,7 @@ impl Designer {
             FormKind::Screen.what(),
             s(Rect::new(GAP * 2, 100, WIDE - GAP * 4, 16)),
             Role::Base300,
-            11,
+            Text::Caption,
         )
         .expect("the card is there");
 
@@ -3905,7 +3918,7 @@ impl Designer {
             "How big?",
             s(Rect::new(GAP * 2, 130, 300, 16)),
             Role::Base300,
-            11,
+            Text::Caption,
         );
         let mut x = GAP * 2;
         for (index, (name, _, _)) in PRESETS.iter().enumerate() {
@@ -3914,7 +3927,7 @@ impl Designer {
                 card,
                 Button::new(*name, Message::NewSize(index))
                     .with_role(Role::Neutral)
-                    .with_size(px(12)),
+                    .with_size(px(Text::Body)),
                 s(Rect::new(x, 150, width, 26)),
             );
             x += width + 5;
@@ -3923,7 +3936,7 @@ impl Designer {
         let field = |ui: &mut Ui<Message>, x: i32, text: &str| {
             let id = ui.add(
                 card,
-                TextInput::<Message>::new().with_size(px(12)),
+                TextInput::<Message>::new().with_size(px(Text::Body)),
                 s(Rect::new(x, 186, 90, ROW)),
             )?;
             if let Some(input) = ui.widget_mut::<TextInput<Message>>(id) {
@@ -3936,7 +3949,7 @@ impl Designer {
             "width",
             s(Rect::new(GAP * 2, 192, 44, 16)),
             Role::BaseContent,
-            11,
+            Text::Caption,
         );
         let width = field(&mut self.ui, GAP * 2 + 48, "800").expect("the card is there");
         label(
@@ -3944,7 +3957,7 @@ impl Designer {
             "height",
             s(Rect::new(GAP * 2 + 150, 192, 50, 16)),
             Role::BaseContent,
-            11,
+            Text::Caption,
         );
         let height = field(&mut self.ui, GAP * 2 + 204, "480").expect("the card is there");
 
@@ -3952,14 +3965,14 @@ impl Designer {
             card,
             Button::new("Cancel", Message::Never)
                 .with_role(Role::Neutral)
-                .with_size(px(13)),
+                .with_size(px(Text::Body)),
             s(Rect::new(WIDE - 200, TALL - 46, 88, 32)),
         );
         self.ui.add(
             card,
             Button::new("Create", Message::Create)
                 .with_role(Role::Primary)
-                .with_size(px(13)),
+                .with_size(px(Text::Body)),
             s(Rect::new(WIDE - 104, TALL - 46, 88, 32)),
         );
 
@@ -4365,7 +4378,7 @@ impl Designer {
         // the window, which is physical already.
         let scale = self.scale;
         let s = |rect: Rect| scale.r(rect);
-        let px = |size: u16| scale.px(size);
+        let px = |text: Text| scale.text(text);
         let size = self.settings_size();
         let (wide_px, tall_px) = (scale.n(WIDE), scale.n(tall));
         let sheet = Rect::new(
@@ -4401,7 +4414,7 @@ impl Designer {
             "The file changed on disk",
             s(Rect::new(GAP * 2, GAP * 2, WIDE - GAP * 4, 22)),
             Role::Warning,
-            17,
+            Text::Title,
         );
         let name = self.document.label().replace(" •", "");
         label(
@@ -4409,7 +4422,7 @@ impl Designer {
             &format!("{name} was written by something else, and this form has unsaved changes."),
             s(Rect::new(GAP * 2, 46, WIDE - GAP * 4, 16)),
             Role::BaseContent,
-            11,
+            Text::Caption,
         );
         label(
             &mut self.ui,
@@ -4420,7 +4433,7 @@ impl Designer {
             },
             s(Rect::new(GAP * 2, 70, WIDE - GAP * 4, 16)),
             Role::Base300,
-            11,
+            Text::Caption,
         );
 
         let mut y = HEAD - 12;
@@ -4430,7 +4443,7 @@ impl Designer {
                 &difference.line(),
                 s(Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW)),
                 Role::BaseContent,
-                11,
+                Text::Caption,
             );
             y += ROW;
         }
@@ -4440,7 +4453,7 @@ impl Designer {
                 &format!("…and {} more", found.len() - NAMED),
                 s(Rect::new(GAP * 3, y, WIDE - GAP * 5, ROW)),
                 Role::Base300,
-                11,
+                Text::Caption,
             );
         }
 
@@ -4451,14 +4464,14 @@ impl Designer {
             card,
             Button::new("Reload", Message::Reload)
                 .with_role(Role::Neutral)
-                .with_size(px(13)),
+                .with_size(px(Text::Body)),
             s(Rect::new(WIDE - 216, tall - 44, 96, 32)),
         );
         self.ui.add(
             card,
             Button::new("Keep mine", Message::KeepMine)
                 .with_role(Role::Primary)
-                .with_size(px(13)),
+                .with_size(px(Text::Body)),
             s(Rect::new(WIDE - 112, tall - 44, 96, 32)),
         );
 
@@ -5235,7 +5248,7 @@ impl Designer {
                 if let Some(id) = self.ui.add(
                     self.chrome.canvas,
                     Label::new(format!("{}", nth + 1))
-                        .with_size(10)
+                        .with_size(self.scale.text(Text::Caption))
                         .with_align(denise_ui::Align::Center, denise_ui::Align::Center)
                         .with_role(if settled {
                             Role::PrimaryContent
@@ -5359,10 +5372,13 @@ impl Designer {
                 || node.kind.to_string(),
                 |name| format!("{} {name}", node.kind),
             );
-            let tag = Rect::new(bounds.x, bounds.y - 15, 200, 14);
+            let tall = self.scale.n(Text::Caption.line());
+            let tag = Rect::new(bounds.x, bounds.y - tall - self.scale.n(1), 200, tall);
             if let Some(id) = self.ui.add(
                 self.chrome.canvas,
-                Label::new(text).with_size(10).with_role(Role::Primary),
+                Label::new(text)
+                    .with_size(self.scale.text(Text::Caption))
+                    .with_role(Role::Primary),
                 to_canvas(tag),
             ) {
                 self.ui.set_z(id, 220);

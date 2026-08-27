@@ -24,6 +24,7 @@ use denise_ui::{NodeId, TextStyle, Ui};
 
 use crate::app::Message;
 use crate::scale::Scale;
+use crate::text::Text;
 
 /// A row's height, and how far one step of nesting moves it across.
 ///
@@ -145,8 +146,10 @@ impl Outline {
         let scale = view.scale;
         let (row_height, indent) = (scale.n(ROW), scale.n(INDENT));
         let (fold_width, eye_width, gap) = (scale.n(FOLD), scale.n(EYE), scale.n(GAP));
-        // A row's label sits four logical pixels down and is fourteen tall.
-        let (text_size, text_top, text_height) = (scale.px(11), scale.n(4), scale.n(14));
+        // A row's label sits three logical pixels down, in a box tall enough for
+        // the step it holds — see `Text::line`.
+        let (text_size, text_top) = (scale.text(Text::Body), scale.n(3));
+        let text_height = scale.n(Text::Body.line());
 
         let width = view.width;
         let height = (view.rows.len() as i32 * row_height).max(row_height);

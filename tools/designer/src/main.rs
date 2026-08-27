@@ -71,6 +71,7 @@ mod inspector;
 mod outline;
 mod scale;
 mod settings;
+mod text;
 mod watch;
 mod zoom;
 

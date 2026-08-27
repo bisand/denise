@@ -580,6 +580,51 @@ under it — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 
+## Four text sizes, and why those
+
+The built-in face is a five-by-seven glyph in an eight-pixel cell drawn at
+whole-number multiples, so `size_px / 8` decides everything and **every size
+from 8 to 15 rendered identically**. This crate named 11, 12, 13, 14, 15 and 17;
+five of those were one size on screen. Writing a different number cost nothing
+and did nothing, so nobody ever had to mean one.
+
+[#130] gave the designer a real face and the distinctions became real overnight.
+The window gained a size hierarchy nobody had chosen, and the pane with the most
+text in it — the inspector, at 11 — landed at the bottom of it. That is what
+[#155] was reported as: *the properties box looks a bit smaller than the rest.*
+It was.
+
+Measured with Arial, the sizes **pair up**: 10 and 11 differ by one pixel across
+six characters, and so do 12 and 13, 14 and 15, 16 and 17. Naming two of a pair
+in one window is a distinction that cannot be seen. So the scale takes every
+*other* size, and there are four:
+
+| step | px | used for |
+|---|---|---|
+| `Caption` | 11 | text *about* the interface: the status line, strip captions, the log, a sheet's explanatory line |
+| `Body` | 13 | everything read and edited — property names and editors, outline rows, palette rows, toolbar buttons, the filter |
+| `Heading` | 15 | a pane's name, and the line saying what is selected |
+| `Title` | 17 | a sheet's title |
+
+Two of those moves are corrections rather than taste. The inspector was below
+body text for no reason, and the palette's rows were at **16** because `List`
+defaults to 16 and nobody had ever named a size — the same class of accident
+[#153] found in the `List` that never scaled.
+
+It is an `enum`, not four constants, for the reason the widgets publish
+`Property` descriptors rather than this crate keeping a table of them: a number
+that cannot be written cannot drift. There is no `with_size(12)` to reach for,
+so a twenty-eighth label is one of the four or it does not compile.
+
+What this does **not** settle is whether typography belongs in the theme, so
+that every widget's default came from it rather than from a constant in each
+one. `docs/design.md` parks that as its own design conversation and it stays
+parked; this is one application choosing its own sizes, which is what the
+toolkit asks an application to do.
+
+[#153]: https://github.com/bisand/denise/pull/153
+[#155]: https://github.com/bisand/denise/issues/155
+
 ## The display's scale, and the canvas's own
 
 The chrome is written in logical units and multiplied once, on the way into the
