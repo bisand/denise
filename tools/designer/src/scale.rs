@@ -26,13 +26,15 @@
 //! it, to be exactly double at 2x. A missed multiplication is invisible at 1x,
 //! which is where the rest of the suite lives.
 //!
-//! # The canvas is not scaled
+//! # The canvas has its own multiplication
 //!
-//! Only the chrome. A form is authored in the panel's own device pixels, and an
-//! 800x480 form is 800x480 here whatever this display does — the numbers in the
-//! inspector are the numbers in the file, and a drag of four pixels moves a node
-//! four pixels. Making the canvas legible on a dense display is a zoom control,
-//! which is a different feature with a coordinate mapping of its own.
+//! This one is the chrome's. A form is authored in the panel's own device
+//! pixels, and the display's density is not a reason to change them — so the
+//! canvas does not follow this factor at all. What magnifies it is
+//! [`Zoom`](crate::zoom::Zoom), which is a *choice* rather than a property of
+//! the screen, and which converts in both directions so that the numbers in the
+//! file never move. The two are deliberately separate: they both look like
+//! multiplication and only one of them is.
 
 use denise::Rect;
 
