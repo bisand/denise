@@ -38,6 +38,8 @@
 
 use denise::Rect;
 
+use crate::text::Text;
+
 /// A display scale factor, applied by the three calls below.
 ///
 /// Cheap to copy and passed by value, because it is one `f32` and threading a
@@ -96,7 +98,19 @@ impl Scale {
         round(length as f32 * self.0)
     }
 
+    /// A step of the designer's type scale, in physical pixels.
+    ///
+    /// The way text sizes are named here: [`Text`] has four steps and there is
+    /// no fifth to write. See its module for why the numbers are those numbers.
+    #[inline]
+    pub fn text(self, text: Text) -> u16 {
+        self.px(text.px())
+    }
+
     /// A text size in physical pixels, never rounded away to nothing.
+    ///
+    /// Prefer [`Scale::text`]. This is for the few sizes that are not the
+    /// designer's own — a size the *form* asked for, at the canvas's zoom.
     #[inline]
     pub fn px(self, size_px: u16) -> u16 {
         let scaled = round(f32::from(size_px) * self.0);

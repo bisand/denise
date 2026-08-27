@@ -526,6 +526,21 @@ and all three are now resolved:
   scale-aware application sets text sizes explicitly; theme-driven typography
   would be its own design conversation.
 
+  That edge has now been walked into twice from the same direction.
+  [#153](https://github.com/bisand/denise/pull/153) found a `List` that never
+  named a size and so stayed at 16 while the pane around it doubled, and
+  [#155](https://github.com/bisand/denise/issues/155) found that the sizes an
+  application *does* name had never been chosen: the built-in face quantises to
+  whole multiples of an eight-pixel cell, so every size from 8 to 15 drew
+  identically and the designer's 11, 12, 13, 14 and 15 were five spellings of
+  one thing. A real face made them real, and the window acquired a hierarchy
+  nobody had designed. The answer there was a four-step scale as an `enum`, so
+  that a size which cannot be written cannot drift — an application's own
+  choice, which is what this decision asks of it. Whether the *theme* should
+  carry a type scale is still the separate conversation; what is now clear is
+  that the question is about defaults, and that an application naming its sizes
+  is the part that works.
+
   The designer did the thing this decision forbids from its first commit: it
   took the factor from `run_with` and dropped it, so every pane, row and label
   came out at half its drawn size on a 2x display — correct on a Pi, and
