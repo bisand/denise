@@ -514,16 +514,16 @@ Children: `option "Label"` — one per choice, in order.
 
 #### `select`
 
-`on-change` is **required**: `Select` holds a message of the application's type
-and has no inert constructor, so there is nothing a form file could put there
-instead. Same for [`collapse`](#collapse). Both are worth a `::inert` in
-`denise-ui` and do not have one yet.
+The message a `select` carries is its request to be **opened**: the popup is a
+scene the application pushes, since a widget cannot own other nodes. So a select
+without `on-change` is a closed control showing what is selected — display-only,
+and the honest meaning of an inert one.
 
 | | Type | Default | |
 |---|---|---|---|
 | `selected` | integer | — | Index; omitted, nothing is selected and the placeholder shows. |
 | `placeholder` | string | `""` | |
-| `on-change` | message (none) | — | `Select` emits one message and the application reads `selected()` — the exception to the payload table, because a dropdown's selection outlives the event. |
+| `on-change` | message (none) | — | Omitted, the list cannot be opened and the control shows what is chosen. `Select` emits one message and the application reads `selected()` — the exception to the payload table, because a dropdown's selection outlives the event. |
 | `role` | [role](#roles) | `base-100` | The control's own surface. |
 | `size` | integer | `16` | |
 
@@ -734,12 +734,18 @@ closed, the header plus `expanded-height` when open. The header's height is a
 theme metric, so a hand-written closed collapse is guessing at it; the engine
 honours `h` as written and the toggle animates to `expanded-height` from there.
 
+**Who drives the fold depends on `on-toggle`.** With one, the application is
+told and answers with `widgets::set_open` — which is what lets an accordion
+close the section beside it, or a fold be refused. Without one, nobody else is
+going to, so the section folds itself. A decorative section on a panel therefore
+needs no message at all.
+
 | | Type | Default | |
 |---|---|---|---|
 | *(first argument)* | string | `""` | The header title. |
 | `open` | bool | `#true` | |
 | `expanded-height` | integer | — | The content's height when open. Measured from the children without it. |
-| `on-toggle` | message (bool) | — | |
+| `on-toggle` | message (bool) | — | Omitted, the section folds itself and reports nothing. |
 | `role` | [role](#roles) | `base-200` | The header. |
 | `size` | integer | `16` | |
 

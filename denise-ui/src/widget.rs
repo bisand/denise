@@ -316,6 +316,7 @@ pub struct EventCtx<'a, M> {
     wants_focus: bool,
     wants_animation: bool,
     reveal: Option<Rect>,
+    resize: Option<(i32, u64)>,
 }
 
 impl<'a, M> EventCtx<'a, M> {
@@ -338,6 +339,7 @@ impl<'a, M> EventCtx<'a, M> {
             wants_focus: false,
             wants_animation: false,
             reveal: None,
+            resize: None,
         }
     }
 
@@ -390,14 +392,45 @@ impl<'a, M> EventCtx<'a, M> {
         self.reveal = Some(rect);
     }
 
-    pub(crate) fn finish(self) -> (bool, bool, bool, Option<Rect>) {
-        (
-            self.dirty,
-            self.wants_focus,
-            self.wants_animation,
-            self.reveal,
-        )
+    /// Asks the tree to carry this node's **height** to `height` over
+    /// `duration_ms`, through the same tween
+    /// [`Ui::animate_layout`](crate::Ui::animate_layout) drives.
+    ///
+    /// A widget does not own its geometry — the tree does — which is why this is
+    /// a request rather than a call, and why it sits beside
+    /// [`reveal`](EventCtx::reveal) rather than anywhere else: those are the two
+    /// things a widget can want and cannot do.
+    ///
+    /// Reach for it only where nothing else can act. The one use in this crate
+    /// is a [`Collapse`](crate::widgets::Collapse) with no message: a section
+    /// that reports its toggles is telling the application to drive the fold,
+    /// and one that reports nothing has nobody else to.
+    pub fn resize_height(&mut self, height: i32, duration_ms: u64) {
+        self.resize = Some((height, duration_ms));
     }
+
+    pub(crate) fn finish(self) -> Outcome {
+        Outcome {
+            dirty: self.dirty,
+            wants_focus: self.wants_focus,
+            wants_animation: self.wants_animation,
+            reveal: self.reveal,
+            resize: self.resize,
+        }
+    }
+}
+
+/// What handling one event left the tree to do.
+///
+/// Grown from a tuple once it reached five fields, which is the point at which
+/// `(bool, bool, bool, Option<Rect>, Option<(i32, u64)>)` stops being readable
+/// at the call site.
+pub(crate) struct Outcome {
+    pub(crate) dirty: bool,
+    pub(crate) wants_focus: bool,
+    pub(crate) wants_animation: bool,
+    pub(crate) reveal: Option<Rect>,
+    pub(crate) resize: Option<(i32, u64)>,
 }
 
 /// What a widget reports back after [`Widget::animate`].

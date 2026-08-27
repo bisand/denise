@@ -2657,18 +2657,26 @@ impl<M: 'static> Ui<M> {
             &mut self.messages,
         );
         let handled = node.widget.on_event(event, &mut ctx);
-        let (dirty, wants_focus, wants_animation, reveal) = ctx.finish();
+        let outcome = ctx.finish();
         let clip = node.clip;
-        if dirty || handled.is_handled() {
+        if outcome.dirty || handled.is_handled() {
             self.dirty(clip);
         }
-        if wants_animation {
+        if outcome.wants_animation {
             self.request_animation(id);
         }
-        if let Some(rect) = reveal {
+        if let Some(rect) = outcome.reveal {
             self.reveal_rect(id, rect);
         }
-        (handled, wants_focus)
+        // A widget asking to be a different height. See
+        // [`EventCtx::resize_height`] for why that is a request and not a call.
+        if let Some((height, duration_ms)) = outcome.resize
+            && let Some(layout) = self.nodes.get(id).map(|node| node.layout)
+        {
+            let to = Rect::new(layout.x, layout.y, layout.width, height);
+            self.animate_layout(id, to, duration_ms);
+        }
+        (handled, outcome.wants_focus)
     }
 
     fn set_hovered(&mut self, id: Option<NodeId>) {

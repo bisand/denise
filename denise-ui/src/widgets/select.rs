@@ -89,6 +89,29 @@ impl<M> Select<M> {
         }
     }
 
+    /// A dropdown that emits nothing, for a chosen value the application reads
+    /// rather than one it is told about.
+    ///
+    /// The message a `Select` carries is its request to be **opened** — the
+    /// popup is a scene the application pushes, since a widget cannot own other
+    /// nodes — so one without a message is a closed control showing
+    /// [`selected`](Select::selected) and nothing else. That is the honest
+    /// meaning of an inert select, and it is what a form file wants for a value
+    /// it displays.
+    ///
+    /// A form that wants the list to open names `on-change`, and the engine
+    /// wires it; see `docs/forms.md`.
+    pub fn inert(options: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            options: options.into_iter().map(Into::into).collect(),
+            selected: None,
+            placeholder: String::from("—"),
+            message: None,
+            role: Role::Base100,
+            style: TextStyle::built_in(16),
+        }
+    }
+
     /// Sets the text shown when nothing is chosen.
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
@@ -472,6 +495,29 @@ mod tests {
 
     fn select() -> Select<u8> {
         Select::new(["Auto", "Manuell", "Av"], 1u8)
+    }
+
+    /// An inert select is a closed control showing what is chosen.
+    ///
+    /// Its message is the request to be *opened*, so one without a message
+    /// cannot be — which is the honest meaning of inert here, and different from
+    /// a checkbox's, which still changes its own value. Everything else about it
+    /// works: the options are there, the selection is readable and settable, and
+    /// it still takes focus, because a focused one is still readable.
+    #[test]
+    fn an_inert_select_shows_a_choice_and_cannot_be_opened() {
+        let mut inert: Select<u8> = Select::inert(["Auto", "Manuell", "Av"]);
+        assert_eq!(inert.options().len(), 3);
+        assert_eq!(inert.selected(), None);
+
+        inert.set_selected(Some(2));
+        assert_eq!(inert.selected(), Some(2));
+        assert!(inert.focusable(), "an inert select is still readable");
+
+        // The one built with a message wants opening; this one has nothing to
+        // ask with.
+        assert!(select().message.is_some());
+        assert!(inert.message.is_none());
     }
 
     /// Nothing chosen shows the placeholder; a choice shows the option.
