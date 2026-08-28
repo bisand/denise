@@ -234,7 +234,7 @@ impl Inspector {
             // A list uses the full width of the pane rather than the editor
             // column: its items are the content, and the property's name is a
             // heading over them rather than a label beside them.
-            let space = if matches!(field.property.kind, PropertyKind::List) {
+            let space = if field.property.kind.is_collection() {
                 Rect::new(gap, y + row, inner, row)
             } else {
                 Rect::new(editor_x, y, editor_w, row)
@@ -351,7 +351,7 @@ impl Inspector {
 /// One, unless it is a list — which is a heading, one row per item, and the row
 /// that adds another.
 fn rows_for(field: &Field) -> i32 {
-    if matches!(field.property.kind, PropertyKind::List) {
+    if field.property.kind.is_collection() {
         2 + field.items.len() as i32
     } else {
         1
@@ -375,7 +375,7 @@ fn build_editor(
         // A run of child nodes. One field per item with the controls that
         // reorder and remove it, and a row underneath that adds another —
         // `space` is the first item's row, and each one after is a row lower.
-        PropertyKind::List => {
+        PropertyKind::List | PropertyKind::Placeholder => {
             let (small, step) = (scale.n(22), row + gap);
             let controls = small * 3 + gap * 2;
             let mut fields = Vec::with_capacity(field.items.len());

@@ -1,0 +1,32 @@
+// Placeholder content, written the way a designer leaves it: a `design` block
+// with comments inside it, one that is empty because somebody deleted the last
+// row, and a widget with none at all. Every build but a designer's skips these,
+// so what is checked here is that they survive the round trip -- the file has to
+// keep them exactly, because the designer edits them.
+
+form "Design" version=1 kind=screen width=400 height=300 {
+    table name=records x=8 y=8 w=384 h=140 {
+        column "First" width=120
+        column "Last" flex=#true
+
+        design {
+            // Four names so the table looks like a table on a canvas.
+            row "Ada" "Lovelace"
+            row "Grace" "Hopper"
+
+            // Left in on purpose: a comment inside placeholder content.
+            row "Alan" "Turing"
+        }
+    }
+
+    // A `design` block with nothing in it, which is what deleting the last row
+    // leaves behind. It is still a block and still round-trips.
+    timeline name=history x=8 y=156 w=190 h=136 {
+        design { }
+    }
+
+    // And a table that never had one.
+    table name=empty x=206 y=156 w=186 h=136 {
+        column "Name"
+    }
+}

@@ -13,7 +13,7 @@ use denise_ui::widgets::{
     Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, Tree, TreeItem, Video,
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
-use kdl::{KdlNode, KdlValue};
+use kdl::{KdlDocument, KdlNode, KdlValue};
 
 use crate::error::{At, Error, Reason};
 use crate::form::{Form, FormKind, MAX_DEPTH, Placement};
@@ -403,6 +403,30 @@ pub fn node_property(name: &str) -> Option<&'static Property> {
 /// Child nodes that are a parent's *content* rather than nodes of their own.
 const COLLECTIONS: &[&str] = &["option", "item", "column", "row", "event", "picture", "tab"];
 
+/// The block a designer's placeholder content lives in.
+///
+/// A `table`'s rows and a `timeline`'s events are four names somebody typed so
+/// the widget looks like itself on a canvas; the application supplies the real
+/// ones. Written here, they are skipped by every build except a designer's, so
+/// they never reach a kiosk. See [`PropertyKind::Placeholder`].
+pub const DESIGN: &str = "design";
+
+/// Whether `kind` reads a collection called `name` from a `design` block.
+///
+/// Asked of the widget's own descriptor rather than a table kept here, which is
+/// the same rule the rest of the schema follows: a widget publishes what it
+/// takes, and nothing enumerates widgets.
+pub(crate) fn is_placeholder(kind: &str, name: &str) -> bool {
+    denise_ui::widgets::all()
+        .iter()
+        .find(|info| info.kind == kind)
+        .is_some_and(|info| {
+            info.properties
+                .iter()
+                .any(|p| p.name == name && p.kind == PropertyKind::Placeholder)
+        })
+}
+
 /// Whether a widget of this kind can hold nodes of their own.
 ///
 /// Two do. Everything else either has no children or has *content* — a `select`
@@ -695,6 +719,65 @@ impl Form {
         )
     }
 
+    /// Builds the form **and the placeholder content a designer needs to see**.
+    ///
+    /// Every other build skips `design { … }` blocks, so a `table` comes up with
+    /// its columns and no rows and a `timeline` with no events: those are the
+    /// application's to supply, and a kiosk should not carry four names somebody
+    /// typed to make a canvas look right. A designer is the one caller that
+    /// wants them, because a table drawn with no rows is not a table anybody can
+    /// lay out against.
+    ///
+    /// `scale` is [`Form::build_scaled`]'s, so a designer's canvas magnifies the
+    /// same way.
+    ///
+    /// ```
+    /// # use denise_forms::{Form, Payload, Handler, Wiring};
+    /// # use denise_ui::{Ui, Void};
+    /// let source = r#"
+    /// form "F" version=1 width=200 height=80 {
+    ///     table name=t x=0 y=0 w=200 h=80 {
+    ///         column "Name"
+    ///         design {
+    ///             row "Ada"
+    ///         }
+    ///     }
+    /// }
+    /// "#;
+    /// let form = Form::parse(source)?;
+    /// let mut wiring = |_: &str, _: Payload| None::<Handler<Void>>;
+    ///
+    /// // What ships: the column, and no rows at all.
+    /// let mut ui: Ui<Void> = Ui::new(form.size(), form.theme());
+    /// let root = ui.root();
+    /// form.build(&mut ui, root, &mut wiring)?;
+    ///
+    /// // What the designer draws.
+    /// let mut canvas: Ui<Void> = Ui::new(form.size(), form.theme());
+    /// let root = canvas.root();
+    /// form.build_with_design(&mut canvas, root, 1.0, &mut wiring)?;
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn build_with_design<M: Clone + 'static>(
+        &self,
+        ui: &mut Ui<M>,
+        parent: NodeId,
+        scale: f32,
+        wiring: &mut impl Wiring<M>,
+    ) -> Result<Built, Error> {
+        self.build_inner(
+            ui,
+            parent,
+            Placement {
+                x: scale,
+                y: scale,
+                rect: Rect::from_size(self.size()).scaled(scale),
+            },
+            wiring,
+            true,
+        )
+    }
+
     /// Builds this form at a [`Fit`] — a factor per axis, which is what
     /// [`Scaling::Stretch`](crate::Scaling::Stretch) needs and [`Form::fit`] works
     /// out.
@@ -744,11 +827,24 @@ impl Form {
         fit: Placement,
         wiring: &mut impl Wiring<M>,
     ) -> Result<Built, Error> {
+        self.build_inner(ui, parent, fit, wiring, false)
+    }
+
+    /// See [`Form::build_fitted`] and [`Form::build_with_design`].
+    fn build_inner<M: Clone + 'static>(
+        &self,
+        ui: &mut Ui<M>,
+        parent: NodeId,
+        fit: Placement,
+        wiring: &mut impl Wiring<M>,
+        designing: bool,
+    ) -> Result<Built, Error> {
         let mut builder = Builder {
             form: self,
             ui,
             wiring,
             fit,
+            designing,
             built: Built::default(),
             focused: None,
         };
@@ -779,6 +875,9 @@ struct Builder<'a, M: 'static, W> {
     /// `1.0` on both axes for [`Form::build`], which is why that is this with
     /// nothing else said.
     fit: Placement,
+    /// Whether the `design` blocks are read. False for every build but a
+    /// designer's, which is what keeps placeholder rows out of a kiosk.
+    designing: bool,
     built: Built,
     focused: Option<NodeId>,
 }
@@ -843,6 +942,22 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
             let owns_children = owns_children(kind);
             for (index, child) in children.nodes().iter().enumerate() {
                 let name = child.name().value();
+                if name == DESIGN {
+                    self.check_design(child, kind)?;
+                    continue;
+                }
+                // Placeholder content written where the engine would load it,
+                // which is the shape this format used to have and the one thing
+                // `design` exists to stop.
+                if is_placeholder(kind, name) {
+                    return Err(self.err(
+                        child,
+                        Reason::PlaceholderOutside {
+                            kind: kind.to_string(),
+                            found: name.to_string(),
+                        },
+                    ));
+                }
                 if COLLECTIONS.contains(&name) {
                     continue;
                 }
@@ -858,6 +973,32 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 let mut below = path.to_vec();
                 below.push(index);
                 self.node(child, id, depth + 1, &below)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// A `design` block holds this widget's placeholder collections and nothing
+    /// else.
+    ///
+    /// Narrow on purpose. `design` is not a general "ignore this" block — a
+    /// widget hidden in one would be a widget the file describes and the engine
+    /// never builds, which is a bigger idea than #160 asked for and a worse one
+    /// to discover by accident.
+    fn check_design(&self, block: &KdlNode, kind: &str) -> Result<(), Error> {
+        let Some(children) = block.children() else {
+            return Ok(());
+        };
+        for child in children.nodes() {
+            let name = child.name().value();
+            if !is_placeholder(kind, name) {
+                return Err(self.err(
+                    child,
+                    Reason::UnexpectedChild {
+                        parent: format!("{kind}'s `design`"),
+                        found: name.to_string(),
+                    },
+                ));
             }
         }
         Ok(())
@@ -1015,15 +1156,40 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
     }
 
     /// The child nodes of one collection kind.
+    /// The child nodes of `node` called `name`.
+    ///
+    /// A placeholder collection lives one level down, in the `design` block,
+    /// and is read only when the caller asked for it — so an application's
+    /// build sees no rows at all and a kiosk carries none.
     fn collection<'n>(&self, node: &'n KdlNode, name: &str) -> Vec<&'n KdlNode> {
-        node.children()
-            .map(|d| {
-                d.nodes()
-                    .iter()
-                    .filter(|n| n.name().value() == name)
-                    .collect()
-            })
-            .unwrap_or_default()
+        let holder = if is_placeholder(node.name().value(), name) {
+            if !self.designing {
+                return Vec::new();
+            }
+            let Some(design) = self.design_block(node) else {
+                return Vec::new();
+            };
+            design
+        } else {
+            let Some(children) = node.children() else {
+                return Vec::new();
+            };
+            children
+        };
+        holder
+            .nodes()
+            .iter()
+            .filter(|n| n.name().value() == name)
+            .collect()
+    }
+
+    /// The `design` block of `node`, if it wrote one.
+    fn design_block<'n>(&self, node: &'n KdlNode) -> Option<&'n KdlDocument> {
+        node.children()?
+            .nodes()
+            .iter()
+            .find(|n| n.name().value() == DESIGN)?
+            .children()
     }
 
     fn strings(&self, node: &KdlNode, name: &str) -> Vec<String> {

@@ -137,6 +137,18 @@ pub enum Reason {
         /// The child's kind.
         found: String,
     },
+    /// A designer's placeholder content written where the engine would load it.
+    ///
+    /// A `table`'s `row`s and a `timeline`'s `event`s belong in that node's
+    /// `design { … }` block, where every build but a designer's skips them. Left
+    /// outside, they would ship to a kiosk — so this is an error rather than a
+    /// thing quietly ignored, for the same reason an unknown property is.
+    PlaceholderOutside {
+        /// The widget's kind.
+        kind: String,
+        /// The child node's name.
+        found: String,
+    },
     /// One message name is used with two different payload shapes, so no single
     /// enum variant can serve both.
     ///
@@ -414,6 +426,12 @@ impl fmt::Display for Error {
                 f,
                 "this form nests more than {limit} deep, which is past what a \
                  form is and into what a stack overflow is"
+            ),
+            Reason::PlaceholderOutside { kind, found } => write!(
+                f,
+                "a `{found}` is placeholder content, so it belongs in this \
+                 {kind}'s `design {{ … }}` block; written here it would be \
+                 loaded on a panel that has its own"
             ),
             Reason::Unbalanced { open } => {
                 if *open {

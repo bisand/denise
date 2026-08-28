@@ -44,6 +44,17 @@ fn build(source: &str) -> (Ui<Void>, Built) {
     (ui, built)
 }
 
+/// The same form as a designer sees it, placeholder content and all.
+fn build_designing(source: &str) -> (Ui<Void>, Built) {
+    let form = Form::parse(source).expect("the form parses");
+    let mut ui: Ui<Void> = Ui::new(form.size(), form.theme());
+    let root = ui.root();
+    let built = form
+        .build_with_design(&mut ui, root, 1.0, &mut Anything)
+        .expect("it builds");
+    (ui, built)
+}
+
 fn tab(ui: &mut Ui<Void>, backwards: bool) {
     ui.handle(&[InputEvent::Key {
         code: KeyCode::Tab,
@@ -228,6 +239,33 @@ form \"F\" version=1 width=300 height=300 {
     assert_eq!(here(&ui, &built), "first");
 }
 
+/// The placeholder rows are the whole difference in the tab order.
+///
+/// A `table` built without its `design` block has no rows, nothing to select
+/// and so no stop; built with them it is a stop like any other. Worth pinning,
+/// because it is the one place where what a designer sees and what a panel gets
+/// differ, and somebody should find that here rather than in a kiosk.
+#[test]
+fn a_table_is_a_stop_once_it_has_rows_to_select() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../forms/reference.dform"
+    ))
+    .expect("the reference form");
+
+    let (mut ui, built) = build(&source);
+    assert!(
+        !sequence(&mut ui, &built).contains(&String::from("records")),
+        "an empty table is not a stop"
+    );
+
+    let (mut ui, built) = build_designing(&source);
+    assert!(
+        sequence(&mut ui, &built).contains(&String::from("records")),
+        "with its placeholder rows it is"
+    );
+}
+
 #[test]
 fn the_reference_form_tabs_through_every_stop_it_has_and_comes_back() {
     // The real one, headless. Twenty stops, and the sequence is the file read
@@ -262,7 +300,13 @@ fn the_reference_form_tabs_through_every_stop_it_has_and_comes_back() {
             "<button>", // Cancel
             "<button>", // Apply
             // Then the sections after it in the file.
-            "records",
+            //
+            // No `records` between these two, and that is #160: this is the
+            // build an application gets, and a `table` whose rows live in a
+            // `design` block comes up empty. An empty table has nothing to
+            // select and so is not a stop until the application supplies its
+            // records -- `a_table_is_a_stop_once_it_has_rows_to_select` is the
+            // same form with them.
             "shots",
             // Not `retry`: the file gives it `no-focus=#true`, which is a
             // widget that takes no focus *and costs none* — a repeat button

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use denise::{BufferAge, Frame, PixelFormat, Rect, Size, Theme, theme};
-use denise_forms::{Form, Handler, Payload, Picture, Wiring};
+use denise_forms::{DESIGN, Form, Handler, Payload, Picture, Wiring};
 use denise_ui::{Ui, Void};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
@@ -179,6 +179,9 @@ fn check(args: &[String]) -> Result<ExitCode, String> {
         if lint {
             warnings += geometry(path, &source);
         }
+        if !quiet {
+            placeholders(path, &source);
+        }
 
         if !quiet {
             let name = form.title();
@@ -220,6 +223,59 @@ fn check(args: &[String]) -> Result<ExitCode, String> {
 /// keeps `kdl` out of this crate's public API, where a major version of it would
 /// otherwise become a breaking change for everybody who only wanted to load a
 /// form.
+/// Says what a panel will *not* show.
+///
+/// A **note** rather than a warning, and it does not count as one: placeholder
+/// content in a `design` block is the format working as intended, and a tool
+/// that warns about every correct use of a feature teaches people to stop
+/// reading its output. What it is worth saying out loud is the asymmetry —
+/// the canvas is full of rows and the panel comes up empty — because that is
+/// the thing nobody notices until the panel is on a wall.
+fn placeholders(path: &str, source: &str) {
+    let Ok(doc) = source.parse::<KdlDocument>() else {
+        return;
+    };
+    let mut walk = |node: &KdlNode| {
+        let Some(design) = node
+            .children()
+            .and_then(|c| c.nodes().iter().find(|n| n.name().value() == DESIGN))
+        else {
+            return;
+        };
+        let items = design.children().map_or(&[][..], KdlDocument::nodes);
+        let count = items.len();
+        // The nodes name themselves -- a `table` holds `row`s and a `timeline`
+        // holds `event`s -- so the warning does too.
+        let Some(noun) = items.first().map(|n| n.name().value()) else {
+            return;
+        };
+        let what = match node.get("name").and_then(KdlValue::as_string) {
+            Some(name) => format!("{} `{name}`", node.name().value()),
+            None => node.name().value().to_string(),
+        };
+        println!(
+            "{path}: note: {what} shows {count} placeholder {noun}{} on a \
+             canvas and none on a panel; the application supplies the real ones",
+            if count == 1 { "" } else { "s" }
+        );
+    };
+    fn descend(node: &KdlNode, walk: &mut impl FnMut(&KdlNode)) {
+        walk(node);
+        if let Some(children) = node.children() {
+            for child in children.nodes() {
+                if child.name().value() != DESIGN {
+                    descend(child, walk);
+                }
+            }
+        }
+    }
+    if let Some(children) = doc.nodes().first().and_then(KdlNode::children) {
+        for node in children.nodes() {
+            descend(node, &mut walk);
+        }
+    }
+}
+
 fn geometry(path: &str, source: &str) -> usize {
     fn rect(node: &KdlNode) -> Option<Rect> {
         let axis = |name: &str| node.get(name).and_then(KdlValue::as_integer);
