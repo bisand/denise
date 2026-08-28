@@ -495,9 +495,13 @@ impl ApplicationHandler for Runner {
                     MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
                 };
                 surface.push_event(InputEvent::PointerScroll {
-                    delta_x: dx,
-                    // winit reports positive-up; Denise reports positive-down so the
-                    // sign matches the content offset a scroll view applies.
+                    // winit reports the *gesture* — positive is up and right —
+                    // and Denise reports the content offset a scroll view adds,
+                    // so both axes flip. Only `delta_y` used to, which left the
+                    // horizontal wheel and every two-finger sideways swipe
+                    // going the wrong way against a vertical one that felt
+                    // right.
+                    delta_x: -dx,
                     delta_y: -dy,
                     position: cursor,
                 });

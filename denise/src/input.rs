@@ -243,11 +243,21 @@ pub enum InputEvent {
         /// Modifiers held at the time.
         modifiers: Modifiers,
     },
-    /// The wheel or a scroll gesture moved. Positive `y` scrolls content down.
+    /// The wheel or a scroll gesture moved.
+    ///
+    /// Both deltas are **content offsets, not device movement**: positive `y`
+    /// scrolls content down and positive `x` scrolls it right, which is the
+    /// sign a scroll view adds straight to its offset. A backend reporting the
+    /// gesture instead — most of them do — negates both on the way in.
+    ///
+    /// Saying it for one axis and not the other is how the horizontal wheel
+    /// came out backwards on macOS and stayed that way: `y` carried this note
+    /// and `x` carried none, so the runner negated one and passed the other
+    /// through.
     PointerScroll {
-        /// Horizontal delta in physical pixels.
+        /// Horizontal delta in physical pixels. Positive scrolls content right.
         delta_x: f32,
-        /// Vertical delta in physical pixels.
+        /// Vertical delta in physical pixels. Positive scrolls content down.
         delta_y: f32,
         /// Pointer position at the time.
         position: Point,
