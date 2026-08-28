@@ -3373,6 +3373,28 @@ fn a_wheel_scrolls_both_ways_by_the_same_rule() {
     );
 }
 
+/// Hiding a container hides what is inside it, for clicks as well as paint.
+#[test]
+fn a_hidden_container_does_not_answer_a_press_meant_for_it() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let page = ui
+        .add(root, Panel::bare(), Rect::new(0, 0, 200, 100))
+        .expect("page");
+    let button = ui
+        .add(page, Button::new("Hit", Msg::Save), Rect::new(0, 0, 80, 30))
+        .expect("button");
+    let at = Point::new(40, 15);
+    assert_eq!(ui.hit_test(at), Some(button), "it answers while shown");
+
+    ui.set_visible(page, false);
+    assert_eq!(
+        ui.hit_test(at),
+        None,
+        "a press landed on a button inside a hidden container"
+    );
+}
+
 // ----------------------------------------------------------- radial progress
 
 /// Renders a ring at each value and reports the painted-pixel count in the

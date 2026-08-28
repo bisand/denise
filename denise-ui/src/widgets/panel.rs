@@ -54,6 +54,29 @@ impl Panel {
         }
     }
 
+    /// A panel that draws nothing: no fill, no border.
+    ///
+    /// A container, for when the *grouping* is the point — a `tabs` node's
+    /// pages, one per tab, shown and hidden as a unit. The tree already gives a
+    /// node a rectangle, a clip and children; this is the widget for a node
+    /// that wants those and no appearance of its own.
+    ///
+    /// ```
+    /// # use denise_ui::widgets::Panel;
+    /// // Nothing to see, and that is the whole idea.
+    /// let page = Panel::bare();
+    /// # let _ = page;
+    /// ```
+    pub const fn bare() -> Self {
+        Self {
+            fill: None,
+            border: None,
+            border_width: 0,
+            radius: Radius::Box,
+            backdrop: false,
+        }
+    }
+
     /// A panel that presses stop at, without disturbing the focus.
     ///
     /// The sheet behind an overlay's contents. An ordinary panel is invisible to
