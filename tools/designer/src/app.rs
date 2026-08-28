@@ -727,6 +727,16 @@ pub struct Designer {
     /// The nodes hidden **in the designer only**, by path. The file never learns
     /// about these: they are how something behind something else is reached.
     hidden: Vec<Vec<usize>>,
+    /// Every `tab` page the open form built, from the last build.
+    pages: Vec<denise_forms::Page>,
+    /// Which tab the designer is *looking at*, per `tabs` node, when that is
+    /// not the one the file opens on.
+    ///
+    /// Designer state, like [`Designer::hidden`], and for the same reason: a
+    /// form that remembered which tab somebody had open while working on it
+    /// would be carrying that to the panel. `selected` in the file stays the
+    /// tab an application starts on.
+    looking_at: Vec<(Vec<usize>, usize)>,
     /// A row being dragged in the outline.
     outline_drag: Option<outline::Drag>,
     selected: Option<NodeId>,
@@ -830,6 +840,8 @@ impl Designer {
             outline: None,
             folded: Vec::new(),
             hidden: Vec::new(),
+            pages: Vec::new(),
+            looking_at: Vec::new(),
             outline_drag: None,
             selected: None,
             placed: Vec::new(),
@@ -1303,6 +1315,7 @@ impl Designer {
             .build_with_design(&mut self.ui, stage, self.zoom.factor(), &mut wiring)
             .map(|built| {
                 self.placed = built.placed().to_vec();
+                self.pages = built.pages().to_vec();
             });
         self.names = std::mem::take(&mut wiring.names);
 
@@ -1361,6 +1374,7 @@ impl Designer {
             .collect();
         self.selection = surviving;
         self.selected = self.selection.last().and_then(|path| self.node_id(path));
+        self.apply_looking_at();
         self.apply_hidden();
         self.refresh_outline();
         self.refresh_inspector();
@@ -1407,6 +1421,52 @@ impl Designer {
                 self.ui.set_visible(id, false);
             }
         }
+    }
+
+    /// Shows the tab page the designer is looking at, where that is not the one
+    /// the file opens on.
+    ///
+    /// Nothing here is written to the file. A page that is not showing is not
+    /// in the tree's order at all — nothing in it paints, answers a press or
+    /// takes the caret — so this is what makes the second tab's contents
+    /// reachable while the file still says the first one opens.
+    fn apply_looking_at(&mut self) {
+        let choices = self.looking_at.clone();
+        for (strip, ordinal) in choices {
+            let siblings: Vec<_> = self
+                .pages
+                .iter()
+                .filter(|page| page.path.starts_with(&strip) && page.path.len() == strip.len() + 1)
+                .map(|page| (page.id, page.ordinal))
+                .collect();
+            for (id, at) in siblings {
+                self.ui.set_visible(id, at == ordinal);
+            }
+        }
+    }
+
+    /// Looks at the tab page holding `path`, if it is on a tab that is not
+    /// showing.
+    ///
+    /// Called when something is selected, so that reaching a widget on another
+    /// tab is *selecting* it — from the outline, or by name — rather than a
+    /// separate gesture nobody would find.
+    fn look_at_page_of(&mut self, path: &[usize]) {
+        let Some(page) = self
+            .pages
+            .iter()
+            .filter(|page| path.starts_with(&page.path))
+            .max_by_key(|page| page.path.len())
+        else {
+            return;
+        };
+        let strip = page.path[..page.path.len() - 1].to_vec();
+        let ordinal = page.ordinal;
+        match self.looking_at.iter_mut().find(|(at, _)| *at == strip) {
+            Some(held) => held.1 = ordinal,
+            None => self.looking_at.push((strip, ordinal)),
+        }
+        self.apply_looking_at();
     }
 
     /// Redraws the inspector for whatever is selected.
@@ -1984,6 +2044,13 @@ impl Designer {
     /// it, the canvas draws handles round it — so changing it is one call rather
     /// than three that can be forgotten one at a time.
     fn reselected(&mut self) {
+        // Selecting something on a tab that is not showing brings that page
+        // into view: every selection path comes through here, so reaching a
+        // widget on another tab is selecting it rather than a gesture of its
+        // own. See `Designer::look_at_page_of`.
+        if let Some(path) = self.selection.last().cloned() {
+            self.look_at_page_of(&path);
+        }
         self.refresh_outline();
         self.refresh_inspector();
         self.refresh_overlay();
@@ -4509,6 +4576,16 @@ impl Designer {
         let selection = self.keepsakes(&self.selection.clone());
         let folded = self.keepsakes(&self.folded.clone());
         let hidden = self.keepsakes(&self.hidden.clone());
+        // Which tab is being looked at is remembered the same way, and has to
+        // be: an edit that inserts or moves a node above a `tabs` shifts its
+        // path, and a stale one would show the wrong strip's page -- or none.
+        let looking = self.looking_at.clone();
+        let looking_at = self.keepsakes(
+            &looking
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>(),
+        );
 
         if let Err(error) = self.document.adopt(text) {
             self.status = error;
@@ -4528,6 +4605,19 @@ impl Designer {
         self.selected = self.selection.last().and_then(|path| self.node_id(path));
         self.folded = self.found_again(&folded);
         self.hidden = self.found_again(&hidden);
+        // Pair by pair, not zipped: `found_again` drops what it cannot find,
+        // so zipping two lists of different lengths would hand a strip's page
+        // number to a different strip.
+        self.looking_at = looking
+            .into_iter()
+            .zip(looking_at)
+            .filter_map(|((_, ordinal), keepsake)| {
+                self.found_again(std::slice::from_ref(&keepsake))
+                    .pop()
+                    .map(|path| (path, ordinal))
+            })
+            .collect();
+        self.apply_looking_at();
         self.apply_hidden();
         self.reselected();
         self.refresh_labels();
@@ -7684,6 +7774,94 @@ mod tests {
         std::fs::write(&path, source).expect("writing");
         let document = Document::open(&path).expect("the form opens");
         Designer::new(WINDOW, 1.0, Settings::default(), document)
+    }
+
+    /// A form whose tabs carry pages.
+    fn with_tab_pages() -> Designer {
+        let source = concat!(
+            "form \"Tabs\" version=1 width=400 height=300 {\n",
+            "    tabs name=sections x=0 y=0 w=400 h=300 selected=0 {\n",
+            "        tab \"One\" {\n",
+            "            button \"a\" name=a x=0 y=0 w=80 h=24\n",
+            "        }\n",
+            "        tab \"Two\" {\n",
+            "            button \"b\" name=b x=0 y=0 w=80 h=24\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        );
+        scratch("tabs", source)
+    }
+
+    /// Selecting a widget on a tab that is not showing brings its page up.
+    ///
+    /// #161: a page that is not showing is not in the tree's order at all, so
+    /// without this the second tab's contents could be seen in the outline and
+    /// never reached. Every selection path runs through `reselected`, so this
+    /// works from the outline, from a click, and from `select_named`.
+    #[test]
+    fn selecting_a_widget_on_another_tab_shows_that_page() {
+        let mut designer = with_tab_pages();
+
+        // The file opens on the first tab, so the second page is not showing
+        // and nothing in it can be hit.
+        let second = designer
+            .placed
+            .iter()
+            .find(|p| p.name.as_deref() == Some("b"))
+            .expect("the second page's button is in the outline")
+            .path
+            .clone();
+        let id = designer.node_id(&second).expect("it was built");
+        assert!(!designer.ui.visible(id) || designer.ui.hit_test(Point::new(20, 60)) != Some(id));
+
+        // Selecting it brings its page into view.
+        assert!(designer.select_named("b"));
+        assert!(
+            designer.ui.visible(id),
+            "the page holding the selected widget is still hidden"
+        );
+
+        // And it is designer state: the file still opens on the first tab.
+        assert!(
+            designer.document.form().text().contains("selected=0"),
+            "looking at a tab wrote to the file: {}",
+            designer.document.form().text()
+        );
+    }
+
+    /// Which tab the designer is looking at survives a rebuild.
+    #[test]
+    fn the_tab_being_looked_at_outlives_an_edit() {
+        let mut designer = with_tab_pages();
+        assert!(designer.select_named("b"));
+        let id = designer
+            .node_id(
+                &designer
+                    .placed
+                    .iter()
+                    .find(|p| p.name.as_deref() == Some("b"))
+                    .expect("named")
+                    .path
+                    .clone(),
+            )
+            .expect("built");
+        assert!(designer.ui.visible(id));
+
+        // An edit rebuilds the tree from the document; the page must come back.
+        designer.nudge(1, 0);
+        let again = designer
+            .placed
+            .iter()
+            .find(|p| p.name.as_deref() == Some("b"))
+            .expect("still named")
+            .path
+            .clone();
+        let id = designer.node_id(&again).expect("rebuilt");
+        assert!(
+            designer.ui.visible(id),
+            "the rebuild put the designer back on the file's tab"
+        );
     }
 
     #[test]

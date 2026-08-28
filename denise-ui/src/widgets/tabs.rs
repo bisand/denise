@@ -3,7 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role};
+use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
@@ -16,6 +16,15 @@ use crate::widgets::describe::{
 use crate::widgets::style::{Align, draw_aligned, interactive_pair, muted};
 
 /// A tab strip: a row of labels, one of them selected, with a rule underneath.
+///
+/// # The strip, and the pages under it
+///
+/// On its own the widget fills its node and selects nothing: an application
+/// listens to its message and shows and hides pages it built itself. A form
+/// file can also nest a page under each `tab`, in which case the node hosts
+/// them and the strip draws in a band along its top — see [`Tabs::over_pages`]
+/// and [`Tabs::strip_height`]. Either way **this widget still owns only which
+/// tab is selected**; what changes is who owns the pages.
 ///
 /// ```
 /// # use denise_ui::Tabs;
@@ -51,6 +60,15 @@ pub struct Tabs<M> {
     message: Option<fn(usize) -> M>,
     role: Role,
     style: TextStyle,
+    /// Whether the node this sits on is hosting a page below the strip.
+    ///
+    /// A strip on its own fills its node, which is what a `tabs` node has
+    /// always been and what a form that sets `h=40` is asking for. A strip over
+    /// pages draws in a band of [`Tabs::strip_height`] along the top and leaves
+    /// the rest to the page, the way `Collapse` leaves everything below its
+    /// header to the body. The *builder* knows which, because it can see
+    /// whether any `tab` node carries children; the widget cannot.
+    over_pages: bool,
 }
 
 impl<M> Tabs<M> {
@@ -65,7 +83,48 @@ impl<M> Tabs<M> {
             message: Some(message),
             role: Role::Primary,
             style: TextStyle::built_in(16),
+            over_pages: false,
         }
+    }
+
+    /// A strip that sits above pages hosted on its own node.
+    ///
+    /// Set by `denise-forms` when a `tab` in the file carries children. It
+    /// changes only where the strip is drawn — the band along the top rather
+    /// than the whole node — so that the page below it is visible.
+    #[must_use]
+    pub fn over_pages(mut self) -> Self {
+        self.over_pages = true;
+        self
+    }
+
+    /// Whether this strip is drawn in a band rather than filling its node.
+    #[inline]
+    pub const fn is_over_pages(&self) -> bool {
+        self.over_pages
+    }
+
+    /// The strip's own height: the theme's field height.
+    ///
+    /// The band this widget draws in, and the offset a form places a tab's page
+    /// at — one definition, so the two cannot drift. The same shape as
+    /// [`Collapse::header_height`](super::Collapse::header_height), and for the
+    /// same reason: the widget is the strip, and the node it sits on may be
+    /// much taller because it is hosting a page below.
+    ///
+    /// A node no taller than this is a strip and nothing else, which is what a
+    /// `tabs` node was before a `tab` could hold anything.
+    pub fn strip_height(&self, theme: &Theme) -> i32 {
+        theme.metrics.size_field.max(1)
+    }
+
+    /// The part of `bounds` this strip draws in and answers clicks in.
+    fn band(&self, bounds: Rect, theme: &Theme) -> Rect {
+        if !self.over_pages {
+            return bounds;
+        }
+        let height = bounds.height.min(self.strip_height(theme));
+        Rect::new(bounds.x, bounds.y, bounds.width, height)
     }
 
     /// A strip that emits nothing.
@@ -76,6 +135,7 @@ impl<M> Tabs<M> {
             message: None,
             role: Role::Primary,
             style: TextStyle::built_in(16),
+            over_pages: false,
         }
     }
 
@@ -245,7 +305,10 @@ impl<M: 'static> Widget<M> for Tabs<M> {
     }
 
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
-        let bounds = ctx.bounds;
+        // A strip over pages is as tall as the page it shows, and what this
+        // widget draws is the band along its top. A strip on its own fills its
+        // node, which is what `tabs h=40` has always meant.
+        let bounds = self.band(ctx.bounds, ctx.theme);
         if bounds.is_empty() || self.labels.is_empty() {
             return;
         }
@@ -309,7 +372,8 @@ impl<M: 'static> Widget<M> for Tabs<M> {
                 ..
             }) => {
                 let widths = self.widths(ctx.text);
-                hit(ctx.bounds, &place(ctx.bounds, &widths), *position)
+                let band = self.band(ctx.bounds, ctx.theme);
+                hit(band, &place(band, &widths), *position)
             }
             // Left and Right only. A tab strip is horizontal, and Up and Down
             // almost always belong to whatever is in the page below it.
@@ -361,7 +425,7 @@ impl<M> Describe for Tabs<M> {
         Property::new(
             "tab",
             PropertyKind::List,
-            "The section names, as `tab` child nodes. Real data: a form's sections are the form's.",
+            "The section names, as `tab` child nodes. Real data: a form's sections are the form's. A `tab` that carries children carries that section's page with it.",
         ),
         Property::new(
             "selected",

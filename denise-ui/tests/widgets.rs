@@ -3373,6 +3373,49 @@ fn a_wheel_scrolls_both_ways_by_the_same_rule() {
     );
 }
 
+/// A strip on its own fills its node; a strip over pages draws in a band.
+///
+/// The band is opt-in for a reason that a test caught rather than a person:
+/// making it unconditional shrinks the strip of every `tabs` node taller than
+/// the theme's field height, which is a silent change to forms that were
+/// written before a `tab` could hold anything. The builder turns it on when it
+/// sees a `tab` carrying children, and only then.
+#[test]
+fn a_tab_strip_fills_its_node_until_it_is_hosting_pages() {
+    let rule_row = |over_pages: bool| -> i32 {
+        let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+        let root = ui.root();
+        let tabs = Tabs::new(["En", "To"], Msg::Page);
+        let tabs = if over_pages { tabs.over_pages() } else { tabs };
+        let id = ui
+            .add(root, tabs, Rect::new(20, 20, 360, 120))
+            .expect("tabs");
+        let bounds = ui.bounds(id).expect("bounds");
+        let painted = pixels_of(&mut ui, bounds);
+        // The lowest row with anything drawn in it is the strip's rule.
+        (0..bounds.height)
+            .rev()
+            .find(|row| {
+                (0..bounds.width).any(|x| painted[(row * bounds.width + x) as usize] != painted[0])
+            })
+            .expect("something was drawn")
+    };
+
+    let filling = rule_row(false);
+    let banded = rule_row(true);
+    assert!(
+        filling > banded,
+        "a strip on its own reaches further down its node than one over pages \
+         ({filling} vs {banded})"
+    );
+    // And the band is the theme's field height, which is what a form places a
+    // page below.
+    assert!(
+        banded < theme::DARK.metrics.size_field,
+        "the rule sits inside the strip band ({banded})"
+    );
+}
+
 /// Hiding a container hides what is inside it, for clicks as well as paint.
 #[test]
 fn a_hidden_container_does_not_answer_a_press_meant_for_it() {

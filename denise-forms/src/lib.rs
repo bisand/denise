@@ -9,7 +9,7 @@ mod error;
 mod form;
 
 pub use build::{
-    Built, DESIGN, FORM_PROPERTIES, Handler, NODE_PROPERTIES, Picture, Placed, Wiring,
+    Built, DESIGN, FORM_PROPERTIES, Handler, NODE_PROPERTIES, Page, Picture, Placed, Wiring,
     default_size, form_property, kind_properties, node_property, owns_children, seed, seed_form,
 };
 pub use error::{At, Error, Reason};

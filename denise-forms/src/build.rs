@@ -130,6 +130,24 @@ pub struct Placed {
 pub struct Built {
     names: HashMap<String, NodeId>,
     placed: Vec<Placed>,
+    pages: Vec<Page>,
+}
+
+/// One `tab`'s page: the container its subtree was built into.
+///
+/// Only a `tab` carrying children has one. A designer needs these because a
+/// page that is not showing is not in the tree's order at all — nothing in it
+/// paints, answers a press or takes the caret — so reaching the second tab's
+/// contents means showing that page first.
+#[derive(Clone, Debug)]
+pub struct Page {
+    /// The `tab` node's path in the document.
+    pub path: Vec<usize>,
+    /// Which tab it is, counting every `tab` in the strip. What `selected`
+    /// names.
+    pub ordinal: usize,
+    /// The container the page's widgets were built into.
+    pub id: NodeId,
 }
 
 impl Built {
@@ -143,6 +161,14 @@ impl Built {
     /// Every name the form gave a node, in no particular order.
     pub fn names(&self) -> impl Iterator<Item = (&str, NodeId)> {
         self.names.iter().map(|(name, &id)| (name.as_str(), id))
+    }
+
+    /// Every `tab` page the form built, in file order.
+    ///
+    /// Empty for a form whose tabs are bare labels, which is every form written
+    /// before a `tab` could hold anything. See [`Page`].
+    pub fn pages(&self) -> &[Page] {
+        &self.pages
     }
 
     /// Every node the form built, in file order.
@@ -940,6 +966,11 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
         // right. A widget that cannot lay children out says so.
         if let Some(children) = node.children() {
             let owns_children = owns_children(kind);
+            // Which `tab` this is, counted over **every** tab and not only the
+            // ones carrying a page: `selected` is an index into the strip, so a
+            // file part-way through gaining pages must still show the right
+            // one.
+            let mut tabs_seen = 0usize;
             for (index, child) in children.nodes().iter().enumerate() {
                 let name = child.name().value();
                 if name == DESIGN {
@@ -957,6 +988,20 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                             found: name.to_string(),
                         },
                     ));
+                }
+                // A `tab` carrying children is a **page**: the labels are the
+                // strip's content, and what is nested under one is a subtree
+                // the file now describes. Everything else in COLLECTIONS is
+                // content and has no children to walk.
+                if name == "tab" && kind == "tabs" {
+                    let ordinal = tabs_seen;
+                    tabs_seen += 1;
+                    if child.children().is_some_and(|b| !b.nodes().is_empty()) {
+                        let mut below = path.to_vec();
+                        below.push(index);
+                        self.page(child, node, id, depth, &below, ordinal)?;
+                    }
+                    continue;
                 }
                 if COLLECTIONS.contains(&name) {
                     continue;
@@ -1183,6 +1228,73 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
             .collect()
     }
 
+    /// Builds one tab's page: a container under the strip, and its subtree.
+    ///
+    /// The page fills what is left of the `tabs` node below the strip band, the
+    /// way a `collapse`'s body fills what is left below its header. So a
+    /// widget written at `y=0` inside a tab sits just under the strip, and a
+    /// tab's rectangles are read the same way as any other container's.
+    ///
+    /// Only the selected page is visible. `selected` is the tab the
+    /// *application* starts on; which page a designer is looking at is the
+    /// designer's business and stays out of the file.
+    fn page(
+        &mut self,
+        tab: &KdlNode,
+        tabs: &KdlNode,
+        strip: NodeId,
+        depth: usize,
+        path: &[usize],
+        ordinal: usize,
+    ) -> Result<(), Error> {
+        let Some(bounds) = self.ui.bounds(strip) else {
+            return Ok(());
+        };
+        // The band the strip draws in, read from the same place the widget
+        // reads it: `Tabs::strip_height` is the theme's field height, and the
+        // theme this tree holds is already in the units these rectangles are
+        // in. Scaling it again here would put every page at twice the offset
+        // the strip is drawn at.
+        let band = self.ui.theme().metrics.size_field.max(1);
+        let rect = Rect::new(0, band, bounds.width, (bounds.height - band).max(0));
+        let page = self
+            .ui
+            .add(strip, Panel::bare(), rect)
+            .ok_or_else(|| self.err(tab, Reason::TreeRefused))?;
+
+        if let Some(children) = tab.children() {
+            for (index, child) in children.nodes().iter().enumerate() {
+                let mut below = path.to_vec();
+                below.push(index);
+                self.node(child, page, depth + 1, &below)?;
+            }
+        }
+
+        // After the children, not before: hiding a node propagates to the
+        // subtree it has *at the time*, and one hidden first would have its
+        // pages added back into view behind it.
+        let selected = tabs
+            .get("selected")
+            .and_then(KdlValue::as_integer)
+            .unwrap_or(0);
+        let shown = usize::try_from(selected).unwrap_or(0) == ordinal;
+        self.ui.set_visible(page, shown);
+        self.built.pages.push(Page {
+            path: path.to_vec(),
+            ordinal,
+            id: page,
+        });
+        Ok(())
+    }
+
+    /// Whether any `tab` under `node` carries a page of its own.
+    fn has_pages(&self, node: &KdlNode) -> bool {
+        self.collection(node, "tab").into_iter().any(|tab| {
+            tab.children()
+                .is_some_and(|block| !block.nodes().is_empty())
+        })
+    }
+
     /// The `design` block of `node`, if it wrote one.
     fn design_block<'n>(&self, node: &'n KdlNode) -> Option<&'n KdlDocument> {
         node.children()?
@@ -1325,6 +1437,15 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 let widget = match self.handler(node, "on-change", Payload::Index)? {
                     Some(h) => Tabs::new(labels, self.on_index(node, "on-change", h)?),
                     None => Tabs::inert(labels),
+                };
+                // A `tab` carrying children makes this a strip *over a page*,
+                // drawn in a band along the top with the page below it. A file
+                // whose tabs are bare labels is what a `tabs` node has always
+                // been, and is untouched. See `Tabs::over_pages`.
+                let widget = if self.has_pages(node) {
+                    widget.over_pages()
+                } else {
+                    widget
                 };
                 self.ui.add(parent, widget, rect)
             }

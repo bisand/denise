@@ -571,6 +571,86 @@ fn a_form_that_would_take_forever_to_parse_is_refused_before_parsing() {
     assert_eq!(form.text(), fine);
 }
 
+// --------------------------------------------------------------------- tabs
+
+/// A `tab` with a block is a page; the strip and the page are one node.
+#[test]
+fn a_tab_that_holds_children_becomes_a_page_under_the_strip() {
+    let source = "form \"F\" version=1 width=300 height=240 {\n    \
+        tabs name=sections x=0 y=0 w=300 h=240 selected=0 {\n        \
+        tab \"One\" {\n            label \"first\" name=a x=0 y=0 w=80 h=20\n        }\n        \
+        tab \"Two\" {\n            label \"second\" name=b x=0 y=0 w=80 h=20\n        }\n    }\n}\n";
+    let (ui, built) = build_str::<Void>(source, &mut Anything).expect("builds");
+
+    let strip = built.node("sections").expect("the strip is named");
+    let strip_bounds = ui.bounds(strip).expect("laid out");
+    let band = ui.theme().metrics.size_field.max(1);
+
+    // A widget written at y=0 inside a tab sits just under the strip, the way a
+    // `collapse`'s body sits under its header.
+    let first = built.node("a").expect("the first page's label");
+    let bounds = ui.bounds(first).expect("laid out");
+    assert_eq!(
+        bounds.y,
+        strip_bounds.y + band,
+        "the page does not start below the strip"
+    );
+    assert_eq!(bounds.x, strip_bounds.x, "and shares its left edge");
+
+    // Both pages exist; the file says which one an application starts on.
+    let second = built.node("b").expect("the second page's label");
+    assert!(ui.contains(second), "the unselected page is still built");
+}
+
+/// `selected` counts tabs, not pages, and is the application's starting tab.
+#[test]
+fn selected_names_the_tab_a_form_opens_on() {
+    // Asked of the tree rather than of a flag: `set_visible` hides a node *and
+    // its descendants*, so a hidden page's button still reports `visible()` for
+    // itself. What a person would notice is that it cannot be pressed.
+    let reachable = |selected: usize, at: Point| -> bool {
+        let source = format!(
+            "form \"F\" version=1 width=300 height=240 {{\n    \
+             tabs name=s x=0 y=0 w=300 h=240 selected={selected} {{\n        \
+             tab \"One\" {{\n            button \"a\" name=a x=0 y=0 w=80 h=20\n        }}\n        \
+             tab \"Two\" {{\n            button \"b\" name=b x=0 y=0 w=80 h=20\n        }}\n    }}\n}}\n"
+        );
+        let (mut ui, built) = build_str::<Void>(&source, &mut Anything).expect("builds");
+        let wanted = built.node("b").expect("the second page's button");
+        // Both pages sit at the same place, so a hit there finds whichever one
+        // is showing.
+        ui.hit_test(at) == Some(wanted)
+    };
+    let band = {
+        let (ui, _) = build_str::<Void>(
+            "form \"F\" version=1 width=300 height=240 {\n    tabs name=s x=0 y=0 w=300 h=240 { tab \"x\" }\n}\n",
+            &mut Anything,
+        )
+        .expect("builds");
+        ui.theme().metrics.size_field.max(1)
+    };
+    let inside = Point::new(40, band + 10);
+    assert!(
+        !reachable(0, inside),
+        "the second page answers when the first is chosen"
+    );
+    assert!(reachable(1, inside), "and does not when it is chosen");
+}
+
+/// A strip of bare labels is what it always was.
+#[test]
+fn a_tabs_node_without_pages_is_unchanged() {
+    let source = "form \"F\" version=1 width=300 height=40 {\n    \
+        tabs name=s x=0 y=0 w=300 h=40 {\n        \
+        tab \"One\"\n        tab \"Two\"\n    }\n}\n";
+    let (ui, built) = build_str::<Void>(source, &mut Anything).expect("builds");
+    let strip = built.node("s").expect("named");
+    // The node keeps the height the file gave it, and nothing was nested under
+    // it -- `built` names only what the file named, and there is one of those.
+    assert_eq!(ui.bounds(strip).expect("laid out").height, 40);
+    assert_eq!(built.names().count(), 1, "a bare strip hosts nothing");
+}
+
 // ------------------------------------------------------------------- design
 
 /// Placeholder content is written, kept, and not built unless asked for.

@@ -468,11 +468,12 @@ Options, rows, columns and items are **child nodes**, not packed strings — one
 per line, so adding one is a one-line diff and reordering is visible as a
 reordering. Each collection node is listed with the widget that owns it.
 
-Whether a given collection is real data or design-time placeholder is a live
-question — a `select`'s options usually are the real ones, a `table`'s rows never
-are — and [#105](https://github.com/bisand/denise/issues/105) decides it. In
-version 1 they are all simply built; an application that means to replace them
-calls `set_rows` afterwards, exactly as `table-editor` does today.
+Whether a given collection is real data or a design-time placeholder is settled
+per widget — a `select`'s options are the real ones, a `table`'s rows never are —
+and the two are written in different places: real content as children of the
+node, placeholder content inside a
+[`design` block](#collections) the engine skips. So an application replaces
+nothing at startup; it supplies the records it always had.
 
 ---
 
@@ -641,10 +642,45 @@ Children: `option "Label"`.
 | `role` | [role](#roles) | `primary` | The selected tab's underline, and only that. |
 | `size` | integer | `16` | |
 
-Children: `tab "Label"` — labels only. The widget is a tab *bar*; what each tab
-shows is the application's, which today means showing and hiding sibling panels.
-Whether the file should nest a subtree per tab is
-[#105](https://github.com/bisand/denise/issues/105).
+Children: `tab "Label"`, and each one may carry **its own page**:
+
+```kdl
+tabs name=sections x=8 y=8 w=404 h=180 selected=1 on-change=pick {
+    tab "First" {
+        label "on the first page" x=8 y=8 w=200 h=20
+    }
+    tab "Second" {
+        label "on the second page" x=8 y=8 w=200 h=20
+    }
+    // Legal, and what a half-written form looks like.
+    tab "Third"
+}
+```
+
+A `tab` with a block nests that section's subtree, and the `tabs` node hosts it:
+the strip is drawn in a band along the top and the page fills what is left, so a
+widget written at `y=0` inside a tab sits just under the strip. That is the same
+arrangement `collapse` uses for its body, and the strip's height is the theme's
+field height — [`Tabs::strip_height`], which the builder reads rather than
+guessing at.
+
+A `tab` **without** a block is the strip a `tabs` node has always been: the
+widget is a tab *bar*, what each tab shows is the application's, and it does that
+by showing and hiding panels of its own. Nothing about those forms changed, and
+the strip still fills its node — a `tabs h=40` is 40 tall, because making the
+band unconditional would have quietly shrunk every strip taller than the theme's
+field height.
+
+`selected` is the tab the **application** opens on, counting every `tab` from
+zero whether or not it carries a page. Which tab a *designer* is looking at is
+the designer's own state and is never written to the file, the way the outline's
+eye is never written: selecting a widget on another tab brings that page up.
+
+Only the selected page is in the tree at all. A hidden page paints nothing,
+answers no press and takes no caret — so a `tabs` whose pages are all in the
+file still costs a panel only the one it shows.
+
+[`Tabs::strip_height`]: https://docs.rs/denise-ui/latest/denise_ui/widgets/struct.Tabs.html#method.strip_height
 
 ### Display
 
@@ -1246,8 +1282,9 @@ cannot be reviewed any other way. The reference form at each, committed:
 
 Decided elsewhere, and deliberately not settled here:
 
-- Which collections are design-time placeholder data and which are real, and what
-  a `tabs` node's content looks like — [#105](https://github.com/bisand/denise/issues/105).
+- A `tabs` node whose pages are laid out by the file rather than nested under
+  each `tab` — a form that wants two tabs sharing one page, say. Nesting answers
+  the common case and a shared page has no spelling yet.
 - A named registry of built-in icons, which `button icon=` needs before it can
   exist.
 - A font-name resolver, once a form in this repository needs two fonts.
