@@ -557,13 +557,26 @@ and all three are now resolved:
   caught — one `List` that never named a size, and so stayed 16 px while the
   rest of the pane doubled.
 
-  Its canvas is the deliberate exception, and worth stating because it is the
-  shape of the general answer: a form is authored in the panel's own device
-  pixels, so the display's density is not a reason to change them. What
-  magnifies it is a zoom control — a feature with a coordinate mapping, not a
-  scale factor — and keeping the two apart is what let each be built and tested
-  on its own. [#154](https://github.com/bisand/denise/issues/154) added it, with
-  one rule: **the numbers never change.** `width 800` means 800 at every
+  Its canvas was the deliberate exception, and the exception turned out to be
+  wrong — which is worth keeping here, because the reasoning was sound and the
+  result still failed. A form is authored in the panel's own device pixels, so
+  the display's density looked like no reason to change them, and the canvas was
+  left at one screen pixel per form pixel. Faithful to a kiosk, and on a 2x
+  display it drew the form at half the size of the toolbar beside it. The first
+  person to open it reported it as a bug, and it is one: nobody eyeballing a
+  canvas is counting device pixels, and `denise-forms render --scale` already
+  answers the pixel-exact question. **A guarantee nobody asked for is not worth
+  a thing that looks broken.** So 100% now means actual size on this screen, and
+  the canvas transform is the display's scale times the zoom.
+
+  Keeping the two *apart* was still right, and is what made the reversal a small
+  change: `Zoom` carries both — the user's `percent` and the screen's `device` —
+  and the user's `percent()` is a different question from `is_unit()`
+  (a form pixel is a screen pixel, true only at 1x). Fitting is
+  where confusing them costs something, since it measures the window in screen
+  pixels and must answer in the user's percentage.
+  [#154](https://github.com/bisand/denise/issues/154) added the zoom, with one
+  rule that the reversal did not touch: **the numbers never change.** `width 800` means 800 at every
   magnification, a drag of one form pixel writes one, and the grid snaps to the
   grid the file records. `Form::build_scaled` puts the form's whole subtree in
   screen units, so the tree's hit testing and painting need to know nothing; the

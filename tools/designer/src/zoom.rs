@@ -53,6 +53,19 @@ pub struct Zoom {
     /// conversion has a factor to use without knowing how big the canvas is —
     /// `fitted` is what recomputes it when the window changes.
     fit: bool,
+    /// What the *display* multiplies everything by, as a percentage, folded in
+    /// here so that every conversion on this type lands in the same units the
+    /// chrome is drawn in.
+    ///
+    /// #154 left the canvas at one screen pixel per form pixel, which is what a
+    /// kiosk panel does and looks half-size next to a Retina toolbar. So 100%
+    /// now means *actual size on this screen*: the form is as big as the
+    /// application around it, and `denise-forms render --scale` is where a
+    /// pixel-exact check belongs.
+    ///
+    /// A percentage rather than a factor so that this type stays `Eq`, and
+    /// because a display scale is a percentage anyway.
+    device: u16,
 }
 
 impl Default for Zoom {
@@ -67,6 +80,7 @@ impl Zoom {
     pub const ACTUAL: Self = Self {
         percent: 100,
         fit: false,
+        device: 100,
     };
 
     /// The longest thing [`Zoom::label`] can return.
@@ -93,6 +107,7 @@ impl Zoom {
         Self {
             percent: percent.clamp(Self::FLOOR, Self::CEILING),
             fit: false,
+            device: 100,
         }
     }
 
@@ -101,6 +116,7 @@ impl Zoom {
         Self {
             percent: percent.clamp(Self::FLOOR, Self::CEILING),
             fit: true,
+            device: 100,
         }
     }
 
@@ -108,13 +124,6 @@ impl Zoom {
     #[inline]
     pub const fn is_fit(self) -> bool {
         self.fit
-    }
-
-    /// Whether one form pixel is one screen pixel, and the conversions are
-    /// therefore identity.
-    #[inline]
-    pub const fn is_actual(self) -> bool {
-        self.percent == 100
     }
 
     /// The percentage itself.
@@ -133,9 +142,31 @@ impl Zoom {
     }
 
     /// The factor `Form::build_scaled` and `Theme::scaled` take.
+    ///
+    /// The user's zoom **and** the display's scale, because the canvas has to
+    /// end up in the same units as everything drawn beside it. See [`Zoom`].
     #[inline]
     pub fn factor(self) -> f32 {
-        f32::from(self.percent) / 100.0
+        f32::from(self.percent) * f32::from(self.device) / 10_000.0
+    }
+
+    /// The same zoom, on a display that multiplies by `factor`.
+    ///
+    /// Applied in one place — `Designer::set_zoom` — because every constructor
+    /// here starts at 100 and would otherwise quietly drop it.
+    pub fn on_device(self, factor: f32) -> Self {
+        let device = (factor * 100.0).round().clamp(25.0, 800.0) as u16;
+        Self { device, ..self }
+    }
+
+    /// Whether a form pixel is a screen pixel, so a conversion can do nothing.
+    ///
+    /// Narrower than [`Zoom::percent`] being 100: the *user's* hundred per cent
+    /// is two screen pixels per form pixel on a Retina display, and very much a
+    /// conversion.
+    #[inline]
+    pub const fn is_unit(self) -> bool {
+        self.percent == 100 && self.device == 100
     }
 
     /// The largest step at or below this one, for `-`.
@@ -165,22 +196,28 @@ impl Zoom {
     /// form up to fill a large window is a different thing that the steps
     /// already offer. A viewport too small to show anything falls back to the
     /// floor rather than to zero.
-    pub fn to_fit(design: Size, view: Size, margin: i32) -> Self {
+    /// `view` is in screen pixels and `design` in form pixels, so `device` —
+    /// what the display multiplies by — is divided back out: what comes back is
+    /// the **user's** percentage, and `Designer::set_zoom` puts the display's
+    /// scale back on. Getting that wrong counts the scale twice and fits a form
+    /// to half the window.
+    pub fn to_fit(design: Size, view: Size, margin: i32, device: f32) -> Self {
         let room = |extent: u32, taken: i32| i32::try_from(extent).unwrap_or(i32::MAX) - taken * 2;
         let (across, down) = (room(view.width, margin), room(view.height, margin));
-        if design.width == 0 || design.height == 0 || across <= 0 || down <= 0 {
+        if design.width == 0 || design.height == 0 || across <= 0 || down <= 0 || device <= 0.0 {
             return Self::fitted(100);
         }
-        let by_width = across as i64 * 100 / i64::from(design.width);
-        let by_height = down as i64 * 100 / i64::from(design.height);
-        let percent = by_width.min(by_height).clamp(0, 100) as u16;
+        let in_form = |screen: i32| f64::from(screen) / f64::from(device);
+        let by_width = in_form(across) * 100.0 / f64::from(design.width);
+        let by_height = in_form(down) * 100.0 / f64::from(design.height);
+        let percent = by_width.min(by_height).clamp(0.0, 100.0) as u16;
         Self::fitted(percent.max(Self::FLOOR))
     }
 
     /// A form rectangle as the tree holds it — **by its edges**.
     #[inline]
     pub fn on_screen(self, form: Rect) -> Rect {
-        if self.is_actual() {
+        if self.is_unit() {
             return form;
         }
         form.scaled(self.factor())
@@ -189,7 +226,7 @@ impl Zoom {
     /// A tree rectangle as the file writes it — **by its edges**.
     #[inline]
     pub fn in_form(self, screen: Rect) -> Rect {
-        if self.is_actual() {
+        if self.is_unit() {
             return screen;
         }
         screen.scaled(1.0 / self.factor())
@@ -198,7 +235,7 @@ impl Zoom {
     /// A form length on screen.
     #[inline]
     pub fn on_screen_n(self, form: i32) -> i32 {
-        if self.is_actual() {
+        if self.is_unit() {
             return form;
         }
         round(form as f32 * self.factor())
@@ -207,7 +244,7 @@ impl Zoom {
     /// A screen length in form pixels.
     #[inline]
     pub fn in_form_n(self, screen: i32) -> i32 {
-        if self.is_actual() {
+        if self.is_unit() {
             return screen;
         }
         round(screen as f32 / self.factor())
@@ -215,7 +252,7 @@ impl Zoom {
 
     /// A form size on screen, as the stage has to be.
     pub fn on_screen_size(self, form: Size) -> Size {
-        if self.is_actual() {
+        if self.is_unit() {
             return form;
         }
         let extent = |v: u32| {
@@ -309,22 +346,25 @@ mod tests {
 
         // Half the width available, so half the size — and the narrower axis
         // wins, because both have to fit.
-        let fit = Zoom::to_fit(design, Size::new(400, 1000), 0);
+        let fit = Zoom::to_fit(design, Size::new(400, 1000), 0, 1.0);
         assert_eq!(fit.percent(), 50);
         assert!(fit.is_fit());
 
-        let squat = Zoom::to_fit(design, Size::new(1600, 240), 0);
+        let squat = Zoom::to_fit(design, Size::new(1600, 240), 0, 1.0);
         assert_eq!(squat.percent(), 50, "the short axis decides");
 
         // Room to spare is not a reason to magnify: fit means *all of it*.
         assert_eq!(
-            Zoom::to_fit(design, Size::new(4000, 4000), 0).percent(),
+            Zoom::to_fit(design, Size::new(4000, 4000), 0, 1.0).percent(),
             100
         );
 
         // The margin comes off both sides.
-        assert_eq!(Zoom::to_fit(design, Size::new(816, 1000), 8).percent(), 100);
-        assert!(Zoom::to_fit(design, Size::new(800, 1000), 8).percent() < 100);
+        assert_eq!(
+            Zoom::to_fit(design, Size::new(816, 1000), 8, 1.0).percent(),
+            100
+        );
+        assert!(Zoom::to_fit(design, Size::new(800, 1000), 8, 1.0).percent() < 100);
     }
 
     /// A viewport with no room in it still produces something drawable.
@@ -335,7 +375,7 @@ mod tests {
             (Size::new(800, 480), Size::new(0, 0)),
             (Size::new(800, 480), Size::new(4, 4)),
         ] {
-            let fit = Zoom::to_fit(design, view, 8);
+            let fit = Zoom::to_fit(design, view, 8, 1.0);
             assert!(fit.percent() > 0, "{design:?} in {view:?} gave nothing");
             assert!(fit.factor() > 0.0);
         }
