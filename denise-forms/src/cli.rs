@@ -17,6 +17,7 @@ denise-forms — the DeniseUI form file
 
     denise-forms check  <file.dform>...          parse, build and lint
     denise-forms render <file.dform> [out.ppm]   draw one frame, no display needed
+    denise-forms fmt    <file.dform>...          lay the indentation out again
 
 Options
     --theme <dark|light|high-contrast>   render: which theme (default: the file's)
@@ -24,8 +25,9 @@ Options
     --size <WxH>                         render: fit the form to this surface, by its
                                          own `scaling=` rule
     --font <path.ttf>                    render: a real font instead of the built-in one
-    --quiet                              check: say nothing unless something is wrong
+    --quiet                              check, fmt: say nothing unless something is wrong
     --no-lint                            check: syntax and building only, no geometry
+    --check                              fmt: report what would change, write nothing
 ";
 
 fn main() -> ExitCode {
@@ -48,6 +50,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     match command.as_str() {
         "check" => check(rest),
         "render" => render(rest),
+        "fmt" => fmt(rest),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
@@ -569,4 +572,61 @@ fn write_ppm(ui: &mut Ui<Void>, size: Size, path: &str) -> Result<(), String> {
         out.flush()
     };
     write(&mut out).map_err(|e| format!("{path}: {e}"))
+}
+
+// ------------------------------------------------------------------------- fmt
+
+/// Lays out the indentation of each file named, in place.
+///
+/// Only whitespace at the two ends of a line ever moves — see
+/// [`tidy`](denise_forms::tidy). A file that does not parse is reported and left
+/// alone, because a formatter that rewrites what it cannot read is how work gets
+/// lost.
+///
+/// `--check` writes nothing and exits non-zero if anything would change, which
+/// is the shape CI wants.
+fn fmt(args: &[String]) -> Result<ExitCode, String> {
+    let (flags, files) = split(args);
+    let quiet = has(&flags, "quiet");
+    let dry = has(&flags, "check");
+    if files.is_empty() {
+        return Err(format!("fmt: no files\n\n{USAGE}"));
+    }
+
+    let mut changed = 0usize;
+    let mut failed = 0usize;
+    for path in files {
+        let source = read(path)?;
+        let tidied = match denise_forms::tidy(&source) {
+            Ok(tidied) => tidied,
+            Err(error) => {
+                eprintln!("{path}:{error}");
+                failed += 1;
+                continue;
+            }
+        };
+        if tidied == source {
+            continue;
+        }
+        changed += 1;
+        if dry {
+            println!("{path}: would be laid out again");
+            continue;
+        }
+        std::fs::write(path, &tidied).map_err(|e| format!("{path}: {e}"))?;
+        if !quiet {
+            println!("{path}: laid out again");
+        }
+    }
+
+    if failed > 0 {
+        return Ok(ExitCode::FAILURE);
+    }
+    if dry && changed > 0 {
+        return Ok(ExitCode::FAILURE);
+    }
+    if !quiet && changed == 0 {
+        println!("nothing to lay out");
+    }
+    Ok(ExitCode::SUCCESS)
 }

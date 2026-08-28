@@ -1977,6 +1977,229 @@ impl Form {
     }
 }
 
+/// Lays a form's indentation out again, and changes nothing else.
+///
+/// Not a canonical formatter. `kdl`'s own
+/// ([`autoformat`](https://docs.rs/kdl/latest/kdl/struct.KdlDocument.html#method.autoformat))
+/// is one, and it deletes a comment written at the end of a node's line
+/// ([#119](https://github.com/bisand/denise/issues/119),
+/// [kdl-org/kdl-rs#179](https://github.com/kdl-org/kdl-rs/issues/179)) — which
+/// is not a thing to ship into a format whose first promise is that comments
+/// survive. It also unquotes strings and drops blank lines.
+///
+/// So this does the one thing hand-editing actually breaks and nothing else:
+/// **only the whitespace at the two ends of a line is ever touched.** Comments
+/// keep their text and their position, strings keep their quoting, properties
+/// keep their order, blank lines stay blank lines, and columns lined up by hand
+/// inside a line stay lined up. What changes is the indent in front of each
+/// line, to one step per level of nesting, and trailing whitespace, which goes.
+///
+/// The step is the file's own — whatever the first node inside `form` uses — so
+/// a file written with two spaces stays a two-space file. Four spaces is the
+/// fallback for a file that does not say.
+///
+/// Lines inside a multi-line string or a block comment are left exactly as they
+/// are, because those are content rather than layout.
+///
+/// ```
+/// # use denise_forms::tidy;
+/// let ragged = "\
+/// form \"F\" version=1 width=20 height=20 {
+///     label \"one\" x=0 y=0 w=5 h=5   // kept, and still here
+///         label \"two\" x=0 y=6 w=5 h=5
+/// }
+/// ";
+/// let tidied = tidy(ragged)?;
+/// assert_eq!(tidied, "\
+/// form \"F\" version=1 width=20 height=20 {
+///     label \"one\" x=0 y=0 w=5 h=5   // kept, and still here
+///     label \"two\" x=0 y=6 w=5 h=5
+/// }
+/// ");
+/// # Ok::<(), denise_forms::Error>(())
+/// ```
+///
+/// Refuses a file it cannot parse, because a formatter that rewrites what it
+/// does not understand is how a file gets lost.
+pub fn tidy(source: &str) -> Result<String, Error> {
+    let form = Form::parse(source)?;
+    Ok(laid_out(source, &form.indent_step()))
+}
+
+/// See [`tidy`]. Split out so the arithmetic can be tested on source that is
+/// not a whole form.
+fn laid_out(source: &str, step: &str) -> String {
+    let b = source.as_bytes();
+    // Which byte each line starts at, and the depth the scan had reached there.
+    let mut depth_at_line = vec![0usize];
+    // Lines whose own bytes are inside a string or a block comment, and so are
+    // content rather than layout.
+    let mut protected = vec![false];
+    let mut depth = 0usize;
+    let mut i = 0usize;
+
+    while i < b.len() {
+        if let Some(past) = not_structure(b, i) {
+            // A newline inside one of these starts a line nobody may reindent.
+            for _ in b[i..past.min(b.len())]
+                .iter()
+                .filter(|byte| **byte == b'\n')
+            {
+                depth_at_line.push(depth);
+                protected.push(true);
+            }
+            i = past.max(i + 1);
+            continue;
+        }
+        match b[i] {
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b'\n' => {
+                depth_at_line.push(depth);
+                protected.push(false);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let mut out = String::with_capacity(source.len());
+    for (number, line) in source.split_inclusive('\n').enumerate() {
+        let (body, ending) = match line.strip_suffix('\n') {
+            Some(body) => (body, "\n"),
+            None => (line, ""),
+        };
+        if protected.get(number).copied().unwrap_or(false) {
+            out.push_str(line);
+            continue;
+        }
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            // A blank line is a paragraph break, and carries no indentation.
+            out.push_str(ending);
+            continue;
+        }
+        // A line that starts by closing its block belongs one level out.
+        let depth = depth_at_line.get(number).copied().unwrap_or(0);
+        let depth = if trimmed.starts_with('}') {
+            depth.saturating_sub(1)
+        } else {
+            depth
+        };
+        for _ in 0..depth {
+            out.push_str(step);
+        }
+        out.push_str(body.trim_start());
+        // Trailing whitespace is never anything, and after a closing brace it
+        // is the shape that `restore_after_close` exists to keep -- so tidying
+        // a file is also how somebody gets rid of it.
+        while out.ends_with(' ') || out.ends_with('\t') {
+            out.pop();
+        }
+        out.push_str(ending);
+    }
+    out
+}
+
+/// If a comment or a string begins at `at`, the offset just past it.
+///
+/// **The one place that decides what is not structure.** A `{` inside a string
+/// or a comment is text, and everything that walks form source without parsing
+/// it — the limits in [`unparseable`], the indentation in [`tidy`] — has to
+/// agree about which those are. They agree by both asking here; four separate
+/// bugs came out of two scans disagreeing before this was one function.
+///
+/// It should never recognise a string that `kdl` would not, because every skip
+/// is a stretch of bytes not counted as structure. So a string is skipped only
+/// when it is certainly a string: it must close, a `"""` must open a line, and
+/// its closing `"""` must lead one. Being wrong the other way — counting the
+/// insides of something that turns out to be a string — cannot refuse a file
+/// that parses, and that is the direction to be wrong in.
+fn not_structure(b: &[u8], at: usize) -> Option<usize> {
+    match *b.get(at)? {
+        // A line comment, to the end of its line but not over the newline:
+        // callers count that newline themselves.
+        b'/' if b.get(at + 1) == Some(&b'/') => {
+            let mut i = at;
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+            Some(i)
+        }
+        // A block comment, which nests.
+        b'/' if b.get(at + 1) == Some(&b'*') => {
+            let mut open = 1usize;
+            let mut i = at + 2;
+            while i < b.len() && open > 0 {
+                if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                    open += 1;
+                    i += 2;
+                } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                    open -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            Some(i)
+        }
+        // A raw string, `#"..."#` with matching hashes. Bare `#true` and
+        // friends fall through harmlessly: no quote follows the hashes.
+        b'#' => {
+            let mut hashes = 0usize;
+            let mut i = at;
+            while b.get(i) == Some(&b'#') {
+                hashes += 1;
+                i += 1;
+            }
+            if b.get(i) != Some(&b'"') {
+                return Some(i);
+            }
+            let mut scan = i + 1;
+            while scan < b.len() {
+                if b[scan] == b'"' {
+                    let mut past = scan + 1;
+                    let mut seen = 0usize;
+                    while seen < hashes && b.get(past) == Some(&b'#') {
+                        past += 1;
+                        seen += 1;
+                    }
+                    if seen == hashes {
+                        return Some(past);
+                    }
+                }
+                scan += 1;
+            }
+            // A run of hashes with no matching close is not a raw string, so
+            // the rest of the file must not be swallowed on the strength of it.
+            Some(i)
+        }
+        // A multi-line string, which KDL spells `"""` *and a newline*, and ends
+        // at the first `"""` that a line's own whitespace leads up to.
+        b'"' if b[at..].starts_with(b"\"\"\"") && opens_a_line(&b[at + 3..]) => {
+            let mut i = at + 3;
+            while i + 3 <= b.len() {
+                if b[i..].starts_with(b"\"\"\"") && closes_a_line(&b[at + 3..i]) {
+                    return Some(i + 3);
+                }
+                i += 1;
+            }
+            Some(at + 1)
+        }
+        b'"' => {
+            let mut i = at + 1;
+            while i < b.len() && b[i] != b'"' {
+                // An escaped character, including an escaped quote.
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            // `i` can overshoot on a trailing backslash, which is one more way
+            // for a quote not to close.
+            Some(if i < b.len() { i + 1 } else { at + 1 })
+        }
+        _ => None,
+    }
+}
+
 /// Whether what follows an opening `"""` is the rest of its line and then a
 /// newline, which is what makes it a multi-line string rather than an error.
 fn opens_a_line(rest: &[u8]) -> bool {
@@ -2031,35 +2254,18 @@ impl Unparseable {
 /// The brace that puts the file past a limit the parser must not be asked to
 /// reach, if there is one.
 ///
-/// A scanner rather than a parse, because it has to run *before* the parser: it
-/// skips comments and every shape of KDL string so that a `{` inside one is not
-/// counted, and counts nothing else. Braces cannot appear in a bare identifier,
-/// so what is left is structure.
-///
-/// **It should never recognise a string that `kdl` would not.** Every skip is a
-/// stretch of bytes not counted as structure, so a string this scan believes in
-/// and the parser does not is a hole through the limits below. The fuzzer found
-/// three, and each one is now a condition here: a quote must close (thirty-four
-/// `#` and a quote with no partner hid twenty-four slashdashes and twenty-eight
-/// braces), a `"""` must open a line (one that did not hid a hundred and twenty
-/// braces), and its closing `"""` must lead one.
-///
-/// It is not a complete agreement and cannot cheaply be made one: KDL also
-/// requires every line of a multi-line string to carry the closing `"""`'s
-/// indentation, and a string that breaks that rule is an error to `kdl` and a
-/// string to this scan. The consequence is bounded — such a file reaches the
-/// parser, which is slow on it and then refuses it — and it is the same
-/// unbounded-time problem [`MAX_COMMENTED_DEPTH`] describes rather than a new
-/// one. What matters is the direction of the error: being wrong the *other*
-/// way, and counting the insides of something that turns out to be a string,
-/// would refuse a file that parses, and none of these conditions can do that.
+/// A scanner rather than a parse, because it has to run *before* the parser.
+/// [`not_structure`] decides what is a comment or a string, and everything left
+/// over is structure — braces cannot appear in a bare identifier.
 ///
 /// Two things are counted, and both are about what the parser costs rather than
 /// about what a form means. Plain nesting past [`MAX_DEPTH`] overflows `kdl`'s
 /// recursive descent; commented-out blocks nested past [`MAX_COMMENTED_DEPTH`]
-/// send it exponential. Neither is a `Result` the parser could hand back — one
-/// is a stack overflow and the other never returns — so both have to be refused
-/// out here, where a byte scan is all it costs.
+/// send it exponential. A third is not counted at all but falls out of the
+/// same walk: braces that do not balance, which no parser can make sense of.
+/// None of the three is a `Result` the parser could hand back — one is a stack
+/// overflow, one never returns, and the third would cost a slow failure — so
+/// all three are refused out here, where a byte scan is all it costs.
 fn unparseable(source: &str) -> Option<Unparseable> {
     let b = source.as_bytes();
     let mut i = 0;
@@ -2077,129 +2283,48 @@ fn unparseable(source: &str) -> Option<Unparseable> {
 
     while i < b.len() {
         let before = i;
-        match b[i] {
-            // A line comment.
-            b'/' if b.get(i + 1) == Some(&b'/') => {
-                while i < b.len() && b[i] != b'\n' {
-                    i += 1;
+        if let Some(past) = not_structure(b, i) {
+            i = past;
+        } else {
+            match b[i] {
+                // A slashdash. It comments out the node that follows it, and
+                // when that node carries a children block with anything in it,
+                // `kdl` pays for the block twice over at every level of nesting.
+                b'/' if b.get(i + 1) == Some(&b'-') => {
+                    next_commented = true;
+                    i += 2;
                 }
-            }
-            // A block comment, which nests.
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                let mut open = 1usize;
-                i += 2;
-                while i < b.len() && open > 0 {
-                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
-                        open += 1;
-                        i += 2;
-                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
-                        open -= 1;
-                        i += 2;
-                    } else {
-                        i += 1;
+                b'{' => {
+                    depth += 1;
+                    if depth > MAX_DEPTH {
+                        return Some(Unparseable::TooDeep(i));
                     }
-                }
-            }
-            // A raw string, `#"..."#` with matching hashes. Bare `#true` and
-            // friends fall through harmlessly: no quote follows the hashes.
-            b'#' => {
-                let mut hashes = 0usize;
-                while b.get(i) == Some(&b'#') {
-                    hashes += 1;
-                    i += 1;
-                }
-                if b.get(i) == Some(&b'"') {
-                    let mut at = i + 1;
-                    let mut end = None;
-                    while at < b.len() {
-                        if b[at] == b'"' {
-                            let mut past = at + 1;
-                            let mut seen = 0usize;
-                            while seen < hashes && b.get(past) == Some(&b'#') {
-                                past += 1;
-                                seen += 1;
-                            }
-                            if seen == hashes {
-                                end = Some(past);
-                                break;
-                            }
+                    blocks.push(next_commented);
+                    opened.push(i);
+                    if next_commented {
+                        commented += 1;
+                        if commented > MAX_COMMENTED_DEPTH {
+                            return Some(Unparseable::CommentedTooDeep(i));
                         }
-                        at += 1;
                     }
-                    // A run of hashes with no matching close is not a raw
-                    // string, so the scan must not swallow the rest of the file
-                    // on the strength of it.
-                    i = end.unwrap_or(i);
+                    next_commented = false;
+                    i += 1;
                 }
-            }
-            // A multi-line string, which KDL spells `"""` *and a newline*. A
-            // `"""` with anything else after it is a parse error to kdl rather
-            // than a string, so treating it as one here would skip over
-            // structure kdl is going to read.
-            b'"' if b[i..].starts_with(b"\"\"\"") && opens_a_line(&b[i + 3..]) => {
-                // And it ends at the first `\"\"\"` that a line's own whitespace
-                // leads up to. Not simply the next one anywhere: `hi\"\"\"` on the
-                // end of a line does not close a multi-line string, and reading
-                // it as one would skip whatever came after -- five braces, in
-                // the input that found this.
-                let mut at = i + 3;
-                let mut end = None;
-                while at + 3 <= b.len() {
-                    if b[at..].starts_with(b"\"\"\"") && closes_a_line(&b[i + 3..at]) {
-                        end = Some(at + 3);
-                        break;
+                b'}' => {
+                    // A `}` with nothing open cannot be parsed by anything, and
+                    // saying so here costs one byte of lookback.
+                    let Some(was_commented) = blocks.pop() else {
+                        return Some(Unparseable::Unbalanced { at: i, open: false });
+                    };
+                    opened.pop();
+                    depth -= 1;
+                    if was_commented {
+                        commented -= 1;
                     }
-                    at += 1;
+                    i += 1;
                 }
-                i = end.unwrap_or(i + 1);
+                _ => i += 1,
             }
-            b'"' => {
-                let mut at = i + 1;
-                while at < b.len() && b[at] != b'"' {
-                    // An escaped character, including an escaped quote.
-                    at += if b[at] == b'\\' { 2 } else { 1 };
-                }
-                // `at` can overshoot on a trailing backslash, which is one
-                // more way for a quote not to close.
-                i = if at < b.len() { at + 1 } else { i + 1 };
-            }
-            // A slashdash. It comments out the node that follows it, and when
-            // that node carries a children block with anything in it, `kdl`
-            // pays for the block twice over at every level of nesting.
-            b'/' if b.get(i + 1) == Some(&b'-') => {
-                next_commented = true;
-                i += 2;
-            }
-            b'{' => {
-                depth += 1;
-                if depth > MAX_DEPTH {
-                    return Some(Unparseable::TooDeep(i));
-                }
-                blocks.push(next_commented);
-                opened.push(i);
-                if next_commented {
-                    commented += 1;
-                    if commented > MAX_COMMENTED_DEPTH {
-                        return Some(Unparseable::CommentedTooDeep(i));
-                    }
-                }
-                next_commented = false;
-                i += 1;
-            }
-            b'}' => {
-                // A `}` with nothing open cannot be parsed by anything, and
-                // saying so here costs one byte of lookback.
-                let Some(was_commented) = blocks.pop() else {
-                    return Some(Unparseable::Unbalanced { at: i, open: false });
-                };
-                opened.pop();
-                depth -= 1;
-                if was_commented {
-                    commented -= 1;
-                }
-                i += 1;
-            }
-            _ => i += 1,
         }
         // A node ends at a newline or a `;`, and so does the reach of a
         // slashdash waiting for a block. Reading it off the bytes just skipped
@@ -2793,6 +2918,134 @@ mod tests {
     /// the fuzz target `parse_form` in six bytes.
     ///
     /// If kdl ever writes those fields, this test fails and the refusal can go.
+    /// The promise `tidy` makes: it moves lines, it does not edit them.
+    ///
+    /// Checked as a property rather than by example, because the whole point of
+    /// the tool is that somebody can run it over a file they annotated without
+    /// reading the diff. Every line of the output must be a line of the input
+    /// with its ends trimmed, in the same order.
+    #[test]
+    fn tidying_changes_only_the_whitespace_at_the_ends_of_a_line() {
+        for name in corpus() {
+            let source = std::fs::read_to_string(&name).expect("readable");
+            let tidied = tidy(&source).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let before: Vec<&str> = source.lines().map(str::trim).collect();
+            let after: Vec<&str> = tidied.lines().map(str::trim).collect();
+            assert_eq!(before, after, "in {name}");
+        }
+    }
+
+    /// And having laid a file out, laying it out again does nothing.
+    #[test]
+    fn tidying_a_tidy_file_is_a_no_op() {
+        for name in corpus() {
+            let source = std::fs::read_to_string(&name).expect("readable");
+            let once = tidy(&source).expect("tidies");
+            let twice = tidy(&once).expect("tidies again");
+            assert_eq!(once, twice, "in {name}");
+            // And what comes out is still the same form, byte-preserved by the
+            // parser that has to read it back.
+            let form = Form::parse(&once).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(form.text(), once, "in {name}");
+        }
+    }
+
+    /// Every `.dform` in the repository, laid out or awkward.
+    fn corpus() -> Vec<String> {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+        let mut found = Vec::new();
+        for dir in [
+            format!("{root}/forms"),
+            format!("{root}/denise-forms/tests/awkward"),
+        ] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "dform") {
+                    found.push(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        assert!(found.len() > 6, "the corpus went missing: {found:?}");
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn tidying_keeps_what_a_person_put_there_and_fixes_the_indent() {
+        // A comment on the end of a line -- the thing kdl's own formatter
+        // deletes, and the reason this exists at all.
+        // The first node inside `form` sets the step -- four spaces here --
+        // and everything after it has drifted.
+        let ragged = "\
+// a note about the form
+form \"F\" version=1 kind=screen width=20 height=20 {
+    label \"hi\"   x=0 y=0 w=5 h=5  // a note about the label
+
+  panel name=p x=0 y=6 w=5 h=5 {
+label \"in\" x=0 y=0 w=5 h=5
+        }
+}
+";
+        let out = tidy(ragged).expect("tidies");
+        assert!(out.contains("// a note about the form"), "{out}");
+        assert!(out.contains("// a note about the label"), "{out}");
+        // Quoting survives, which autoformat also takes away.
+        assert!(out.contains("label \"hi\""), "{out}");
+        // Columns lined up inside the line are the author's business.
+        assert!(out.contains("\"hi\"   x=0"), "{out}");
+        // The blank line is a paragraph break and stays one.
+        assert!(out.contains("h=5  // a note about the label\n\n"), "{out}");
+        // And the indent is one step per level, closing braces included.
+        assert!(out.contains("\n    label \"hi\""), "{out}");
+        assert!(out.contains("\n        label \"in\""), "{out}");
+        assert!(out.contains("\n    }\n}\n"), "{out}");
+    }
+
+    #[test]
+    fn tidying_leaves_the_inside_of_a_multi_line_string_alone() {
+        // The lines of a multi-line string are its value, not layout.
+        let source = "\
+form \"F\" version=1 kind=screen width=20 height=20 {
+    label \"one\" x=0 y=0 w=5 h=5
+        label \"\"\"
+  indented on purpose
+      and so is this
+\"\"\" x=0 y=6 w=5 h=5
+}
+";
+        let out = tidy(source).expect("tidies");
+        assert!(out.contains("\n  indented on purpose\n"), "{out}");
+        assert!(out.contains("\n      and so is this\n"), "{out}");
+        // The line that opens it is still laid out.
+        assert!(out.contains("\n    label \"\"\"\n"), "{out}");
+    }
+
+    #[test]
+    fn tidying_uses_the_indent_the_file_already_uses() {
+        let two = "\
+form \"F\" version=1 kind=screen width=20 height=20 {
+  panel name=p x=0 y=0 w=5 h=5 {
+          label \"in\" x=0 y=0 w=5 h=5
+  }
+}
+";
+        let out = tidy(two).expect("tidies");
+        assert!(out.contains("\n  panel"), "{out}");
+        assert!(out.contains("\n    label"), "{out}");
+    }
+
+    #[test]
+    fn a_file_that_does_not_parse_is_not_rewritten() {
+        // Including the shapes the guards refuse: a formatter must not be the
+        // way a file that cannot be read gets edited anyway.
+        assert!(tidy("form \"F\" version=1 {").is_err());
+        assert!(tidy("not a form at all").is_err());
+        assert!(tidy(&("a /-{ ".repeat(8) + &"}".repeat(8))).is_err());
+    }
+
     #[test]
     fn a_type_annotation_kdl_cannot_write_back_is_refused_rather_than_mangled() {
         for source in ["(Z) h", "( Z )h", "(Z) h\n", "(Z)h { (Y) i }\n"] {

@@ -522,8 +522,6 @@ jobs:
       # geometry, which is the only thing that will ever catch a node quietly
       # sitting outside its parent when there is no layout engine to complain.
       #
-      # `git ls-files` rather than a glob, so a form added anywhere is covered and
-      # a stray file in `target/` is not.
       # `git ls-files` rather than a shell glob, so a form added in any directory
       # is covered and nothing in `target/` is. Unquoted on purpose, to split into
       # arguments; a `.dform` with a space in its name would need more, and there
@@ -538,3 +536,14 @@ jobs:
           echo "$forms"
           cargo run --quiet -p denise-forms --features cli --bin denise-forms \
             -- check $forms
+
+      # `forms/` only, and that is the point: `denise-forms/tests/awkward/` is a
+      # corpus of files written the way people write them -- an indent that is
+      # not the designer's, columns lined up by hand, trailing whitespace after a
+      # brace -- and laying those out would destroy what they are for. The
+      # exemplar forms are what somebody copies, so those stay tidy.
+      - name: The example forms are laid out
+        run: |
+          forms=$(git ls-files 'forms/*.dform')
+          cargo run --quiet -p denise-forms --features cli --bin denise-forms \
+            -- fmt --check $forms
