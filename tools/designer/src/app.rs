@@ -819,7 +819,7 @@ impl Designer {
         let mut designer = Self {
             ui,
             scale,
-            zoom: Zoom::default(),
+            zoom: Zoom::default().on_device(scale.factor()),
             chrome,
             document,
             settings,
@@ -1120,6 +1120,10 @@ impl Designer {
     /// `Form::build_scaled` is what puts it there. Nothing about the *document*
     /// changes, so this is not an edit and never touches the history.
     pub fn set_zoom(&mut self, zoom: Zoom) {
+        // The display's scale is folded in here and nowhere else: every `Zoom`
+        // constructor starts at 100 and would otherwise drop it, and this is
+        // the one door they all come through.
+        let zoom = zoom.on_device(self.scale.factor());
         if zoom == self.zoom {
             return;
         }
@@ -1170,7 +1174,12 @@ impl Designer {
     fn fitted(&self) -> Zoom {
         let view = self.ui.bounds(self.chrome.canvas).unwrap_or(Rect::ZERO);
         let room = Size::new(view.width.max(0) as u32, view.height.max(0) as u32);
-        Zoom::to_fit(self.document.form().size(), room, self.scale.n(GAP))
+        Zoom::to_fit(
+            self.document.form().size(),
+            room,
+            self.scale.n(GAP),
+            self.scale.factor(),
+        )
     }
 
     /// Rebuilds the canvas from the open document.
@@ -1721,7 +1730,7 @@ impl Designer {
                 // out is exact enough for a number nobody typed, and it is
                 // dimmed in the pane anyway.
                 if property.pixels
-                    && !self.zoom.is_actual()
+                    && !self.zoom.is_unit()
                     && let Some(written) = self.document.form().property(path, property.name)
                 {
                     return written;
@@ -1892,7 +1901,7 @@ impl Designer {
     /// The rectangle is not one of these: it is not a *property* of the widget
     /// but the tree's own geometry, and it goes through [`Designer::form_layout`].
     fn unlengthened(&self, property: &Property, value: Value) -> Value {
-        if !property.pixels || self.zoom.is_actual() {
+        if !property.pixels || self.zoom.is_unit() {
             return value;
         }
         match value {
@@ -1908,7 +1917,7 @@ impl Designer {
     /// Without this, typing `3` into `thickness` at 400% would write 3 to the
     /// file — correctly — and then draw a hairline until the next rebuild.
     fn lengthened(&self, property: &Property, value: Value) -> Value {
-        if !property.pixels || self.zoom.is_actual() {
+        if !property.pixels || self.zoom.is_unit() {
             return value;
         }
         match value {
@@ -6070,30 +6079,54 @@ mod tests {
         }
     }
 
-    /// The canvas does not follow the **display**, at either scale factor.
+    /// The canvas follows the display, so 100% is actual size *on this screen*.
     ///
-    /// A form is authored in the panel's own device pixels, and the display's
-    /// density is not a reason to change them. What magnifies it is the zoom
-    /// control, which is a separate choice with a conversion of its own — see
-    /// the tests above — and this pins the two apart: at 100% the form is its
-    /// own size on a 1x display and on a 2x one alike.
+    /// #154 left it at one screen pixel per form pixel, which is what a kiosk
+    /// panel does and which drew the form at half the size of the toolbar
+    /// beside it on a Retina display — reported as a bug the first time anybody
+    /// used it, and it is one: nobody eyeballing a canvas is counting device
+    /// pixels, and `denise-forms render --scale` is where a pixel-exact check
+    /// belongs. So the stage is the form's size times the display's scale, and
+    /// the zoom control multiplies on top of that.
     #[test]
-    fn the_form_on_the_canvas_is_not_scaled_with_the_chrome() {
+    fn the_form_on_the_canvas_is_actual_size_on_this_display() {
         let (one, two) = (at_scale(1.0), at_scale(2.0));
-        assert!(one.zoom.is_actual() && two.zoom.is_actual());
+        assert_eq!((one.zoom.percent(), two.zoom.percent()), (100, 100));
         let size = one.document.form().size();
 
-        for (name, designer) in [("1x", &one), ("2x", &two)] {
+        for (name, designer, factor) in [("1x", &one, 1), ("2x", &two, 2)] {
             let stage = designer
                 .ui
                 .bounds(designer.chrome.stage)
                 .expect("the stage is there");
             assert_eq!(
                 (stage.width, stage.height),
-                (size.width as i32, size.height as i32),
-                "the form is not its own size at {name}"
+                (size.width as i32 * factor, size.height as i32 * factor),
+                "the form is not actual size at {name}"
             );
         }
+
+        // And only at 1x is a form pixel a screen pixel, which is what the
+        // conversions may skip.
+        assert!(one.zoom.is_unit(), "1x at 100% converts nothing");
+        assert!(!two.zoom.is_unit(), "2x at 100% is still a conversion");
+    }
+
+    /// Fitting measures the window in screen pixels and answers in the user's.
+    ///
+    /// The display's scale is in the room being measured and is put back on by
+    /// `set_zoom`, so counting it once is the whole job: counting it twice fits
+    /// a form to half the window and reports a percentage nobody asked for.
+    #[test]
+    fn fitting_does_not_count_the_displays_scale_twice() {
+        let (mut one, mut two) = (at_scale(1.0), at_scale(2.0));
+        one.zoom_to_fit();
+        two.zoom_to_fit();
+        assert_eq!(
+            one.zoom.percent(),
+            two.zoom.percent(),
+            "the same form in the same window fits at the same percentage"
+        );
     }
 
     /// Simulating another theme does not put the chrome back at half size.

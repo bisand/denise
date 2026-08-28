@@ -642,11 +642,25 @@ picture — every node of the chrome, and the text size of every node that has
 one, has to be exactly twice what it is at 1x. `--scale <factor>` is the same
 lever for a snapshot, and grows the surface with it, the way a real window does.
 
-**The canvas does not follow the display.** A form is authored in the panel's
-own device pixels, and the density of the screen it is being drawn on is not a
-reason to change them. What magnifies it is the zoom control, which is a
-separate choice — the toolbar says what it is at, `+`, `-` and `0` step it, and
-`9` fits the whole form in the window.
+**The canvas follows the display too, and 100% means actual size on this
+screen.** It did not at first: a form is authored in a panel's own device
+pixels, so the canvas was left at one screen pixel per form pixel whatever the
+display's density. That is faithful to a kiosk and wrong to look at — on a 2x
+display the form came out at half the size of the toolbar beside it, and the
+first person to open it reported it as a bug. It is one: nobody eyeballing a
+canvas is counting device pixels, and `denise-forms render --scale` is where a
+pixel-exact check belongs.
+
+So the canvas transform is the display's scale *and* the zoom control together,
+and `Zoom` carries both — `percent` is the user's and `device` is the screen's,
+with `factor()` the product. `percent()` is still the user's hundred per cent; `is_unit()`
+is the narrower question a conversion asks, and is true only on a 1x display at
+100%. Fitting is the one place the two must not be confused: it
+measures the window in screen pixels and answers in the user's percentage, so it
+divides the display's scale back out and `set_zoom` puts it back on.
+
+The zoom control is still a separate choice on top — the toolbar says what it is
+at, `+`, `-` and `0` step it, and `9` fits the whole form in the window.
 
 ### The numbers never change
 
