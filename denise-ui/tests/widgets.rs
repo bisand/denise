@@ -3323,6 +3323,56 @@ fn a_widget_that_consumes_the_wheel_stops_the_viewport_scrolling() {
     assert_eq!(ui.scroll(view), Point::new(0, 48));
 }
 
+/// A wheel's two axes mean the same thing, and mean it in the same direction.
+///
+/// `InputEvent::PointerScroll` carries a **content offset**, not the gesture:
+/// positive `y` scrolls content down and positive `x` scrolls it right, and a
+/// scroll view adds both straight to its offset. Every scroll test written
+/// before this one passed `delta_x: 0.0`, so the horizontal axis had never been
+/// exercised anywhere — which is how `denise-winit` came to negate one axis and
+/// not the other, and how the horizontal wheel stayed backwards on macOS.
+#[test]
+fn a_wheel_scrolls_both_ways_by_the_same_rule() {
+    // Its own viewport, with something to scroll to on *both* axes: the shared
+    // fixture is only taller than its view, so `x` would clamp to nothing and
+    // the test would pass whatever the sign was.
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let view = ui
+        .add(root, Panel::default(), Rect::new(40, 40, 200, 120))
+        .expect("viewport");
+    ui.set_scrollable(view, true);
+    ui.add(
+        view,
+        Button::new("Wide", Msg::Save),
+        Rect::new(0, 0, 400, 300),
+    )
+    .expect("something to scroll over");
+    let at = Point::new(100, 130);
+
+    ui.handle(&[InputEvent::PointerScroll {
+        delta_x: 32.0,
+        delta_y: 48.0,
+        position: at,
+    }]);
+    assert_eq!(
+        ui.scroll(view),
+        Point::new(32, 48),
+        "positive is right and down on both axes"
+    );
+
+    ui.handle(&[InputEvent::PointerScroll {
+        delta_x: -32.0,
+        delta_y: -48.0,
+        position: at,
+    }]);
+    assert_eq!(
+        ui.scroll(view),
+        Point::ZERO,
+        "and negative takes it back the same way"
+    );
+}
+
 // ----------------------------------------------------------- radial progress
 
 /// Renders a ring at each value and reports the painted-pixel count in the
