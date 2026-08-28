@@ -724,6 +724,11 @@ impl<M> Describe for Table<M> {
             "The columns, as `column` child nodes. Real data: a table's columns are its shape, not its contents.",
         ),
         Property::new(
+            "row",
+            PropertyKind::Placeholder,
+            "Rows to show on a canvas, as `row` child nodes inside `design`. The application supplies the real records, so these never reach a kiosk.",
+        ),
+        Property::new(
             "selected",
             PropertyKind::Int {
                 min: 0,
@@ -784,8 +789,10 @@ impl<M> Describe for Table<M> {
             // than remembering an index nothing can draw.
             "selected" => self.set_selected(Some(value.as_index()?)),
             // Built from the child nodes; an inspector edits them
-            // where they live. See `PropertyKind::List`.
-            "on-select" | "on-activate" | "column" => return Err(Mismatch::Supplied),
+            // where they live. See `PropertyKind::List`, and
+            // `PropertyKind::Placeholder` for `row`, which the application
+            // replaces at run time.
+            "on-select" | "on-activate" | "column" | "row" => return Err(Mismatch::Supplied),
             "activate-on-click" => self.single_click = value.as_bool()?,
             "row-height" => self.row_height = Some(value.as_int()?.max(1)),
             "role" => self.role = value.as_role()?,

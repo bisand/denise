@@ -1308,8 +1308,8 @@ impl Form {
         let Some(node) = self.node_at(path) else {
             return Vec::new();
         };
-        node.children()
-            .map(|block| {
+        self.holder(node, kind)
+            .map(|(block, _)| {
                 block
                     .nodes()
                     .iter()
@@ -1335,9 +1335,10 @@ impl Form {
     /// ```
     /// # use denise_forms::Form;
     /// let form = Form::parse(
-    ///     "form \"F\" version=1 width=99 height=99 {\n    table name=t x=0 y=0 w=9 h=9 {\n        column \"A\"\n        row \"1\"\n        row \"2\"\n    }\n}\n",
+    ///     "form \"F\" version=1 width=99 height=99 {\n    table name=t x=0 y=0 w=9 h=9 {\n        column \"A\"\n        column \"B\"\n        design {\n            row \"1\"\n            row \"2\"\n        }\n    }\n}\n",
     /// )?;
     ///
+    /// // Two columns and the `design` block, which is a child like any other.
     /// assert_eq!(form.child_count(&[0]), 3);
     /// assert_eq!(form.items(&[0], "row").len(), 2);
     /// assert_eq!(form.child_count(&[9]), 0);
@@ -1360,12 +1361,14 @@ impl Form {
     /// ```
     /// # use denise_forms::Form;
     /// let form = Form::parse(
-    ///     "form \"F\" version=1 width=99 height=99 {\n    table name=t x=0 y=0 w=9 h=9 {\n        column \"A\"\n        row \"1\"\n        row \"2\"\n    }\n}\n",
+    ///     "form \"F\" version=1 width=99 height=99 {\n    table name=t x=0 y=0 w=9 h=9 {\n        column \"A\"\n        column \"B\"\n        design {\n            row \"1\"\n            row \"2\"\n        }\n    }\n}\n",
     /// )?;
     ///
-    /// // The second `row` is the table's *third* child.
-    /// assert_eq!(form.item_path(&[0], "row", 1), Some(vec![0, 2]));
-    /// assert_eq!(form.item_path(&[0], "column", 0), Some(vec![0, 0]));
+    /// // The second `row` is the second child of the table's third child,
+    /// // because placeholder content lives in `design`.
+    /// assert_eq!(form.item_path(&[0], "row", 1), Some(vec![0, 2, 1]));
+    /// // Real content is addressed where it is written.
+    /// assert_eq!(form.item_path(&[0], "column", 1), Some(vec![0, 1]));
     /// // Past the end, and a kind the node does not hold.
     /// assert_eq!(form.item_path(&[0], "row", 2), None);
     /// assert_eq!(form.item_path(&[0], "option", 0), None);
@@ -1373,8 +1376,8 @@ impl Form {
     /// ```
     pub fn item_path(&self, path: &[usize], kind: &str, nth: usize) -> Option<Vec<usize>> {
         let node = self.node_at(path)?;
-        let at = node
-            .children()?
+        let (block, design) = self.holder(node, kind)?;
+        let at = block
             .nodes()
             .iter()
             .enumerate()
@@ -1382,8 +1385,69 @@ impl Form {
             .map(|(index, _)| index)
             .nth(nth)?;
         let mut full = path.to_vec();
+        // A placeholder sits one level further down, inside `design`, and the
+        // path has to say so or an edit lands on the wrong node.
+        if let Some(index) = design {
+            full.push(index);
+        }
         full.push(at);
         Some(full)
+    }
+
+    /// The node an item of `kind` is written under, as a path.
+    ///
+    /// The node at `path` itself for real content — a `table`'s `column`s are
+    /// its own children. Its `design { … }` block for placeholder content, which
+    /// is where a `row` goes so that no build but a designer's loads it.
+    ///
+    /// `None` when the node has no `design` block yet, which is the caller's cue
+    /// to write one: the first `row` a designer adds brings the block with it.
+    ///
+    /// ```
+    /// # use denise_forms::Form;
+    /// let form = Form::parse(r#"
+    /// form "F" version=1 width=99 height=99 {
+    ///     table name=t x=0 y=0 w=99 h=99 {
+    ///         column "Name"
+    ///     }
+    /// }
+    /// "#)?;
+    /// // A column is written on the table.
+    /// assert_eq!(form.collection_parent(&[0], "column"), Some(vec![0]));
+    /// // A row would need a `design` block, and there is none.
+    /// assert_eq!(form.collection_parent(&[0], "row"), None);
+    /// # Ok::<(), denise_forms::Error>(())
+    /// ```
+    pub fn collection_parent(&self, path: &[usize], kind: &str) -> Option<Vec<usize>> {
+        let node = self.node_at(path)?;
+        let (_, design) = self.holder(node, kind)?;
+        let mut full = path.to_vec();
+        if let Some(index) = design {
+            full.push(index);
+        }
+        Some(full)
+    }
+
+    /// Where a collection of `kind` under `node` actually lives, and the child
+    /// index of the `design` block if it is in one.
+    ///
+    /// Real content is written as children of the node itself; placeholder
+    /// content is written inside `design { … }`, so that every build but a
+    /// designer's skips it. See [`Form::build_with_design`].
+    fn holder<'n>(
+        &self,
+        node: &'n KdlNode,
+        kind: &str,
+    ) -> Option<(&'n KdlDocument, Option<usize>)> {
+        let children = node.children()?;
+        if !crate::build::is_placeholder(node.name().value(), kind) {
+            return Some((children, None));
+        }
+        let at = children
+            .nodes()
+            .iter()
+            .position(|child| child.name().value() == crate::build::DESIGN)?;
+        Some((children.nodes()[at].children()?, Some(at)))
     }
 
     /// The source of one node, as it stands in the file, with its own

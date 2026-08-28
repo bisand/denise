@@ -338,6 +338,11 @@ impl Describe for Timeline {
     /// `warning`.
     const PROPERTIES: &'static [Property] = &[
         Property::new(
+            "event",
+            PropertyKind::Placeholder,
+            "Events to show on a canvas, as `event` child nodes inside `design`. The application supplies the real history, so these never reach a kiosk.",
+        ),
+        Property::new(
             "row-height",
             PropertyKind::Int { min: 16, max: 200 },
             "Height of every event row in logical pixels, overriding the theme's field height.",
@@ -365,6 +370,10 @@ impl Describe for Timeline {
         match name {
             "row-height" => self.row_height = Some(value.as_int()?.max(1)),
             "size" => self.style.size_px = value.as_size()?,
+            // Built from the child nodes in a `design` block, which an
+            // inspector edits where they live and an application replaces at
+            // run time. See `PropertyKind::Placeholder`.
+            "event" => return Err(Mismatch::Supplied),
             _ => return Err(Mismatch::Unknown),
         }
         Ok(())

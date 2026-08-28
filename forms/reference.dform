@@ -60,10 +60,12 @@ form "Reference" name=reference version=1 kind=screen width=1024 height=600 them
         divider "History" x=8 y=264 w=224 h=16 role=base-content size=11
 
         timeline name=history x=8 y=288 w=224 h=112 row-height=28 size=12 {
-            event "Parsed" time="09:14" role=success
-            event "Built" time="09:14" role=success
-            event "Painted" time="09:15" role=info
-            event "Presented" pending=#true
+            design {
+                event "Parsed" time="09:14" role=success
+                event "Built" time="09:14" role=success
+                event "Painted" time="09:15" role=info
+                event "Presented" pending=#true
+            }
         }
 
         // A vertical rule against the main area, to prove the orientation.
@@ -145,10 +147,15 @@ form "Reference" name=reference version=1 kind=screen width=1024 height=600 them
             column "Last" flex=#true
             column "Born" width=64 align=end
 
-            row "Ada" "Lovelace" "1815"
-            row "Grace" "Hopper" "1906"
-            row "Alan" "Turing" "1912"
-            row "Karen" "Spärck Jones" "1935"
+            // Placeholder: four names so the table looks like a table on a
+            // canvas. Every build but a designer's skips a `design` block, so
+            // these never reach a panel -- the application supplies the records.
+            design {
+                row "Ada" "Lovelace" "1815"
+                row "Grace" "Hopper" "1906"
+                row "Alan" "Turing" "1912"
+                row "Karen" "Spärck Jones" "1935"
+            }
         }
 
         progress name=loaded x=12 y=204 w=352 h=8 value=0.62 role=info

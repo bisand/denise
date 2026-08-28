@@ -1,7 +1,7 @@
 //! Building the repository's own form files, and every way one can be wrong.
 
 use denise::{ElementState, InputEvent, KeyCode, Point, PointerButton, Size};
-use denise_forms::{Error, Form, Handler, Payload, Picture, Reason, Wiring};
+use denise_forms::{Edit, Error, Form, Handler, Payload, Picture, Reason, Wiring};
 use denise_ui::widgets::TextInput;
 use denise_ui::{Ui, Void};
 
@@ -569,6 +569,89 @@ fn a_form_that_would_take_forever_to_parse_is_refused_before_parsing() {
         \n    label \"here\" x=1 y=20 w=50 h=9\n}\n";
     let form = Form::parse(fine).expect("one commented-out block is ordinary");
     assert_eq!(form.text(), fine);
+}
+
+// ------------------------------------------------------------------- design
+
+/// Placeholder content is written, kept, and not built unless asked for.
+#[test]
+fn a_design_block_is_skipped_by_every_build_but_a_designers() {
+    let source = "form \"F\" version=1 width=200 height=90 {\n    \
+        table name=t x=0 y=0 w=200 h=40 {\n        column \"Name\"\n        \
+        design {\n            row \"Ada\"\n            row \"Grace\"\n        }\n    }\n    \
+        timeline name=h x=0 y=44 w=200 h=40 {\n        \
+        design {\n            event \"Parsed\"\n        }\n    }\n}\n";
+
+    // The file keeps every byte of it either way -- it is content, not a
+    // comment, and the designer has to edit it.
+    let form = Form::parse(source).expect("parses");
+    assert_eq!(form.text(), source);
+    assert_eq!(form.items(&[0], "row"), ["Ada", "Grace"]);
+    assert_eq!(form.items(&[1], "event"), ["Parsed"]);
+
+    // An application's build sees the column and no rows.
+    let (ui, built) = build_str::<Void>(source, &mut Anything).expect("builds");
+    let table = built.node("t").expect("the table is named");
+    assert!(ui.contains(table));
+
+    // And a designer's sees the rows.
+    let form = Form::parse(source).expect("parses");
+    let mut canvas: Ui<Void> = Ui::new(form.size(), form.theme());
+    let root = canvas.root();
+    form.build_with_design(&mut canvas, root, 1.0, &mut Anything)
+        .expect("builds with design");
+}
+
+/// The path an edit takes to a placeholder goes through the `design` block.
+#[test]
+fn a_placeholder_item_is_addressed_inside_the_design_block() {
+    let source = "form \"F\" version=1 width=200 height=90 {\n    \
+        table name=t x=0 y=0 w=200 h=40 {\n        column \"Name\"\n        \
+        design {\n            row \"Ada\"\n            row \"Grace\"\n        }\n    }\n}\n";
+    let form = Form::parse(source).expect("parses");
+
+    // The table is child 0; `design` is its child 1, after the column; the rows
+    // are inside that.
+    assert_eq!(form.item_path(&[0], "row", 0), Some(vec![0, 1, 0]));
+    assert_eq!(form.item_path(&[0], "row", 1), Some(vec![0, 1, 1]));
+    assert_eq!(form.item_path(&[0], "row", 2), None);
+    // Real content is still addressed where it is written.
+    assert_eq!(form.item_path(&[0], "column", 0), Some(vec![0, 0]));
+
+    // And the path is the one an edit lands on.
+    let mut form = form;
+    let path = form.item_path(&[0], "row", 1).expect("the second row");
+    form.apply(Edit::argument(&path, "Grace Hopper"))
+        .expect("edits");
+    assert!(
+        form.text().contains("row \"Grace Hopper\""),
+        "{}",
+        form.text()
+    );
+    assert_eq!(form.items(&[0], "row"), ["Ada", "Grace Hopper"]);
+}
+
+/// Placeholder content outside `design` is refused rather than shipped.
+#[test]
+fn a_row_written_where_the_engine_would_load_it_is_an_error() {
+    let source = "form \"F\" version=1 width=200 height=90 {\n    \
+        table name=t x=0 y=0 w=200 h=40 {\n        column \"Name\"\n        \
+        row \"Ada\"\n    }\n}\n";
+    assert!(
+        matches!(failure(source), Reason::PlaceholderOutside { ref found, .. } if found == "row"),
+        "{:?}",
+        failure(source)
+    );
+
+    // And a `design` block holds that widget's placeholders and nothing else.
+    let stray = "form \"F\" version=1 width=200 height=90 {\n    \
+        table name=t x=0 y=0 w=200 h=40 {\n        column \"Name\"\n        \
+        design {\n            event \"nope\"\n        }\n    }\n}\n";
+    assert!(
+        matches!(failure(stray), Reason::UnexpectedChild { .. }),
+        "{:?}",
+        failure(stray)
+    );
 }
 
 /// A file over the size limit is an error before it is a parse.

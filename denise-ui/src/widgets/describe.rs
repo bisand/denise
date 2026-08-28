@@ -377,11 +377,43 @@ pub enum PropertyKind {
     ///
     /// Which collections are a widget's **real data** and which are a
     /// designer's placeholder is a question per widget, not per kind; see
-    /// `docs/forms.md`.
+    /// `docs/forms.md` and [`PropertyKind::Placeholder`].
     List,
+    /// A collection the **designer** supplies and the application replaces:
+    /// written as child nodes, like [`List`](PropertyKind::List), but inside a
+    /// `design { … }` block that the engine skips unless it is asked for it.
+    ///
+    /// A `table`'s columns are its shape and a `List`; its rows are four names
+    /// somebody typed so the table looks like a table on a canvas, and are
+    /// this. The rows a kiosk shows come from the application at run time, so
+    /// carrying the designer's into flash is dead weight at best and a leak of
+    /// whatever was used as sample data at worst.
+    ///
+    /// Never settable here, for the same reason as `List`: the items are a run
+    /// of nodes rather than one value, and an inspector edits them where they
+    /// live.
+    Placeholder,
 }
 
 impl PropertyKind {
+    /// Whether this is a collection written as child nodes.
+    ///
+    /// True for [`List`](PropertyKind::List) and
+    /// [`Placeholder`](PropertyKind::Placeholder), which differ in where they
+    /// are written and whether the engine builds them, and not at all in what
+    /// an inspector does with one: both are a run of nodes edited where they
+    /// live rather than a value typed into a field.
+    ///
+    /// ```
+    /// # use denise_ui::widgets::describe::PropertyKind;
+    /// assert!(PropertyKind::List.is_collection());
+    /// assert!(PropertyKind::Placeholder.is_collection());
+    /// assert!(!PropertyKind::Text.is_collection());
+    /// ```
+    pub const fn is_collection(self) -> bool {
+        matches!(self, PropertyKind::List | PropertyKind::Placeholder)
+    }
+
     /// A short name for this kind, for error messages.
     pub const fn noun(self) -> &'static str {
         match self {
@@ -394,6 +426,7 @@ impl PropertyKind {
             PropertyKind::Asset => "a path",
             PropertyKind::Color => "a colour like #RRGGBB",
             PropertyKind::List => "a run of child nodes",
+            PropertyKind::Placeholder => "a run of child nodes in a `design` block",
         }
     }
 }
@@ -468,7 +501,10 @@ impl Property {
     pub const fn is_settable(&self) -> bool {
         !matches!(
             self.kind,
-            PropertyKind::Message(_) | PropertyKind::Asset | PropertyKind::List
+            PropertyKind::Message(_)
+                | PropertyKind::Asset
+                | PropertyKind::List
+                | PropertyKind::Placeholder
         )
     }
 }

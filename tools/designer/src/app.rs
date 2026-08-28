@@ -1288,7 +1288,10 @@ impl Designer {
         let outcome = self
             .document
             .form()
-            .build_scaled(&mut self.ui, stage, self.zoom.factor(), &mut wiring)
+            // With the `design` blocks, which is the one caller that wants
+            // them: a table drawn with no rows is not a table anybody can lay
+            // out against, and the application supplies the real ones. See #160.
+            .build_with_design(&mut self.ui, stage, self.zoom.factor(), &mut wiring)
             .map(|built| {
                 self.placed = built.placed().to_vec();
             });
@@ -1637,7 +1640,7 @@ impl Designer {
             // A collection is written as child nodes, so there is no entry to
             // find and none to take away: it counts as written when it holds
             // something, and it is emptied one item at a time.
-            let list = matches!(property.kind, PropertyKind::List);
+            let list = property.kind.is_collection();
             resettable &= entry && !list;
             written &= if list {
                 !self.items_of(path, property.name).is_empty()
@@ -1666,7 +1669,7 @@ impl Designer {
             // to that one — a list is the node's content, and merging two
             // nodes' content is not something an inspector can mean.
             items: match (property.kind, paths.first()) {
-                (PropertyKind::List, Some(path)) => self.items_of(path, property.name),
+                (kind, Some(path)) if kind.is_collection() => self.items_of(path, property.name),
                 _ => Vec::new(),
             },
         }
@@ -1699,7 +1702,7 @@ impl Designer {
                 .unwrap_or_default(),
             // A list's row shows how many there are; the items themselves are
             // the editor, one field each.
-            PropertyKind::List => {
+            PropertyKind::List | PropertyKind::Placeholder => {
                 let items = self.items_of(path, property.name);
                 match items.len() {
                     0 => String::new(),
@@ -1780,7 +1783,7 @@ impl Designer {
     fn list_row(&self, row: usize) -> Option<(Vec<usize>, &'static str)> {
         let pane = self.inspector.as_ref()?;
         let property = pane.rows.get(row)?.property;
-        if !matches!(property.kind, PropertyKind::List) {
+        if !property.kind.is_collection() {
             return None;
         }
         Some((self.selection.first()?.clone(), property.name))
@@ -1796,15 +1799,26 @@ impl Designer {
             return;
         };
         let at = self.document.form().items(&path, kind).len();
+        // Placeholder content goes in the node's `design` block rather than on
+        // the node, so that no build but this one loads it. The first one
+        // brings the block with it, which keeps this a single edit and so a
+        // single undo.
+        let (parent, text) = match self.document.form().collection_parent(&path, kind) {
+            Some(parent) => (parent, format!("{kind} {:?}", kind)),
+            None => (
+                path,
+                format!("{} {{\n    {kind} {:?}\n}}", denise_forms::DESIGN, kind),
+            ),
+        };
         // Past every child, not past every *item*: a node may hold more than one
         // collection — a `table` holds columns and rows — and the index an edit
         // takes is the one among children.
-        let index = self.document.form().child_count(&path);
+        let index = self.document.form().child_count(&parent);
         self.history.separate();
         self.edit(Edit::Insert {
-            parent: path,
+            parent,
             index,
-            text: format!("{kind} {:?}", kind),
+            text,
         });
         self.status = format!("added {kind} {}", at + 1);
         self.reload_from_document();
@@ -2131,7 +2145,7 @@ impl Designer {
         // by newlines rather than one value. Only the text of an item can arrive
         // this way — adding, removing and reordering are buttons, which carry an
         // index a polled string cannot.
-        if matches!(property.kind, PropertyKind::List) {
+        if property.kind.is_collection() {
             self.commit_items(row, property.name, &text);
             return;
         }
@@ -7407,6 +7421,99 @@ mod tests {
             .iter()
             .position(|row| row.property.name == name)
             .expect("the widget describes its collection")
+    }
+
+    /// A table whose rows are placeholder content, with and without the block.
+    fn with_rows(design: bool) -> Designer {
+        let rows = if design {
+            concat!(
+                "        design {\n",
+                "            row \"Ada\"\n",
+                "            row \"Grace\"\n",
+                "        }\n",
+            )
+        } else {
+            ""
+        };
+        let source = format!(
+            concat!(
+                "form \"Recs\" version=1 width=300 height=200 {{\n",
+                "    table name=t x=4 y=4 w=280 h=120 {{\n",
+                "        column \"Name\"\n",
+                "{}",
+                "    }}\n",
+                "}}\n",
+            ),
+            rows
+        );
+        scratch("recs", &source)
+    }
+
+    /// The inspector edits placeholder rows the same way it edits real content,
+    /// and writes them where the engine will not load them.
+    ///
+    /// #160: a `row` is a `PropertyKind::Placeholder`, which differs from a
+    /// `List` in where it lives and who builds it, and not at all in what the
+    /// pane does with one.
+    #[test]
+    fn the_inspector_edits_the_rows_a_table_shows_on_a_canvas() {
+        let mut designer = with_rows(true);
+        assert!(designer.select_named("t"));
+        let row = list_row_of(&designer, "row");
+
+        let pane = designer.inspector.as_ref().expect("an inspector");
+        assert_eq!(pane.rows[row].shown, "2 rows");
+
+        designer.add_item(row);
+        let path = path_named(&designer, "t");
+        assert_eq!(
+            designer.document.form().items(&path, "row"),
+            ["Ada", "Grace", "row"],
+            "adding did not append one"
+        );
+        // And it went inside `design`, not onto the table.
+        let text = designer.document.form().text();
+        assert!(text.contains("design {"), "{text}");
+        let design = text.split("design {").nth(1).expect("the block");
+        assert!(
+            design.contains("row \"row\""),
+            "the new row is outside: {text}"
+        );
+    }
+
+    /// The first placeholder brings the block with it.
+    #[test]
+    fn adding_the_first_row_writes_the_design_block_too() {
+        let mut designer = with_rows(false);
+        assert!(designer.select_named("t"));
+        let row = list_row_of(&designer, "row");
+        // An empty collection shows nothing, the same as a `select` with no
+        // options: the row is there because the widget has the property.
+        assert_eq!(
+            designer.inspector.as_ref().expect("a pane").rows[row].shown,
+            ""
+        );
+
+        designer.add_item(row);
+        let text = designer.document.form().text();
+        assert!(text.contains("design {"), "no block was written: {text}");
+        assert_eq!(
+            designer
+                .document
+                .form()
+                .items(&path_named(&designer, "t"), "row"),
+            ["row"],
+        );
+        // Still a form the engine will read, block and all.
+        denise_forms::Form::parse(&text).expect("the result parses");
+
+        // And one undo takes the whole thing back, block included.
+        designer.undo();
+        assert!(
+            !designer.document.form().text().contains("design {"),
+            "undo left the block behind: {}",
+            designer.document.form().text()
+        );
     }
 
     /// The inspector shows a `select`'s options, and adds one.

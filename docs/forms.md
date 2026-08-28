@@ -332,13 +332,43 @@ path rather than an argument. They are read and written by the engine as they
 always were.
 
 **Placeholder** content is what the *designer* needs to show the widget
-convincingly — four rows of names so a table looks like a table. It is still
-written as child nodes today and still loaded by the engine, which means a kiosk
-ships them. Moving it under a `design` child node the engine ignores unless
-asked is [#160]; until then, keep placeholder rows short and remember they are
-in the binary.
+convincingly — four rows of names so a table looks like a table. It goes in a
+`design { … }` block on the widget, and **every build but a designer's skips
+it**, so it never reaches a panel:
 
-[#160]: https://github.com/bisand/denise/issues/160
+```kdl
+table name=records x=8 y=8 w=384 h=140 {
+    column "First" width=120
+    column "Last" flex=#true
+
+    design {
+        row "Ada" "Lovelace"
+        row "Grace" "Hopper"
+    }
+}
+```
+
+`Form::build` and `Form::build_scaled` come up with the columns and no rows;
+`Form::build_with_design` is the designer's, and is the only one that reads the
+block. Each is a `PropertyKind::Placeholder` property, which differs from a
+`List` in where it is written and who builds it and not at all in what an
+inspector does with one.
+
+A `row` or an `event` written *outside* a `design` block is an **error**, not
+something quietly ignored — the same choice, for the same reason, as an unknown
+property. Ignoring it would mean a form that looks right in the designer and
+comes up empty on a panel, which is the failure nobody notices until the panel
+is on a wall.
+
+The block is narrow on purpose: it holds that widget's placeholder collections
+and nothing else. A widget hidden inside one would be something the file
+describes and the engine never builds, which is a larger idea than this needs
+and a worse one to meet by accident.
+
+One consequence worth knowing: a `table` built without its rows has nothing to
+select, so it is not a tab stop until the application supplies records. The
+designer sees a stop there and a panel does not, and that is the placeholder
+data being exactly as absent as it should be.
 
 ### Value types
 
