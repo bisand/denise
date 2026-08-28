@@ -1404,6 +1404,8 @@ impl<M: 'static> Ui<M> {
             return;
         }
         node.visible = visible;
+        // The order excludes hidden subtrees, so it has to be rebuilt.
+        self.order_dirty = true;
         self.damage_subtree(id);
         // In a stack, appearing and disappearing move the siblings below.
         let root = self.reflow_root(id);
@@ -2885,6 +2887,16 @@ impl<M: 'static> Ui<M> {
                 let Some(node) = self.nodes.get(id) else {
                     continue;
                 };
+                // A hidden node takes its descendants with it, which is what
+                // `set_visible` promises. Skipping the subtree here is what
+                // makes that true of *everything* this list drives -- painting,
+                // hit testing, tab stops and scroll targets all read it, and
+                // each one used to ask only whether the node itself was
+                // visible. So a button inside a hidden container was drawn,
+                // clickable, tabbable and scrollable.
+                if !node.visible {
+                    continue;
+                }
                 self.order.push(id);
                 // Reversed, because the stack pops last-in first.
                 stack.extend(node.children.iter().rev().copied());
