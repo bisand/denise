@@ -38,6 +38,13 @@
 //! [`InputBackend::raw_fds`] again when it says yes. `examples/bare-linux`
 //! packages that as `Waits` and every kiosk example uses it.
 
+// Off Linux, some of the items the documentation above links to are compiled
+// out, so those links resolve to nothing and `cargo doc` fails. CI documents on
+// Ubuntu and never sees it; a developer on a Mac cannot avoid it. Linux stays
+// the platform that checks these links, being the one with the items to check
+// them against.
+#![cfg_attr(not(target_os = "linux"), allow(rustdoc::broken_intra_doc_links))]
+
 pub mod codes;
 pub mod keymap;
 pub mod translate;

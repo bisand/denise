@@ -1352,6 +1352,7 @@ example in the tree than it did before.
 | **M4** | Text: three font tiers behind feature flags, a bounded glyph atlas, keyboard layouts with dead keys. | ✅ |
 | **M5** | C ABI, macOS `NSView`, Windows child-HWND control, ActiveX shim. | ✅ |
 | **M6** | Widening the widget set, one at a time, against [#6](https://github.com/bisand/denise/issues/6). | ◐ |
+| **M7** | What a panel needs that is not a widget: the `.dform` file and the designer that writes it, opt-in content-driven layout, hardware video onto a DRM plane. | ◐ |
 
 M2 does not start until M1 is benchmarked. M5 does not start until the Pi story is
 solid — that is the entire point of the project.
@@ -1388,6 +1389,22 @@ screen. It then took one sitting, and the container found no bugs in it at all.
 What did find one was a test: `2540 / 96` as an integer constant is 26 rather than
 26.458, so every extent the control reported was 1.7% short. A container would have
 drawn it slightly too small forever and nothing would have pointed at a constant.
+
+M7 is the three crates that sit *on top* rather than inside, and none of them is
+on the path of a panel that does not ask for it: `denise-forms` with the designer
+(the [Form designer](https://github.com/bisand/denise/milestone/2) milestone,
+thirty-five issues), `denise-arrange`, and `denise-video`.
+
+It is ◐ because the last of those is deliberately half. `denise-video`'s
+**stateful** decode path — H.264 through `bcm2835-codec`, and the equivalent
+decoders on i.MX, Rockchip and Amlogic — is hardware-verified end to end on a Pi
+3A+: access units in, dmabuf out, imported as a DRM framebuffer and flipped onto
+a plane the display controller composites during scanout, at a paced 29.5 fps
+over a live UI surface. The **stateless** path for `rpivid`, which is what the Pi
+5 needs and what costs an order of magnitude more — slice parsing, reference
+management, the media request API — is
+[#36](https://github.com/bisand/denise/issues/36) and has no hardware here to be
+proven on.
 
 Still outstanding, and deliberately not hidden:
 
