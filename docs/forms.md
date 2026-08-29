@@ -1056,7 +1056,10 @@ string literal and at load time by `Form::parse`. `std::fs::read_to_string` is
 the other way, and is what you want when the form is meant to be swapped without
 a rebuild — a panel whose screens are updated by copying files.
 
-Both are the same three lines afterwards. The format does not care.
+Both are the same three lines afterwards. The format does not care — with one
+exception, which is that a form read at runtime may have come from anywhere.
+`Form::parse_within` is `Form::parse` with a deadline, and [it is what to call
+when the file is not yours](#and-a-fourth-which-is-a-clock).
 
 The **typed** path above is the one place this is a real choice rather than a
 preference: generating the struct bakes the form in at build time, because that
@@ -1133,9 +1136,44 @@ fuzzer's slow inputs are unbalanced to a one. A guard a caller cannot install
 for itself belongs in the crate that knows why it is there.
 
 That last one bounds a shape, not the parser. `kdl` 6.7.1 has other exponential
-corners, so an application reading a form it did not write — downloaded, pasted,
-handed over on a stick — should still bound how long a parse may take. This
-crate is `no_std + alloc` and has neither a thread nor a clock to do it with.
+corners, and agreeing with it about where a string ends means *being* its lexer
+— a fourth divergence turned up five minutes after the third was fixed. Anything
+that slips past the scan costs whatever `kdl` costs, which is the next section.
+
+### And a fourth, which is a clock
+
+`Form::parse_within(source, limit)` is `Form::parse` with a deadline. It is the
+complete answer to the exponential corners, because the only thing that bounds a
+parser you cannot change is giving up on it, and it is what anything reading a
+form **it did not write** should call — opened by a person, pasted, downloaded,
+handed over on a stick, or watched on disk while a text editor has it too.
+
+`denise_forms::PATIENCE` is one second, which is the default because it is three
+hundred times the slowest real form: [`reference.dform`](../forms/reference.dform),
+every node kind this toolkit has in nine and a half kilobytes, parses in **under
+3 ms** on an M5 Pro, and the other five forms in the repository in under 300 µs
+each. The limit is an argument rather than a constant because two things move it:
+a file near `MAX_SOURCE` is legitimately slower — four megabytes of real nodes
+measures 1.7 s — and a slower machine is slower.
+
+The honest part is what happens when the deadline passes. **A parse is abandoned,
+not stopped.** A thread cannot be cancelled and `kdl` has no point at which to ask
+it to stop, so the call returns `Reason::TooSlow` and the worker keeps going until
+it finishes, which for the exponential shapes may be never. That bounds the call
+and not the process, so `MAX_ABANDONED` (4) bounds the process: a parse whose
+predecessors are still wedged is refused before it starts, with `Reason::NoThread`
+and a message saying to restart. Four wedged threads on a four-core panel is the
+point at which spawning a fifth stops being caution and starts being the denial of
+service the deadline is there to prevent.
+
+### Who bounds it
+
+| caller | bounded | why |
+|---|---|---|
+| **The designer** | ✅ `PATIENCE` | On open, on a paste, and on an outside write noticed by the file watcher. It opens whatever it is pointed at, and it is the case with a person sitting in front of it. |
+| **An application reading a form at runtime** | your call | `Form::parse_within` is there; `Form::parse` is still the short one. Bound it if the file can come from anywhere but your own repository. |
+| **An application with the form baked in** | not at risk | `include_str!` reads a file in the repository at build time, and CI has already parsed it. |
+| **The `denise-forms` command** | ❌ deliberately | A command with a terminal in front of it and a person who can stop it, run on files you chose. A limit here would refuse a legitimately enormous generated form and buy nothing a `^C` does not. |
 
 ## What the format will not do
 

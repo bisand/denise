@@ -1,6 +1,7 @@
 //! The form being edited, and its file.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use denise_forms::Form;
 
@@ -65,11 +66,28 @@ form \"Untitled\" version=1 kind=screen width=800 height=480 theme=dark {
     }
 
     /// Opens a file.
+    ///
+    /// Under a deadline, because a designer opens whatever it is pointed at and
+    /// `kdl` parses some malformed files in exponential time — see
+    /// [`Form::parse_within`] and
+    /// [#164](https://github.com/bisand/denise/issues/164). This is the worst
+    /// place in the toolkit for that to bite, because it is the one with a
+    /// person sitting in front of it waiting for a window.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+        Self::open_within(path, denise_forms::PATIENCE)
+    }
+
+    /// [`Document::open`], with the deadline said out loud.
+    ///
+    /// Only so that the deadline can be tested: every slow input anybody has
+    /// found is refused by the byte scan before `kdl` sees it, so the way to
+    /// watch a parse miss a deadline is to move the deadline.
+    pub fn open_within(path: impl AsRef<Path>, limit: Duration) -> Result<Self, String> {
         let path = path.as_ref();
         let source =
             std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let form = Form::parse(&source).map_err(|e| format!("{}:{e}", path.display()))?;
+        let form =
+            Form::parse_within(&source, limit).map_err(|e| format!("{}:{e}", path.display()))?;
         Ok(Self {
             path: Some(path.to_path_buf()),
             form,
@@ -207,5 +225,20 @@ mod tests {
     fn a_form_that_was_never_saved_cannot_be_saved_without_a_path() {
         let mut document = Document::blank();
         assert!(document.save(None).is_err());
+    }
+
+    #[test]
+    fn opening_a_form_is_on_a_clock() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../forms/reference.dform");
+        // The same file, twice, differing only in how long it is given. This is
+        // the whole claim of #164: a designer told to open something can be
+        // told to stop, and what it says when it does names the file.
+        Document::open(&path).expect("the reference form opens in a second");
+
+        let Err(refused) = Document::open_within(&path, Duration::ZERO) else {
+            panic!("no form parses in no time at all");
+        };
+        assert!(refused.contains("reference.dform"), "{refused}");
+        assert!(refused.contains("abandoned"), "{refused}");
     }
 }

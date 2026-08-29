@@ -248,6 +248,31 @@ pub enum Reason {
         /// The limit, in levels.
         limit: usize,
     },
+    /// The parse was still running when the caller's deadline passed, so it
+    /// was abandoned and the file was not read.
+    ///
+    /// Only [`Form::parse_within`](crate::Form::parse_within) raises this, and
+    /// only a caller who asked for a deadline can get it. It says nothing about
+    /// the file beyond how long it was taking: a hostile one that has found a
+    /// corner of `kdl` that takes exponential time looks exactly like a
+    /// legitimate one on a machine that is too slow for the number chosen. The
+    /// position is the top of the file, because nothing in it has been read.
+    TooSlow {
+        /// The time the caller allowed.
+        limit: core::time::Duration,
+    },
+    /// A bounded parse could not be started, so the file was not read at all.
+    ///
+    /// [`Form::parse_within`](crate::Form::parse_within) works on a thread it
+    /// can walk away from, and this says there was no such thread to be had:
+    /// either [`MAX_ABANDONED`](crate::MAX_ABANDONED) earlier parses are still
+    /// running past their deadlines — a wedged thread each, and the point of
+    /// the limit is that a machine does not fill up with them — or the system
+    /// refused a thread outright.
+    NoThread {
+        /// How many earlier parses are still running past their deadline.
+        abandoned: usize,
+    },
     /// The parser could not keep the file byte-for-byte.
     ///
     /// Everything this crate does — undo, the designer's save, a text editor
@@ -445,6 +470,27 @@ impl fmt::Display for Error {
                 "this nests commented-out blocks more than {limit} deep, and \
                  every level of that doubles what reading the file costs"
             ),
+            Reason::TooSlow { limit } => write!(
+                f,
+                "this form was taking longer than {limit:?} to parse, so it \
+                 was abandoned unread"
+            ),
+            Reason::NoThread { abandoned } => {
+                if *abandoned >= crate::MAX_ABANDONED {
+                    write!(
+                        f,
+                        "{abandoned} earlier parses are still running past \
+                         their deadline and cannot be stopped, so this form \
+                         was not started; restart to clear them"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "this form needs a thread of its own to be parsed \
+                         under a deadline, and the system would not give it one"
+                    )
+                }
+            }
             Reason::NotPreserved => write!(
                 f,
                 "the parser cannot keep this file byte-for-byte, so saving it \

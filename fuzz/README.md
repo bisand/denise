@@ -145,6 +145,15 @@ a better error than the recovery would have produced anyway.
 `kdl` has other exponential corners: the commented-block limit needed
 tightening from four levels to one to catch two of the four artifacts, and then
 missed the next input outright. A balanced file that is malformed some other
-way may well still be exponential, and nothing here would stop it. The complete fix belongs upstream. Until then, anything that parses a form it did not write should bound how long the
-parse may take; `denise-forms` is `no_std + alloc` and has neither a thread nor
-a clock to do that with, so it cannot be done in this crate.
+way may well still be exponential, and nothing here would stop it. The complete
+fix belongs upstream.
+
+The bound on the parser is therefore a clock, and it is
+`Form::parse_within(source, limit)`
+([#164](https://github.com/bisand/denise/issues/164)): the same parse on a
+worker thread, giving up after `limit` and reporting `Reason::TooSlow`. It is
+what the designer calls on every form it opens, pastes or re-reads, and what an
+application reading a form it did not write should call too. It abandons rather
+than stops — a thread cannot be cancelled — so `MAX_ABANDONED` bounds what the
+abandoned ones cost. See the section in
+[`docs/forms.md`](../docs/forms.md#and-a-fourth-which-is-a-clock).
