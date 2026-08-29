@@ -48,7 +48,11 @@
 //! one — the form is checked at *build* time by being a string literal and at
 //! *load* time by [`Form::parse`]. Reading it with `std::fs::read_to_string`
 //! instead is one line, and is what you want when the form is meant to be
-//! swapped without a rebuild.
+//! swapped without a rebuild — with one thing to change besides: a form read at
+//! runtime came from somewhere, so parse it with
+//! [`Form::parse_within`](denise_forms::Form::parse_within) and a deadline
+//! rather than [`Form::parse`]. Baked in, this file is not at risk: it was read
+//! at build time from the repository.
 //!
 //! [#101]: https://github.com/bisand/denise/issues/101
 

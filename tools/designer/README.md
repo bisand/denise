@@ -305,6 +305,17 @@ invisible. A watcher that misses an edit is worse than no watcher, because it is
 trusted. Reading a form file measures at 29 µs — 0.007% of a second at this
 cadence — so there was nothing worth the risk.
 
+**Every parse the designer does not control is on a deadline.** Opening a file,
+pasting from the clipboard and re-reading an outside write all go through
+`Form::parse_within` with `denise_forms::PATIENCE` — a second — rather than
+`Form::parse`. `kdl` 6.7.1 parses some malformed files in exponential time
+([kdl-org/kdl-rs#177](https://github.com/kdl-org/kdl-rs/issues/177)), and a
+designer is where that matters most: it opens whatever it is pointed at, and it
+is the one with a person sitting in front of it waiting for a window. A form
+that overruns is reported like any other refusal — the status line says so, and
+the file is left alone. See
+[docs/forms.md](../../docs/forms.md#and-a-fourth-which-is-a-clock).
+
 ## Tab order
 
 Delphi had this and WinForms kept it. **Tab order** numbers every place Tab can

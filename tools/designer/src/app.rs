@@ -4539,7 +4539,10 @@ impl Designer {
         let Some(text) = self.document.changed_on_disk() else {
             return;
         };
-        let fresh = match Form::parse(&text) {
+        // Under a deadline: this is a file two editors have open, and the other
+        // one is a text editor that can write anything at all into it. See
+        // `Form::parse_within`.
+        let fresh = match Form::parse_within(&text, denise_forms::PATIENCE) {
             Ok(form) => form,
             Err(error) => {
                 // A file halfway through being written is not a conflict, and a
@@ -4933,7 +4936,9 @@ impl Designer {
             error.at.line = error.at.line.saturating_sub(1).max(1);
             error
         };
-        let form = Form::parse(&source).map_err(lower)?;
+        // Under a deadline, because this is where the clipboard comes in and
+        // the clipboard holds whatever the last program to touch it put there.
+        let form = Form::parse_within(&source, denise_forms::PATIENCE).map_err(lower)?;
 
         let mut scratch: Ui<Message> = Ui::new(Size::new(1, 1), theme::DARK);
         let root = scratch.root();

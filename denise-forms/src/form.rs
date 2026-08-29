@@ -52,9 +52,10 @@ pub const MAX_SOURCE: usize = 1 << 22;
 /// every form in this repository is nowhere near it.
 ///
 /// This bounds the shapes that have been found, and it is not a bound on the
-/// parser: `kdl` 6.7.1 has more exponential corners than this one, and a caller
-/// reading a form it did not write should still bound how long a parse may take.
-/// See `fuzz/README.md`.
+/// parser: `kdl` 6.7.1 has more exponential corners than this one. The bound on
+/// the parser is a clock, and it belongs to the caller —
+/// [`Form::parse_within`](crate::Form::parse_within) is it. See
+/// `fuzz/README.md`.
 pub const MAX_COMMENTED_DEPTH: usize = 1;
 
 /// What a form is for.
@@ -622,6 +623,12 @@ impl Form {
     /// written back out and compared to the input, so a file that would not
     /// reproduce is refused with [`Reason::NotPreserved`] rather than accepted
     /// and corrupted on the first save.
+    ///
+    /// This is bounded in shape and **not in time**: [`MAX_SOURCE`],
+    /// [`MAX_DEPTH`], [`MAX_COMMENTED_DEPTH`] and a brace count refuse every
+    /// slow file anybody has found, and `kdl` has exponential corners nobody
+    /// has found yet. For a form this program did not write, use
+    /// [`Form::parse_within`], which is this with a clock.
     ///
     /// ```
     /// # use denise_forms::{Form, FormKind};

@@ -107,6 +107,43 @@ A form is something a person typed, so every failure carries a line, a column, a
       radius, repeat-delay, repeat-interval, role, size, text, watch-hold
 ```
 
+## A form you did not write
+
+[`Form::parse`] is bounded in shape and not in time, and it cannot be: `kdl`
+6.7.1 parses some malformed documents in exponential time
+([kdl-org/kdl-rs#177](https://github.com/kdl-org/kdl-rs/issues/177)), a hundred
+and thirty bytes for seventy-eight seconds. A byte scan refuses `MAX_SOURCE`,
+`MAX_DEPTH`, `MAX_COMMENTED_DEPTH` and unbalanced braces before the file reaches
+the parser at all, and that covers every slow input the fuzzer has found — but
+agreeing with `kdl` about where a string ends means *being* `kdl`'s lexer, and
+anything that slips past costs whatever `kdl` costs.
+
+So [`Form::parse_within`] is the same parse with a deadline, and it is what to
+call for a form that was opened, pasted, downloaded or handed over on a stick:
+
+```rust
+# use denise_forms::{Form, PATIENCE};
+# let path = "../forms/hello.dform";
+let source = std::fs::read_to_string(path)?;
+let form = Form::parse_within(&source, PATIENCE)?;
+# assert_eq!(form.text(), source);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`PATIENCE` is one second — three hundred times the 3 ms the reference form, every
+node kind this toolkit has, takes to parse — and the limit is an argument
+because a four-megabyte form and a slow panel both move it.
+
+What a missed deadline does is **abandon** the parse, not stop it: a thread
+cannot be cancelled and `kdl` has no point at which to ask. The call returns
+[`Reason::TooSlow`] and the worker keeps going, so `MAX_ABANDONED` (4) bounds
+what that costs the process — the fifth such parse is refused before it starts,
+rather than taking the last core with it. A form baked in with `include_str!`
+needs none of this: it was read at build time from a file in the repository.
+
+[`Form::parse_within`]: https://docs.rs/denise-forms/latest/denise_forms/struct.Form.html#method.parse_within
+[`Reason::TooSlow`]: https://docs.rs/denise-forms/latest/denise_forms/enum.Reason.html#variant.TooSlow
+
 ## The command-line tool
 
 ```bash
