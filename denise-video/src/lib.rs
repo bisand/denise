@@ -32,10 +32,23 @@
 //! # Status
 //!
 //! The **stateful** decode path (H.264 via `bcm2835-codec` on the Pi, and its
-//! equivalents on i.MX, Rockchip and Amlogic). The stateless HEVC path for
-//! `rpivid` — slice parsing, reference management, the media request API — is
-//! tracked separately; [`Decoders::detect`] already reports it where the
-//! hardware offers it.
+//! equivalents on i.MX, Rockchip and Amlogic), verified end to end on a Pi 3A+:
+//! access units in, dmabuf out, imported as a DRM framebuffer and flipped onto
+//! a plane at a paced 29.5 fps over a live UI surface.
+//!
+//! The **stateless** HEVC path for `rpivid` — what the Pi 5 needs, and an order
+//! of magnitude more work: slice parsing, reference management, the media
+//! request API — is [#36](https://github.com/bisand/denise/issues/36).
+//! [`Decoders::detect`] already reports it where the hardware offers it, so a
+//! board with `rpivid` and no `bcm2835-codec` will say so and then decline to
+//! play, which is the honest answer until #36 lands.
+
+// Off Linux, some of the items the documentation above links to are compiled
+// out, so those links resolve to nothing and `cargo doc` fails. CI documents on
+// Ubuntu and never sees it; a developer on a Mac cannot avoid it. Linux stays
+// the platform that checks these links, being the one with the items to check
+// them against.
+#![cfg_attr(not(target_os = "linux"), allow(rustdoc::broken_intra_doc_links))]
 
 pub mod annexb;
 

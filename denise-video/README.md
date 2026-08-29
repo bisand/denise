@@ -64,10 +64,16 @@ through the tree.
 ## Status
 
 The **stateful** decoder path: `bcm2835-codec` on the Pi and its equivalents
-on i.MX, Rockchip and Amlogic. The **stateless** HEVC path (`rpivid`, the
-price of the Pi 5) is detected and reported but not yet driven — it is
-tracked as its own issue, being an order of magnitude more work: slice
-parsing, reference management, the media request API.
+on i.MX, Rockchip and Amlogic. Verified end to end on a Pi 3A+ as a static musl
+binary — access units in, dmabuf out, imported as a DRM framebuffer and flipped
+onto a plane at a paced 29.5 fps over a live UI surface, looping past 500 frames.
+
+The **stateless** HEVC path (`rpivid`, the price of the Pi 5) is detected and
+reported but **not yet driven**: it is
+[#36](https://github.com/bisand/denise/issues/36), an order of magnitude more
+work — slice parsing, reference management, the media request API. A board that
+offers `rpivid` and nothing else will be told so by `Decoders::detect` and then
+decline to play.
 
 Linux only; on anything else the crate compiles to the pure Annex-B module
 and nothing more. The `probe` example prints what a board can do, and is the
