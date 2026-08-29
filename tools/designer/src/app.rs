@@ -8,8 +8,8 @@ use denise::{
 };
 use denise_forms::{Edit, Form, FormKind, Handler, Literal, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{
-    Button, Divider, Group, Label, List, ListItem, Panel, Property, PropertyKind, TextInput, Value,
-    WidgetInfo, open_select,
+    Button, Divider, Group, Label, List, ListItem, Panel, Property, PropertyKind, Tabs, TextInput,
+    Value, WidgetInfo, open_select,
 };
 use denise_ui::{Anchors, Dock, NodeId, TextStyle, Ui};
 
@@ -1467,6 +1467,53 @@ impl Designer {
             None => self.looking_at.push((strip, ordinal)),
         }
         self.apply_looking_at();
+    }
+
+    /// Brings up the page of a tab picked on a *running* form.
+    ///
+    /// [`Tabs`] owns which tab is selected and nothing else: showing the page
+    /// is the host application's job, and while previewing the designer is the
+    /// host. Design mode answers the same question through the selection —
+    /// see [`Designer::look_at_page_of`] — and preview has no selection, so
+    /// without this the strip moves and the page underneath does not.
+    ///
+    /// Read from the strip rather than from the message, because a `tabs` node
+    /// with pages need not carry `on-change` at all, and a message says which
+    /// name fired rather than which node did.
+    pub fn follow_previewed_tabs(&mut self) {
+        if !self.previewing() {
+            return;
+        }
+        // Every strip that hosts pages, once each.
+        let mut strips: Vec<Vec<usize>> = Vec::new();
+        for page in &self.pages {
+            let Some((_, strip)) = page.path.split_last() else {
+                continue;
+            };
+            if !strips.iter().any(|held| held == strip) {
+                strips.push(strip.to_vec());
+            }
+        }
+
+        let mut moved = false;
+        for strip in strips {
+            let Some(id) = self.node_id(&strip) else {
+                continue;
+            };
+            let Some(tabs) = self.ui.widget::<Tabs<Message>>(id) else {
+                continue;
+            };
+            let selected = tabs.selected();
+            match self.looking_at.iter_mut().find(|(at, _)| *at == strip) {
+                Some(held) if held.1 == selected => continue,
+                Some(held) => held.1 = selected,
+                None => self.looking_at.push((strip, selected)),
+            }
+            moved = true;
+        }
+        if moved {
+            self.apply_looking_at();
+        }
     }
 
     /// Redraws the inspector for whatever is selected.
@@ -6305,6 +6352,7 @@ mod tests {
     fn feed(designer: &mut Designer, events: &[InputEvent]) {
         let rest = designer.input(events);
         designer.ui.handle(&rest);
+        designer.follow_previewed_tabs();
     }
 
     fn button(state: ElementState, at: Point) -> InputEvent {
@@ -6753,6 +6801,71 @@ mod tests {
         assert!(!designer.previewing());
         let scrim = designer.chrome.scrim.expect("a scrim again");
         assert!(designer.ui.visible(scrim));
+    }
+
+    /// A tab picked while the form is running brings its page up.
+    ///
+    /// The strip has always moved its own highlight and fired `on-change`. What
+    /// it does not do is show the page, because `Tabs` does not own that — and
+    /// while previewing there is no application to own it either, so the
+    /// designer stands in. See `Designer::follow_previewed_tabs`.
+    #[test]
+    fn a_tab_picked_on_a_running_form_brings_its_page_up() {
+        let source = concat!(
+            "form \"Tabs\" version=1 width=400 height=300 {\n",
+            "    tabs name=sections x=0 y=0 w=400 h=300 selected=1 {\n",
+            "        tab \"One\" {\n",
+            "            label \"first\" name=on-one x=8 y=8 w=200 h=20\n",
+            "        }\n",
+            "        tab \"Two\" {\n",
+            "            label \"second\" name=on-two x=8 y=8 w=200 h=20\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        );
+        let mut designer = scratch("running-tabs", source);
+        press_key(&mut designer, KeyCode::F5, false);
+        assert!(designer.previewing());
+
+        let one = designer
+            .pages
+            .iter()
+            .find(|page| page.ordinal == 0)
+            .expect("a first page")
+            .id;
+        let two = designer
+            .pages
+            .iter()
+            .find(|page| page.ordinal == 1)
+            .expect("a second page")
+            .id;
+        assert!(
+            designer.ui.visible(two) && !designer.ui.visible(one),
+            "the file says the second tab opens"
+        );
+
+        // Tab zero starts at the strip's left edge whatever the labels say,
+        // which is the one point that needs no arithmetic over their widths.
+        let strip = designer
+            .path_bounds(&path_named(&designer, "sections"))
+            .expect("laid out");
+        let at = Point::new(strip.x + 2, strip.y + 4);
+        feed(
+            &mut designer,
+            &[
+                button_at(ElementState::Down, at),
+                button_at(ElementState::Up, at),
+            ],
+        );
+
+        assert!(
+            designer.ui.visible(one),
+            "the picked tab's page did not come up"
+        );
+        assert!(
+            !designer.ui.visible(two),
+            "the page that was showing stayed up"
+        );
     }
 
     /// The index the log knows a message name by.
