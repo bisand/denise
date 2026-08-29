@@ -374,7 +374,11 @@ impl DeniseApp for Main {
         // same frame it was typed in. Nothing in the inspector emits a message;
         // see `Designer::poll`. There is no inspector while previewing, and no
         // palette filter either.
-        if !self.designer.previewing() {
+        if self.designer.previewing() {
+            // A tab picked on the running form: `Tabs` owns the selection and
+            // the host owns the page, and while previewing this is the host.
+            self.designer.follow_previewed_tabs();
+        } else {
             self.designer.poll();
         }
 

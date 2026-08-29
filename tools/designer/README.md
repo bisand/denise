@@ -353,7 +353,8 @@ an order, a person chose it, and saving keeps it.
 The whole of the first half is **hiding the scrim** — the invisible sheet that has
 been absorbing every press over the form — and design mode giving up the canvas's
 events. The same tree, the same widgets, the same paint. What changes is who the
-events belong to: buttons press, fields type, a select opens.
+events belong to: buttons press, fields type, a select opens, a tab brings its
+page up.
 
 The two columns go grey, because they are not the form's. A palette that looked
 live and was not would be worse than one that says so.
