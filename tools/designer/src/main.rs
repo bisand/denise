@@ -374,6 +374,11 @@ impl DeniseApp for Main {
         // from the tree it replaced.
         self.designer.check_file();
 
+        // After the tree has seen the resize, so the form is placed in the
+        // viewport as it now is rather than as it was. See
+        // `Designer::settle_resize`.
+        self.designer.settle_resize();
+
         // Last, so a keystroke that has just reached a field is applied in the
         // same frame it was typed in. Nothing in the inspector emits a message;
         // see `Designer::poll`. There is no inspector while previewing, and no

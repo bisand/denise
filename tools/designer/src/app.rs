@@ -808,6 +808,8 @@ pub struct Designer {
     /// Set when a close was refused because of unsaved work; a second ask goes
     /// through.
     warned: bool,
+    /// Set by `remember_size` and cleared by `settle_resize`.
+    resized: bool,
     status: String,
     /// What the window's title bar should say. Kept rather than built on demand:
     /// `DeniseApp::title` is asked once a frame and `Document::label` allocates.
@@ -872,6 +874,7 @@ impl Designer {
             stale: false,
             history: History::new(),
             warned: false,
+            resized: false,
             status: String::new(),
             // Filled by `refresh_labels`, which `show_form` below reaches.
             window_title: String::new(),
@@ -892,12 +895,35 @@ impl Designer {
 
     /// Records a new window size, to be written out on the way to exiting.
     pub fn remember_size(&mut self, size: Size) {
+        // The stage is centred in the canvas viewport where the tree is *built*,
+        // so a viewport that changed size leaves the form where the old one put
+        // it -- off to one side, and clipped if the window shrank. Acted on in
+        // `settle_resize`, because the tree has not seen the resize yet and the
+        // new viewport is what the placement needs.
+        self.resized = true;
         // The event carries the surface, which is physical; `Settings` holds a
         // window, which is logical, and hands it straight back to
         // `WindowConfig`. Without the division the remembered size grows by the
         // scale factor on every run, until `Settings::sane` stops it at 16,384.
         self.settings.width = self.scale.logical(size.width);
         self.settings.height = self.scale.logical(size.height);
+    }
+
+    /// Re-places the form after the window changed size.
+    ///
+    /// Called once the tree has seen the resize, so `show_form` reads the
+    /// viewport the form is now to be centred in rather than the one it was.
+    /// Rebuilding is what moves it: a node's layout is fixed when it is added,
+    /// and the canvas scrolling cannot centre a stage that is placed off to one
+    /// side.
+    pub fn settle_resize(&mut self) {
+        // The flag is not cleared until the form is actually placed, so a window
+        // resized mid-drag settles when the pointer comes up rather than never.
+        if !self.resized || self.mid_gesture() {
+            return;
+        }
+        self.resized = false;
+        self.show_form();
     }
 
     /// What the window's title bar should say, as of the last `refresh_labels`.
@@ -1452,6 +1478,17 @@ impl Designer {
                 .collect();
             for (id, at) in siblings {
                 self.ui.set_visible(id, at == ordinal);
+            }
+            // And the strip says the same thing. A rebuild makes it from the
+            // file's `selected`, which is the tab an *application* opens on --
+            // so without this a rebuilt strip highlights one tab while the page
+            // below it belongs to another. `set_selected` emits nothing, so
+            // agreeing is not an edit.
+            let strip_id = self.node_id(&strip);
+            if let Some(id) = strip_id
+                && let Some(tabs) = self.ui.widget_mut::<Tabs<Message>>(id)
+            {
+                tabs.set_selected(ordinal);
             }
         }
     }
@@ -4582,21 +4619,27 @@ impl Designer {
     /// asking: the designer is showing the file, the file changed, so the
     /// designer shows the new one. With unsaved work there is exactly one
     /// question, and it gets asked rather than answered by whoever wrote last.
-    pub fn check_file(&mut self) {
-        // Not mid-gesture. A reload rebuilds the tree, and a drag is holding
-        // `NodeId`s from the tree it started in; the file will still have
-        // changed when the pointer comes up.
-        if self.clash.is_some()
+    /// Whether rebuilding the tree now would pull it out from under something.
+    ///
+    /// A drag holds `NodeId`s from the tree it started in, and a rebuild hands
+    /// out new ones. A caret is the same argument about text: the inspector is
+    /// replaced wholesale, and what is half typed into it has not reached the
+    /// document to be kept. Both callers answer the same way -- wait, and ask
+    /// again next frame.
+    fn mid_gesture(&self) -> bool {
+        self.clash.is_some()
             || self.making.is_some()
             || self.drag.is_some()
             || self.band.is_some()
             || self.outline_drag.is_some()
             || self.choosing.is_some()
             || self.placing != Placing::Idle
-            // Nor under a caret: a reload replaces the inspector, and what is
-            // half typed into it has not reached the file to be kept.
             || self.typing()
-        {
+    }
+
+    pub fn check_file(&mut self) {
+        // The file will still have changed when the pointer comes up.
+        if self.mid_gesture() {
             return;
         }
         let Some(text) = self.document.changed_on_disk() else {
@@ -6915,6 +6958,150 @@ mod tests {
             designer.window_title().contains('•'),
             "an edited form is not marked unsaved: {:?}",
             designer.window_title()
+        );
+    }
+
+    /// A window that changed size puts the form back in the middle of it.
+    ///
+    /// The centring is computed where the tree is built, so before this the
+    /// form kept the place the *old* viewport gave it — off to one side, and
+    /// clipped if the window shrank.
+    #[test]
+    fn a_resized_window_puts_the_form_back_in_the_middle() {
+        let mut designer = scratch(
+            "resized",
+            "form \"R\" version=1 width=200 height=120 {\n    label \"a\" x=0 y=0 w=9 h=9\n}\n",
+        );
+
+        assert!(off_centre(&designer) <= 1, "not centred to begin with");
+
+        // A wider window, the way the event loop delivers one.
+        let bigger = Size::new(WINDOW.width + 600, WINDOW.height + 200);
+        designer.remember_size(bigger);
+        designer.ui.handle(&[InputEvent::SurfaceResized {
+            size: bigger,
+            scale_factor: 1.0,
+        }]);
+        designer.settle_resize();
+
+        assert!(
+            off_centre(&designer) <= 1,
+            "the form was left where the old viewport put it: off by {}",
+            off_centre(&designer)
+        );
+    }
+
+    /// How far from centred the form sits in the canvas, in pixels.
+    fn off_centre(designer: &Designer) -> i32 {
+        let view = designer
+            .ui
+            .bounds(designer.chrome.canvas)
+            .expect("a canvas");
+        let stage = designer.ui.bounds(designer.chrome.stage).expect("a stage");
+        ((stage.x - view.x) - (view.right() - stage.right())).abs()
+    }
+
+    /// A window resized mid-drag is placed when the pointer comes up.
+    ///
+    /// The mirror of `nothing_is_read_from_under_a_drag_in_flight`: a rebuild
+    /// hands out new `NodeId`s and the drag is holding the old ones. The resize
+    /// is deferred rather than dropped.
+    #[test]
+    fn a_resize_under_a_drag_waits_for_the_pointer() {
+        let mut designer = scratch(
+            "resized-mid-drag",
+            "form \"D\" version=1 width=200 height=120 {\n    label \"a\" name=a x=0 y=0 w=9 h=9\n}\n",
+        );
+        assert!(designer.select_named("a"));
+        designer.drag_selection(0, 4);
+        assert!(designer.drag.is_some(), "no drag to be mid-way through");
+
+        let bigger = Size::new(WINDOW.width + 600, WINDOW.height);
+        designer.remember_size(bigger);
+        designer.ui.handle(&[InputEvent::SurfaceResized {
+            size: bigger,
+            scale_factor: 1.0,
+        }]);
+        designer.settle_resize();
+        assert!(
+            off_centre(&designer) > 1,
+            "the tree was rebuilt out from under the drag"
+        );
+
+        designer.release();
+        designer.settle_resize();
+        assert!(
+            off_centre(&designer) <= 1,
+            "the resize was dropped along with the drag: off by {}",
+            off_centre(&designer)
+        );
+    }
+
+    /// A rebuild while previewing keeps the tab that was picked.
+    ///
+    /// The strip is made from the file's `selected`, and the page from
+    /// `looking_at`. They have to agree or a resize -- which now rebuilds --
+    /// would snap a previewed form back to the tab the file opens on.
+    #[test]
+    fn a_rebuild_keeps_the_tab_that_was_picked_while_previewing() {
+        let source = concat!(
+            "form \"Tabs\" version=1 width=400 height=300 {\n",
+            "    tabs name=sections x=0 y=0 w=400 h=300 selected=1 {\n",
+            "        tab \"One\" {\n",
+            "            label \"first\" name=on-one x=8 y=8 w=200 h=20\n",
+            "        }\n",
+            "        tab \"Two\" {\n",
+            "            label \"second\" name=on-two x=8 y=8 w=200 h=20\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        );
+        let mut designer = scratch("rebuilt-tabs", source);
+        press_key(&mut designer, KeyCode::F5, false);
+
+        let strip = designer
+            .path_bounds(&path_named(&designer, "sections"))
+            .expect("laid out");
+        let at = Point::new(strip.x + 2, strip.y + 4);
+        feed(
+            &mut designer,
+            &[
+                button_at(ElementState::Down, at),
+                button_at(ElementState::Up, at),
+            ],
+        );
+        let one = designer
+            .pages
+            .iter()
+            .find(|page| page.ordinal == 0)
+            .expect("a first page")
+            .id;
+        assert!(designer.ui.visible(one), "the pick did not take");
+
+        // What a resize now does.
+        designer.show_form();
+
+        let one = designer
+            .pages
+            .iter()
+            .find(|page| page.ordinal == 0)
+            .expect("a first page")
+            .id;
+        assert!(
+            designer.ui.visible(one),
+            "the rebuild threw the picked tab away"
+        );
+        let id = designer
+            .node_id(&path_named(&designer, "sections"))
+            .expect("a strip");
+        let tabs = designer
+            .ui
+            .widget::<Tabs<Message>>(id)
+            .expect("a tabs widget");
+        assert_eq!(
+            tabs.selected(),
+            0,
+            "the strip highlights a different tab from the page it is over"
         );
     }
 
