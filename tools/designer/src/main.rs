@@ -320,6 +320,10 @@ impl Main {
 }
 
 impl DeniseApp for Main {
+    fn title(&self) -> Option<&str> {
+        Some(self.designer.window_title())
+    }
+
     fn update(&mut self, events: &[InputEvent], damage: &mut DamageTracker) {
         for event in events {
             // The window's own size is what gets remembered, so it is read from

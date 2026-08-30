@@ -809,6 +809,9 @@ pub struct Designer {
     /// through.
     warned: bool,
     status: String,
+    /// What the window's title bar should say. Kept rather than built on demand:
+    /// `DeniseApp::title` is asked once a frame and `Document::label` allocates.
+    window_title: String,
     exit: bool,
 }
 
@@ -870,6 +873,8 @@ impl Designer {
             history: History::new(),
             warned: false,
             status: String::new(),
+            // Filled by `refresh_labels`, which `show_form` below reaches.
+            window_title: String::new(),
             exit: false,
         };
         designer.fill_palette();
@@ -893,6 +898,12 @@ impl Designer {
         // scale factor on every run, until `Settings::sane` stops it at 16,384.
         self.settings.width = self.scale.logical(size.width);
         self.settings.height = self.scale.logical(size.height);
+    }
+
+    /// What the window's title bar should say, as of the last `refresh_labels`.
+    #[must_use]
+    pub fn window_title(&self) -> &str {
+        &self.window_title
     }
 
     /// Asks the loop to stop after this frame.
@@ -2173,6 +2184,11 @@ impl Designer {
         }
 
         let title = self.document.label();
+        // The same words in the two places that name the open file. `label` is
+        // documented as what goes in the title bar and had never reached one:
+        // `WindowConfig::title` is read at start-up, so opening a second form
+        // left the bar naming the first.
+        self.window_title = format!("Denise designer — {title}");
         if let Some(label) = self.ui.widget_mut::<Label>(self.chrome.title) {
             label.set_text(title);
         }
@@ -6865,6 +6881,40 @@ mod tests {
         assert!(
             !designer.ui.visible(two),
             "the page that was showing stayed up"
+        );
+    }
+
+    /// The title bar names the open file, and says when it is unsaved.
+    ///
+    /// `Document::label` is documented as what goes in the title bar and had
+    /// never reached one: `WindowConfig::title` is read when the window is
+    /// made, so a form opened after start-up left the bar naming the one
+    /// before it.
+    #[test]
+    fn the_title_bar_names_the_file_that_is_open() {
+        let mut designer = scratch(
+            "titled",
+            "form \"T\" version=1 width=80 height=60 {\n    label \"a\" name=a x=0 y=0 w=9 h=9\n}\n",
+        );
+        let title = designer.window_title().to_string();
+        assert!(
+            title.contains("denise-designer-titled"),
+            "the bar does not name the file: {title:?}"
+        );
+        assert!(
+            !title.contains('•'),
+            "nothing has been edited yet: {title:?}"
+        );
+
+        // An edit, moved the way `the_title_says_when_there_is_unsaved_work`
+        // moves one, and the bar says so as the toolbar does.
+        let at = middle(&designer, &path_named(&designer, "a"));
+        click_at(&mut designer, at, false);
+        press_key(&mut designer, KeyCode::ArrowRight, false);
+        assert!(
+            designer.window_title().contains('•'),
+            "an edited form is not marked unsaved: {:?}",
+            designer.window_title()
         );
     }
 

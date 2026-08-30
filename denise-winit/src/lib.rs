@@ -148,6 +148,22 @@ pub trait DeniseApp {
         false
     }
 
+    /// What the title bar should say, when the application wants a say in it.
+    ///
+    /// [`WindowConfig::title`] is read once, when the window is made, which is
+    /// enough for a window whose title is a constant and not enough for one
+    /// naming a document: a file opened after start-up leaves the bar naming
+    /// whatever was open before it.
+    ///
+    /// Asked once a frame and compared with what the window was last given, so
+    /// an application answering the same string pays a comparison rather than a
+    /// trip through the window system. Borrowed rather than owned for the same
+    /// reason -- an answer built fresh each frame would allocate for every one
+    /// of them. `None` leaves the title alone.
+    fn title(&self) -> Option<&str> {
+        None
+    }
+
     /// How long the loop may sleep before asking for another frame.
     ///
     /// The default — `Some(Duration::ZERO)` — means "as often as

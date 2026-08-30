@@ -53,6 +53,10 @@ struct WindowState {
     /// How fast this window may draw. Per-window because a settings form has no
     /// reason to share the main window's cadence.
     frame_interval: Duration,
+    /// What the title bar was last given, so `DeniseApp::title` answering the
+    /// same thing every frame is a comparison rather than a call into the
+    /// window system.
+    title: String,
 }
 
 pub(crate) struct Runner {
@@ -142,6 +146,9 @@ impl Runner {
             id,
             WindowState {
                 damage: DamageTracker::new(surface.size()),
+                // What `with_title` above already put in the bar, so the first
+                // frame does not set it again.
+                title: config.title.clone(),
                 window,
                 surface,
                 app,
@@ -246,6 +253,17 @@ impl Runner {
             .app
             .next_frame_in()
             .map(|asked| now + asked.max(interval));
+
+        // A document's name belongs in the bar the moment it opens, not only at
+        // start-up. Compared before it is set, because every platform's
+        // `set_title` is a round trip.
+        if let Some(wanted) = state.app.title()
+            && wanted != state.title
+        {
+            state.window.set_title(wanted);
+            state.title.clear();
+            state.title.push_str(wanted);
+        }
 
         if state.app.exit_requested() {
             // The main window ends the run; any other window ends only itself,
