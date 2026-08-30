@@ -5,6 +5,8 @@
 //! assert the thing the whole feature exists for and that no ordinary test can
 //! say: **code that used the old name does not compile.**
 
+#![cfg(feature = "codegen")]
+
 use denise_forms::Reason;
 use denise_forms::codegen::generate;
 
