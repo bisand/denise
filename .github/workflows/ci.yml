@@ -83,6 +83,14 @@ jobs:
       - run: cargo clippy -p denise-text --all-targets -- -D warnings
       - run: cargo test -p denise-text
 
+      # `denise-forms` is the same shape and was not covered: `codegen` and `cli`
+      # are both off by default, so the run above is the only one that ever built
+      # its test targets. `tests/typed.rs` reached for a feature nothing said it
+      # needed, which is a *compile* failure -- it took the whole default-build
+      # run down before a test in any crate ran, and no job here noticed (#174).
+      - run: cargo clippy -p denise-forms --all-targets -- -D warnings
+      - run: cargo test -p denise-forms
+
   no-std:
     name: core builds without std
     runs-on: ubuntu-latest
