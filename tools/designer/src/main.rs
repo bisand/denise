@@ -320,6 +320,10 @@ impl Main {
 }
 
 impl DeniseApp for Main {
+    fn title(&self) -> Option<&str> {
+        Some(self.designer.window_title())
+    }
+
     fn update(&mut self, events: &[InputEvent], damage: &mut DamageTracker) {
         for event in events {
             // The window's own size is what gets remembered, so it is read from
@@ -369,6 +373,11 @@ impl DeniseApp for Main {
         // the inspector is read, so a reload does not land on top of a commit
         // from the tree it replaced.
         self.designer.check_file();
+
+        // After the tree has seen the resize, so the form is placed in the
+        // viewport as it now is rather than as it was. See
+        // `Designer::settle_resize`.
+        self.designer.settle_resize();
 
         // Last, so a keystroke that has just reached a field is applied in the
         // same frame it was typed in. Nothing in the inspector emits a message;
