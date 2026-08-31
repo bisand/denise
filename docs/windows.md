@@ -107,6 +107,50 @@ $env:PATH = "$vs\$ver\bin\HostARM64\ARM64;$env:PATH"
 The reason this is worth a section: the error names the right file and the wrong
 cause, so the obvious response is to reinstall a toolchain that was never broken.
 
+### When `kernel32.lib` cannot be opened
+
+The complement of the section above, and the reason it is worth having both: this
+one really is MSVC's linker, saying what it really cannot find.
+
+```text
+LINK : fatal error LNK1181: cannot open input file 'kernel32.lib'
+```
+
+`kernel32.lib` belongs to the **Windows SDK**, not to the C++ toolset, so this
+says `LIB` has the compiler's own library directory in it and not the SDK's.
+`vcvarsarm64.bat` sets all three of `PATH`, `LIB` and `INCLUDE` — but it has been
+seen to report success, print its `Environment initialized for: 'arm64'` banner,
+and leave `LIB` holding the MSVC path alone. The same batch file linked cleanly
+earlier in the same session and then did not, so treat it as intermittent rather
+than as a machine that was never set up.
+
+Look at what you actually got:
+
+```bat
+echo %LIB%
+```
+
+Two entries or more is right. One, ending in `\VC\Tools\MSVC\<version>\lib\ARM64`,
+is this fault. Before blaming the SDK, check it is there — it usually is:
+
+```bat
+dir "C:\Program Files (x86)\Windows Kits\10\Lib"
+```
+
+Then put it on `LIB` for the session, substituting the version that listed:
+
+```bat
+set "SDK=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0"
+set "LIB=%LIB%;%SDK%\um\arm64;%SDK%\ucrt\arm64"
+```
+
+Both are what `vcvars` would have added: `um` holds `kernel32.lib` and the rest
+of the Win32 API, `ucrt` holds the C runtime. On an x64 toolchain the two
+directories are `x64` rather than `arm64`.
+
+The reason this is worth a section too: a linker that cannot open `kernel32.lib`
+reads as a broken Windows installation, which is the one thing it is not.
+
 ## Getting the code in
 
 Either clone it:
