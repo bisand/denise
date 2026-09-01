@@ -1195,17 +1195,18 @@ impl Designer {
                         (slot.width - inset * 2).max(1),
                         (slot.height - inset * 2).max(1),
                     );
-                    let button = Button::<Message>::inert("")
-                        .with_icon(info.icon)
-                        .with_role(if armed == Some(info.kind) {
+                    let button = Button::<Message>::inert("").with_icon(info.icon).with_role(
+                        if armed == Some(info.kind) {
                             Role::Primary
                         } else {
                             Role::Neutral
-                        });
+                        },
+                    );
                     if let Some(id) = self.ui.add(panel, button, tile) {
                         // The name the other modes print, and the line they
                         // put in the shared tooltip, together on the tile.
-                        self.ui.set_tooltip(id, format!("{} — {}", info.kind, info.doc));
+                        self.ui
+                            .set_tooltip(id, format!("{} — {}", info.kind, info.doc));
                     }
                 }
             }
@@ -8692,7 +8693,9 @@ mod tests {
             .widget::<List<Message>>(designer.chrome.palette)
             .expect("a palette list");
         assert!(
-            list.items().iter().all(|item| item.leading_icon().is_none()),
+            list.items()
+                .iter()
+                .all(|item| item.leading_icon().is_none()),
             "text mode still shows glyphs"
         );
         let button = designer
@@ -8766,7 +8769,10 @@ mod tests {
         designer.cycle_palette_mode();
         let width = designer.scale.n(designer.settings().left - GAP * 2);
         for (row, slot) in designer.shown.iter().zip(&designer.slots) {
-            assert!(slot.x >= 0 && slot.right() <= width, "{slot:?} leaves the pane");
+            assert!(
+                slot.x >= 0 && slot.right() <= width,
+                "{slot:?} leaves the pane"
+            );
             if matches!(row, Shelf::Heading(_)) {
                 assert_eq!(slot.width, width, "a heading shares its row");
             }

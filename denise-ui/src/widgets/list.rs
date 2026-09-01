@@ -645,10 +645,18 @@ impl<M: 'static> Widget<M> for List<M> {
                 );
                 // The knockouts are cut in whatever this row is actually
                 // painted on, which for a resting row is the list's backdrop.
-                let back = if kind == RowKind::Resting { backdrop } else { fill };
+                let back = if kind == RowKind::Resting {
+                    backdrop
+                } else {
+                    fill
+                };
                 canvas.draw_icon(icon, box_, content, back);
             }
-            let leading_text = if item.icon.is_some() { "" } else { item.leading.as_str() };
+            let leading_text = if item.icon.is_some() {
+                ""
+            } else {
+                item.leading.as_str()
+            };
             for (box_of, text, align) in [
                 (leading, leading_text, Align::Start),
                 (label, item.text.as_str(), Align::Start),
