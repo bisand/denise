@@ -960,6 +960,7 @@ impl<M> Describe for Tree<M> {
     const KIND: &'static str = "tree";
     const DOC: &'static str = "A hierarchy of rows that open and shut, indented by depth.";
     const GROUP: Group = Group::Data;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::TREE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

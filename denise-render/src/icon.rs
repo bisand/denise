@@ -64,7 +64,7 @@ pub enum Ink {
 }
 
 /// One closed polygon of an icon.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
     /// Vertices on the `0..=`[`GRID`] box, y downwards, in order round the
     /// outline. Three at least; [`MAX_VERTICES`](crate::MAX_ICON_VERTICES) at most.
@@ -95,7 +95,7 @@ impl Shape {
 ///
 /// Order matters: shapes are drawn front to back in the order given, so a hole
 /// comes after the shape it is punched in.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Icon {
     /// The polygons, in drawing order.
     pub shapes: &'static [Shape],

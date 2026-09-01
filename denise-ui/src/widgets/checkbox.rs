@@ -338,6 +338,7 @@ impl<M> Describe for Checkbox<M> {
     const KIND: &'static str = "checkbox";
     const DOC: &'static str = "A box and a tick: one thing that is either on or off.";
     const GROUP: Group = Group::Input;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::CHECKBOX;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The label beside the box."),

@@ -716,6 +716,7 @@ impl<M> Describe for Table<M> {
     const KIND: &'static str = "table";
     const DOC: &'static str = "Columns of cells under a header that stays put.";
     const GROUP: Group = Group::Data;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::TABLE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

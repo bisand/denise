@@ -195,6 +195,7 @@ impl Describe for Progress {
     const KIND: &'static str = "progress";
     const DOC: &'static str = "A bar that fills to show how far along something is.";
     const GROUP: Group = Group::Indicator;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::PROGRESS;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

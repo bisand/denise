@@ -184,6 +184,7 @@ impl Describe for Panel {
     const KIND: &'static str = "panel";
     const DOC: &'static str = "A themed rectangle: the background other widgets sit on.";
     const GROUP: Group = Group::Container;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::PANEL;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

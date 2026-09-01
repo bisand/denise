@@ -138,6 +138,7 @@ impl Describe for Label {
     const KIND: &'static str = "label";
     const DOC: &'static str = "Text that is read and not touched.";
     const GROUP: Group = Group::Display;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::LABEL;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The text drawn."),

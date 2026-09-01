@@ -564,6 +564,7 @@ impl<M> Describe for Carousel<M> {
     const KIND: &'static str = "carousel";
     const DOC: &'static str = "Pictures shown one at a time, sliding between them.";
     const GROUP: Group = Group::Media;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::CAROUSEL;
 
     // The pictures are not here. They are child nodes of the form — one
     // `picture` per page, loaded by the engine — because this crate decodes

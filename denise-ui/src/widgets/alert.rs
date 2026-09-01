@@ -226,6 +226,7 @@ impl Describe for Alert {
     const DOC: &'static str =
         "A coloured banner saying something happened, in the place it happened.";
     const GROUP: Group = Group::Display;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::ALERT;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The message."),

@@ -487,6 +487,7 @@ impl<M> Describe for TextInput<M> {
     const KIND: &'static str = "text-input";
     const DOC: &'static str = "A line of text somebody types into.";
     const GROUP: Group = Group::Input;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::TEXT_INPUT;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "Initial contents."),
