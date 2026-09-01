@@ -205,6 +205,7 @@ impl Describe for Badge {
     const KIND: &'static str = "badge";
     const DOC: &'static str = "A count, a status or a short word, in a pill of its role's colour.";
     const GROUP: Group = Group::Display;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::BADGE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The text."),

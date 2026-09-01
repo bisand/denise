@@ -104,6 +104,7 @@ impl Describe for Video {
     const KIND: &'static str = "video";
     const DOC: &'static str = "The rectangle a video plane is shown in.";
     const GROUP: Group = Group::Media;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::VIDEO;
 
     const PROPERTIES: &'static [Property] = &[Property::new(
         "ground",

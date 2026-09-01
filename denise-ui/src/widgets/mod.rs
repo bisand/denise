@@ -54,6 +54,7 @@
 //! `Checkbox::new("Mute", Message::Muted)`.
 //!
 pub mod describe;
+pub mod icons;
 
 mod alert;
 mod avatar;

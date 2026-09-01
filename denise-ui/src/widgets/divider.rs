@@ -218,6 +218,7 @@ impl Describe for Divider {
     const KIND: &'static str = "divider";
     const DOC: &'static str = "A line between things, with an optional label in the middle.";
     const GROUP: Group = Group::Display;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::DIVIDER;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

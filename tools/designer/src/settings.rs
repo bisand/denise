@@ -8,7 +8,54 @@
 
 use std::path::PathBuf;
 
-/// The window's last size, and where the panes were split.
+/// How the palette lists its widgets.
+///
+/// Cycled by the small button beside the palette's heading, and remembered
+/// here because it is a taste, not a document property.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PaletteMode {
+    /// A glyph and the name. The default: the glyph is for recognising, the
+    /// name is for searching and for learning which glyph is which.
+    #[default]
+    Both,
+    /// Names alone, as the palette originally was.
+    Text,
+    /// Glyphs alone, on tiles — the whole catalogue in a third of the height,
+    /// with the names in the tiles' tooltips.
+    Glyphs,
+}
+
+impl PaletteMode {
+    /// The one after this, wrapping — the order the toggle button cycles in.
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Both => Self::Text,
+            Self::Text => Self::Glyphs,
+            Self::Glyphs => Self::Both,
+        }
+    }
+
+    /// The spelling the settings file uses, and the toggle button shows.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Both => "both",
+            Self::Text => "text",
+            Self::Glyphs => "glyphs",
+        }
+    }
+
+    /// The mode a settings line names, or the default for anything else.
+    fn from_name(name: &str) -> Self {
+        match name {
+            "text" => Self::Text,
+            "glyphs" => Self::Glyphs,
+            _ => Self::Both,
+        }
+    }
+}
+
+/// The window's last size, where the panes were split, and how the palette
+/// shows itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
     /// Window width in logical pixels.
@@ -19,6 +66,8 @@ pub struct Settings {
     pub left: i32,
     /// The inspector column.
     pub right: i32,
+    /// How the palette lists its widgets.
+    pub palette: PaletteMode,
 }
 
 impl Default for Settings {
@@ -28,6 +77,7 @@ impl Default for Settings {
             height: 800,
             left: 240,
             right: 300,
+            palette: PaletteMode::default(),
         }
     }
 }
@@ -53,6 +103,7 @@ impl Settings {
                 "height" => settings.height = value.parse().unwrap_or(settings.height),
                 "left" => settings.left = value.parse().unwrap_or(settings.left),
                 "right" => settings.right = value.parse().unwrap_or(settings.right),
+                "palette" => settings.palette = PaletteMode::from_name(value),
                 _ => {}
             }
         }
@@ -72,10 +123,15 @@ impl Settings {
             height,
             left,
             right,
+            palette,
         } = self.sane();
         let _ = std::fs::write(
             path,
-            format!("width = {width}\nheight = {height}\nleft = {left}\nright = {right}\n"),
+            format!(
+                "width = {width}\nheight = {height}\nleft = {left}\nright = {right}\n\
+                 palette = {}\n",
+                palette.name()
+            ),
         );
     }
 
@@ -127,6 +183,7 @@ mod tests {
             height: 0,
             left: -50,
             right: 100_000,
+            palette: PaletteMode::Glyphs,
         };
         let sane = absurd.sane();
         assert!(sane.width >= 640 && sane.height >= 400);
@@ -136,5 +193,21 @@ mod tests {
     #[test]
     fn the_defaults_are_already_sane() {
         assert_eq!(Settings::default(), Settings::default().sane());
+    }
+
+    /// The mode survives the file: what `save` writes, `load` reads back —
+    /// and a line somebody hand-edited into nonsense is the default, not a
+    /// refusal to start.
+    #[test]
+    fn the_palette_mode_round_trips_through_its_name() {
+        for mode in [PaletteMode::Both, PaletteMode::Text, PaletteMode::Glyphs] {
+            assert_eq!(PaletteMode::from_name(mode.name()), mode);
+        }
+        assert_eq!(PaletteMode::from_name("puce"), PaletteMode::Both);
+        // And the cycle visits all three before coming round.
+        let start = PaletteMode::default();
+        assert_ne!(start.next(), start);
+        assert_ne!(start.next().next(), start);
+        assert_eq!(start.next().next().next(), start);
     }
 }

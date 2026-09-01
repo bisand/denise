@@ -398,11 +398,21 @@ its own description, still without this crate changing.
 declares which one it is on, the same way it declares its properties. The
 heading carries a count and the shelf disappears when the filter empties it.
 
+**Every row wears its widget's glyph** — a small portrait of the thing, drawn in
+[`denise-render`'s icon format](../../denise-render/src/icon.rs) rather than
+looked up in a font, declared by the widget through `Describe::ICON` exactly as
+its description and its shelf are. The button beside the palette's heading
+cycles how the rows read: **both** (glyph and name, the default), **text**
+(names alone, as the palette originally was), or **glyphs** (tiles alone, the
+whole catalogue in a third of the height, with each tile's name in its tooltip).
+The choice is remembered in the settings file, and everything else — dragging,
+clicking, arming, the filter — works the same in all three.
+
 **Resting on a row says what the widget is** — one line, declared by the widget
 itself. Twenty-five bare names tell somebody who already knows which widget they
 want; this is for everybody else.
 
-![The designer's palette grouped into shelves — headings reading CONTAINER, DATA 3 and MEDIA 4 with their widgets under them — and a tooltip under the hovered `video` row reading "The rectangle a video plane is shown in."](../../assets/screenshots/designer-palette.png)
+![The designer's palette grouped into shelves — headings reading DATA 4 and MEDIA 4 with their widgets under them, every row wearing its widget's glyph, the mode button beside the heading reading `both` — and a tooltip under the hovered `video` row reading "The rectangle a video plane is shown in."](../../assets/screenshots/designer-palette.png)
 
 **The filter reads what a widget is, not only what it is called.** Typing
 `dropdown` finds `select`; typing `switch` finds `toggle`. Neither word is a
@@ -547,7 +557,7 @@ out of the field being typed in.
 
 | | |
 |---|---|
-| **Palette** | Every widget the toolkit ships, from `widgets::all()` — on six shelves, each row saying what it is, filtered by name *or* description, dragged or clicked onto the canvas. |
+| **Palette** | Every widget the toolkit ships, from `widgets::all()` — on six shelves, each row wearing its widget's glyph and saying what it is, filtered by name *or* description, dragged or clicked onto the canvas. Shown as glyph-and-name, names alone or glyph tiles alone, cycled by the button beside the heading. |
 | **Outline** | Every node, as a tree: folded, selected, renamed, dragged to reparent, and hidden here without the file knowing. |
 | **Canvas** | The form, drawn — selected one at a time or by rubber band, moved, resized, reparented by drop, reordered front to back, copied, pasted and deleted. |
 | **Inspector** | The selected node's properties, edited — from the widget's own `Describe`, so again no list here. With nothing selected: the form's own. |
@@ -566,11 +576,6 @@ byte moving, and nudging any node in any of them changes exactly the line that
 node is written on. See [`denise-forms/tests/awkward/`](../../denise-forms/tests/awkward/README.md).
 
 ## What is not here yet
-
-The palette's rows have no **icon**. Grouping and the tooltip came from the
-widget declaring them; a glyph is a theme's business more than a widget's, and
-where it should be declared is genuinely undecided. It is also the least of the
-three, so it is waiting for somebody to want it rather than for a design.
 
 The outline remembers what is folded and what is hidden **by path**, so an edit
 that shifts a path leaves those pointing at whatever moved into its place. A form

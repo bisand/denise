@@ -8,8 +8,8 @@ use denise::{
 };
 use denise_forms::{Edit, Form, FormKind, Handler, Literal, Payload, Picture, Placed, Wiring};
 use denise_ui::widgets::{
-    Button, Divider, Group, Label, List, ListItem, Panel, Property, PropertyKind, Tabs, TextInput,
-    Value, WidgetInfo, open_select,
+    Align, Button, Divider, Group, Label, List, ListItem, Panel, Property, PropertyKind, Tabs,
+    TextInput, Value, WidgetInfo, open_select,
 };
 use denise_ui::{Anchors, Dock, NodeId, TextStyle, Ui};
 
@@ -21,7 +21,7 @@ use crate::history::History;
 use crate::inspector::{Editor, Field, Inspector, show_value};
 use crate::outline::{self, Outline};
 use crate::scale::Scale;
-use crate::settings::Settings;
+use crate::settings::{PaletteMode, Settings};
 use crate::text::Text;
 use crate::watch::{self, differences};
 use crate::zoom::Zoom;
@@ -96,6 +96,8 @@ pub enum Message {
     Theme,
     /// The zoom control: the next step round, and back to fit after the widest.
     Zoom,
+    /// The palette's display mode: the next of glyph-and-name, name, glyphs.
+    PaletteMode,
     /// A key tapped on the on-screen keyboard.
     Key(KeyCode),
     /// A message the **form under design** emitted, by the index of its name.
@@ -121,6 +123,10 @@ const STATUS: i32 = 26;
 const PALETTE_ROW: i32 = 24;
 /// Eleven rows exactly, so the viewport never cuts one in half.
 const PALETTE_ROWS: i32 = PALETTE_ROW * 11;
+/// A glyph tile in the palette's glyphs-only mode.
+const TILE: i32 = 28;
+/// How many tiles sit abreast in that mode.
+const TILE_COLUMNS: i32 = 4;
 /// The field that filters the palette.
 const FILTER: i32 = 26;
 /// How far a press has to travel before it is a drag rather than a click.
@@ -334,6 +340,8 @@ struct Chrome {
     filter: NodeId,
     /// The palette's list, replaced whenever the filter changes.
     palette: NodeId,
+    /// The button beside the palette's heading that cycles [`PaletteMode`].
+    mode_button: NodeId,
     /// The outline's scrolling viewport.
     outline_view: NodeId,
 
@@ -392,6 +400,7 @@ impl Chrome {
             ("palette viewport", self.palette_view),
             ("filter", self.filter),
             ("palette", self.palette),
+            ("palette mode", self.mode_button),
             ("outline viewport", self.outline_view),
             ("inspector viewport", self.inspector_view),
             ("log", self.log),
@@ -598,7 +607,22 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         Label::new("Palette")
             .with_size(px(Text::Heading))
             .with_role(Role::Primary),
-        s(Rect::new(GAP, GAP, width, HEADER)),
+        s(Rect::new(GAP, GAP, width - 64, HEADER)),
+    );
+    // The heading shares its row with the button that says how the palette is
+    // listing things — and, pressed, lists them the next way instead.
+    let mode_button = ui
+        .add(
+            left,
+            Button::new(settings.palette.name(), Message::PaletteMode)
+                .with_role(Role::Neutral)
+                .with_size(px(Text::Caption)),
+            s(Rect::new(GAP + width - 60, GAP, 60, HEADER)),
+        )
+        .expect("left");
+    ui.set_tooltip(
+        mode_button,
+        "How the palette lists widgets: glyph and name, name alone, or glyphs alone",
     );
     let split = GAP + HEADER + FILTER + PALETTE_ROWS + GAP;
     ui.add(left, Divider::new(), s(Rect::new(GAP, split, width, 8)));
@@ -674,6 +698,7 @@ fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrom
         palette_view,
         filter,
         palette,
+        mode_button,
         outline_view,
         inspector_view,
         columns: [left, right],
@@ -716,6 +741,11 @@ pub struct Designer {
     /// What the palette is showing: a heading per shelf with anything the
     /// filter let through under it, in `Group::ALL` order.
     shown: Vec<Shelf>,
+    /// Where each entry of [`Designer::shown`] sits, in the palette's own
+    /// scaled coordinates: stacked rows in the list modes, tiles under
+    /// headings in glyphs mode. One arithmetic for drawing and hit-testing,
+    /// whichever mode built it.
+    slots: Vec<Rect>,
     /// What the filter field last held.
     filter: String,
     /// A widget on its way onto the canvas.
@@ -840,6 +870,7 @@ impl Designer {
             settings,
             palette,
             shown: Vec::new(),
+            slots: Vec::new(),
             filter: String::new(),
             placing: Placing::Idle,
             outline: None,
@@ -1001,6 +1032,15 @@ impl Designer {
             self.shown.extend(members.into_iter().map(Shelf::Widget));
         }
 
+        match self.settings.palette {
+            PaletteMode::Glyphs => self.fill_palette_glyphs(counts),
+            mode => self.fill_palette_list(counts, mode == PaletteMode::Both),
+        }
+    }
+
+    /// The palette as rows: a name per widget, its glyph leading when the mode
+    /// says both.
+    fn fill_palette_list(&mut self, counts: Vec<usize>, with_glyphs: bool) {
         let mut headings = counts.into_iter();
         let items: Vec<ListItem> = self
             .shown
@@ -1013,7 +1053,13 @@ impl Designer {
                 Shelf::Heading(group) => ListItem::new(group.name().to_uppercase())
                     .with_trailing(headings.next().unwrap_or(0).to_string())
                     .disabled(),
-                Shelf::Widget(index) => ListItem::new(self.palette[*index]),
+                Shelf::Widget(index) => {
+                    let item = ListItem::new(self.palette[*index]);
+                    match denise_ui::widgets::all().get(*index) {
+                        Some(info) if with_glyphs => item.with_leading_icon(info.icon),
+                        _ => item,
+                    }
+                }
             })
             .collect();
         let rows = items.len().max(1) as i32;
@@ -1038,6 +1084,11 @@ impl Designer {
             .with_selected(armed);
 
         let width = self.scale.n(self.settings.left - GAP * 2);
+        // Rows stacked from the top, remembered for hit-testing: the same
+        // arithmetic the list draws with.
+        self.slots = (0..self.shown.len().max(1))
+            .map(|row| Rect::new(0, row as i32 * row_height, width, row_height))
+            .collect();
         self.ui.remove(self.chrome.palette);
         self.chrome.palette = self
             .ui
@@ -1049,6 +1100,119 @@ impl Designer {
             .expect("the palette viewport is there");
     }
 
+    /// The palette as tiles: every glyph in sight at once, names in tooltips.
+    ///
+    /// Presses never reach these buttons — design mode takes the palette's
+    /// presses so a tile can start a drag, exactly as it does for rows — so
+    /// the tiles are inert and the armed one is marked by its role instead.
+    /// What the keyboard loses with the list, the mode gives back in height:
+    /// the whole catalogue lands in a third of the rows.
+    fn fill_palette_glyphs(&mut self, counts: Vec<usize>) {
+        let width = self.scale.n(self.settings.left - GAP * 2);
+        let row_height = self.scale.n(PALETTE_ROW);
+        let tile_height = self.scale.n(TILE);
+        let tile_width = width / TILE_COLUMNS;
+        let armed = self.placing.kind();
+
+        // First pass: where everything goes, in the palette's own coordinates.
+        // A heading takes a full row of its own; tiles flow under it, wrapping
+        // at the column count.
+        self.slots.clear();
+        let mut y = 0;
+        let mut column = 0;
+        for row in &self.shown {
+            match row {
+                Shelf::Heading(_) => {
+                    if column > 0 {
+                        y += tile_height;
+                        column = 0;
+                    }
+                    self.slots.push(Rect::new(0, y, width, row_height));
+                    y += row_height;
+                }
+                Shelf::Widget(_) => {
+                    self.slots
+                        .push(Rect::new(column * tile_width, y, tile_width, tile_height));
+                    column += 1;
+                    if column == TILE_COLUMNS {
+                        column = 0;
+                        y += tile_height;
+                    }
+                }
+            }
+        }
+        if column > 0 {
+            y += tile_height;
+        }
+
+        self.ui.remove(self.chrome.palette);
+        let panel = self
+            .ui
+            .add(
+                self.chrome.palette_view,
+                Panel::default(),
+                Rect::new(0, 0, width, y.max(1)),
+            )
+            .expect("the palette viewport is there");
+
+        let mut headings = counts.into_iter();
+        let inset = self.scale.n(2);
+        let indent = self.scale.n(GAP);
+        for (row, slot) in self.shown.clone().into_iter().zip(self.slots.clone()) {
+            match row {
+                Shelf::Heading(group) => {
+                    // The same words the list's headings use, in the same
+                    // clothes: upper case, dimmed, a count at the far end.
+                    let heading = Rect::new(
+                        slot.x + indent,
+                        slot.y,
+                        (slot.width - indent * 2).max(1),
+                        slot.height,
+                    );
+                    self.ui.add(
+                        panel,
+                        Label::new(group.name().to_uppercase())
+                            .with_size(self.scale.text(Text::Caption))
+                            .with_role(Role::Base300),
+                        heading,
+                    );
+                    self.ui.add(
+                        panel,
+                        Label::new(headings.next().unwrap_or(0).to_string())
+                            .with_align(Align::End, Align::Center)
+                            .with_size(self.scale.text(Text::Caption))
+                            .with_role(Role::Base300),
+                        heading,
+                    );
+                }
+                Shelf::Widget(index) => {
+                    let Some(info) = denise_ui::widgets::all().get(index) else {
+                        continue;
+                    };
+                    let tile = Rect::new(
+                        slot.x + inset,
+                        slot.y + inset,
+                        (slot.width - inset * 2).max(1),
+                        (slot.height - inset * 2).max(1),
+                    );
+                    let button = Button::<Message>::inert("")
+                        .with_icon(info.icon)
+                        .with_role(if armed == Some(info.kind) {
+                            Role::Primary
+                        } else {
+                            Role::Neutral
+                        });
+                    if let Some(id) = self.ui.add(panel, button, tile) {
+                        // The name the other modes print, and the line they
+                        // put in the shared tooltip, together on the tile.
+                        self.ui.set_tooltip(id, format!("{} — {}", info.kind, info.doc));
+                    }
+                }
+            }
+        }
+        self.chrome.palette = panel;
+    }
+
     /// The kind a palette row stands for, or `None` for a heading.
     fn palette_kind(&self, row: usize) -> Option<&'static str> {
         match self.shown.get(row)? {
@@ -1057,11 +1221,15 @@ impl Designer {
         }
     }
 
-    /// The row of the palette under a point, if the point is on one.
-    fn palette_row(&self, at: Point) -> Option<usize> {
+    /// The palette entry under a point: a row in the list modes, a tile or a
+    /// heading in glyphs mode. Indexes [`Designer::shown`], whatever the mode —
+    /// the slots were laid down by whichever `fill_palette` branch built the
+    /// pane, so hitting and drawing cannot disagree.
+    fn palette_slot(&self, at: Point) -> Option<usize> {
         let view = self.ui.bounds(self.chrome.palette_view)?;
         let scroll = self.ui.scroll(self.chrome.palette_view);
-        usize::try_from((at.y - view.y + scroll.y) / self.scale.n(PALETTE_ROW)).ok()
+        let local = Point::new(at.x - view.x + scroll.x, at.y - view.y + scroll.y);
+        self.slots.iter().position(|slot| slot.contains(local))
     }
 
     /// Hovers a palette row by the widget's name, and waits out the tooltip.
@@ -1074,22 +1242,23 @@ impl Designer {
         else {
             return false;
         };
+        let Some(slot) = self.slots.get(row).copied() else {
+            return false;
+        };
         let Some(view) = self.ui.bounds(self.chrome.palette_view) else {
             return false;
         };
         // Scrolled to, because the viewport holds eleven rows and there are
         // thirty-one: a `--hover video` that quietly hovered nothing would be a
         // picture of the palette with the pointer in the wrong place.
-        let row_height = self.scale.n(PALETTE_ROW);
-        let top = row as i32 * row_height;
         let scroll = self.ui.scroll(self.chrome.palette_view);
-        let wanted = scroll.y.clamp(top - view.height + row_height, top);
+        let wanted = scroll.y.clamp(slot.bottom() - view.height, slot.y);
         self.ui
             .set_scroll(self.chrome.palette_view, Point::new(scroll.x, wanted));
         let scroll = self.ui.scroll(self.chrome.palette_view);
         let at = Point::new(
-            view.x + view.width / 2,
-            view.y + top - scroll.y + row_height / 2,
+            view.x + slot.x + slot.width / 2,
+            view.y + slot.y - scroll.y + slot.height / 2,
         );
         let moved = [InputEvent::PointerMoved { position: at }];
         self.input(&moved);
@@ -1106,8 +1275,13 @@ impl Designer {
     /// twenty-five names tell somebody who already knows which widget they want,
     /// and this is for everybody else. See `Describe::DOC`.
     fn palette_hover(&mut self, at: Point) {
+        // The tiles of glyphs mode carry their own tooltips — a glyph without
+        // its name would be a riddle — so the shared one stays out of the way.
+        if self.settings.palette == PaletteMode::Glyphs {
+            return;
+        }
         let doc = self
-            .palette_row(at)
+            .palette_slot(at)
             .and_then(|row| self.shown.get(row).copied())
             .and_then(|row| match row {
                 Shelf::Heading(_) => None,
@@ -1208,6 +1382,18 @@ impl Designer {
     /// toolbar says what the state **is**, and pressing it changes it. The
     /// keyboard has the separate ones, which is where somebody who wants a
     /// particular magnification reaches anyway.
+    /// The next palette mode along: glyph-and-name, name alone, glyphs alone.
+    ///
+    /// Remembered in the settings, because it is a taste rather than a
+    /// property of any form. Whatever was armed stays armed — the palette is
+    /// rebuilt, and each mode marks the armed widget its own way.
+    pub fn cycle_palette_mode(&mut self) {
+        self.settings.palette = self.settings.palette.next();
+        self.fill_palette();
+        self.status = format!("palette: {}", self.settings.palette.name());
+        self.refresh_labels();
+    }
+
     pub fn cycle_zoom(&mut self) {
         let next = if self.zoom.is_fit() {
             Zoom::at(Zoom::STEPS[0])
@@ -2186,6 +2372,14 @@ impl Designer {
             .widget_mut::<Button<Message>>(self.chrome.theme_button)
         {
             button.set_label(theme);
+        }
+
+        let palette_mode = self.settings.palette.name();
+        if let Some(button) = self
+            .ui
+            .widget_mut::<Button<Message>>(self.chrome.mode_button)
+        {
+            button.set_label(palette_mode);
         }
 
         let zoom = self.zoom.label();
@@ -3227,7 +3421,7 @@ impl Designer {
     fn press_palette(&mut self, at: Point) {
         // A heading has no kind, so pressing one arms nothing — which is also
         // what `ListItem::disabled` would have decided if the list saw presses.
-        let Some(kind) = self.palette_row(at).and_then(|row| self.palette_kind(row)) else {
+        let Some(kind) = self.palette_slot(at).and_then(|row| self.palette_kind(row)) else {
             self.cancel_placing();
             return;
         };
@@ -5836,6 +6030,7 @@ impl Designer {
             Message::TabOrder => self.toggle_tab_order(),
             Message::Theme => self.cycle_theme(),
             Message::Zoom => self.cycle_zoom(),
+            Message::PaletteMode => self.cycle_palette_mode(),
             Message::ItemAdd(row) => self.add_item(row),
             Message::ItemRemove(row, nth) => self.remove_item(row, nth),
             Message::ItemUp(row, nth) => self.move_item(row, nth, nth.wrapping_sub(1)),
@@ -8458,6 +8653,130 @@ mod tests {
         (0..designer.shown.len())
             .filter_map(|row| designer.palette_kind(row))
             .collect()
+    }
+
+    /// The default palette wears its glyphs: every widget row carries its
+    /// widget's icon, and no heading carries one.
+    #[test]
+    fn the_palette_rows_wear_their_glyphs_by_default() {
+        let designer = designer_on("forms/hello.dform");
+        assert_eq!(designer.settings().palette, PaletteMode::Both);
+        let list = designer
+            .ui
+            .widget::<List<Message>>(designer.chrome.palette)
+            .expect("a palette list");
+        assert_eq!(list.items().len(), designer.shown.len());
+        for (row, item) in list.items().iter().enumerate() {
+            match designer.shown[row] {
+                Shelf::Heading(_) => {
+                    assert_eq!(item.leading_icon(), None, "a heading wears a glyph")
+                }
+                Shelf::Widget(_) => assert!(
+                    item.leading_icon().is_some(),
+                    "`{}` has no glyph",
+                    item.text()
+                ),
+            }
+        }
+    }
+
+    /// Text mode is the palette as it originally was: names, no glyphs — and
+    /// the button beside the heading is what gets there.
+    #[test]
+    fn text_mode_strips_the_glyphs_and_the_button_says_which_mode_it_is() {
+        let mut designer = designer_on("forms/hello.dform");
+        designer.cycle_palette_mode();
+        assert_eq!(designer.settings().palette, PaletteMode::Text);
+        let list = designer
+            .ui
+            .widget::<List<Message>>(designer.chrome.palette)
+            .expect("a palette list");
+        assert!(
+            list.items().iter().all(|item| item.leading_icon().is_none()),
+            "text mode still shows glyphs"
+        );
+        let button = designer
+            .ui
+            .widget::<Button<Message>>(designer.chrome.mode_button)
+            .expect("the mode button");
+        assert_eq!(button.label(), "text");
+    }
+
+    /// Glyphs mode swaps the list for tiles, and the slots keep hitting: a
+    /// press in the middle of a tile arms exactly what a press on its row
+    /// would have, and a press on a heading arms nothing.
+    #[test]
+    fn a_tile_in_glyphs_mode_arms_its_widget_the_way_a_row_does() {
+        let mut designer = designer_on("forms/hello.dform");
+        designer.cycle_palette_mode();
+        designer.cycle_palette_mode();
+        assert_eq!(designer.settings().palette, PaletteMode::Glyphs);
+        assert_eq!(
+            designer.slots.len(),
+            designer.shown.len(),
+            "every entry has a slot"
+        );
+
+        let view = designer
+            .ui
+            .bounds(designer.chrome.palette_view)
+            .expect("a palette");
+        let centre = |slot: Rect| {
+            Point::new(
+                view.x + slot.x + slot.width / 2,
+                view.y + slot.y + slot.height / 2,
+            )
+        };
+
+        let row = (0..designer.shown.len())
+            .find(|row| designer.palette_kind(*row) == Some("button"))
+            .expect("a button tile");
+        designer.press_palette(centre(designer.slots[row]));
+        designer.drop_at(centre(designer.slots[row]));
+        assert_eq!(
+            designer.placing.kind(),
+            Some("button"),
+            "the tile did not arm its widget"
+        );
+
+        // Headings take a full row of their own, so the first slot is one —
+        // and pressing it gives up what was armed, as it does in the list.
+        assert!(matches!(designer.shown[0], Shelf::Heading(_)));
+        designer.press_palette(centre(designer.slots[0]));
+        assert_eq!(designer.placing.kind(), None);
+
+        // And the way back round is a list again, glyphs and all.
+        designer.cycle_palette_mode();
+        assert_eq!(designer.settings().palette, PaletteMode::Both);
+        assert!(
+            designer
+                .ui
+                .widget::<List<Message>>(designer.chrome.palette)
+                .is_some(),
+            "cycling back did not rebuild the list"
+        );
+    }
+
+    /// In glyphs mode the tiles wrap at the column count and never leave the
+    /// pane, whatever the filter has done to the shelves.
+    #[test]
+    fn glyph_tiles_stay_inside_the_pane_and_under_their_headings() {
+        let mut designer = designer_on("forms/hello.dform");
+        designer.cycle_palette_mode();
+        designer.cycle_palette_mode();
+        let width = designer.scale.n(designer.settings().left - GAP * 2);
+        for (row, slot) in designer.shown.iter().zip(&designer.slots) {
+            assert!(slot.x >= 0 && slot.right() <= width, "{slot:?} leaves the pane");
+            if matches!(row, Shelf::Heading(_)) {
+                assert_eq!(slot.width, width, "a heading shares its row");
+            }
+        }
+        // No two slots overlap: a press can only mean one thing.
+        for (i, a) in designer.slots.iter().enumerate() {
+            for b in &designer.slots[i + 1..] {
+                assert!(!a.intersects(b), "{a:?} and {b:?} overlap");
+            }
+        }
     }
 
     #[test]

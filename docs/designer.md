@@ -38,7 +38,8 @@ shelf or a fragment — because the kind decides what the rest of the questions
 are, and because a form's kind is a fact the file records rather than something
 the application asserts later.
 
-Then: drag widgets out of the palette, drag them about, drag their handles,
+Then: drag widgets out of the palette — each on its shelf, wearing its glyph,
+with a tooltip saying what it is — drag them about, drag their handles,
 align them, and give the ones the application will need to reach a **name**.
 
 Two things are worth knowing before the first drag:

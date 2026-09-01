@@ -278,6 +278,7 @@ impl Describe for Spinner {
     const DOC: &'static str =
         "A turning arc, for when all there is to say is that something is happening.";
     const GROUP: Group = Group::Indicator;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::SPINNER;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

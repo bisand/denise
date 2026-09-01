@@ -426,6 +426,7 @@ impl<M> Describe for Rating<M> {
     const KIND: &'static str = "rating";
     const DOC: &'static str = "Stars, filled to a value and set by pressing one.";
     const GROUP: Group = Group::Input;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::RATING;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

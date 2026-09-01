@@ -346,6 +346,7 @@ impl<M> Describe for Select<M> {
     const KIND: &'static str = "select";
     const DOC: &'static str = "One choice out of many, picked from a dropdown list.";
     const GROUP: Group = Group::Input;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::SELECT;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

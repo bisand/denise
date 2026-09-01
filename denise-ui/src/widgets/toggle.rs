@@ -433,6 +433,7 @@ impl<M> Describe for Toggle<M> {
     const KIND: &'static str = "toggle";
     const DOC: &'static str = "The same on-or-off as a checkbox, shaped like a switch.";
     const GROUP: Group = Group::Input;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::TOGGLE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The label beside the track."),

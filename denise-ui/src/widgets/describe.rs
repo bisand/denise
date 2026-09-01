@@ -15,9 +15,9 @@
 //! - The designer's inspector renders one editor per [`Property`], choosing which
 //!   from the [`PropertyKind`].
 //! - [`all`] lists every widget that ships, so a palette does not name them —
-//!   with [`Describe::DOC`] saying what each one *is* and [`Describe::GROUP`]
-//!   saying which shelf it belongs on, so the palette does not describe or file
-//!   them either.
+//!   with [`Describe::DOC`] saying what each one *is*, [`Describe::GROUP`]
+//!   saying which shelf it belongs on, and [`Describe::ICON`] giving it a face,
+//!   so the palette does not describe, file or draw them either.
 //!
 //! # The two properties a widget cannot hold
 //!
@@ -68,6 +68,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use denise::{Radius, Role};
+use denise_render::icon::Icon;
 
 use super::{Align, Fit, Orientation, avatar::Presence};
 
@@ -764,6 +765,19 @@ pub trait Describe {
     /// Which shelf of the catalogue this belongs on.
     const GROUP: Group;
 
+    /// The widget's glyph: a small portrait of the thing, for a palette to
+    /// draw beside — or instead of — its name.
+    ///
+    /// Drawn in [`denise_render::icon`]'s format rather than looked up in a
+    /// font, for the reason that module gives: a picture that depends on the
+    /// installed font is a box on the machine least able to spare one. The
+    /// glyphs themselves live in [`icons`](super::icons), which also says what
+    /// makes one read well at sixteen pixels.
+    ///
+    /// Required rather than defaulted, like [`DOC`](Describe::DOC) and for the
+    /// same reason: a widget the palette cannot draw should not compile.
+    const ICON: &'static Icon;
+
     /// Every property, in the order an inspector should show them.
     const PROPERTIES: &'static [Property];
 
@@ -840,6 +854,8 @@ pub struct WidgetInfo {
     pub doc: &'static str,
     /// Which shelf of the catalogue it belongs on.
     pub group: Group,
+    /// Its glyph. See [`Describe::ICON`].
+    pub icon: &'static Icon,
     /// What it accepts.
     pub properties: &'static [Property],
 }
@@ -851,6 +867,7 @@ impl WidgetInfo {
             kind: W::KIND,
             doc: W::DOC,
             group: W::GROUP,
+            icon: W::ICON,
             properties: W::PROPERTIES,
         }
     }

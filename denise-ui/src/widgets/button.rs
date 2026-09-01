@@ -636,6 +636,7 @@ impl<M> Describe for Button<M> {
     const KIND: &'static str = "button";
     const DOC: &'static str = "A rectangle somebody presses to make something happen.";
     const GROUP: Group = Group::Input;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::BUTTON;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The label."),

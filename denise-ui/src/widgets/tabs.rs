@@ -420,6 +420,7 @@ impl<M> Describe for Tabs<M> {
     const KIND: &'static str = "tabs";
     const DOC: &'static str = "A row of labels where one is selected, for switching what is below.";
     const GROUP: Group = Group::Container;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::TABS;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

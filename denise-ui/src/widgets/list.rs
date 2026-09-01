@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
 use denise_render::Canvas;
+use denise_render::icon::Icon;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -23,11 +24,13 @@ use crate::widgets::style::{
 /// # use denise_ui::ListItem;
 /// ListItem::new("Kjøletemperatur").with_trailing("4 °C");
 /// ListItem::new("Avriming").with_leading(">").disabled();
+/// ListItem::new("button").with_leading_icon(&denise_ui::widgets::icons::BUTTON);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListItem {
     text: String,
     leading: String,
+    icon: Option<&'static Icon>,
     trailing: String,
     enabled: bool,
 }
@@ -38,6 +41,7 @@ impl ListItem {
         Self {
             text: text.into(),
             leading: String::new(),
+            icon: None,
             trailing: String::new(),
             enabled: true,
         }
@@ -49,6 +53,18 @@ impl ListItem {
     /// labels line up rather than each starting wherever its own marker ended.
     pub fn with_leading(mut self, leading: impl Into<String>) -> Self {
         self.leading = leading.into();
+        self
+    }
+
+    /// Puts a glyph in the column before the label, instead of leading text.
+    ///
+    /// Drawn square at the text size, centred in the leading column, in the
+    /// row's own content colour — so it mutes with a disabled row and inverts
+    /// on a selected one, exactly as the label does. A row with both an icon
+    /// and leading text shows the icon; the column is shared, and two markers
+    /// in it would jostle.
+    pub fn with_leading_icon(mut self, icon: &'static Icon) -> Self {
+        self.icon = Some(icon);
         self
     }
 
@@ -74,6 +90,12 @@ impl ListItem {
     #[inline]
     pub fn leading(&self) -> &str {
         &self.leading
+    }
+
+    /// The leading glyph, if the row has one.
+    #[inline]
+    pub const fn leading_icon(&self) -> Option<&'static Icon> {
+        self.icon
     }
 
     /// The trailing text, empty when there is none.
@@ -385,19 +407,35 @@ impl<M> List<M> {
         // The widest label and the widest trailing value may be on different
         // rows. Summing them is the width at which *no* row has to be squeezed,
         // which is the question a caller sizing a column is actually asking.
-        let leading = widest(ListItem::leading);
         let trailing = widest(ListItem::trailing);
+        let text = widest(ListItem::text);
+        let leading = self.leading_width(engine);
         let gap = |width: i32| if width > 0 { pad } else { 0 };
-        pad * 2 + leading + gap(leading) + widest(ListItem::text) + trailing + gap(trailing)
+        pad * 2 + leading + gap(leading) + text + trailing + gap(trailing)
+    }
+
+    /// The side of the square a row's glyph is drawn in: the text size, so a
+    /// glyph and the label beside it read at the same weight.
+    const fn icon_side(&self) -> i32 {
+        self.style.size_px as i32
     }
 
     /// Width of the leading column: the widest one in the list, so labels align.
+    ///
+    /// A glyph counts at its drawn side, so a list mixing icon rows and text
+    /// rows still lines its labels up.
     fn leading_width(&self, engine: &mut TextEngine) -> i32 {
-        self.items
+        let text = self
+            .items
             .iter()
             .map(|item| engine.measure_line(self.style, &item.leading))
             .max()
-            .unwrap_or(0)
+            .unwrap_or(0);
+        if self.items.iter().any(|item| item.icon.is_some()) {
+            text.max(self.icon_side())
+        } else {
+            text
+        }
     }
 
     /// Which enabled row is under `point`, if any.
@@ -596,10 +634,25 @@ impl<M: 'static> Widget<M> for List<M> {
                 leading_width,
                 item.trailing_width(ctx.text, self.style),
             );
+            // A glyph takes the leading column's place; see `with_leading_icon`.
+            if let Some(icon) = item.icon {
+                let side = self.icon_side().min(leading.width).min(row.height).max(1);
+                let box_ = Rect::new(
+                    leading.x + (leading.width - side) / 2,
+                    row.y + (row.height - side) / 2,
+                    side,
+                    side,
+                );
+                // The knockouts are cut in whatever this row is actually
+                // painted on, which for a resting row is the list's backdrop.
+                let back = if kind == RowKind::Resting { backdrop } else { fill };
+                canvas.draw_icon(icon, box_, content, back);
+            }
+            let leading_text = if item.icon.is_some() { "" } else { item.leading.as_str() };
             for (box_of, text, align) in [
-                (leading, &item.leading, Align::Start),
-                (label, &item.text, Align::Start),
-                (trailing, &item.trailing, Align::End),
+                (leading, leading_text, Align::Start),
+                (label, item.text.as_str(), Align::Start),
+                (trailing, item.trailing.as_str(), Align::End),
             ] {
                 if text.is_empty() || box_of.is_empty() {
                     continue;
@@ -715,6 +768,7 @@ impl<M> Describe for List<M> {
     const KIND: &'static str = "list";
     const DOC: &'static str = "Rows in a column, one of them selected.";
     const GROUP: Group = Group::Data;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::LIST;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
@@ -1346,6 +1400,54 @@ mod tests {
         assert_eq!(list.visible_rows(&theme::DARK, 0), 0);
         assert_eq!(list.visible_rows(&theme::DARK, -10), 0);
         assert_eq!(list.row_height(&theme::DARK), 40);
+    }
+
+    /// A glyph sits in the leading column, so it widens the column to its own
+    /// side when the leading texts are narrower — and the icon side follows the
+    /// text size, so a scaled-up list scales its glyphs with it.
+    #[test]
+    fn a_leading_icon_widens_the_leading_column_to_its_side() {
+        use crate::widgets::icons;
+
+        let mut engine = TextEngine::new();
+        let bare = list();
+        assert_eq!(bare.leading_width(&mut engine), 0, "no icons, no column");
+
+        let mut iconed: List<usize> = List::new(
+            alloc::vec![
+                ListItem::new("button").with_leading_icon(&icons::BUTTON),
+                ListItem::new("label"),
+            ],
+            |index| index,
+        );
+        assert_eq!(iconed.items()[0].leading_icon(), Some(&icons::BUTTON));
+        assert_eq!(iconed.items()[1].leading_icon(), None);
+        assert_eq!(
+            iconed.leading_width(&mut engine),
+            16,
+            "the column is the icon's side at the default text size"
+        );
+        iconed.set_style(TextStyle::built_in(24));
+        assert_eq!(iconed.leading_width(&mut engine), 24, "and it scales");
+    }
+
+    /// The icon column is part of the preferred width, same as leading text:
+    /// a palette sized to its rows must not squeeze the labels to fit glyphs in.
+    #[test]
+    fn a_leading_icon_is_part_of_the_preferred_width() {
+        use crate::widgets::icons;
+
+        let mut engine = TextEngine::new();
+        let plain: List<usize> = List::new(["button"], |index| index);
+        let iconed: List<usize> = List::new(
+            [ListItem::new("button").with_leading_icon(&icons::BUTTON)],
+            |index| index,
+        );
+        assert_eq!(
+            iconed.preferred_width(&mut engine),
+            plain.preferred_width(&mut engine) + 16 + padding(16),
+            "the glyph and its gap"
+        );
     }
 
     /// A string is a row, so the common case does not need a builder.

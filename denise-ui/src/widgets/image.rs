@@ -224,6 +224,7 @@ impl Describe for Image {
     const KIND: &'static str = "image";
     const DOC: &'static str = "A picture, fitted to a rectangle.";
     const GROUP: Group = Group::Media;
+    const ICON: &'static denise_render::icon::Icon = &super::icons::IMAGE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
