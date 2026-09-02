@@ -15,6 +15,9 @@ homepage.workspace = true
 denise = { workspace = true, features = ["std"] }
 denise-forms = { workspace = true }
 denise-ui = { workspace = true, features = ["std"] }
+# The open-the-handler button wears a glyph drawn in the same format as the
+# palette's, and the format is this crate's.
+denise-render = { workspace = true }
 denise-winit = { workspace = true }
 
 # Preview mode puts the on-screen keyboard up over the form under design, so

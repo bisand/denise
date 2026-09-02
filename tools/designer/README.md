@@ -553,6 +553,77 @@ widget is built again. Both are written to the file at once and the canvas catch
 up when the caret leaves the field — rebuilding mid-keystroke would take the caret
 out of the field being typed in.
 
+**Events are filed under their own heading**, last, whatever order each widget
+listed them in — so the pane reads geometry, then look, then data, then what the
+node fires, and a handler is one place to look for. A section rather than a tab: a
+button has one event, and hiding it behind a click would cost more than it saves.
+
+## The code behind it
+
+Beside every event's name is a small arrow-out-of-a-box, and it does what Delphi's
+double-click on an event did: **opens the handler in your editor, writing one
+first if there is none.** Double-clicking the event's name does the same.
+
+Three things have to be known for that, and the designer learns each once:
+
+- **Which file.** A `.dform` holds no code and is not owed to any one application
+  — `hello.dform` is built by three of the examples here — so the form cannot say,
+  and the designer will not guess. The first time, it asks with the platform's own
+  file dialog, then remembers the answer **beside the form**, in `hello.designer`:
+
+  ```
+  code = ../examples/typed/src/main.rs
+  ```
+
+  Versioned with the form, so the next person's designer knows too, and never a
+  byte of the form itself. A file that does not exist yet is created, with a header
+  saying which form it belongs to — you still add the `mod` line.
+
+  A second line, written by hand, names the type the handlers belong to:
+
+  ```
+  handlers = Typed
+  ```
+
+  With it, a handler the designer has to write goes **inside that type's `impl`**
+  as a method taking `&mut self`, rather than at the end of the file as a free
+  function; and when two types both have a `fn save`, the ladder below prefers
+  the named type's. Of several impls, one for a trait whose name ends in
+  `Handlers` is preferred, then the inherent one.
+
+- **Where in the file.** There is no single convention for how a name reaches Rust,
+  so the designer walks a short ladder and the first rung that answers wins: a
+  function named for the event (`fn greet(`), then a `match` arm on its variant
+  (`HelloMessage::Greet =>`, spelt as the code generator spells it), then the name
+  as a string (`"greet"`, the untyped wiring's arm). An event nothing answers gets
+  a placeholder appended, shaped by the payload the widget declares —
+  `fn set_notify(on: bool)` for a checkbox — so it compiles as written. A free
+  function rather than a method, because the designer cannot know which `impl` is
+  yours; wiring it into the `match` stays your job, and on the typed path the
+  compiler asks for exactly that the moment the form gains the event.
+
+- **Which editor.** `editor = code --goto {file}:{line}:{column}` in the settings
+  file — Visual Studio Code, opening and focusing without any extension. Another
+  editor is a different line there (`zed {file}:{line}`), not a change here. If
+  the command cannot be started, the platform's own opener gets the file, which
+  opens it without going to the line, and the status line says so.
+
+**The other direction: which names the code answers.** When the application is
+already built and the form is being redesigned — a new face on the same binary —
+the question is not "write me a handler" but "does this name reach one". The
+designer reads the code file for every name it answers: strings in `match` arms,
+variants of any `…Message` enum in arms, and the handlers type's methods. The
+event's tooltip lists them, and an event naming none of them has its name drawn
+in the error role — the load error the application would raise, shown before
+the load. A file that is not the whole wiring can leave a name looking
+unanswered; the tooltip says which file was read, so the red is a question, not a
+verdict.
+
+None of this changes what a form *is*. A form loaded at runtime is still layout
+and initial state, and still fails at load naming an event the application does
+not answer; what this adds is the shortest path from that name to the function,
+and from the function back to the names a form may use.
+
 ## What is here
 
 | | |

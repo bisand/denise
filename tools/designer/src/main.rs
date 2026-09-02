@@ -65,6 +65,7 @@ mod app;
 mod arrange;
 mod canvas;
 mod clipboard;
+mod code;
 mod document;
 mod history;
 mod inspector;

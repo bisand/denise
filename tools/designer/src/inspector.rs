@@ -21,11 +21,14 @@
 //! [`Describe`]: denise_ui::widgets::Describe
 
 use denise::{Rect, Role};
-use denise_ui::widgets::{Button, Checkbox, Label, Property, PropertyKind, Select, Slider, Value};
+use denise_ui::widgets::{
+    Align, Button, Checkbox, Label, Property, PropertyKind, Select, Slider, Value,
+};
 use denise_ui::widgets::{Panel, TextInput};
 use denise_ui::{NodeId, TextStyle, Ui};
 
 use crate::app::Message;
+use crate::code;
 use crate::scale::Scale;
 use crate::text::Text;
 
@@ -42,6 +45,14 @@ const NAME: i32 = 88;
 const RESET: i32 = 18;
 /// The control that opens a file dialog, on an asset row.
 const BROWSE: i32 = 22;
+/// The control that opens the handler in the editor, on an event row.
+const OPEN: i32 = 22;
+
+/// Whether a property is an event: a message name, rather than a value the
+/// widget holds. The pane files these under their own heading.
+pub fn is_event(property: &Property) -> bool {
+    matches!(property.kind, PropertyKind::Message(_))
+}
 
 /// How wide a range may be before a slider stops being worth its pixels.
 ///
@@ -111,6 +122,8 @@ pub struct Row {
     /// The text the editor was last *given*, so that what it now holds being
     /// different means a person changed it.
     pub shown: String,
+    /// The label down the left, for the double-click that opens an event.
+    pub name: Option<NodeId>,
 }
 
 /// What the pane needs in order to draw one row.
@@ -137,6 +150,10 @@ pub struct Field {
     /// The items, for a [`PropertyKind::List`] property. Empty for every other
     /// kind, and the reason a list row is taller than one row.
     pub items: Vec<String>,
+    /// For an event: whether the code behind the form answers its name.
+    /// `None` when there is no code to ask, or no name yet. `Some(false)` is
+    /// the load error the application will raise, shown before the load.
+    pub answered: Option<bool>,
 }
 
 /// The pane.
@@ -178,7 +195,16 @@ impl Inspector {
         // A list property is as tall as it has items, plus the row that adds
         // one; every other property is a single row.
         let tall: i32 = fields.iter().map(rows_for).sum();
-        let height = header.len() as i32 * header_pitch + tall * (row + gap) + row * 2 + gap * 4;
+        // The events sit under a heading of their own, which costs a row.
+        let events = fields
+            .iter()
+            .filter(|field| is_event(field.property))
+            .count();
+        let sections = i32::from(events > 0);
+        let height = header.len() as i32 * header_pitch
+            + (tall + sections) * (row + gap)
+            + row * 2
+            + gap * 4;
         let content = ui
             .add(parent, Panel::default(), Rect::new(0, 0, width, height))
             .expect("the inspector's viewport is there");
@@ -201,7 +227,34 @@ impl Inspector {
         let editor_w = inner - name_width - gap - reset - gap;
 
         let mut rows = Vec::with_capacity(fields.len());
+        let mut headed = false;
         for (index, field) in fields.iter().enumerate() {
+            // The first event opens the events section: a heading in the same
+            // clothes as the palette's shelves, with the count at the far end,
+            // so the handlers are one place to look rather than wherever each
+            // widget happened to list them. A section rather than a tab,
+            // because a button has one event and hiding it behind a click
+            // would cost more than it saves.
+            if is_event(field.property) && !headed {
+                headed = true;
+                let heading = Rect::new(gap, y + scale.n(4), inner, label_height);
+                ui.add(
+                    content,
+                    Label::new("EVENTS")
+                        .with_role(Role::Base300)
+                        .with_size(scale.text(Text::Caption)),
+                    heading,
+                );
+                ui.add(
+                    content,
+                    Label::new(events.to_string())
+                        .with_align(Align::End, Align::Center)
+                        .with_role(Role::Base300)
+                        .with_size(scale.text(Text::Caption)),
+                    heading,
+                );
+                y += row + gap;
+            }
             // Dimmed when the file does not write it: what is on screen is then
             // the widget's own default, and knowing which is which is the
             // difference between reading a form and guessing at one.
@@ -209,7 +262,9 @@ impl Inspector {
             // `Neutral` rather than `Base300`: a dimmed name still has to be
             // readable, and `Base300` is a *background* role — text in it is
             // one step off the panel it sits on.
-            let role = if field.written {
+            let role = if field.answered == Some(false) {
+                Role::Error
+            } else if field.written {
                 Role::BaseContent
             } else {
                 Role::Neutral
@@ -227,19 +282,57 @@ impl Inspector {
                     doc.push('\n');
                     doc.push_str(hint);
                 }
+                if is_event(field.property) {
+                    doc.push_str("\nDouble-click the name to open its handler in your editor.");
+                }
                 ui.set_tooltip(id, doc);
             }
 
             let shown = field.value.clone().unwrap_or_default();
+            let event = is_event(field.property);
             // A list uses the full width of the pane rather than the editor
             // column: its items are the content, and the property's name is a
-            // heading over them rather than a label beside them.
+            // heading over them rather than a label beside them. An event's
+            // editor leaves room for the button that opens its handler.
             let space = if field.property.kind.is_collection() {
                 Rect::new(gap, y + row, inner, row)
+            } else if event {
+                Rect::new(editor_x, y, editor_w - scale.n(OPEN) - gap, row)
             } else {
                 Rect::new(editor_x, y, editor_w, row)
             };
             let editor = build_editor(ui, content, index, field, &shown, space, scale);
+
+            // The way into the code: a glyph of an arrow leaving a box, greyed
+            // until the event has a name, because a nameless event has no
+            // handler to go to.
+            if event {
+                let named = !shown.trim().is_empty();
+                let open = scale.n(OPEN);
+                if let Some(id) = ui.add(
+                    content,
+                    Button::new("", Message::OpenCode(index))
+                        .with_icon(&code::OPEN)
+                        .with_role(Role::Neutral)
+                        .with_size(label),
+                    Rect::new(
+                        gap + inner - reset - gap - open,
+                        y + scale.n(2),
+                        open,
+                        row - scale.n(4),
+                    ),
+                ) {
+                    ui.set_enabled(id, named);
+                    ui.set_tooltip(
+                        id,
+                        if named {
+                            "Open the handler in your editor — written for you if it is not there yet"
+                        } else {
+                            "Name the event first"
+                        },
+                    );
+                }
+            }
 
             // Something to reset only when there is something to reset: a
             // property the file does not write is already at its default.
@@ -260,6 +353,7 @@ impl Inspector {
                 node: field.node,
                 editor,
                 shown,
+                name,
             });
             y += rows_for(field) * (row + gap);
         }

@@ -116,6 +116,14 @@ The three things the file cannot hold — the application's message type, its
 pictures, and what the widgets are called — are
 [explained in full](forms.md#loading-one-from-rust) with the payload table.
 
+The designer knows the way back to this code. Beside every event in its
+inspector is a button — double-clicking the event's name does the same — that
+opens the handler in your editor, writing a placeholder shaped for the event's
+payload if nothing answers the name yet. Which file that is gets asked once and
+remembered in a sidecar beside the form, `settings.designer`; which editor is a
+line in the designer's settings, Visual Studio Code by default. [The designer's
+README](../tools/designer/README.md#the-code-behind-it) has the rest.
+
 [`examples/designed`](../examples/designed) is a complete, runnable version of
 exactly this. It is the [`hello`](../examples/hello) example again, built from
 [`hello.dform`](../forms/hello.dform), and reading the two side by side is the

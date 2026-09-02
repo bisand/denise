@@ -1,6 +1,6 @@
 //! The designer: a toolbar, three panes and a status line.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use denise::{
@@ -16,9 +16,10 @@ use denise_ui::{Anchors, Dock, NodeId, TextStyle, Ui};
 use crate::arrange::{self, Command, Needs};
 use crate::canvas::{self, Band, Drag, Grip, Guide, between, place, resting, snap, topmost};
 use crate::clipboard::Clipboard;
+use crate::code;
 use crate::document::Document;
 use crate::history::History;
-use crate::inspector::{Editor, Field, Inspector, show_value};
+use crate::inspector::{Editor, Field, Inspector, is_event, show_value};
 use crate::outline::{self, Outline};
 use crate::scale::Scale;
 use crate::settings::{PaletteMode, Settings};
@@ -98,6 +99,8 @@ pub enum Message {
     Zoom,
     /// The palette's display mode: the next of glyph-and-name, name, glyphs.
     PaletteMode,
+    /// Open an inspector row's event handler in the editor.
+    OpenCode(usize),
     /// A key tapped on the on-screen keyboard.
     Key(KeyCode),
     /// A message the **form under design** emitted, by the index of its name.
@@ -424,7 +427,7 @@ impl Chrome {
 /// bottom, two columns against the sides, and the canvas taking what is left. So
 /// the window resizes correctly without this file doing arithmetic on a resize,
 /// which is the thing anchoring and docking were added for.
-fn build_chrome(ui: &mut Ui<Message>, settings: Settings, scale: Scale) -> Chrome {
+fn build_chrome(ui: &mut Ui<Message>, settings: &Settings, scale: Scale) -> Chrome {
     let root = ui.root();
     // Every rectangle and every text size below is written in logical units and
     // multiplied here, on the way in — the pattern `docs/design.md` settles on,
@@ -750,6 +753,11 @@ pub struct Designer {
     filter: String,
     /// A widget on its way onto the canvas.
     placing: Placing,
+    /// The frame clock, as of the last `keyboard_turn`: what pairs two presses
+    /// on an event's name into the double-click that opens its handler.
+    now_ms: u64,
+    /// The last press on an event's name in the inspector, and when.
+    last_name_press: Option<(usize, u64)>,
     /// The lower-left pane, rebuilt whenever the tree or the selection changes.
     outline: Option<Outline>,
     /// The subtrees drawn shut, by path.
@@ -858,7 +866,7 @@ impl Designer {
         // The tree draws tooltips itself, so this is the only way to say how big
         // they are — and the palette's whole answer to #126 is a tooltip.
         ui.set_tooltip_size(scale.text(Text::Body));
-        let chrome = build_chrome(&mut ui, settings, scale);
+        let chrome = build_chrome(&mut ui, &settings, scale);
         let palette: Vec<&'static str> = denise_ui::widgets::all().iter().map(|w| w.kind).collect();
 
         let mut designer = Self {
@@ -873,6 +881,8 @@ impl Designer {
             slots: Vec::new(),
             filter: String::new(),
             placing: Placing::Idle,
+            now_ms: 0,
+            last_name_press: None,
             outline: None,
             folded: Vec::new(),
             hidden: Vec::new(),
@@ -921,7 +931,7 @@ impl Designer {
     }
 
     pub fn settings(&self) -> Settings {
-        self.settings
+        self.settings.clone()
     }
 
     /// Records a new window size, to be written out on the way to exiting.
@@ -1862,6 +1872,7 @@ impl Designer {
                     resettable: property.name != "title"
                         && self.document.form().property(&[], property.name).is_some(),
                     hint: None,
+                    answered: None,
                     // The form node has no collection of its own.
                     items: Vec::new(),
                 }
@@ -1941,9 +1952,36 @@ impl Designer {
         }
     }
 
+    /// The names the code behind the form answers, and which file said so —
+    /// or `None` when there is no code to ask. See [`code::answered`].
+    fn vocabulary(&self) -> Option<(String, Vec<String>)> {
+        let link = code::read_link(self.document.path()?)?;
+        let source = std::fs::read_to_string(&link.code).ok()?;
+        Some((
+            code::display_name(&link.code),
+            code::answered(&source, link.handlers.as_deref()),
+        ))
+    }
+
     fn fields(&self, paths: &[Vec<usize>], ids: &[NodeId]) -> Vec<Field> {
         let used = self.message_names();
-        let hint = (!used.is_empty()).then(|| format!("Used in this form: {}", used.join(", ")));
+        let vocabulary = self.vocabulary();
+        // What an event's tooltip adds under the property's own line: the
+        // names this form already uses, and the names the code answers — the
+        // second being what a redesign of a built application has to stay
+        // inside.
+        let mut lines: Vec<String> = Vec::new();
+        if !used.is_empty() {
+            lines.push(format!("Used in this form: {}", used.join(", ")));
+        }
+        if let Some((file, names)) = &vocabulary {
+            lines.push(if names.is_empty() {
+                format!("{file} answers no event names yet")
+            } else {
+                format!("Answered by {file}: {}", names.join(", "))
+            });
+        }
+        let hint = (!lines.is_empty()).then(|| lines.join("\n"));
 
         let mut fields: Vec<Field> = denise_forms::NODE_PROPERTIES
             .iter()
@@ -1963,11 +2001,29 @@ impl Designer {
             // A message field cannot offer a dropdown — a name not used yet is
             // exactly what somebody is usually typing — so what the form
             // already uses goes in the tooltip instead.
-            let hint = matches!(property.kind, PropertyKind::Message(_))
-                .then(|| hint.clone())
-                .flatten();
-            fields.push(self.field(paths, ids, property, false, hint));
+            let hint = is_event(property).then(|| hint.clone()).flatten();
+            let mut field = self.field(paths, ids, property, false, hint);
+            if is_event(property)
+                && let Some((_, names)) = &vocabulary
+            {
+                // A name the code does not answer is the load error, early. No
+                // name, or several nodes disagreeing, is nothing to judge.
+                field.answered = field
+                    .value
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(|name| names.iter().any(|known| known == name));
+            }
+            fields.push(field);
         }
+        // The events go last, under their own heading, whatever order each
+        // widget listed them in: geometry, then look, then data, then what it
+        // fires. The pane draws the heading where the first one starts.
+        let (mut fields, events): (Vec<Field>, Vec<Field>) = fields
+            .into_iter()
+            .partition(|field| !is_event(field.property));
+        fields.extend(events);
         fields
     }
 
@@ -2023,6 +2079,7 @@ impl Designer {
                 (kind, Some(path)) if kind.is_collection() => self.items_of(path, property.name),
                 _ => Vec::new(),
             },
+            answered: None,
         }
     }
 
@@ -2841,6 +2898,9 @@ impl Designer {
                     self.press_outline(*position, modifiers.contains(denise::Modifiers::SHIFT));
                     return true;
                 }
+                if self.press_event_name(*position) {
+                    return true;
+                }
                 if !canvas.contains(*position) {
                     // A press anywhere else — the inspector, the toolbar —
                     // gives up whatever the palette had armed.
@@ -3087,6 +3147,7 @@ impl Designer {
 
     /// A held key, and the caret deciding whether a keyboard is wanted.
     pub fn keyboard_turn(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
         if !self.preview {
             return;
         }
@@ -6032,6 +6093,7 @@ impl Designer {
             Message::Theme => self.cycle_theme(),
             Message::Zoom => self.cycle_zoom(),
             Message::PaletteMode => self.cycle_palette_mode(),
+            Message::OpenCode(row) => self.open_code(row),
             Message::ItemAdd(row) => self.add_item(row),
             Message::ItemRemove(row, nth) => self.remove_item(row, nth),
             Message::ItemUp(row, nth) => self.move_item(row, nth, nth.wrapping_sub(1)),
@@ -6150,6 +6212,164 @@ impl Designer {
         // A field was written to, so nothing will settle on its own.
         self.stale = false;
         self.reload_from_document();
+    }
+
+    /// A press on an event's name in the inspector: the second of two inside
+    /// [`code::DOUBLE_CLICK_MS`] opens the handler, as the button beside it
+    /// would. A single press is left to the tree, so nothing else changes.
+    fn press_event_name(&mut self, at: Point) -> bool {
+        let row = self.inspector.as_ref().and_then(|pane| {
+            pane.rows.iter().position(|row| {
+                is_event(row.property)
+                    && row
+                        .name
+                        .and_then(|name| self.ui.bounds(name))
+                        .is_some_and(|bounds| bounds.contains(at))
+            })
+        });
+        let Some(row) = row else {
+            self.last_name_press = None;
+            return false;
+        };
+        let now = self.now_ms;
+        let paired = matches!(
+            self.last_name_press,
+            Some((seen, then)) if seen == row && now.saturating_sub(then) <= code::DOUBLE_CLICK_MS
+        );
+        if paired {
+            self.last_name_press = None;
+            self.open_code(row);
+            true
+        } else {
+            self.last_name_press = Some((row, now));
+            false
+        }
+    }
+
+    /// Opens the handler behind an event row in the editor, writing one first
+    /// when nothing in the code answers the name yet. See [`code`].
+    ///
+    /// Three things have to be known, and each missing one is a status line
+    /// rather than a dialog: the event needs a name, the form needs a file for
+    /// the sidecar to sit beside, and the code needs a path — which is asked
+    /// for once and remembered in that sidecar.
+    pub fn open_code(&mut self, row: usize) {
+        let Some((property, editor)) = self.inspector.as_ref().and_then(|pane| {
+            let row = pane.rows.get(row)?;
+            let editor = match row.editor {
+                Editor::Field(id) => Some(id),
+                _ => None,
+            };
+            Some((row.property, editor))
+        }) else {
+            return;
+        };
+        let PropertyKind::Message(payload) = property.kind else {
+            return;
+        };
+        // What the field holds *now*, not what it was given: the name being
+        // opened is usually the one just typed.
+        let event = editor
+            .and_then(|id| self.ui.widget::<TextInput<Message>>(id))
+            .map(|field| field.text().trim().to_string())
+            .unwrap_or_default();
+        if event.is_empty() {
+            self.status = format!(
+                "`{}` has no name yet — type one, and it can be opened",
+                property.name
+            );
+            self.refresh_labels();
+            return;
+        }
+        let Some(form) = self.document.path().map(Path::to_path_buf) else {
+            self.status =
+                String::from("save the form first — where its code lives is remembered beside it");
+            self.refresh_labels();
+            return;
+        };
+        let link = match code::read_link(&form) {
+            Some(link) => link,
+            None => {
+                let Some(chosen) = pick_code(&form) else {
+                    return;
+                };
+                if let Err(why) = code::write_link(&form, &chosen) {
+                    self.status = why;
+                    self.refresh_labels();
+                    return;
+                }
+                code::Link {
+                    code: chosen,
+                    handlers: None,
+                }
+            }
+        };
+        let code_path = link.code;
+        let handlers = link.handlers.as_deref();
+
+        let form_name = form.file_name().map_or_else(
+            || form.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let kind = self
+            .selected
+            .and_then(|id| self.ui.kind(id))
+            .unwrap_or("form");
+        let fired_by = format!("`{}` of a `{kind}`", property.name);
+
+        let created = !code_path.exists();
+        let mut source = if created {
+            code::header(&form_name)
+        } else {
+            match std::fs::read_to_string(&code_path) {
+                Ok(source) => source,
+                Err(why) => {
+                    self.status = format!("could not read {}: {why}", code_path.display());
+                    self.refresh_labels();
+                    return;
+                }
+            }
+        };
+        let ((line, column), ensured) = code::ensure(
+            &mut source,
+            &event,
+            payload,
+            &fired_by,
+            &form_name,
+            handlers,
+        );
+        if (created || ensured != code::Ensured::Found)
+            && let Err(why) = std::fs::write(&code_path, &source)
+        {
+            self.status = format!("could not write {}: {why}", code_path.display());
+            self.refresh_labels();
+            return;
+        }
+
+        let function = code::snake(&event);
+        let file = code::display_name(&code_path);
+        let did = match (created, ensured) {
+            (true, _) => format!("wrote {file} with `fn {function}` — "),
+            (false, code::Ensured::AddedMethod) => {
+                format!(
+                    "added `fn {function}` to `impl {}` in {file} — ",
+                    handlers.unwrap_or_default()
+                )
+            }
+            (false, code::Ensured::AddedFunction) => match handlers {
+                // Asked for a method and could not oblige: say why, or the
+                // free function looks like a choice rather than a fallback.
+                Some(handlers) => {
+                    format!("no `impl {handlers}` in {file}, so `fn {function}` went at the end — ")
+                }
+                None => format!("added `fn {function}` to {file} — "),
+            },
+            (false, code::Ensured::Found) => String::new(),
+        };
+        self.status = match code::launch(&self.settings.editor, &code_path, line, column) {
+            Ok(said) | Err(said) => format!("{did}{said}"),
+        };
+        self.refresh_labels();
     }
 
     /// Opens a path, reporting a failure in the status line rather than exiting.
@@ -6271,6 +6491,22 @@ fn pick_picture() -> Option<PathBuf> {
         .add_filter("Picture", &["png", "jpg", "jpeg", "gif"])
         .set_title("Find a picture")
         .pick_file()
+}
+
+/// Asks, once, which file holds a form's code.
+///
+/// The platform's *save* dialog rather than its open one, because the file may
+/// not exist yet and a save dialog is the one that lets a name be typed. An
+/// existing file chosen here is appended to, never replaced, whatever the
+/// dialog's own warning says.
+fn pick_code(form: &Path) -> Option<PathBuf> {
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Which file holds this form's code?")
+        .add_filter("Rust source", &["rs"]);
+    if let Some(directory) = form.parent() {
+        dialog = dialog.set_directory(directory);
+    }
+    dialog.save_file()
 }
 
 fn pick_save() -> Option<PathBuf> {
@@ -8758,6 +8994,305 @@ mod tests {
                 .is_some(),
             "cycling back did not rebuild the list"
         );
+    }
+
+    /// The events come last under their own heading, whatever order the
+    /// widget listed them in — and a node with no events gets no heading.
+    #[test]
+    fn events_are_filed_last_under_their_own_heading() {
+        let mut designer = designer_on("forms/hello.dform");
+        assert!(designer.select_named("who"));
+        let pane = designer.inspector.as_ref().expect("a pane");
+        let first_event = pane
+            .rows
+            .iter()
+            .position(|row| is_event(row.property))
+            .expect("a text input fires on-submit");
+        assert!(
+            pane.rows[first_event..]
+                .iter()
+                .all(|row| is_event(row.property)),
+            "a property came after an event"
+        );
+        assert!(
+            pane.rows[..first_event]
+                .iter()
+                .all(|row| !is_event(row.property)),
+            "an event came before the properties"
+        );
+        assert!(
+            first_event > 0,
+            "geometry and the widget's own properties come first"
+        );
+
+        assert!(designer.select_named("greeting"));
+        let pane = designer.inspector.as_ref().expect("a pane");
+        assert!(
+            pane.rows.iter().all(|row| !is_event(row.property)),
+            "a label fires nothing"
+        );
+    }
+
+    /// An event with no name has no handler to go to, and the status line
+    /// says so rather than a dialog asking for a file it could not use.
+    #[test]
+    fn opening_an_unnamed_event_says_so() {
+        let mut designer = designer_on("forms/hello.dform");
+        assert!(designer.select_named("who"));
+        let index = row(&designer, "on-submit");
+        let Editor::Field(field) = designer.inspector.as_ref().unwrap().rows[index].editor else {
+            panic!("an event is edited in a field");
+        };
+        designer
+            .ui
+            .widget_mut::<TextInput<Message>>(field)
+            .expect("the field")
+            .set_text("");
+        designer.open_code(index);
+        assert!(
+            designer.status.contains("no name yet"),
+            "{}",
+            designer.status
+        );
+    }
+
+    /// The whole way through: the sidecar names the file, the file is written
+    /// with a handler shaped for the event, opening it again writes nothing,
+    /// and a double-click on the event's name is the same as the button.
+    ///
+    /// Unix only, because the editor is stood in for by `true`, which is a
+    /// program every Unix has and Windows does not.
+    #[cfg(unix)]
+    #[test]
+    fn opening_an_event_writes_its_handler_once_and_opens_it() {
+        let dir = std::env::temp_dir().join(format!("denise-code-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let form = dir.join("hello.dform");
+        std::fs::copy(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../forms/hello.dform"),
+            &form,
+        )
+        .unwrap();
+        let code_path = dir.join("src").join("app.rs");
+        code::write_link(&form, &code_path).unwrap();
+
+        let mut designer = designer_on_file(&form);
+        designer.settings.editor = String::from("true {file}:{line}:{column}");
+        assert!(designer.select_named("who"));
+        let index = row(&designer, "on-submit");
+
+        designer.open_code(index);
+        let source = std::fs::read_to_string(&code_path).expect("the file was created");
+        assert!(
+            source.starts_with("//! Code behind `hello.dform`"),
+            "{source}"
+        );
+        assert!(source.contains("fn greet() {"), "{source}");
+        assert!(
+            source.contains("fired by `on-submit` of a `text-input`"),
+            "{source}"
+        );
+        assert!(designer.status.starts_with("wrote "), "{}", designer.status);
+        assert!(designer.status.contains("opened "), "{}", designer.status);
+
+        designer.open_code(index);
+        assert_eq!(
+            std::fs::read_to_string(&code_path).unwrap(),
+            source,
+            "a handler that is there is not written again"
+        );
+        assert!(
+            designer.status.starts_with("opened "),
+            "{}",
+            designer.status
+        );
+
+        // The double-click: two presses on the name inside the window open
+        // it; a first press alone is left to the tree.
+        designer.status.clear();
+        let name = designer.inspector.as_ref().unwrap().rows[index]
+            .name
+            .expect("the name label");
+        let at = designer.ui.bounds(name).expect("the label is laid out");
+        let at = Point::new(at.x + at.width / 2, at.y + at.height / 2);
+        let press = InputEvent::PointerButton {
+            button: PointerButton::Left,
+            state: ElementState::Down,
+            position: at,
+            modifiers: denise::Modifiers::NONE,
+        };
+        designer.keyboard_turn(1_000);
+        assert!(!designer.claim(&press), "one press is not a double-click");
+        assert!(designer.status.is_empty());
+        designer.keyboard_turn(1_000 + code::DOUBLE_CLICK_MS);
+        assert!(designer.claim(&press), "the second press opens the handler");
+        assert!(
+            designer.status.starts_with("opened "),
+            "{}",
+            designer.status
+        );
+
+        // And two slow presses are two single presses.
+        designer.status.clear();
+        designer.keyboard_turn(5_000);
+        designer.claim(&press);
+        designer.keyboard_turn(5_000 + code::DOUBLE_CLICK_MS + 1);
+        assert!(!designer.claim(&press), "too slow to pair");
+        assert!(designer.status.is_empty());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A temporary copy of `hello.dform` beside a sidecar and a code file, for
+    /// the tests that read and write the code behind it.
+    fn code_behind(
+        tag: &str,
+        form_text: Option<&str>,
+        code: &str,
+        sidecar: &str,
+    ) -> (std::path::PathBuf, Designer) {
+        let dir = std::env::temp_dir().join(format!("denise-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let form = dir.join("hello.dform");
+        let text = form_text.map_or_else(
+            || {
+                std::fs::read_to_string(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../forms/hello.dform"
+                ))
+                .unwrap()
+            },
+            str::to_string,
+        );
+        std::fs::write(&form, text).unwrap();
+        std::fs::write(dir.join("src").join("app.rs"), code).unwrap();
+        std::fs::write(code::sidecar(&form), sidecar).unwrap();
+        let designer = designer_on_file(&form);
+        (dir, designer)
+    }
+
+    /// With a handlers type in the sidecar, the placeholder is a method in
+    /// that type's impl, and the status line says so.
+    #[cfg(unix)]
+    #[test]
+    fn a_handlers_type_gets_its_placeholder_as_a_method() {
+        let (dir, mut designer) = code_behind(
+            "method",
+            None,
+            "struct App;\n\nimpl App {\n    fn new() -> Self {\n        Self\n    }\n}\n",
+            "code = src/app.rs\nhandlers = App\n",
+        );
+        designer.settings.editor = String::from("true {file}");
+        assert!(designer.select_named("who"));
+        let index = row(&designer, "on-submit");
+        designer.open_code(index);
+        let source = std::fs::read_to_string(dir.join("src").join("app.rs")).unwrap();
+        assert!(
+            source.contains("    }\n\n    /// `greet` — fired by `on-submit` of a `text-input` in hello.dform.\n    fn greet(&mut self) {\n        todo!(\"greet\")\n    }\n}\n"),
+            "{source}"
+        );
+        assert!(
+            !source.contains("\nfn greet()"),
+            "no free function:\n{source}"
+        );
+        assert!(
+            designer
+                .status
+                .starts_with("added `fn greet` to `impl App`"),
+            "{}",
+            designer.status
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A handlers type whose impl is not in the file still gets a handler —
+    /// a free function — and the status line says why it is not a method.
+    #[cfg(unix)]
+    #[test]
+    fn a_handlers_type_with_no_impl_in_the_file_falls_back_and_says_so() {
+        let (dir, mut designer) = code_behind(
+            "noimpl",
+            None,
+            "fn main() {}\n",
+            "code = src/app.rs\nhandlers = App\n",
+        );
+        designer.settings.editor = String::from("true {file}");
+        assert!(designer.select_named("who"));
+        designer.open_code(row(&designer, "on-submit"));
+        let source = std::fs::read_to_string(dir.join("src").join("app.rs")).unwrap();
+        assert!(
+            source.ends_with("fn greet() {\n    todo!(\"greet\")\n}\n"),
+            "{source}"
+        );
+        assert!(
+            designer.status.starts_with("no `impl App` in "),
+            "{}",
+            designer.status
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The code's vocabulary reaches the inspector: an event the code answers
+    /// is left alone, one it does not is marked, and the tooltip lists what
+    /// the code does answer.
+    #[test]
+    fn an_event_the_code_does_not_answer_is_marked_and_the_tooltip_says_what_it_would() {
+        let code = "impl App {\n    fn greet(&mut self) {}\n    fn save(&mut self) {}\n}\n";
+        let (dir, mut designer) =
+            code_behind("vocab", None, code, "code = src/app.rs\nhandlers = App\n");
+        assert!(designer.select_named("who"));
+        let fields = designer.fields(&designer.selection.clone(), &[designer.selected.unwrap()]);
+        let submit = fields
+            .iter()
+            .find(|f| f.property.name == "on-submit")
+            .unwrap();
+        assert_eq!(submit.answered, Some(true), "`greet` is answered");
+        assert!(
+            fields
+                .iter()
+                .filter(|f| !is_event(f.property))
+                .all(|f| f.answered.is_none())
+        );
+        let name = designer.inspector.as_ref().unwrap().rows[row(&designer, "on-submit")]
+            .name
+            .unwrap();
+        let tooltip = designer.ui.tooltip(name).unwrap_or_default();
+        assert!(tooltip.contains("Answered by "), "{tooltip}");
+        assert!(tooltip.contains("greet, save"), "{tooltip}");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // The same form asking for a name the code has never heard of.
+        let unanswered = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../forms/hello.dform"
+        ))
+        .unwrap()
+        .replace("on-submit=greet", "on-submit=nope");
+        let (dir, mut designer) = code_behind(
+            "vocab2",
+            Some(&unanswered),
+            code,
+            "code = src/app.rs\nhandlers = App\n",
+        );
+        assert!(designer.select_named("who"));
+        let fields = designer.fields(&designer.selection.clone(), &[designer.selected.unwrap()]);
+        let submit = fields
+            .iter()
+            .find(|f| f.property.name == "on-submit")
+            .unwrap();
+        assert_eq!(
+            submit.answered,
+            Some(false),
+            "`nope` is the load error, early"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // And with no code to ask, nothing is judged.
+        let mut plain = designer_on("forms/hello.dform");
+        assert!(plain.select_named("who"));
+        let fields = plain.fields(&plain.selection.clone(), &[plain.selected.unwrap()]);
+        assert!(fields.iter().all(|f| f.answered.is_none()));
     }
 
     /// In glyphs mode the tiles wrap at the column count and never leave the
