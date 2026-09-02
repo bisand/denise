@@ -146,12 +146,22 @@ pub fn read_link(form: &Path) -> Option<Link> {
 pub fn write_link(form: &Path, code: &Path) -> Result<(), String> {
     let base = form.parent().unwrap_or(Path::new("."));
     let shown = relative(base, code).unwrap_or_else(|| code.to_path_buf());
-    let mut text = format!("code = {}\n", shown.to_string_lossy());
+    let mut text = format!("code = {}\n", portable(&shown));
     if let Some((_, handlers)) = lines_of(form).into_iter().find(|(k, _)| k == "handlers") {
         text.push_str(&format!("handlers = {handlers}\n"));
     }
     std::fs::write(sidecar(form), text)
         .map_err(|why| format!("could not write {}: {why}", sidecar(form).display()))
+}
+
+/// A path as a checked-in text file should spell it: forward slashes on every
+/// platform. Windows reads them back happily, and a sidecar written on one
+/// machine is read on another.
+fn portable(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// `to`, written from `from` with as many `..` as it takes — or `None` when
