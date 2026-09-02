@@ -325,11 +325,12 @@ disabled-selection answer and the pairing rules live once.
 `Rating` is where the rasteriser ran out. Arcs unblocked the rings and the
 spinner and do nothing at all for a five-pointed star, which is a ten-vertex
 polygon — so the choice was a public polygon API, rating with discs instead of
-stars, or one more *shape*. The shape won: `Canvas::fill_star` computes its own
+stars, or one more *shape*. The shape won: `fill_star` computes its own
 vertices from the same Q16 sine table the arcs use, over a scanline polygon
-filler kept `pub(crate)`. The no-path-builder promise survives intact, and a
-heart or an arrow can be added the day one is wanted without having committed to
-a public path API today. The filler keeps its crossings in a fixed-size stack
+filler. The no-path-builder promise survives intact, and a heart or an arrow can
+be added the day one is wanted without having committed to a public path API
+today — a list of vertices is not a path, and there is still nothing here that
+curves, strokes or winds. The filler keeps its crossings in a fixed-size stack
 array, because this crate has no allocator.
 
 Two things fell out of that. `TURN` is a power of two and does not divide by

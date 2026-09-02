@@ -51,6 +51,7 @@ mod arc;
 // nowhere at all.
 pub mod blit;
 pub mod icon;
+pub mod painter;
 
 pub use polygon::MAX_ICON_VERTICES;
 mod line;
@@ -65,6 +66,7 @@ pub use arc::TURN;
 pub use blend::Paint;
 pub use canvas::{Canvas, PixelView};
 pub use coverage::Mask;
+pub use painter::{ClipToken, Clipped, Painter, PainterExt, Pen};
 pub use font::BitmapFont;
 
 /// Compiles the examples in this crate's README, so they cannot drift from the API

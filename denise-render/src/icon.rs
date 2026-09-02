@@ -119,27 +119,7 @@ impl Canvas<'_> {
     /// rectangle if you want it square. Anything beyond
     /// [`MAX_SHAPES`] is ignored rather than drawn wrong.
     pub fn draw_icon(&mut self, icon: &Icon, rect: Rect, fore: Color, back: Color) {
-        if rect.is_empty() || GRID <= 0 {
-            return;
-        }
-        for shape in icon.shapes.iter().take(MAX_SHAPES) {
-            let mut points = [(0i32, 0i32); crate::MAX_ICON_VERTICES];
-            let n = shape.points.len().min(crate::MAX_ICON_VERTICES);
-            if n < 3 {
-                continue;
-            }
-            for (slot, &(gx, gy)) in points.iter_mut().zip(shape.points).take(n) {
-                *slot = (
-                    fx_along(rect.x, rect.width, gx),
-                    fx_along(rect.y, rect.height, gy),
-                );
-            }
-            let paint = match shape.ink {
-                Ink::Fore => fore,
-                Ink::Back => back,
-            };
-            self.fill_polygon_fx(&points[..n], paint.into());
-        }
+        crate::painter::Painter::draw_icon(self, icon, rect, fore, back);
     }
 }
 
@@ -149,7 +129,7 @@ impl Canvas<'_> {
 /// edge: a triangle snapped to pixel corners at 48 px has visibly ragged
 /// diagonals, and the filler is already doing the subpixel arithmetic.
 #[inline]
-fn fx_along(origin: i32, extent: i32, grid: i16) -> i32 {
+pub(crate) fn fx_along(origin: i32, extent: i32, grid: i16) -> i32 {
     let offset = (i64::from(grid) * i64::from(extent) * i64::from(ONE)) / i64::from(GRID);
     let base = i64::from(origin.clamp(-COORD_LIMIT, COORD_LIMIT)) * i64::from(ONE);
     (base + offset).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32

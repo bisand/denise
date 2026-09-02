@@ -108,6 +108,15 @@ impl<'a> Canvas<'a> {
         })
     }
 
+    /// A [`Pen`](crate::Pen) drawing through this canvas.
+    ///
+    /// The bridge from a concrete rasteriser to the painter-agnostic API widgets
+    /// and the text engine take.
+    #[inline]
+    pub fn pen(&mut self) -> crate::Pen<'_> {
+        crate::Pen::new(self)
+    }
+
     /// Full extent of the underlying frame.
     #[inline]
     pub const fn size(&self) -> Size {
@@ -129,6 +138,17 @@ impl<'a> Canvas<'a> {
     /// Narrows the clip in place. Never widens it.
     pub fn clip_to(&mut self, rect: Rect) {
         self.clip = self.clip.intersect(&rect).unwrap_or(Rect::ZERO);
+    }
+
+    /// Puts back a clip that [`Painter::push_clip`](crate::Painter::push_clip)
+    /// narrowed.
+    ///
+    /// The one operation that may widen, which is why it is not public: the only
+    /// way to reach it is through a [`ClipToken`](crate::ClipToken), and the only
+    /// way to hold one of those is to have narrowed the clip first.
+    #[inline]
+    pub(crate) fn restore_clip(&mut self, rect: Rect) {
+        self.clip = rect;
     }
 
     /// A canvas over the same pixels with a tighter clip.
