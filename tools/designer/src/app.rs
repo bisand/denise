@@ -6506,6 +6506,11 @@ fn pick_code(form: &Path) -> Option<PathBuf> {
     if let Some(directory) = form.parent() {
         dialog = dialog.set_directory(directory);
     }
+    // Named for the form, the way Delphi's unit was, rather than `Untitled`:
+    // the pairing the sidecar exists to record is at least suggested.
+    if let Some(stem) = form.file_stem() {
+        dialog = dialog.set_file_name(format!("{}.rs", stem.to_string_lossy()));
+    }
     dialog.save_file()
 }
 
