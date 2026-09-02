@@ -1030,6 +1030,26 @@ field that is gone. **Add a message to the form and every `match` stops being
 exhaustive.** Neither is something a string lookup can do, and both are asserted
 with `trybuild` rather than described.
 
+Or skip the `match`. The same file generates a trait with one method per
+message, named for it and taking what it carries, and a `dispatch` that calls
+the method a message is named for:
+
+```rust
+impl HelloHandlers for App {
+    fn greet(&mut self) { … }
+}
+
+for message in ui.drain_messages() {
+    message.dispatch(&mut app);
+}
+```
+
+Now **adding an event in the designer makes the compiler name the method that is
+missing** — `greet`, at `impl HelloHandlers for App` — which is also the method
+the designer writes when asked to open that event. The binding from form to
+code is one `impl` line, in code, where a type name means something; the form
+file still says nothing about code.
+
 The generated `build` calls the same engine — there is one implementation, and
 this is a typed door onto it — so a form loaded at runtime and the same form
 generated behave identically. `Hello::place` is the door onto `build_fitted`, so

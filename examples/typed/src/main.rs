@@ -33,6 +33,11 @@
 //! - `enum HelloMessage`, with a variant per message the form emits, carrying
 //!   whatever that widget's payload is. Add one and every `match` stops being
 //!   exhaustive.
+//! - `trait HelloHandlers`, with a method per message named for it, and
+//!   `HelloMessage::dispatch`, which calls the one a message is named for.
+//!   Implement it and there is no `match` to write: add an event in the
+//!   designer and the compiler names the method that is missing — the same
+//!   method the designer writes when asked to open that event.
 //! - `Hello::build`, which calls the same engine [`designed`](../../designed)
 //!   calls. There is one implementation of building a form; this is a typed door
 //!   onto it.
@@ -70,6 +75,28 @@ struct Typed {
     exit: bool,
 }
 
+impl HelloHandlers for Typed {
+    /// The only piece of application logic, and it is `hello`'s, unchanged.
+    ///
+    /// The form calls it `greet`; the trait names the method for it, so this is
+    /// wired by being here. Take it away and the `impl` stops compiling.
+    fn greet(&mut self) {
+        let name = self
+            .ui
+            .widget::<TextInput<HelloMessage>>(self.form.who)
+            .map(|field| field.text().trim().to_string())
+            .unwrap_or_default();
+        let greeting = if name.is_empty() {
+            "Hello, whoever you are.".to_string()
+        } else {
+            format!("Hello, {name}.")
+        };
+        if let Some(label) = self.ui.widget_mut::<Label>(self.form.greeting) {
+            label.set_text(greeting);
+        }
+    }
+}
+
 impl Typed {
     fn new(size: Size, _scale: f32) -> Self {
         let designed = Hello::form();
@@ -86,23 +113,6 @@ impl Typed {
             form,
             started: Instant::now(),
             exit: false,
-        }
-    }
-
-    /// The only piece of application logic, and it is `hello`'s, unchanged.
-    fn greet(&mut self) {
-        let name = self
-            .ui
-            .widget::<TextInput<HelloMessage>>(self.form.who)
-            .map(|field| field.text().trim().to_string())
-            .unwrap_or_default();
-        let greeting = if name.is_empty() {
-            "Hello, whoever you are.".to_string()
-        } else {
-            format!("Hello, {name}.")
-        };
-        if let Some(label) = self.ui.widget_mut::<Label>(self.form.greeting) {
-            label.set_text(greeting);
         }
     }
 }
@@ -122,14 +132,13 @@ impl DeniseApp for Typed {
         self.ui.handle(events);
         self.ui.tick(self.started.elapsed().as_millis() as u64);
 
-        // The `match` the whole feature is for. Add `on-press=cancel` to the
-        // form, rebuild, and this stops compiling until it is handled — which is
-        // what a string-keyed resolver can never do.
+        // The dispatch the whole feature is for: no `match` here at all. Add
+        // `on-press=cancel` to the form, rebuild, and `impl HelloHandlers for
+        // Typed` stops compiling until it has a `cancel` — which is what a
+        // string-keyed resolver can never do.
         let messages: Vec<HelloMessage> = self.ui.drain_messages().collect();
         for message in messages {
-            match message {
-                HelloMessage::Greet => self.greet(),
-            }
+            message.dispatch(self);
         }
 
         if self.ui.needs_paint() {
