@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{
@@ -207,7 +207,7 @@ fn chevron_box(bounds: Rect, pad: i32) -> Rect {
 /// Two lines rather than a glyph: the built-in font has no arrow, and a control
 /// whose affordance depended on which font was loaded would lose it on the
 /// panel that ships with none.
-fn draw_chevron(canvas: &mut Canvas<'_>, box_of: Rect, thickness: i32, color: denise::Color) {
+fn draw_chevron(canvas: &mut Pen<'_>, box_of: Rect, thickness: i32, color: denise::Color) {
     if box_of.is_empty() {
         return;
     }
@@ -250,7 +250,7 @@ impl<M: Clone + 'static> Widget<M> for Select<M> {
         Measured::both(widest + pad * 4, ctx.theme.metrics.size_field.max(1))
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;

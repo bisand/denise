@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString};
 
 use denise::Role;
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -126,7 +126,7 @@ impl<M: 'static> Widget<M> for Label {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let color = ctx.theme.color(self.role);
         draw_aligned(
             canvas, ctx.text, self.style, ctx.bounds, self.align, &self.text, color,

@@ -34,7 +34,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{Color, Point, Radius, Rect, Role, Size, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Motion;
@@ -355,7 +355,7 @@ impl Toasts {
         surface: Size,
         engine: &mut TextEngine,
         now_ms: u64,
-        canvas: &mut Canvas<'_>,
+        canvas: &mut Pen<'_>,
     ) {
         let placed = self.placed(surface, engine, now_ms);
         self.last_painted = placed

@@ -87,7 +87,8 @@ fn drawing(c: &mut Criterion) {
                 BufferAge::Frames(1),
             )
             .expect("frame");
-            let mut canvas = Canvas::new(&mut frame);
+            let mut raster = Canvas::new(&mut frame);
+            let mut canvas = raster.pen();
             engine.draw(&mut canvas, style, Point::new(40, 40), LABEL, Color::WHITE);
             b.iter(|| {
                 black_box(engine.draw(

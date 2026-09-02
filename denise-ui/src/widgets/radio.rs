@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -256,7 +256,7 @@ impl<M: 'static> Widget<M> for RadioGroup<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let count = self.options.len();
         if count == 0 {
             return;

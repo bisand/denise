@@ -4,7 +4,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{
@@ -492,7 +492,7 @@ impl<M: 'static> Widget<M> for Table<M> {
         Measured::tall(self.preferred_height(ctx.theme, self.rows.len()))
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.columns.is_empty() {
             return;

@@ -3,7 +3,7 @@
 use alloc::format;
 
 use denise::Color;
-use denise_render::Canvas;
+use denise_render::Pen;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
@@ -80,7 +80,7 @@ impl<M: 'static> Widget<M> for Video {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         canvas.fill_rect(ctx.bounds, self.ground);
     }
 }

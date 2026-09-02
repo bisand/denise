@@ -3,7 +3,7 @@
 use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
@@ -275,7 +275,7 @@ impl<M: 'static> Widget<M> for Toggle<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let track = track_rect(ctx.bounds, ctx.theme);
         // A stadium: the radius is half the height, whatever the theme's selector
         // radius says. A switch with square-ish corners reads as a progress bar.

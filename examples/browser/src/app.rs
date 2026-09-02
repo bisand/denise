@@ -1008,7 +1008,7 @@ struct ReloadButton {
 }
 
 impl denise_ui::Widget<Message> for ReloadButton {
-    fn paint(&self, ctx: &mut denise_ui::PaintCtx<'_>, canvas: &mut denise_render::Canvas<'_>) {
+    fn paint(&self, ctx: &mut denise_ui::PaintCtx<'_>, canvas: &mut denise_render::Pen<'_>) {
         use denise::theme::Radius;
         use denise_render::TURN;
         use denise_ui::VisualState;

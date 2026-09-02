@@ -18,7 +18,7 @@
 //! and [`CursorImage::rasterise`] is how the same sprite reaches the plane.
 
 use denise::{Color, Point, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 
 /// A cursor bitmap: three levels, drawn in two theme colours.
 ///
@@ -181,7 +181,7 @@ impl Cursor {
     }
 
     /// Composites the sprite onto an already-finished scene.
-    pub fn paint(&self, theme: &Theme, canvas: &mut Canvas<'_>) {
+    pub fn paint(&self, theme: &Theme, canvas: &mut Pen<'_>) {
         if !self.visible || !self.image.is_well_formed() {
             return;
         }
@@ -200,7 +200,7 @@ fn paint_mask(
     origin: Rect,
     fill: Color,
     outline: Color,
-    canvas: &mut Canvas<'_>,
+    canvas: &mut Pen<'_>,
 ) {
     for row in 0..image.height {
         let base = (row * image.width) as usize;
@@ -229,6 +229,7 @@ fn paint_mask(
 
 #[cfg(test)]
 mod tests {
+    use denise_render::Canvas;
     /// The plane and the software composite must agree, or switching a panel to
     /// the hardware cursor would also change how it looks.
     #[test]
@@ -319,7 +320,7 @@ mod tests {
             Canvas::from_pixels(&mut pixels, Size::new(64, 64), 64, PixelFormat::Xrgb8888)
                 .expect("canvas");
         let cursor = Cursor::default();
-        cursor.paint(&theme::DARK, &mut canvas);
+        cursor.paint(&theme::DARK, &mut canvas.pen());
         assert!(pixels.iter().all(|&p| p == 0));
     }
 
@@ -335,7 +336,7 @@ mod tests {
             let mut canvas =
                 Canvas::from_pixels(&mut pixels, Size::new(64, 64), 64, PixelFormat::Xrgb8888)
                     .expect("canvas");
-            cursor.paint(&theme::DARK, &mut canvas);
+            cursor.paint(&theme::DARK, &mut canvas.pen());
         }
         let bounds = cursor.bounds();
         for y in 0..64i32 {

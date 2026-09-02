@@ -11,7 +11,7 @@ use denise::{
     BufferAge, Color, ElementState, Frame, InputEvent, Modifiers, PixelFormat, Point,
     PointerButton, Radius, Rect, Role, Size, Surface, SurfaceError, Theme, theme,
 };
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_ui::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use denise_ui::widgets::Panel;
 use denise_ui::{NodeId, Ui};
@@ -170,7 +170,7 @@ enum Msg {
 }
 
 impl Widget<Msg> for Probe {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let mut color = ctx.theme.color(self.color);
         // Every visual state must change the pixels, otherwise the tests below
         // could not tell a missing invalidation from a no-op.

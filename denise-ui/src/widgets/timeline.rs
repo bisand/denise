@@ -4,7 +4,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use denise::{Point, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -229,7 +229,7 @@ impl<M: 'static> Widget<M> for Timeline {
         Measured::tall(self.preferred_height(ctx.theme))
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.items.is_empty() {
             return;

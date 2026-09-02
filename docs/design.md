@@ -915,6 +915,41 @@ though it owned the whole window; restricting the clip to a damage region turns
 that into an incremental repaint, so there is never a second draw path to keep in
 step with the first.
 
+### The painting seam
+
+Widgets do not paint into a `Canvas`. They paint through a `Painter`: eighteen
+required operations, six more written in terms of those, and no way to express
+anything else. `Canvas` is one implementation of it and for now the only one.
+
+The trait exists because the drawing vocabulary turned out to be small enough to
+be worth naming. There are no paths, no beziers, one blend mode and a clip that
+is always a rectangle — a set of primitives a backend could answer some other
+way. Widgets are trait objects, so `Widget::paint` can only ever be handed a
+`&mut dyn Painter`, which settles two things: the trait may have no generic
+methods, and a colour crossing it is a premultiplied `Paint` rather than an
+`impl Into<Paint>`.
+
+Neither is a constraint widget code should have to wear, so it does not. `Pen` is
+a `&mut dyn Painter` with the ergonomics restored as *inherent* methods, which
+never compete with the trait's for resolution: `impl Into<Paint>` at every call
+site, and a `with_clip` that hands back a guard rather than a re-borrow of a
+concrete type. A widget body written against `Canvas` reads identically written
+against a pen. Converting the whole widget set changed two lines per file — the
+import and the signature — and not one line inside a `paint`.
+
+Two things moved to pay for it. The scanline polygon filler is on the trait
+rather than `pub(crate)`, because stars and icons are written in terms of it and
+a backend should inherit both rather than reimplement them. And restoring a
+narrowed clip needs a `ClipToken`, whose field is private: the only way to widen
+a clip is to have narrowed it, so a child still cannot escape the region its
+parent gave it.
+
+What this is *not* is a GPU backend. Nothing here renders on a GPU on any
+platform; on macOS, Windows and Wayland the compositor uploads a CPU-rendered
+buffer as a texture, which it always did. The seam only means such a backend
+would be an additive crate rather than a rewrite — and `Surface` handing out a
+`Frame`, which is `&mut [u32]`, is the half that would still have to change.
+
 ### Numbers
 
 Apple M-series, `--release`, so read the *ratios*, not the absolute times — a Pi 4

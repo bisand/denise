@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{
@@ -284,7 +284,7 @@ impl Accordion {
 
 /// The chevron: a small `>` when closed, rotated to `v` when open, drawn as
 /// two strokes since the built-in font has no glyph for it.
-fn chevron(canvas: &mut Canvas<'_>, centre: Point, arm: i32, open: bool, color: denise::Color) {
+fn chevron(canvas: &mut Pen<'_>, centre: Point, arm: i32, open: bool, color: denise::Color) {
     let a = arm.max(2);
     if open {
         // Pointing down: two arms meeting at the bottom.
@@ -333,7 +333,7 @@ impl<M: 'static> Widget<M> for Collapse<M> {
         Measured::tall(header.saturating_add(body))
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;

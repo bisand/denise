@@ -3,7 +3,7 @@
 use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -195,7 +195,7 @@ const fn tick_weight(side: i32) -> i32 {
 /// effective width of about `t / √2`, which is close enough that nobody counting
 /// pixels on a 20-pixel box would notice, and far better than the anaemic hairline
 /// a single pass gives.
-fn draw_tick(canvas: &mut Canvas<'_>, area: Rect, color: denise::Color, thickness: i32) {
+fn draw_tick(canvas: &mut Pen<'_>, area: Rect, color: denise::Color, thickness: i32) {
     let s = area.width;
     // Proportions of the box, in eighths and sixteenths so the arithmetic stays
     // integral at every size a selector metric can produce.
@@ -233,7 +233,7 @@ impl<M: 'static> Widget<M> for Checkbox<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let area = box_rect(ctx.bounds, ctx.theme);
         // Never more than a half-side, or the "rounded rect" is a circle with the
         // corners guessed at — which is what a radio button should look like and a

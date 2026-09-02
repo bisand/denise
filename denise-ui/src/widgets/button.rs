@@ -3,7 +3,7 @@
 use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Radius, Rect, Role};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_render::icon::Icon;
 use denise_text::TextStyle;
 
@@ -403,7 +403,7 @@ impl<M: Clone + 'static> Widget<M> for Button<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let (background, content) = interactive_pair(ctx.theme, self.role, ctx.state);
         canvas.fill_rounded_rect(ctx.bounds, radius, background);

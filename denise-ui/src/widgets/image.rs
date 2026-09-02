@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use denise::{Rect, Size};
-use denise_render::{Canvas, PixelView};
+use denise_render::{Pen, PixelView};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
@@ -186,7 +186,7 @@ impl Image {
     /// the rectangle and radius as arguments is what lets `Avatar` reuse the
     /// fit and mask rules for a shape it decides at paint time, without
     /// cloning a pixel buffer to change one number.
-    pub(crate) fn paint_at(&self, bounds: Rect, radius: i32, canvas: &mut Canvas<'_>) {
+    pub(crate) fn paint_at(&self, bounds: Rect, radius: i32, canvas: &mut Pen<'_>) {
         let Some(view) = PixelView::new(self.pixels.as_slice(), self.size, self.size.width) else {
             return;
         };
@@ -215,7 +215,7 @@ impl<M: 'static> Widget<M> for Image {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         self.paint_at(ctx.bounds, self.radius, canvas);
     }
 }

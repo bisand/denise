@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use denise::{Color, Point, Rect, Size};
-use denise_render::Canvas;
+use denise_render::Pen;
 
 use crate::atlas::{AtlasStats, GlyphAtlas, GlyphKey};
 use crate::bitmap::BitmapSource;
@@ -414,7 +414,7 @@ impl TextEngine {
     /// Returns the total advance.
     pub fn draw_line(
         &mut self,
-        canvas: &mut Canvas<'_>,
+        canvas: &mut Pen<'_>,
         style: TextStyle,
         origin: Point,
         text: &str,
@@ -445,7 +445,7 @@ impl TextEngine {
     /// happens to fall.
     pub fn draw(
         &mut self,
-        canvas: &mut Canvas<'_>,
+        canvas: &mut Pen<'_>,
         style: TextStyle,
         origin: Point,
         text: &str,

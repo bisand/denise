@@ -1,7 +1,7 @@
 //! A track and a fill. The one widget here that is purely an output.
 
 use denise::{Rect, Role};
-use denise_render::Canvas;
+use denise_render::Pen;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
@@ -166,7 +166,7 @@ impl<M: 'static> Widget<M> for Progress {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;

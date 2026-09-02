@@ -1,7 +1,7 @@
 //! Stars, filled to a value.
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role};
-use denise_render::Canvas;
+use denise_render::Pen;
 
 use crate::widget::{
     Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
@@ -282,7 +282,7 @@ impl<M: 'static> Widget<M> for Rating<M> {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         let (side, step) = geometry(bounds, self.max);
         if side <= 0 {

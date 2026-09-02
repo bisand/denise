@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString};
 
 use denise::Role;
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -170,7 +170,7 @@ impl<M: 'static> Widget<M> for Badge {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;

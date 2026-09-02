@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 
 use denise::{InputEvent, Rect, Size, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::TextEngine;
 
 use crate::motion::Wake;
@@ -484,7 +484,7 @@ pub trait Widget<M>: AsAny {
     /// Paint as though the whole widget were visible. The clip turns that into an
     /// incremental repaint, so there is never a second draw path to keep in step
     /// with the first.
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>);
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>);
 
     /// Reacts to an event routed to this widget.
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
@@ -641,7 +641,7 @@ pub trait Widget<M>: AsAny {
 pub struct Void;
 
 impl<M: 'static> Widget<M> for Void {
-    fn paint(&self, _ctx: &mut PaintCtx<'_>, _canvas: &mut Canvas<'_>) {}
+    fn paint(&self, _ctx: &mut PaintCtx<'_>, _canvas: &mut Pen<'_>) {}
 }
 
 pub(crate) type BoxedWidget<M> = Box<dyn Widget<M>>;

@@ -8,7 +8,7 @@ use denise::{
     Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, MAX_DAMAGE_RECTS,
     MAX_TRACKED_FRAMES, Modifiers, Point, Rect, Role, Size, Surface, SurfaceError, Theme,
 };
-use denise_render::Canvas;
+use denise_render::{Canvas, Pen};
 use denise_text::{FontId, GlyphSource, TextEngine};
 use slotmap::SlotMap;
 
@@ -2312,7 +2312,8 @@ impl<M: 'static> Ui<M> {
         };
 
         let base = self.theme.color(Role::Base100);
-        let mut canvas = Canvas::new(frame);
+        let mut raster = Canvas::new(frame);
+        let mut canvas = Pen::new(&mut raster);
 
         for region in &regions[..count] {
             let mut region_canvas = canvas.with_clip(*region);

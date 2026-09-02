@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Size};
-use denise_render::Canvas;
+use denise_render::Pen;
 
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
@@ -275,7 +275,7 @@ impl<M: 'static> Widget<M> for Carousel<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;
@@ -296,7 +296,7 @@ impl<M: 'static> Widget<M> for Carousel<M> {
         // rectangle rather than across the panel.
         {
             let mut c = canvas.with_clip(bounds);
-            let page_at = |c: &mut Canvas<'_>, index: usize, dx: i32| {
+            let page_at = |c: &mut Pen<'_>, index: usize, dx: i32| {
                 if let Some(page) = self.pages.get(index) {
                     let shifted = Rect::new(bounds.x + dx, bounds.y, bounds.width, bounds.height);
                     page.paint_at(shifted, 0, c);

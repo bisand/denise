@@ -40,7 +40,7 @@ mod app {
     use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
     use denise_evdev::InputBackend;
     use denise_fbdev::FbdevSurface;
-    use denise_render::Canvas;
+    use denise_render::{Canvas, Pen, Pen};
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
     const CURSOR: i32 = 28;
@@ -189,7 +189,7 @@ mod app {
         }
 
         /// Paints the scene. Unaware of damage: the clip makes it incremental.
-        fn paint(&self, canvas: &mut Canvas<'_>) {
+        fn paint(&self, canvas: &mut Pen<'_>) {
             let theme = self.theme();
             canvas.clear(theme.color(Role::Base100));
 

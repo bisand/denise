@@ -1,7 +1,7 @@
 //! A value in a range, dragged or typed.
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
-use denise_render::Canvas;
+use denise_render::Pen;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
@@ -269,7 +269,7 @@ impl<M: 'static> Widget<M> for Slider<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;

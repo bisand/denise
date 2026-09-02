@@ -2,7 +2,7 @@
 //! happening.
 
 use denise::Role;
-use denise_render::{Canvas, TURN};
+use denise_render::{Pen, TURN};
 
 use crate::motion::{Motion, Wake};
 use crate::widget::{Animation, PaintCtx, Widget};
@@ -202,7 +202,7 @@ impl<M: 'static> Widget<M> for Spinner {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;

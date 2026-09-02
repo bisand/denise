@@ -3,7 +3,7 @@
 use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
@@ -283,7 +283,7 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
         Measured::tall(line.max(ctx.theme.metrics.size_field).max(1))
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let radius = ctx.theme.radius(self.radius);
         let disabled = ctx.state.contains(VisualState::DISABLED);
         let focused = ctx.state.contains(VisualState::FOCUSED);

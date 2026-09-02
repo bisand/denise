@@ -17,7 +17,7 @@ use crate::clock;
 
 use denise::theme::{AA, ColorScheme, Metrics, Radius, contrast_x100};
 use denise::{Color, Rect, Role, Size, Theme};
-use denise_render::Canvas;
+use denise_render::{Canvas, Pen};
 use denise_ui::widgets::{
     Accordion, Alert, Align, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Column, Divider,
     Fit, Image, Label, List, ListItem, Presence, Progress, RadialProgress, RadioGroup, Rating,
@@ -126,7 +126,7 @@ struct Swatch {
 }
 
 impl Widget<Message> for Swatch {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let b = ctx.bounds;
         let radius = ctx.theme.radius(Radius::Field);
         let i = self.inset;
@@ -200,7 +200,7 @@ impl Clock {
 }
 
 impl Widget<Message> for Clock {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         Widget::<Message>::paint(&self.face, ctx, canvas);
     }
 

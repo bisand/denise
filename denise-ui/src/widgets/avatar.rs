@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{Point, Rect, Role, Size};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
@@ -314,7 +314,7 @@ impl<M: 'static> Widget<M> for Avatar {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let (square, radius) = self.square(ctx.bounds);
         if square.is_empty() {
             return;
