@@ -54,9 +54,9 @@ impl PaletteMode {
     }
 }
 
-/// The window's last size, where the panes were split, and how the palette
-/// shows itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The window's last size, where the panes were split, how the palette shows
+/// itself, and which editor opens the code.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     /// Window width in logical pixels.
     pub width: u32,
@@ -68,6 +68,9 @@ pub struct Settings {
     pub right: i32,
     /// How the palette lists its widgets.
     pub palette: PaletteMode,
+    /// The command that opens an event's handler, with `{file}`, `{line}` and
+    /// `{column}` filled in. See [`crate::code`].
+    pub editor: String,
 }
 
 impl Default for Settings {
@@ -78,6 +81,7 @@ impl Default for Settings {
             left: 240,
             right: 300,
             palette: PaletteMode::default(),
+            editor: String::from(crate::code::DEFAULT_EDITOR),
         }
     }
 }
@@ -104,6 +108,7 @@ impl Settings {
                 "left" => settings.left = value.parse().unwrap_or(settings.left),
                 "right" => settings.right = value.parse().unwrap_or(settings.right),
                 "palette" => settings.palette = PaletteMode::from_name(value),
+                "editor" => settings.editor = value.to_string(),
                 _ => {}
             }
         }
@@ -111,7 +116,7 @@ impl Settings {
     }
 
     /// Writes the settings, and says nothing if it cannot.
-    pub fn save(self) {
+    pub fn save(&self) {
         let Some(path) = Self::path() else {
             return;
         };
@@ -124,12 +129,13 @@ impl Settings {
             left,
             right,
             palette,
-        } = self.sane();
+            editor,
+        } = self.clone().sane();
         let _ = std::fs::write(
             path,
             format!(
                 "width = {width}\nheight = {height}\nleft = {left}\nright = {right}\n\
-                 palette = {}\n",
+                 palette = {}\neditor = {editor}\n",
                 palette.name()
             ),
         );
@@ -145,6 +151,11 @@ impl Settings {
         self.height = self.height.clamp(400, 16_384);
         self.left = self.left.clamp(160, 640);
         self.right = self.right.clamp(200, 720);
+        // An editor line somebody emptied is the default, not a designer that
+        // can open nothing.
+        if self.editor.trim().is_empty() {
+            self.editor = String::from(crate::code::DEFAULT_EDITOR);
+        }
         self
     }
 
@@ -184,8 +195,14 @@ mod tests {
             left: -50,
             right: 100_000,
             palette: PaletteMode::Glyphs,
+            editor: String::from("   "),
         };
         let sane = absurd.sane();
+        assert_eq!(
+            sane.editor,
+            crate::code::DEFAULT_EDITOR,
+            "an empty editor is the default"
+        );
         assert!(sane.width >= 640 && sane.height >= 400);
         assert!(sane.left >= 160 && sane.right <= 720);
     }
