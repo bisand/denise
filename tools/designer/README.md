@@ -589,7 +589,10 @@ Three things have to be known for that, and the designer learns each once:
   as a method taking `&mut self`, rather than at the end of the file as a free
   function; and when two types both have a `fn save`, the ladder below prefers
   the named type's. Of several impls, one for a trait whose name ends in
-  `Handlers` is preferred, then the inherent one.
+  `Handlers` is preferred, then the inherent one — because that is the trait
+  [the code generator makes](../../docs/forms.md#or-let-the-compiler-check-it),
+  one method per event, and a method written into `impl HelloHandlers for App`
+  is wired the moment it exists.
 
 - **Where in the file.** There is no single convention for how a name reaches Rust,
   so the designer walks a short ladder and the first rung that answers wins: a
