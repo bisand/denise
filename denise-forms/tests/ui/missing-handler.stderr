@@ -1,0 +1,10 @@
+error[E0046]: not all trait items implemented, missing: `greet`
+  --> tests/ui/missing-handler.rs:12:1
+   |
+12 | impl HelloHandlers for App {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `greet` in implementation
+   |
+  ::: tests/ui/hello_form.rs
+   |
+   |     fn greet(&mut self);
+   |     -------------------- `greet` from trait

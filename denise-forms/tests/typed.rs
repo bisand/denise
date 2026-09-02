@@ -41,6 +41,52 @@ fn a_form_becomes_a_struct_of_its_names_and_an_enum_of_its_messages() {
 }
 
 #[test]
+fn a_form_becomes_a_trait_of_its_handlers_and_a_dispatcher_onto_it() {
+    let generated = generate(&repo("forms/reference.dform"), "reference").expect("generates");
+    assert!(generated.source.contains("pub trait ReferenceHandlers {"));
+    // One method per message, named for it, taking what it carries — spelt
+    // exactly as the designer's placeholder spells it, so the method it writes
+    // is the method the trait wants.
+    for method in [
+        "fn save(&mut self);",
+        "fn set_notify(&mut self, on: bool);",
+        "fn navigate(&mut self, index: usize);",
+        "fn set_volume(&mut self, value: f32);",
+    ] {
+        assert!(
+            generated.source.contains(method),
+            "no `{method}` in the output"
+        );
+    }
+    // And the dispatcher hands each variant to its method.
+    assert!(
+        generated
+            .source
+            .contains("pub fn dispatch(self, handlers: &mut impl ReferenceHandlers)")
+    );
+    assert!(generated.source.contains("Self::Save => handlers.save(),"));
+    assert!(
+        generated
+            .source
+            .contains("Self::SetNotify(value) => handlers.set_notify(value),")
+    );
+
+    // A form emitting nothing still gets both, so an application's `impl`
+    // line does not appear with the first event.
+    let none = generate(
+        "form \"F\" version=1 width=9 height=9 {\n    label \"x\" x=0 y=0 w=9 h=9\n}\n",
+        "f",
+    )
+    .expect("generates");
+    assert!(
+        none.source.contains("pub trait FHandlers {\n}"),
+        "{}",
+        none.source
+    );
+    assert!(none.source.contains("Self::Never => {}"));
+}
+
+#[test]
 fn every_payload_shape_becomes_a_variant_that_carries_it() {
     // The reference form uses all four, which is why it is the one to check
     // against: a variant of the wrong shape would not compile where it is used
@@ -189,4 +235,5 @@ fn using_a_name_the_form_no_longer_has_does_not_compile() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/ui/renamed.rs");
     cases.compile_fail("tests/ui/added-message.rs");
+    cases.compile_fail("tests/ui/missing-handler.rs");
 }

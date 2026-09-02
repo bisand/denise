@@ -30,6 +30,13 @@
 //! the enum stops compiling**, because it is no longer exhaustive. Both are the
 //! point, and both are what a string lookup cannot do.
 //!
+//! And a trait, `SettingsHandlers`, with one method per message named for it —
+//! `fn save(&mut self)`, `fn set_notify(&mut self, on: bool)` — plus
+//! `SettingsMessage::dispatch`, which calls the method a message is named for.
+//! Implement the trait for whatever handles the form and there is no `match` to
+//! write at all: add an event in the designer and the compiler names the method
+//! that is missing, which is the one the designer writes when asked to open it.
+//!
 //! # A build script rather than a proc macro
 //!
 //! Chosen deliberately, and [#101] said to. The output is a file you can open,
@@ -131,7 +138,7 @@ pub fn generate(source: &str, name: &str) -> Result<Generated, Error> {
     // gathered in file order, so the generated file reads down the form.
     let mut fields: Vec<(String, String)> = Vec::new();
     let mut taken: BTreeMap<String, String> = BTreeMap::new();
-    let mut messages: Vec<(String, String, Payload)> = Vec::new();
+    let mut messages: Vec<Message> = Vec::new();
     let mut seen: BTreeMap<String, (Payload, String)> = BTreeMap::new();
 
     for node in form.written() {
@@ -179,8 +186,14 @@ pub fn generate(source: &str, name: &str) -> Result<Generated, Error> {
                 None => {}
             }
             let variant = variant_name(&used)?;
+            let method = field_name(&used)?;
             seen.insert(used.clone(), (payload, variant.clone()));
-            messages.push((variant, used, payload));
+            messages.push(Message {
+                variant,
+                method,
+                name: used,
+                payload,
+            });
         }
     }
 
@@ -241,6 +254,29 @@ const fn shape(payload: Payload) -> &'static str {
     }
 }
 
+/// One message the form emits, in the spellings the generated code uses.
+struct Message {
+    /// The enum variant: `SetNotify`.
+    variant: String,
+    /// The handler method: `set_notify`.
+    method: String,
+    /// What the form calls it: `set-notify`.
+    name: String,
+    /// What it carries.
+    payload: Payload,
+}
+
+/// The parameter a handler method takes after `self`, named as the
+/// designer's placeholder names it, so the two are the same text.
+const fn parameter(payload: Payload) -> &'static str {
+    match payload {
+        Payload::None => "",
+        Payload::Bool => ", on: bool",
+        Payload::Index => ", index: usize",
+        Payload::Number => ", value: f32",
+    }
+}
+
 /// The Rust type of a payload, as it appears in a variant.
 const fn carried(payload: Payload) -> &'static str {
     match payload {
@@ -257,7 +293,7 @@ fn write(
     kind: &str,
     message: &str,
     fields: &[(String, String)],
-    messages: &[(String, String, Payload)],
+    messages: &[Message],
 ) -> String {
     let mut out = String::new();
     out.push_str(
@@ -300,7 +336,13 @@ fn write(
          #[derive(Clone, Copy, PartialEq, Debug)]\n\
          pub enum {message} {{\n"
     ));
-    for (variant, name, payload) in messages {
+    for Message {
+        variant,
+        name,
+        payload,
+        ..
+    } in messages
+    {
         out.push_str(&format!(
             "    /// What the form calls `{name}`.\n    {variant}{},\n",
             carried(*payload)
@@ -310,6 +352,55 @@ fn write(
         out.push_str("    /// The form emits nothing, and this cannot be constructed.\n    #[doc(hidden)]\n    Never,\n");
     }
     out.push_str("}\n\n");
+
+    // The handlers trait, and the dispatcher onto it. One step past an
+    // exhaustive `match`: add an event to the form and the compiler does not
+    // say "a match is missing an arm", it says which *method* is missing —
+    // the one the designer writes when asked to open that event.
+    out.push_str(&format!(
+        "/// What [`{kind}`]'s events reach: one method per message, named for it.\n\
+         ///\n\
+         /// Implement this for the type that handles the form, and hand it every\n\
+         /// message through [`{message}::dispatch`]. Add an event to the form and\n\
+         /// this `impl` stops compiling, naming the method it is missing — which\n\
+         /// is the method the designer writes when asked to open that event.\n\
+         pub trait {kind}Handlers {{\n"
+    ));
+    for Message {
+        method,
+        name,
+        payload,
+        ..
+    } in messages
+    {
+        out.push_str(&format!(
+            "    /// What the form calls `{name}`.\n    fn {method}(&mut self{});\n",
+            parameter(*payload)
+        ));
+    }
+    out.push_str("}\n\n");
+    out.push_str(&format!(
+        "impl {message} {{\n\
+         \x20   /// Hands this message to the method named for it.\n\
+         \x20   pub fn dispatch(self, handlers: &mut impl {kind}Handlers) {{\n\
+         \x20       match self {{\n"
+    ));
+    for Message {
+        variant,
+        method,
+        payload,
+        ..
+    } in messages
+    {
+        out.push_str(&match payload {
+            Payload::None => format!("            Self::{variant} => handlers.{method}(),\n"),
+            _ => format!("            Self::{variant}(value) => handlers.{method}(value),\n"),
+        });
+    }
+    if messages.is_empty() {
+        out.push_str("            Self::Never => {}\n");
+    }
+    out.push_str("        }\n    }\n}\n\n");
 
     // The wiring, and the constructor.
     out.push_str(&format!(
@@ -403,7 +494,13 @@ fn write(
          \x20   ) -> Option<::denise_forms::Handler<{message}>> {{\n\
          \x20       Some(match (name, payload) {{\n"
     ));
-    for (variant, name, payload) in messages {
+    for Message {
+        variant,
+        name,
+        payload,
+        ..
+    } in messages
+    {
         let arm = match payload {
             Payload::None => format!("::denise_forms::Handler::Plain({message}::{variant})"),
             Payload::Bool => format!("::denise_forms::Handler::Bool({message}::{variant})"),
