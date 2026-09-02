@@ -383,6 +383,7 @@ draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `fontdue`
 | [`hello`](examples/hello) | **Start here.** Eighty lines: a message enum, a tree, an event loop. Builds for a window or a bare display. |
 | [`table-editor`](examples/table-editor) | A record editor with a grid, a form, validation, a modal and real fonts. Builds for a window *or* for a bare display. |
 | [`designed`](examples/designed) | **`hello` again, from a file.** The same application built from [`hello.dform`](forms/hello.dform) rather than from Rust. Read the two side by side: a form replaces the tree-building and nothing else. |
+| [`runtime`](examples/runtime) | **Two forms, read from files at run time.** One application answering both; swap a screen by copying a file over it, and every event still reaches its function — or fails at load naming the one that does not. |
 | [`forms`](examples/forms) | Secondary windows on the desktop: a modeless settings form, a modal, and the state they share. Desktop only, deliberately. |
 | [`hello-rect`](examples/hello-rect) | The damage proof: a bouncing rectangle that repaints two rectangles, not a window. |
 | [`panel`](examples/panel) | The widget tree, a modal and a cursor sprite, on bare Linux with no X. |

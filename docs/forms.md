@@ -1076,6 +1076,10 @@ string literal and at load time by `Form::parse`. `std::fs::read_to_string` is
 the other way, and is what you want when the form is meant to be swapped without
 a rebuild — a panel whose screens are updated by copying files.
 
+[`examples/runtime`](../examples/runtime) is the other way, with two screens:
+each read from its file when it is shown, one `Wiring` answering both, and the
+tests that say what that path can and cannot promise.
+
 Both are the same three lines afterwards. The format does not care — with one
 exception, which is that a form read at runtime may have come from anywhere.
 `Form::parse_within` is `Form::parse` with a deadline, and [it is what to call
