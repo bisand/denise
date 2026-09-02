@@ -1,0 +1,21 @@
+// The second screen, read from this file when the Settings button is pressed.
+//
+// Its events carry values: a checkbox hands the application a `bool`, a slider
+// an `f32`. The application answers `set-notify` with a `fn(bool)` and
+// `set-volume` with a `fn(f32)`, which is what the widgets ask for — see the
+// payload table in docs/forms.md.
+
+form "Settings" name=settings version=1 kind=screen width=460 height=260 theme=dark {
+    panel name=card x=16 y=16 w=428 h=228 {
+        label "Settings" x=20 y=18 w=300 h=28 size=22
+        button "Back" name=back-button x=328 y=18 w=80 h=28 on-press=back size=14
+
+        checkbox "Send me release notes" name=notify x=20 y=64 w=388 h=28 on-change=set-notify size=16
+
+        label "Volume" x=20 y=104 w=388 h=20 size=14
+        slider name=volume x=20 y=128 w=388 h=28 min=0 max=100 value=35 on-change=set-volume
+
+        // What the application makes of the two values, written by it.
+        label "" name=summary x=20 y=176 w=388 h=24 size=16
+    }
+}

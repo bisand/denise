@@ -1,0 +1,23 @@
+// The first of two screens, read from this file when the application starts.
+//
+// Two of its events are `hello.dform`'s — `greet`, from the button and from
+// Enter in the field — and one is new: the Settings button, which swaps this
+// screen for the other file. Nothing here says what `settings` does; the
+// application answers the name, and this file only uses it.
+
+form "Hello" name=hello version=1 kind=screen width=460 height=260 theme=dark {
+    panel name=card x=16 y=16 w=428 h=228 {
+        label "Hello, Denise" x=20 y=18 w=300 h=28 size=22
+        button "Settings" name=to-settings x=328 y=18 w=80 h=28 on-press=settings size=14
+
+        label "What is your name?" x=20 y=58 w=388 h=20 size=16
+        text-input name=who x=20 y=82 w=388 h=34 placeholder="your name" on-submit=greet size=16 focus=#true
+
+        button "Greet" name=greet-button x=20 y=128 w=110 h=34 role=primary on-press=greet size=16
+
+        // Filled in by the application from what was typed — and kept when
+        // the screen is swapped away and back, because the application keeps
+        // it and the form is only its face.
+        label "" name=greeting x=20 y=176 w=388 h=24 size=16
+    }
+}

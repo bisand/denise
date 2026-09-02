@@ -1,0 +1,20 @@
+[package]
+name = "runtime"
+description = "Two forms read from files at run time, one application: the screens are swapped by copying files, and every event still reaches its function."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+denise-forms = { workspace = true }
+denise-ui = { workspace = true, features = ["std"] }
+denise-winit = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
