@@ -994,7 +994,9 @@ family stays for pixels that genuinely differ every frame, and pays per call.
 is a full repaint — a swapchain keeps no buffer age worth trusting and a desktop
 GPU redraws a window for nothing — so `BufferAge::Undefined` is what the
 application is told, and an application that implements only `render` is
-refused the window rather than shown a blank one.
+refused the window rather than shown a blank one. The designer takes it behind
+`--gpu`: the beneficiary the whole seam was cut for, one flag away from the
+software path it will stay on until the GPU has earned the default.
 
 What it is *not* is a target for the panels this toolkit exists for. A kiosk on
 a Pi draws with the rasteriser, needs no Mesa and no compositor, and was never

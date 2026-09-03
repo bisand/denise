@@ -671,6 +671,13 @@ under it — the same
 affordance every example in this repository has, and how this one's own layout
 gets reviewed over SSH or diffed in a pull request.
 
+`--gpu` opens the window on a wgpu swapchain instead of a buffer of words —
+`denise-winit`'s `Present::Gpu`, drawing through the same widget tree via
+`denise-wgpu`. The designer is what that path was built for: a Retina display,
+a large window, a canvas that zooms. It is a flag rather than the default until
+it has earned the switch, and the software path is what a form under design
+will be drawn with on the panel anyway.
+
 ## Four text sizes, and why those
 
 The built-in face is a five-by-seven glyph in an eight-pixel cell drawn at

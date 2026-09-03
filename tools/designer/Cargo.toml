@@ -18,7 +18,9 @@ denise-ui = { workspace = true, features = ["std", "raster"] }
 # The open-the-handler button wears a glyph drawn in the same format as the
 # palette's, and the format is this crate's.
 denise-render = { workspace = true }
-denise-winit = { workspace = true }
+# `gpu`: the designer is what the GPU path was built for. `--gpu` turns it on
+# per run; the software path stays the default until it has earned the switch.
+denise-winit = { workspace = true, features = ["gpu"] }
 
 # Preview mode puts the on-screen keyboard up over the form under design, so
 # that "the form gets out of the keyboard's way by shrinking" can be checked on
