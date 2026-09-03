@@ -1,6 +1,6 @@
 //! Every widget's glyph: a portrait of the thing, drawn rather than looked up.
 //!
-//! A palette that lists twenty-six widgets by name serves the person who
+//! A palette that lists twenty-seven widgets by name serves the person who
 //! already knows which one they want. A glyph beside the name serves everybody
 //! else — and the glyph has to be drawable on every machine, which rules out an
 //! icon font before the argument starts: [`denise::icon`] exists because
@@ -35,7 +35,7 @@
 //! A widget names its glyph through [`Describe::ICON`](super::Describe::ICON),
 //! next to its `DOC` and its `GROUP`, and [`all`](super::all) carries it in
 //! [`WidgetInfo`](super::WidgetInfo) — so a palette draws glyphs without naming
-//! widgets, and the twenty-seventh widget cannot be merged without one. The
+//! widgets, and the twenty-eighth widget cannot be merged without one. The
 //! tests at the bottom hold every glyph to the format's real limits.
 //!
 //! [`Ink::Back`]: denise::icon::Ink::Back
@@ -361,6 +361,26 @@ pub static PANEL: Icon = Icon::new(&[
 pub static TABS: Icon = Icon::new(&[
     Shape::fore(&[(8, 66), (8, 34), (42, 34), (42, 58), (92, 58), (92, 66)]),
     Shape::fore(&[(50, 42), (84, 42), (84, 58), (50, 58)]),
+]);
+
+/// Menu bar: a strip of titles, with one of them dropped open beneath it.
+pub static MENU_BAR: Icon = Icon::new(&[
+    Shape::fore(&[(8, 14), (92, 14), (92, 34), (8, 34)]),
+    Shape::back(&[(15, 20), (33, 20), (33, 28), (15, 28)]),
+    Shape::back(&[(41, 20), (59, 20), (59, 28), (41, 28)]),
+    Shape::back(&[(67, 20), (85, 20), (85, 28), (67, 28)]),
+    Shape::fore(&[(8, 40), (56, 40), (56, 86), (8, 86)]),
+    // One knockout for both rows: the notch between them is the gap.
+    Shape::back(&[
+        (16, 48),
+        (48, 48),
+        (48, 70),
+        (16, 70),
+        (16, 62),
+        (44, 62),
+        (44, 56),
+        (16, 56),
+    ]),
 ]);
 
 /// Collapse: a header with its chevron, over the content it folds away.

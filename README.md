@@ -118,9 +118,9 @@ all.
 Three things it is showing, none of which is obvious from the outside:
 
 - **There was no grid widget when this example was written** — and it remains a
-  lesson in how the widgets compose. There are twenty-six now, `Table` among
+  lesson in how the widgets compose. There are twenty-seven now, `Table` among
   them: label, button, panel, text field, checkbox, toggle, radio group, progress
-  bar, slider, divider, badge, alert, tabs, list, radial progress, spinner,
+  bar, slider, divider, badge, alert, tabs, menu bar, list, radial progress, spinner,
   select, image, rating, avatar, table, timeline, carousel, collapse, video. A row is a full-width `Button` with the cell `Label`s placed on top of it;
   labels are not interactive, so a click falls through them to the button
   underneath and arrives as `Select(index)`. That is how most of the widgets you

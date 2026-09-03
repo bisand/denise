@@ -44,7 +44,7 @@ The issue assumes the crate's job is to make queries that already exist:
 
 That is half true, and the missing half is most of the work.
 
-**Twelve of twenty-six widgets offer a query at all.** The fourteen that offer
+**Twelve of twenty-seven widgets offer a query at all.** The fourteen that offer
 nothing are `avatar`, `carousel`, `collapse`, `divider`, `image`, `label`,
 `panel`, `progress`, `radial-progress`, `select`, `slider`, `spinner`,
 `text-input` and `video`.

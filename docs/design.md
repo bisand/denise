@@ -177,7 +177,7 @@ Three rules hold across all of them:
   because it looks like the same thing. An intrinsic-size *protocol* is one where
   the tree asks every widget how big it wants to be and then places it. Here the
   *application* asks, does its own arithmetic, and passes a rectangle — exactly as
-  it does for a node with no natural size at all. Sixteen of the twenty-six answer
+  it does for a node with no natural size at all. Sixteen of the twenty-seven answer
   — the ten that are whatever rectangle they are given say so, which is the honest
   answer and not a gap — and **nothing in `denise-ui` consumes any of it**.
 
