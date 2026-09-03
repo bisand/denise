@@ -47,12 +47,19 @@
 //! and every glyph after that is six vertices sampling it. A label costs what a
 //! rectangle costs.
 //!
+//! # Images
+//!
+//! Pictures arrive through [`blit_image`](Painter::blit_image) with an id and a
+//! version, the same way a glyph page does, and are cached the same way: one
+//! upload when the pixels change, a quad every time after. A photo in a
+//! carousel costs what a rectangle costs.
+//!
 //! # What it does not do yet
 //!
-//! Every [`blit`](Painter::blit) still uploads its source as a fresh texture.
-//! Correct, and the next thing a profile will point at: an image handle is the
-//! remaining piece, and like the glyph page it is an addition to the trait
-//! rather than a change to this crate alone.
+//! The raw [`blit`](Painter::blit) family — a `PixelView` with no identity —
+//! still uploads per call. Nothing in the widget set uses it any more; it is
+//! there for a caller with pixels that genuinely are different every frame,
+//! which is what an upload per call is the honest price of.
 
 #![forbid(unsafe_code)]
 
@@ -62,7 +69,9 @@ use std::ops::Range;
 
 use denise::angle::{ONE, TURN};
 use denise::painter::ClipToken;
-use denise::{AtlasPage, Color, Mask, Paint, Painter, PixelFormat, PixelView, Point, Rect, Size};
+use denise::{
+    AtlasPage, Color, ImageRef, Mask, Paint, Painter, PixelFormat, PixelView, Point, Rect, Size,
+};
 use wgpu::util::DeviceExt as _;
 
 /// What can go wrong between asking for a GPU and reading pixels back.
@@ -145,6 +154,11 @@ pub struct Gpu {
     /// How many atlas pages have been uploaded, ever. The number a profile
     /// wants, and the number the tests hold to "once per version".
     page_uploads: Cell<u64>,
+    /// Images, by image id: the version uploaded and its texture. The same
+    /// arrangement as `pages`, for the same reason.
+    images: RefCell<HashMap<u64, (u64, wgpu::BindGroup)>>,
+    /// How many images have been uploaded, ever.
+    image_uploads: Cell<u64>,
 }
 
 impl Gpu {
@@ -295,6 +309,8 @@ impl Gpu {
             white,
             pages: RefCell::new(HashMap::new()),
             page_uploads: Cell::new(0),
+            images: RefCell::new(HashMap::new()),
+            image_uploads: Cell::new(0),
         }
     }
 
@@ -340,6 +356,15 @@ impl Gpu {
         self.page_uploads.get()
     }
 
+    /// How many images this device has uploaded, in total.
+    ///
+    /// An image is uploaded once per [`ImageRef::version`]: a picture that has
+    /// been drawn before costs a quad, and only replacing its pixels costs an
+    /// upload.
+    pub fn image_uploads(&self) -> u64 {
+        self.image_uploads.get()
+    }
+
     /// The texture format [`GpuPainter::finish`] expects its target to have.
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
@@ -376,6 +401,28 @@ impl Gpu {
         self.pages
             .borrow_mut()
             .insert(page.id, (page.version, group.clone()));
+        group
+    }
+
+    /// The texture holding `src`, uploaded now if this version has not been.
+    fn image_texture(&self, src: &ImageRef<'_>) -> wgpu::BindGroup {
+        if let Some((version, group)) = self.images.borrow().get(&src.id)
+            && *version == src.version
+        {
+            return group.clone();
+        }
+        let size = src.view.size();
+        let bytes = rgba_bytes(&src.view);
+        let group = self.upload(
+            size.width.max(1),
+            size.height.max(1),
+            wgpu::TextureFormat::Rgba8Unorm,
+            &bytes,
+        );
+        self.image_uploads.set(self.image_uploads.get() + 1);
+        self.images
+            .borrow_mut()
+            .insert(src.id, (src.version, group.clone()));
         group
     }
 
@@ -746,19 +793,7 @@ impl GpuPainter<'_> {
 
     fn upload_view(&mut self, src: &PixelView<'_>) -> usize {
         let size = src.size();
-        let mut bytes = Vec::with_capacity((size.width * size.height * 4) as usize);
-        for y in 0..size.height as i32 {
-            let row = src.row(y, 0, size.width as i32).unwrap_or(&[]);
-            for &word in row {
-                // 0xAARRGGBB, premultiplied, to R G B A bytes.
-                bytes.extend_from_slice(&[
-                    (word >> 16) as u8,
-                    (word >> 8) as u8,
-                    word as u8,
-                    (word >> 24) as u8,
-                ]);
-            }
-        }
+        let bytes = rgba_bytes(src);
         self.textures.push(self.gpu.upload(
             size.width,
             size.height,
@@ -767,6 +802,26 @@ impl GpuPainter<'_> {
         ));
         self.textures.len() - 1
     }
+}
+
+/// A premultiplied `0xAARRGGBB` view as the R G B A bytes a texture wants.
+fn rgba_bytes(src: &PixelView<'_>) -> Vec<u8> {
+    let size = src.size();
+    let mut bytes = Vec::with_capacity((size.width * size.height * 4) as usize);
+    for y in 0..size.height as i32 {
+        let row = src.row(y, 0, size.width as i32).unwrap_or(&[]);
+        for &word in row {
+            bytes.extend_from_slice(&[
+                (word >> 16) as u8,
+                (word >> 8) as u8,
+                word as u8,
+                (word >> 24) as u8,
+            ]);
+        }
+    }
+    // A view narrower than it claims still fills its texture.
+    bytes.resize((size.width.max(1) * size.height.max(1) * 4) as usize, 0);
+    bytes
 }
 
 fn is_textured(kind: u32) -> bool {
@@ -1047,6 +1102,35 @@ impl Painter for GpuPainter<'_> {
         ];
         let dest = Rect::new(at.x, at.y, rect.width, rect.height);
         self.textured_quad(KIND_MASK, rgba(paint), index, dest, uv, ([0.0; 4], 0.0));
+    }
+
+    fn blit_image(&mut self, src: &ImageRef<'_>, dest: Rect) {
+        if src.view.size().is_empty() || dest.is_empty() || self.clip.is_empty() {
+            return;
+        }
+        // Uploaded once per version; this is six vertices.
+        let group = self.gpu.image_texture(src);
+        self.textures.push(group);
+        let index = self.textures.len() - 1;
+        self.textured_quad(KIND_TEXTURED, [1.0; 4], index, dest, WHOLE, ([0.0; 4], 0.0));
+    }
+
+    fn blit_image_rounded(&mut self, src: &ImageRef<'_>, dest: Rect, shape: Rect, radius: i32) {
+        if src.view.size().is_empty() || dest.is_empty() || self.clip.is_empty() {
+            return;
+        }
+        let group = self.gpu.image_texture(src);
+        self.textures.push(group);
+        let index = self.textures.len() - 1;
+        let r = radius.clamp(0, shape.width.min(shape.height) / 2) as f32;
+        self.textured_quad(
+            KIND_TEXTURED_ROUNDED,
+            [1.0; 4],
+            index,
+            dest,
+            WHOLE,
+            (box_of(shape), r),
+        );
     }
 
     fn blit(&mut self, src: &PixelView<'_>, at: Point) {

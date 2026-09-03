@@ -2,7 +2,9 @@
 
 use alloc::vec::Vec;
 
-use denise::{Pen, PixelView};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use denise::{ImageRef, Pen, PixelView};
 use denise::{Rect, Size};
 
 use crate::widget::{PaintCtx, Widget};
@@ -67,12 +69,36 @@ impl Pixels {
 /// panel mostly shows, visibly blocky for a photo at a non-integer factor. An
 /// asset pre-sized to its box (`Fit::Center`) is blitted without resampling at
 /// all, which is both the fastest path and the best-looking one.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Image {
+    /// Unique per image for the life of the process, so a painter that keeps
+    /// textures can tell this image from every other — a clone included.
+    id: u64,
+    /// Bumped whenever the pixels are replaced, and never otherwise.
+    version: u64,
     pixels: Pixels,
     size: Size,
     fit: Fit,
     radius: i32,
+}
+
+/// Hands out image ids. Relaxed is enough: uniqueness is all that is asked.
+static NEXT_IMAGE: AtomicU64 = AtomicU64::new(1);
+
+impl Clone for Image {
+    /// A clone is a new image with the same pixels, not the same image twice:
+    /// it takes a fresh id, so replacing the pixels of one can never make a
+    /// painter's cached texture of the other stale.
+    fn clone(&self) -> Self {
+        Self {
+            id: NEXT_IMAGE.fetch_add(1, Ordering::Relaxed),
+            version: 0,
+            pixels: self.pixels.clone(),
+            size: self.size,
+            fit: self.fit,
+            radius: self.radius,
+        }
+    }
 }
 
 impl Image {
@@ -84,6 +110,8 @@ impl Image {
     /// rectangle where the picture would be.
     pub fn new(pixels: Vec<u32>, size: Size) -> Self {
         Self {
+            id: NEXT_IMAGE.fetch_add(1, Ordering::Relaxed),
+            version: 0,
             pixels: Pixels::Owned(pixels),
             size,
             fit: Fit::Contain,
@@ -97,6 +125,8 @@ impl Image {
     /// panel its branding with no file I/O and no allocation.
     pub fn from_static(pixels: &'static [u32], size: Size) -> Self {
         Self {
+            id: NEXT_IMAGE.fetch_add(1, Ordering::Relaxed),
+            version: 0,
             pixels: Pixels::Static(pixels),
             size,
             fit: Fit::Contain,
@@ -134,6 +164,19 @@ impl Image {
     pub fn set_pixels(&mut self, pixels: Vec<u32>, size: Size) {
         self.pixels = Pixels::Owned(pixels);
         self.size = size;
+        self.version = self.version.wrapping_add(1);
+    }
+
+    /// Unique per image for the life of the process.
+    #[inline]
+    pub const fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Changes whenever the pixels are replaced.
+    #[inline]
+    pub const fn version(&self) -> u64 {
+        self.version
     }
 }
 
@@ -190,6 +233,13 @@ impl Image {
         let Some(view) = PixelView::new(self.pixels.as_slice(), self.size, self.size.width) else {
             return;
         };
+        // The pixels with their identity, so a painter that keeps textures
+        // uploads them once and draws a quad from then on.
+        let image = ImageRef {
+            id: self.id,
+            version: self.version,
+            view,
+        };
         let dest = fit_rect(bounds, self.size, self.fit);
         if dest.is_empty() {
             return;
@@ -200,9 +250,9 @@ impl Image {
             let Some(shape) = dest.intersect(&bounds) else {
                 return;
             };
-            canvas.blit_rounded(&view, dest, shape, radius);
+            canvas.blit_image_rounded(&image, dest, shape, radius);
         } else {
-            canvas.blit_scaled(&view, dest);
+            canvas.blit_image(&image, dest);
         }
     }
 }

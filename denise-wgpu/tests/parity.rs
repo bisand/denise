@@ -457,3 +457,74 @@ fn an_atlas_page_is_uploaded_once_per_version() {
     frame(&mut text, "x + denise");
     assert_eq!(gpu.page_uploads(), 2, "and then it, too, is free");
 }
+
+// ------------------------------------------------------------------ images
+
+/// The same for pictures as for glyphs: an `Image` widget's pixels go up once,
+/// and only replacing them costs another upload. A clone is a new image.
+#[test]
+fn an_image_is_uploaded_once_per_version() {
+    use denise::{Role, theme};
+    use denise_ui::Ui;
+    use denise_ui::widgets::{Fit, Image};
+
+    let gpu = match Gpu::headless() {
+        Ok(gpu) => gpu,
+        Err(err) => {
+            eprintln!("skipping: {err}");
+            return;
+        }
+    };
+    let picture = |seed: u32| -> (Vec<u32>, Size) {
+        let size = Size::new(16, 12);
+        let px = (0..size.area())
+            .map(|i| 0xFF00_0000 | (i as u32 * 7919 + seed))
+            .collect();
+        (px, size)
+    };
+
+    let mut ui: Ui<()> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let (px, size) = picture(1);
+    let node = ui
+        .add(
+            root,
+            Image::new(px, size).with_fit(Fit::Center),
+            Rect::new(10, 10, 60, 40),
+        )
+        .expect("image");
+    let _ = Role::Primary;
+
+    let frame = |ui: &mut Ui<()>| {
+        let mut painter = gpu.painter(SIZE);
+        ui.paint_with(&mut Pen::new(&mut painter), BufferAge::Undefined);
+        painter.finish_to_pixels().expect("readback");
+    };
+
+    frame(&mut ui);
+    assert_eq!(
+        gpu.image_uploads(),
+        1,
+        "the first frame uploads the picture"
+    );
+    frame(&mut ui);
+    frame(&mut ui);
+    assert_eq!(
+        gpu.image_uploads(),
+        1,
+        "a picture already uploaded costs a quad"
+    );
+
+    let (px, size) = picture(2);
+    ui.widget_mut::<Image>(node)
+        .expect("still there")
+        .set_pixels(px, size);
+    frame(&mut ui);
+    assert_eq!(
+        gpu.image_uploads(),
+        2,
+        "replacing the pixels uploads once more"
+    );
+    frame(&mut ui);
+    assert_eq!(gpu.image_uploads(), 2);
+}

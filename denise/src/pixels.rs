@@ -154,3 +154,20 @@ pub struct AtlasPage<'a> {
     /// The whole page.
     pub mask: Mask<'a>,
 }
+
+/// An image with the identity a painter needs to cache it.
+///
+/// The same shape as [`AtlasPage`], for the same reason: the software
+/// rasteriser composites the pixels and is done, and a GPU would rather upload
+/// them once and draw a quad forever. `id` says which image and `version`
+/// whether its bytes are the ones uploaded last time — it changes when the
+/// pixels are replaced and never otherwise.
+#[derive(Clone, Copy, Debug)]
+pub struct ImageRef<'a> {
+    /// Unique per image for the life of the process.
+    pub id: u64,
+    /// Changes whenever the pixels do.
+    pub version: u64,
+    /// The pixels, premultiplied.
+    pub view: PixelView<'a>,
+}
