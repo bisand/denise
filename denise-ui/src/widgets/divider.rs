@@ -2,8 +2,8 @@
 
 use alloc::string::String;
 
+use denise::Pen;
 use denise::{Point, Rect, Role};
-use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
@@ -167,7 +167,7 @@ impl<M: 'static> Widget<M> for Divider {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;
@@ -218,7 +218,7 @@ impl Describe for Divider {
     const KIND: &'static str = "divider";
     const DOC: &'static str = "A line between things, with an optional label in the middle.";
     const GROUP: Group = Group::Display;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::DIVIDER;
+    const ICON: &'static denise::icon::Icon = &super::icons::DIVIDER;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

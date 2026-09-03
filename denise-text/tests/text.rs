@@ -1,7 +1,7 @@
 //! The glyph cache and the engine, driven the way a widget drives them.
 
 use denise::{BufferAge, Color, Frame, PixelFormat, Point, Rect, Size};
-use denise_render::Canvas;
+use denise_render::{Canvas, Pen};
 use denise_text::atlas::GlyphKey;
 use denise_text::{BitmapSource, FontId, GlyphAtlas, GlyphSource, TextEngine, TextStyle};
 
@@ -19,7 +19,7 @@ impl Sheet {
         }
     }
 
-    fn draw(&mut self, f: impl FnOnce(&mut Canvas<'_>)) {
+    fn draw(&mut self, f: impl FnOnce(&mut Pen<'_>)) {
         let mut frame = Frame::new(
             &mut self.pixels,
             SURFACE,
@@ -28,7 +28,8 @@ impl Sheet {
             BufferAge::Undefined,
         )
         .expect("frame");
-        let mut canvas = Canvas::new(&mut frame);
+        let mut raster = Canvas::new(&mut frame);
+        let mut canvas = raster.pen();
         f(&mut canvas);
     }
 

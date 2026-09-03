@@ -4,6 +4,7 @@ use denise::Rect;
 
 use crate::blend::{Paint, blend_span};
 use crate::canvas::Canvas;
+use crate::painter::Painter;
 
 impl Canvas<'_> {
     /// Fills `rect`, compositing with the destination if the paint has alpha.
@@ -24,10 +25,7 @@ impl Canvas<'_> {
 
     /// Fills every rectangle. Overlapping rectangles composite twice.
     pub fn fill_rects(&mut self, rects: &[Rect], color: impl Into<Paint>) {
-        let paint = color.into();
-        for rect in rects {
-            self.fill_rect(*rect, paint);
-        }
+        Painter::fill_rects(self, rects, color.into());
     }
 
     /// Draws a border of `thickness` pixels *inside* `rect`.
@@ -36,24 +34,7 @@ impl Canvas<'_> {
     /// full-length rectangles would composite the corners twice, which is invisible
     /// at full alpha and obvious at anything less.
     pub fn stroke_rect(&mut self, rect: Rect, thickness: i32, color: impl Into<Paint>) {
-        let paint = color.into();
-        let t = thickness.max(0);
-        if t == 0 || rect.is_empty() || paint.is_invisible() {
-            return;
-        }
-        if t * 2 >= rect.width.min(rect.height) {
-            self.fill_rect(rect, paint);
-            return;
-        }
-
-        let inner_height = rect.height - 2 * t;
-        self.fill_rect(Rect::new(rect.x, rect.y, rect.width, t), paint);
-        self.fill_rect(Rect::new(rect.x, rect.bottom() - t, rect.width, t), paint);
-        self.fill_rect(Rect::new(rect.x, rect.y + t, t, inner_height), paint);
-        self.fill_rect(
-            Rect::new(rect.right() - t, rect.y + t, t, inner_height),
-            paint,
-        );
+        Painter::stroke_rect(self, rect, thickness, color.into());
     }
 }
 

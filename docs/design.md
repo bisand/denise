@@ -47,7 +47,7 @@ depends on the contract — putting them together would be a dependency cycle. I
 also means a signage application that draws its own scene links no arena, no tree
 and no widget code at all.
 
-### The two traits
+### The backend traits
 
 Everything a backend has to provide:
 
@@ -325,11 +325,12 @@ disabled-selection answer and the pairing rules live once.
 `Rating` is where the rasteriser ran out. Arcs unblocked the rings and the
 spinner and do nothing at all for a five-pointed star, which is a ten-vertex
 polygon — so the choice was a public polygon API, rating with discs instead of
-stars, or one more *shape*. The shape won: `Canvas::fill_star` computes its own
+stars, or one more *shape*. The shape won: `fill_star` computes its own
 vertices from the same Q16 sine table the arcs use, over a scanline polygon
-filler kept `pub(crate)`. The no-path-builder promise survives intact, and a
-heart or an arrow can be added the day one is wanted without having committed to
-a public path API today. The filler keeps its crossings in a fixed-size stack
+filler. The no-path-builder promise survives intact, and a heart or an arrow can
+be added the day one is wanted without having committed to a public path API
+today — a list of vertices is not a path, and there is still nothing here that
+curves, strokes or winds. The filler keeps its crossings in a fixed-size stack
 array, because this crate has no allocator.
 
 Two things fell out of that. `TURN` is a power of two and does not divide by
@@ -913,6 +914,60 @@ The clip is the only damage-awareness the drawing code has. Widget code paints a
 though it owned the whole window; restricting the clip to a damage region turns
 that into an incremental repaint, so there is never a second draw path to keep in
 step with the first.
+
+### The painting seam
+
+Widgets do not paint into a `Canvas`. They paint through a `Painter`: eighteen
+required operations, six more written in terms of those, and no way to express
+anything else. `Canvas` is one implementation of it and for now the only one.
+
+The trait exists because the drawing vocabulary turned out to be small enough to
+be worth naming. There are no paths, no beziers, one blend mode and a clip that
+is always a rectangle — a set of primitives a backend could answer some other
+way. Widgets are trait objects, so `Widget::paint` can only ever be handed a
+`&mut dyn Painter`, which settles two things: the trait may have no generic
+methods, and a colour crossing it is a premultiplied `Paint` rather than an
+`impl Into<Paint>`.
+
+Neither is a constraint widget code should have to wear, so it does not. `Pen` is
+a `&mut dyn Painter` with the ergonomics restored as *inherent* methods, which
+never compete with the trait's for resolution: `impl Into<Paint>` at every call
+site, and a `with_clip` that hands back a guard rather than a re-borrow of a
+concrete type. A widget body written against `Canvas` reads identically written
+against a pen. Converting the whole widget set changed two lines per file — the
+import and the signature — and not one line inside a `paint`.
+
+Two things moved to pay for it. The scanline polygon filler is on the trait
+rather than `pub(crate)`, because stars and icons are written in terms of it and
+a backend should inherit both rather than reimplement them. And restoring a
+narrowed clip needs a `ClipToken`, whose field is private: the only way to widen
+a clip is to have narrowed it, so a child still cannot escape the region its
+parent gave it.
+
+The vocabulary itself lives in `denise`, not in the rasteriser: a premultiplied
+word is arithmetic, a mask is a borrowed buffer, an icon is a table of vertices,
+and a binary turn is geometry. `denise-render` implements the trait and is
+otherwise only a renderer. So `denise-ui` depends on it through one optional
+feature rather than as a fact of life.
+
+`raster` is that feature, and it is on by default. It carries `Ui::paint`, which
+takes a `Frame` and rasterises into it, and `Ui::render`, which acquires one from
+a `Surface` first. Underneath both is `Ui::paint_with`, which takes a `Pen` and a
+buffer age and knows nothing about how the pixels get made. Turning the feature
+off leaves that one and drops `denise-render` out of the tree entirely.
+
+The split falls where it does because of the scroll optimisation. A viewport that
+scrolls moves the rows it can keep with a `copy_within` on the frame's own words,
+and no painter operation expresses an overlapping self-to-self copy — nor should
+one, since the target might be a texture. `Ui::paint` has the frame and does it;
+`Ui::paint_with` does not and repaints the viewport instead. That is the honest
+cost, and it is smallest exactly where it is paid: on anything that composites,
+shifting rows was never the expensive part.
+
+What this is *not* is a GPU backend. Nothing here renders on a GPU on any
+platform; on macOS, Windows and Wayland the compositor uploads a CPU-rendered
+buffer as a texture, which it always did. The seam only means such a backend
+would be an additive crate rather than a rewrite.
 
 ### Numbers
 

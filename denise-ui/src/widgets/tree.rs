@@ -3,8 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use denise::Pen;
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -748,7 +748,7 @@ fn row_rect(bounds: Rect, row_height: i32, nth: usize) -> Rect {
 /// Filled from horizontal spans rather than drawn as a glyph: the built-in font
 /// covers ASCII and Latin-1, so `▾` would come out as the missing-character box
 /// on a panel with no font file — which is the configuration this toolkit is for.
-fn disclosure(canvas: &mut Canvas<'_>, box_of: Rect, open: bool, color: denise::Color) {
+fn disclosure(canvas: &mut Pen<'_>, box_of: Rect, open: bool, color: denise::Color) {
     // Sized off the row so it scales with the text, and odd so it has a point.
     let size = (box_of.height / 3).clamp(3, 9) | 1;
     let cx = box_of.x + box_of.width / 2;
@@ -792,7 +792,7 @@ impl<M: 'static> Widget<M> for Tree<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.items.is_empty() {
             return;
@@ -960,7 +960,7 @@ impl<M> Describe for Tree<M> {
     const KIND: &'static str = "tree";
     const DOC: &'static str = "A hierarchy of rows that open and shut, indented by depth.";
     const GROUP: Group = Group::Data;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TREE;
+    const ICON: &'static denise::icon::Icon = &super::icons::TREE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

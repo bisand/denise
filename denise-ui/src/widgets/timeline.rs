@@ -3,8 +3,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use denise::Pen;
 use denise::{Point, Rect, Role, Theme};
-use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -229,7 +229,7 @@ impl<M: 'static> Widget<M> for Timeline {
         Measured::tall(self.preferred_height(ctx.theme))
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.items.is_empty() {
             return;
@@ -332,7 +332,7 @@ impl Describe for Timeline {
     const KIND: &'static str = "timeline";
     const DOC: &'static str = "Events in order, each with a time, a marker and a label.";
     const GROUP: Group = Group::Data;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TIMELINE;
+    const ICON: &'static denise::icon::Icon = &super::icons::TIMELINE;
 
     /// A timeline has no colour role of its own: the role belongs to each
     /// event, so a run of them can be `success` up to the one that is still

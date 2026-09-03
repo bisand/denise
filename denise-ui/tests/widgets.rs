@@ -2384,7 +2384,7 @@ impl Toast {
 }
 
 impl Widget<Msg> for Toast {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut denise_render::Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut denise_render::Pen<'_>) {
         // The fade is time-driven, which is the whole point of the test.
         let age = self
             .born_ms
@@ -3286,7 +3286,7 @@ fn a_list_selection_below_the_fold_pulls_the_viewport_along() {
 fn a_widget_that_consumes_the_wheel_stops_the_viewport_scrolling() {
     struct WheelEater;
     impl Widget<Msg> for WheelEater {
-        fn paint(&self, _: &mut PaintCtx<'_>, _: &mut denise_render::Canvas<'_>) {}
+        fn paint(&self, _: &mut PaintCtx<'_>, _: &mut denise_render::Pen<'_>) {}
         fn on_event(
             &mut self,
             event: &denise_ui::Event<'_>,

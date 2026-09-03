@@ -79,7 +79,8 @@ fn main() -> std::io::Result<()> {
             BufferAge::Undefined,
         )
         .expect("frame");
-        let mut canvas = Canvas::new(&mut frame);
+        let mut raster = Canvas::new(&mut frame);
+        let mut canvas = raster.pen();
         canvas.clear(theme.color(Role::Base100));
 
         let mut y = 16;

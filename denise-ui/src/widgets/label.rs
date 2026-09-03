@@ -2,8 +2,8 @@
 
 use alloc::string::{String, ToString};
 
+use denise::Pen;
 use denise::Role;
-use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -126,7 +126,7 @@ impl<M: 'static> Widget<M> for Label {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let color = ctx.theme.color(self.role);
         draw_aligned(
             canvas, ctx.text, self.style, ctx.bounds, self.align, &self.text, color,
@@ -138,7 +138,7 @@ impl Describe for Label {
     const KIND: &'static str = "label";
     const DOC: &'static str = "Text that is read and not touched.";
     const GROUP: Group = Group::Display;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::LABEL;
+    const ICON: &'static denise::icon::Icon = &super::icons::LABEL;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The text drawn."),

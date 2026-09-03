@@ -33,6 +33,7 @@ mod app {
     use std::os::fd::BorrowedFd;
     use std::time::{Duration, Instant};
 
+    use denise::Pen;
     use denise::{
         Color, DamageTracker, ElementState, InputEvent, InputSource, KeyCode, MAX_DAMAGE_RECTS,
         Modifiers, Point, Radius, Rect, Role, Size, Surface, Theme,
@@ -189,7 +190,7 @@ mod app {
         }
 
         /// Paints the scene. Unaware of damage: the clip makes it incremental.
-        fn paint(&self, canvas: &mut Canvas<'_>) {
+        fn paint(&self, canvas: &mut Pen<'_>) {
             let theme = self.theme();
             canvas.clear(theme.color(Role::Base100));
 
@@ -400,7 +401,8 @@ mod app {
             damage_px.push(damage.iter().map(Rect::area).sum::<u64>() as u32);
 
             {
-                let mut canvas = Canvas::new(&mut target);
+                let mut raster = Canvas::new(&mut target);
+                let mut canvas = raster.pen();
                 for region in damage {
                     let mut clipped = canvas.with_clip(*region);
                     scene.paint(&mut clipped);

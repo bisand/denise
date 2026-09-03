@@ -3,8 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use denise::Pen;
 use denise::{ElementState, InputEvent, Point, PointerButton, Rect, Role, Size, Theme};
-use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -263,7 +263,7 @@ impl<M: 'static> Widget<M> for MenuBar<M> {
         self.message.is_some()
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let theme = ctx.theme;
         let bounds = ctx.bounds;
         canvas.fill_rect(bounds, theme.color(Role::Base200));
@@ -365,7 +365,7 @@ impl<M> Describe for MenuBar<M> {
     const KIND: &'static str = "menubar";
     const DOC: &'static str = "A row of menu titles along the top of a window.";
     const GROUP: Group = Group::Container;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::MENU_BAR;
+    const ICON: &'static denise::icon::Icon = &super::icons::MENU_BAR;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(
@@ -412,7 +412,7 @@ impl<M> Describe for MenuBar<M> {
 
 /// Opens `items` as a menu below title `index` of a [`MenuBar`].
 ///
-/// The popup is an ordinary one — [`Ui::push_popup_at`] — so it flips near a
+/// The popup is an ordinary one — [`push_popup_at`](crate::Ui::push_popup_at) — so it flips near a
 /// screen edge, closes on Escape or a press outside (swallowing that press),
 /// and returns focus to the bar. `message` is emitted with the row's index when
 /// a row is **chosen**, by Enter or by a tap; the arrow keys move the highlight
@@ -572,7 +572,7 @@ impl<M: 'static> Widget<M> for Rows<M> {
         true
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let theme = ctx.theme;
         let bounds = ctx.bounds;
         let height = self.row_height(theme);

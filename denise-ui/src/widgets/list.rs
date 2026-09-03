@@ -3,9 +3,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use denise::Pen;
+use denise::icon::Icon;
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Canvas;
-use denise_render::icon::Icon;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -589,7 +589,7 @@ impl<M: 'static> Widget<M> for List<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() || self.items.is_empty() {
             return;
@@ -776,7 +776,7 @@ impl<M> Describe for List<M> {
     const KIND: &'static str = "list";
     const DOC: &'static str = "Rows in a column, one of them selected.";
     const GROUP: Group = Group::Data;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::LIST;
+    const ICON: &'static denise::icon::Icon = &super::icons::LIST;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

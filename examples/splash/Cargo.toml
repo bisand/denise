@@ -15,7 +15,7 @@ homepage.workspace = true
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-text = { workspace = true, features = ["truetype"] }
-denise-ui = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype", "raster"] }
 system-font = { path = "../system-font" }
 
 # Linux-only, so the workspace still builds on a development machine.

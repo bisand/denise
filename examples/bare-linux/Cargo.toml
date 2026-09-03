@@ -12,7 +12,7 @@ homepage.workspace = true
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-denise-ui = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std", "raster"] }
 
 # Linux-only, so the workspace still builds on a development machine. On anything
 # else this crate compiles to nothing at all.

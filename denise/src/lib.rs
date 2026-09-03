@@ -48,21 +48,31 @@
 
 extern crate alloc;
 
+pub mod angle;
 pub mod color;
 pub mod cursor;
 pub mod damage;
 pub mod geom;
+pub mod icon;
 pub mod input;
+pub mod paint;
+pub mod painter;
+pub mod pixels;
 pub mod surface;
 pub mod theme;
 
+pub use angle::TURN;
 pub use color::Color;
 pub use cursor::CursorPlane;
 pub use damage::{DamageTracker, MAX_DAMAGE_RECTS, MAX_TRACKED_FRAMES, RectList};
 pub use geom::{Point, Rect, Size};
+pub use icon::{GRID, Icon, Ink, MAX_ICON_VERTICES, MAX_SHAPES, Shape};
 pub use input::{
     ElementState, InputEvent, InputSource, KeyCode, Modifiers, PointerButton, TouchId,
 };
+pub use paint::Paint;
+pub use painter::{ClipToken, Clipped, Painter, PainterExt, Pen};
+pub use pixels::{Mask, PixelView};
 pub use surface::{BufferAge, Frame, PixelFormat, Surface, SurfaceError, required_words};
 pub use theme::{ColorScheme, Metrics, Radius, Role, Theme};
 

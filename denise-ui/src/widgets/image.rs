@@ -2,8 +2,8 @@
 
 use alloc::vec::Vec;
 
+use denise::{Pen, PixelView};
 use denise::{Rect, Size};
-use denise_render::{Canvas, PixelView};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
@@ -52,7 +52,7 @@ impl Pixels {
 ///
 /// # The pixels are premultiplied `0xAARRGGBB`
 ///
-/// The same contract as [`Canvas::blit`]: colour channels already multiplied
+/// The same contract as [`Pen::blit`]: colour channels already multiplied
 /// by alpha, converted once at load time —
 /// [`denise_render::blend::premultiply`] does it in place. Fully opaque pixels
 /// are identical in both conventions, so an image with no transparency needs
@@ -186,7 +186,7 @@ impl Image {
     /// the rectangle and radius as arguments is what lets `Avatar` reuse the
     /// fit and mask rules for a shape it decides at paint time, without
     /// cloning a pixel buffer to change one number.
-    pub(crate) fn paint_at(&self, bounds: Rect, radius: i32, canvas: &mut Canvas<'_>) {
+    pub(crate) fn paint_at(&self, bounds: Rect, radius: i32, canvas: &mut Pen<'_>) {
         let Some(view) = PixelView::new(self.pixels.as_slice(), self.size, self.size.width) else {
             return;
         };
@@ -215,7 +215,7 @@ impl<M: 'static> Widget<M> for Image {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         self.paint_at(ctx.bounds, self.radius, canvas);
     }
 }
@@ -224,7 +224,7 @@ impl Describe for Image {
     const KIND: &'static str = "image";
     const DOC: &'static str = "A picture, fitted to a rectangle.";
     const GROUP: Group = Group::Media;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::IMAGE;
+    const ICON: &'static denise::icon::Icon = &super::icons::IMAGE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

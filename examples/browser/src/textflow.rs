@@ -13,7 +13,7 @@
 //! scroll falls through to the viewport the tree already runs.
 
 use denise::{Color, Point, Rect};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::TextStyle;
 use denise_ui::{Event, EventCtx, Handled, PaintCtx, Widget};
 
@@ -56,7 +56,7 @@ impl TextFlow {
 }
 
 impl Widget<Message> for TextFlow {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         for line in &self.flow.lines {
             let baseline = ctx.bounds.y + line.y + line.baseline;
             for frag in &line.fragments {
@@ -143,7 +143,7 @@ impl Widget<Message> for TextFlow {
 pub struct Filler(pub Color);
 
 impl Widget<Message> for Filler {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         canvas.fill_rect(ctx.bounds, self.0);
     }
 }
@@ -157,7 +157,7 @@ pub struct BulletMark {
 }
 
 impl Widget<Message> for BulletMark {
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let ascent = ctx.text.metrics(self.style).ascent;
         ctx.text.draw_line(
             canvas,

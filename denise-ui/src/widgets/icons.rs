@@ -3,7 +3,7 @@
 //! A palette that lists twenty-seven widgets by name serves the person who
 //! already knows which one they want. A glyph beside the name serves everybody
 //! else — and the glyph has to be drawable on every machine, which rules out an
-//! icon font before the argument starts: [`denise_render::icon`] exists because
+//! icon font before the argument starts: [`denise::icon`] exists because
 //! whether a font has a picture depends on which font is installed, and these
 //! are the same pictures with the same problem.
 //!
@@ -12,7 +12,7 @@
 //! Every glyph here follows one rule set, so the set reads as a set:
 //!
 //! - **Solid, outlined by knockout.** The format has no stroke — see
-//!   [`denise_render::icon`] for why — and at the sixteen pixels a palette row
+//!   [`denise::icon`] for why — and at the sixteen pixels a palette row
 //!   offers, a thin outline would vanish anyway. A shape that reads as an
 //!   outline is a fill with the middle knocked back out in [`Ink::Back`],
 //!   exactly as the keyboard's Backspace draws its cross.
@@ -38,9 +38,9 @@
 //! widgets, and the twenty-eighth widget cannot be merged without one. The
 //! tests at the bottom hold every glyph to the format's real limits.
 //!
-//! [`Ink::Back`]: denise_render::icon::Ink::Back
+//! [`Ink::Back`]: denise::icon::Ink::Back
 
-use denise_render::icon::{Icon, Shape};
+use denise::icon::{Icon, Shape};
 
 // ------------------------------------------------------------------- input
 
@@ -395,7 +395,7 @@ pub static COLLAPSE: Icon = Icon::new(&[
 
 /// List: three rows, each a bullet and its label. Exactly [`MAX_SHAPES`].
 ///
-/// [`MAX_SHAPES`]: denise_render::icon::MAX_SHAPES
+/// [`MAX_SHAPES`]: denise::icon::MAX_SHAPES
 pub static LIST: Icon = Icon::new(&[
     Shape::fore(&[(12, 18), (22, 18), (22, 28), (12, 28)]),
     Shape::fore(&[(30, 18), (88, 18), (88, 28), (30, 28)]),
@@ -547,8 +547,8 @@ pub static CAROUSEL: Icon = Icon::new(&[
 
 #[cfg(test)]
 mod tests {
-    use denise_render::MAX_ICON_VERTICES;
-    use denise_render::icon::{GRID, MAX_SHAPES};
+    use denise::MAX_ICON_VERTICES;
+    use denise::icon::{GRID, MAX_SHAPES};
 
     use crate::widgets::all;
 
@@ -603,7 +603,7 @@ mod tests {
     /// itself: drawing order starts with ink somebody will see.
     #[test]
     fn every_glyph_starts_with_fore_ink() {
-        use denise_render::icon::Ink;
+        use denise::icon::Ink;
         for widget in all() {
             let first = widget.icon.shapes.first().expect("at least one shape");
             assert_eq!(

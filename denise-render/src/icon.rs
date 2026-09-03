@@ -34,79 +34,11 @@
 //! arithmetic. No floating point anywhere: this crate has neither `std` nor
 //! `libm`, and the whole rasteriser is built on that.
 
+pub use denise::icon::{GRID, Icon, Ink, MAX_SHAPES, Shape, fx_along};
+
 use denise::{Color, Rect};
 
 use crate::canvas::Canvas;
-use crate::rounded::{COORD_LIMIT, ONE};
-
-/// The side of the square an icon's coordinates are given on.
-///
-/// A hundred because it reads as a percentage and divides by enough to place
-/// things on halves, quarters and fifths without fractions.
-pub const GRID: i32 = 100;
-
-/// The most polygons one icon may have.
-///
-/// Six is a filled shape, a hole and room to spare. An icon needing more than
-/// this is a drawing, and a drawing belongs in a `denise-image` decoder.
-pub const MAX_SHAPES: usize = 6;
-
-/// Which of the two colours a shape is drawn in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Ink {
-    /// The content colour — the same one the label would be drawn in.
-    Fore,
-    /// The colour behind the icon, for knocking a hole out of a filled shape.
-    ///
-    /// The only way to draw an outline here, since the filler has no stroke and
-    /// no even-odd rule. It is why `⌫` can have an `×` in it.
-    Back,
-}
-
-/// One closed polygon of an icon.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Shape {
-    /// Vertices on the `0..=`[`GRID`] box, y downwards, in order round the
-    /// outline. Three at least; [`MAX_VERTICES`](crate::MAX_ICON_VERTICES) at most.
-    pub points: &'static [(i16, i16)],
-    /// Which colour it is drawn in.
-    pub ink: Ink,
-}
-
-impl Shape {
-    /// A shape in the content colour.
-    pub const fn fore(points: &'static [(i16, i16)]) -> Self {
-        Self {
-            points,
-            ink: Ink::Fore,
-        }
-    }
-
-    /// A shape knocked back out in the background colour.
-    pub const fn back(points: &'static [(i16, i16)]) -> Self {
-        Self {
-            points,
-            ink: Ink::Back,
-        }
-    }
-}
-
-/// A small drawing, in shapes rather than glyphs.
-///
-/// Order matters: shapes are drawn front to back in the order given, so a hole
-/// comes after the shape it is punched in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Icon {
-    /// The polygons, in drawing order.
-    pub shapes: &'static [Shape],
-}
-
-impl Icon {
-    /// An icon from its shapes.
-    pub const fn new(shapes: &'static [Shape]) -> Self {
-        Self { shapes }
-    }
-}
 
 impl Canvas<'_> {
     /// Draws an icon into `rect`, scaled from its grid.
@@ -119,40 +51,8 @@ impl Canvas<'_> {
     /// rectangle if you want it square. Anything beyond
     /// [`MAX_SHAPES`] is ignored rather than drawn wrong.
     pub fn draw_icon(&mut self, icon: &Icon, rect: Rect, fore: Color, back: Color) {
-        if rect.is_empty() || GRID <= 0 {
-            return;
-        }
-        for shape in icon.shapes.iter().take(MAX_SHAPES) {
-            let mut points = [(0i32, 0i32); crate::MAX_ICON_VERTICES];
-            let n = shape.points.len().min(crate::MAX_ICON_VERTICES);
-            if n < 3 {
-                continue;
-            }
-            for (slot, &(gx, gy)) in points.iter_mut().zip(shape.points).take(n) {
-                *slot = (
-                    fx_along(rect.x, rect.width, gx),
-                    fx_along(rect.y, rect.height, gy),
-                );
-            }
-            let paint = match shape.ink {
-                Ink::Fore => fore,
-                Ink::Back => back,
-            };
-            self.fill_polygon_fx(&points[..n], paint.into());
-        }
+        crate::painter::Painter::draw_icon(self, icon, rect, fore, back);
     }
-}
-
-/// One grid coordinate to a fixed-point position along an axis.
-///
-/// In fixed point rather than whole pixels so the filler can anti-alias the
-/// edge: a triangle snapped to pixel corners at 48 px has visibly ragged
-/// diagonals, and the filler is already doing the subpixel arithmetic.
-#[inline]
-fn fx_along(origin: i32, extent: i32, grid: i16) -> i32 {
-    let offset = (i64::from(grid) * i64::from(extent) * i64::from(ONE)) / i64::from(GRID);
-    let base = i64::from(origin.clamp(-COORD_LIMIT, COORD_LIMIT)) * i64::from(ONE);
-    (base + offset).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 #[cfg(test)]

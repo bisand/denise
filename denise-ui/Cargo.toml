@@ -17,15 +17,19 @@ homepage.workspace = true
 all-features = true
 
 [features]
-default = ["std"]
-std = ["denise/std", "denise-render/std", "denise-text/std"]
+default = ["std", "raster"]
+std = ["denise/std", "denise-render?/std", "denise-text/std"]
+# The software rasteriser, and the `Ui::paint` that draws into a `Frame` with it.
+# On by default because it is how every application built so far draws. Turn it
+# off and `Ui::paint_with` remains: a `Pen` over whatever painter you have.
+raster = ["dep:denise-render"]
 # Passed through so an application picks its text tier once, on `denise-ui`.
 truetype = ["denise-text/truetype"]
 shaping = ["denise-text/shaping"]
 
 [dependencies]
 denise = { workspace = true }
-denise-render = { workspace = true }
+denise-render = { workspace = true, optional = true }
 denise-text = { workspace = true }
 slotmap = { workspace = true }
 

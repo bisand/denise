@@ -23,10 +23,9 @@
 
 use denise::{Point, Rect};
 
-use crate::arc::{TURN, direction};
 use crate::blend::{Paint, blend_span};
 use crate::canvas::Canvas;
-use crate::rounded::{COORD_LIMIT, ONE, SUB_STEP, SUBSAMPLES, ceil_px, floor_px, to_fx};
+use crate::rounded::{ONE, SUB_STEP, SUBSAMPLES, ceil_px, floor_px, to_fx};
 
 /// The most vertices a polygon may have, and so the most crossings one
 /// scanline can produce. Sixteen points of a star is far past anything legible
@@ -38,7 +37,7 @@ pub(crate) const MAX_VERTICES: usize = 32;
 /// The same number, published because an icon's shapes are written by hand and
 /// silently dropping the thirty-third point would be a shape that is subtly
 /// wrong rather than absent.
-pub const MAX_ICON_VERTICES: usize = MAX_VERTICES;
+pub use denise::MAX_ICON_VERTICES;
 
 /// Crossings of one sub-row, sorted ascending, in fixed point.
 struct Crossings {
@@ -174,7 +173,7 @@ impl Canvas<'_> {
     /// `0.38` of the outer radius is the classic pentagram, and an inner radius
     /// approaching the outer one is a polygon with `2 × points` sides.
     ///
-    /// `rotation` is in the same binary turns as the arcs — see [`TURN`] — and
+    /// `rotation` is in the same binary turns as the arcs — see [`TURN`](crate::TURN) — and
     /// zero puts a tip at twelve o'clock.
     ///
     /// Vertices are computed to sub-pixel precision even though the centre is
@@ -182,7 +181,7 @@ impl Canvas<'_> {
     ///
     /// # A five-pointed star is not exactly five-fold symmetric
     ///
-    /// [`TURN`] is a power of two, so it divides exactly by two, four and eight
+    /// [`TURN`](crate::TURN) is a power of two, so it divides exactly by two, four and eight
     /// and not by five. A five-pointed star's vertex angles are therefore each
     /// rounded to the nearest unit — at most half a unit in 65536, which is
     /// under a hundredth of a pixel at any radius a screen can show, and
@@ -198,34 +197,15 @@ impl Canvas<'_> {
         rotation: i32,
         color: impl Into<Paint>,
     ) {
-        let paint = color.into();
-        if points < 2 || outer_radius <= 0 || paint.is_invisible() {
-            return;
-        }
-        let count = (points as usize) * 2;
-        if count > MAX_VERTICES {
-            return;
-        }
-        let outer = outer_radius.clamp(0, COORD_LIMIT) as i64;
-        let inner = inner_radius.clamp(0, outer_radius) as i64;
-
-        let mut vertices = [(0i32, 0i32); MAX_VERTICES];
-        let (cx, cy) = (to_fx(centre.x), to_fx(centre.y));
-        for (i, vertex) in vertices.iter_mut().enumerate().take(count) {
-            // Rounded, not truncated: the spacing error is then at most half a
-            // unit per vertex rather than a whole one.
-            let step = (i as i64 * TURN as i64 + count as i64 / 2) / count as i64;
-            let angle = rotation.wrapping_add(step as i32);
-            let (dx, dy) = direction(angle);
-            let r = if i % 2 == 0 { outer } else { inner };
-            // The direction is Q16 and the target is 8.8, so a radius in whole
-            // pixels lands sub-pixel after shifting off eight bits.
-            *vertex = (
-                cx + ((dx as i64 * r) >> 8) as i32,
-                cy + ((dy as i64 * r) >> 8) as i32,
-            );
-        }
-        self.fill_polygon_fx(&vertices[..count], paint);
+        crate::painter::Painter::fill_star(
+            self,
+            centre,
+            outer_radius,
+            inner_radius,
+            points,
+            rotation,
+            color.into(),
+        );
     }
 }
 
@@ -245,6 +225,7 @@ fn coverage(rows: &[Crossings; SUBSAMPLES], x: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TURN;
     use crate::testing::TestCanvas;
     use denise::Color;
 

@@ -36,7 +36,7 @@ denise-keyboard = { workspace = true }
 # example still builds and draws with the built-in 8x8 bitmap font.
 denise-text = { workspace = true, features = ["truetype"] }
 system-font = { path = "../system-font" }
-denise-ui = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype", "raster"] }
 denise-winit = { workspace = true, optional = true }
 
 # The kiosk backend exists on Linux and nowhere else, so asking for it anywhere

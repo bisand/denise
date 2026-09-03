@@ -10,27 +10,14 @@ use denise::Rect;
 
 use crate::blend::{Paint, blend_span};
 use crate::canvas::Canvas;
+pub(crate) use denise::angle::{COORD_LIMIT, ONE, to_fx};
 
 /// Sub-rows sampled per scanline. Four is the point where the near-horizontal top
 /// of a corner stops looking stepped; eight is not visibly better.
 pub(crate) const SUBSAMPLES: usize = 4;
 
-/// Fractional bits in the fixed-point coordinates used here.
-pub(crate) const FRAC_BITS: u32 = 8;
-/// One whole pixel in fixed point.
-pub(crate) const ONE: i32 = 1 << FRAC_BITS;
 /// Vertical distance between sub-rows.
 pub(crate) const SUB_STEP: i32 = ONE / SUBSAMPLES as i32;
-
-/// Coordinates are clamped to this before entering fixed point, so a rectangle
-/// placed absurdly far off-screen cannot overflow the shift. Any real surface is
-/// orders of magnitude inside it.
-pub(crate) const COORD_LIMIT: i32 = 1 << 22;
-
-#[inline]
-pub(crate) fn to_fx(v: i32) -> i32 {
-    v.clamp(-COORD_LIMIT, COORD_LIMIT) << FRAC_BITS
-}
 
 #[inline]
 pub(crate) fn floor_px(v: i32) -> i32 {

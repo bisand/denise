@@ -3,8 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use denise::Pen;
 use denise::{Point, Rect, Role, Size};
-use denise_render::Canvas;
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
@@ -314,7 +314,7 @@ impl<M: 'static> Widget<M> for Avatar {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let (square, radius) = self.square(ctx.bounds);
         if square.is_empty() {
             return;
@@ -368,7 +368,7 @@ impl Describe for Avatar {
     const KIND: &'static str = "avatar";
     const DOC: &'static str = "A person: their picture, or their initials on a coloured disc.";
     const GROUP: Group = Group::Media;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::AVATAR;
+    const ICON: &'static denise::icon::Icon = &super::icons::AVATAR;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

@@ -11,65 +11,12 @@
 //! blitter walks each row in runs, sends solid runs through the span blend, skips
 //! empty runs entirely, and pays the per-pixel cost only on the edge.
 
-use denise::{Point, Rect};
+pub use denise::Mask;
+
+use denise::Point;
 
 use crate::blend::{Paint, blend_span};
 use crate::canvas::Canvas;
-
-/// A borrowed 8-bit coverage mask: `0` transparent, `255` fully covered.
-#[derive(Clone, Copy, Debug)]
-pub struct Mask<'a> {
-    data: &'a [u8],
-    width: i32,
-    height: i32,
-    stride: usize,
-}
-
-impl<'a> Mask<'a> {
-    /// Wraps a coverage buffer. Returns `None` if it is too small for the
-    /// geometry, or if `stride` is narrower than `width`.
-    pub fn new(data: &'a [u8], width: i32, height: i32, stride: usize) -> Option<Self> {
-        if width <= 0 || height <= 0 || stride < width as usize {
-            return None;
-        }
-        let required = stride * (height as usize - 1) + width as usize;
-        (data.len() >= required).then_some(Self {
-            data,
-            width,
-            height,
-            stride,
-        })
-    }
-
-    /// A mask whose rows are contiguous.
-    pub fn packed(data: &'a [u8], width: i32, height: i32) -> Option<Self> {
-        Self::new(data, width, height, width.max(0) as usize)
-    }
-
-    /// Width in pixels.
-    #[inline]
-    pub const fn width(&self) -> i32 {
-        self.width
-    }
-
-    /// Height in pixels.
-    #[inline]
-    pub const fn height(&self) -> i32 {
-        self.height
-    }
-
-    /// Extent as a rectangle placed at `at`.
-    #[inline]
-    pub const fn bounds_at(&self, at: Point) -> Rect {
-        Rect::new(at.x, at.y, self.width, self.height)
-    }
-
-    #[inline]
-    fn row(&self, y: i32) -> &'a [u8] {
-        let base = y as usize * self.stride;
-        &self.data[base..base + self.width as usize]
-    }
-}
 
 impl Canvas<'_> {
     /// Composites `mask` in `color`, with its top-left corner at `at`.
@@ -128,6 +75,7 @@ mod tests {
     use super::*;
     use crate::testing::TestCanvas;
     use denise::Color;
+    use denise::Rect;
 
     /// A mask with a solid interior and a half-covered rim, like a real glyph.
     fn ring() -> ([u8; 36], i32, i32) {

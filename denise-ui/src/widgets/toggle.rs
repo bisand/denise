@@ -2,8 +2,8 @@
 
 use alloc::string::String;
 
+use denise::Pen;
 use denise::{ElementState, InputEvent, KeyCode, Rect, Role, Theme};
-use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
@@ -275,7 +275,7 @@ impl<M: 'static> Widget<M> for Toggle<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let track = track_rect(ctx.bounds, ctx.theme);
         // A stadium: the radius is half the height, whatever the theme's selector
         // radius says. A switch with square-ish corners reads as a progress bar.
@@ -433,7 +433,7 @@ impl<M> Describe for Toggle<M> {
     const KIND: &'static str = "toggle";
     const DOC: &'static str = "The same on-or-off as a checkbox, shaped like a switch.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TOGGLE;
+    const ICON: &'static denise::icon::Icon = &super::icons::TOGGLE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The label beside the track."),

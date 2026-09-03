@@ -13,7 +13,7 @@ homepage.workspace = true
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-arrange = { workspace = true }
-denise-ui = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std", "raster"] }
 denise-winit = { workspace = true }
 
 [lints.rust]

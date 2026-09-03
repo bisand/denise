@@ -349,7 +349,7 @@ framebuffer.
 
 | Crate | | |
 |---|---|---|
-| [`denise`](https://crates.io/crates/denise) | Core types, traits, damage tracking, theming | `no_std + alloc` |
+| [`denise`](https://crates.io/crates/denise) | Core types, the surface and painting traits, damage tracking, theming | `no_std + alloc` |
 | [`denise-render`](https://crates.io/crates/denise-render) | Software rasteriser and the built-in font | `no_std + alloc` |
 | [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout, word wrapping | `no_std + alloc` |
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |

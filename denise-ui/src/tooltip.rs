@@ -20,8 +20,8 @@
 
 use alloc::string::String;
 
+use denise::Pen;
 use denise::{Point, Radius, Rect, Role, Size, Theme};
-use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::overlay::{Side, anchored};
@@ -182,7 +182,7 @@ impl Tooltip {
         theme: &Theme,
         surface: Size,
         engine: &mut TextEngine,
-        canvas: &mut Canvas<'_>,
+        canvas: &mut Pen<'_>,
     ) {
         let Some((text, anchor)) = self.shown.as_ref() else {
             return;

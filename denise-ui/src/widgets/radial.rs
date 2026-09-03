@@ -2,8 +2,8 @@
 
 use alloc::string::{String, ToString};
 
+use denise::{Pen, TURN};
 use denise::{Point, Rect, Role};
-use denise_render::{Canvas, TURN};
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
@@ -259,7 +259,7 @@ impl<M: 'static> Widget<M> for RadialProgress {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;
@@ -314,7 +314,7 @@ impl Describe for RadialProgress {
     const KIND: &'static str = "radial-progress";
     const DOC: &'static str = "A ring that fills clockwise, with room for a number inside it.";
     const GROUP: Group = Group::Indicator;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::RADIAL_PROGRESS;
+    const ICON: &'static denise::icon::Icon = &super::icons::RADIAL_PROGRESS;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

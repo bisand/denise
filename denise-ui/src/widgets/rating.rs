@@ -1,7 +1,7 @@
 //! Stars, filled to a value.
 
+use denise::Pen;
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role};
-use denise_render::Canvas;
 
 use crate::widget::{
     Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,
@@ -282,7 +282,7 @@ impl<M: 'static> Widget<M> for Rating<M> {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         let (side, step) = geometry(bounds, self.max);
         if side <= 0 {
@@ -426,7 +426,7 @@ impl<M> Describe for Rating<M> {
     const KIND: &'static str = "rating";
     const DOC: &'static str = "Stars, filled to a value and set by pressing one.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::RATING;
+    const ICON: &'static denise::icon::Icon = &super::icons::RATING;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

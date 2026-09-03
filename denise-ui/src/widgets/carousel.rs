@@ -2,8 +2,8 @@
 
 use alloc::vec::Vec;
 
+use denise::Pen;
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Size};
-use denise_render::Canvas;
 
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
@@ -275,7 +275,7 @@ impl<M: 'static> Widget<M> for Carousel<M> {
     fn describe_mut(&mut self) -> Option<&mut dyn DynDescribe> {
         Some(self)
     }
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let bounds = ctx.bounds;
         if bounds.is_empty() {
             return;
@@ -296,7 +296,7 @@ impl<M: 'static> Widget<M> for Carousel<M> {
         // rectangle rather than across the panel.
         {
             let mut c = canvas.with_clip(bounds);
-            let page_at = |c: &mut Canvas<'_>, index: usize, dx: i32| {
+            let page_at = |c: &mut Pen<'_>, index: usize, dx: i32| {
                 if let Some(page) = self.pages.get(index) {
                     let shifted = Rect::new(bounds.x + dx, bounds.y, bounds.width, bounds.height);
                     page.paint_at(shifted, 0, c);
@@ -564,7 +564,7 @@ impl<M> Describe for Carousel<M> {
     const KIND: &'static str = "carousel";
     const DOC: &'static str = "Pictures shown one at a time, sliding between them.";
     const GROUP: Group = Group::Media;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::CAROUSEL;
+    const ICON: &'static denise::icon::Icon = &super::icons::CAROUSEL;
 
     // The pictures are not here. They are child nodes of the form — one
     // `picture` per page, loaded by the engine — because this crate decodes

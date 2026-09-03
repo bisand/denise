@@ -1,8 +1,8 @@
 //! Shared visual vocabulary, so the widgets agree with each other.
 
+use denise::Pen;
 use denise::theme::{AA_LARGE, contrast_x100, derive_content};
 use denise::{Color, Point, Rect, Role, Size, Theme};
-use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::VisualState;
@@ -121,7 +121,7 @@ pub(crate) fn interactive_pair(theme: &Theme, role: Role, state: VisualState) ->
 ///
 /// A ring rather than a colour change, because a panel driven only by Tab has to
 /// show focus on a widget that may already be hovered or pressed.
-pub(crate) fn focus_ring(theme: &Theme, bounds: Rect, radius: i32, canvas: &mut Canvas<'_>) {
+pub(crate) fn focus_ring(theme: &Theme, bounds: Rect, radius: i32, canvas: &mut Pen<'_>) {
     canvas.stroke_rounded_rect(
         bounds.inflate(-1),
         (radius - 1).max(0),
@@ -136,7 +136,7 @@ pub(crate) fn focus_ring(theme: &Theme, bounds: Rect, radius: i32, canvas: &mut 
 /// the glyphs actually occupy — including with a proportional font, where the
 /// answer is not the character count times anything.
 pub(crate) fn draw_aligned(
-    canvas: &mut Canvas<'_>,
+    canvas: &mut Pen<'_>,
     engine: &mut TextEngine,
     style: TextStyle,
     bounds: Rect,

@@ -3,8 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use denise::Pen;
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
-use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -304,7 +304,7 @@ impl<M: 'static> Widget<M> for Tabs<M> {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         // A strip over pages is as tall as the page it shows, and what this
         // widget draws is the band along its top. A strip on its own fills its
         // node, which is what `tabs h=40` has always meant.
@@ -420,7 +420,7 @@ impl<M> Describe for Tabs<M> {
     const KIND: &'static str = "tabs";
     const DOC: &'static str = "A row of labels where one is selected, for switching what is below.";
     const GROUP: Group = Group::Container;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TABS;
+    const ICON: &'static denise::icon::Icon = &super::icons::TABS;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

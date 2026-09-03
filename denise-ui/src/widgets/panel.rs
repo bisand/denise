@@ -1,7 +1,7 @@
 //! A themed rectangle: the background every other widget sits on.
 
+use denise::Pen;
 use denise::{Radius, Role};
-use denise_render::Canvas;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
@@ -127,7 +127,7 @@ impl<M: 'static> Widget<M> for Panel {
         self.backdrop
     }
 
-    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Canvas<'_>) {
+    fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
         let radius = ctx.theme.radius(self.radius);
         if let Some(role) = self.fill {
             canvas.fill_rounded_rect(ctx.bounds, radius, ctx.theme.color(role));
@@ -184,7 +184,7 @@ impl Describe for Panel {
     const KIND: &'static str = "panel";
     const DOC: &'static str = "A themed rectangle: the background other widgets sit on.";
     const GROUP: Group = Group::Container;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::PANEL;
+    const ICON: &'static denise::icon::Icon = &super::icons::PANEL;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

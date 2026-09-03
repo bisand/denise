@@ -15,10 +15,10 @@ exactly once.
 
 ```rust
 use denise::{Color, Point};
-use denise_render::Canvas;
+use denise_render::Pen;
 use denise_text::{TextEngine, TextStyle};
 
-# fn demo(canvas: &mut Canvas<'_>) {
+# fn demo(canvas: &mut Pen<'_>) {
 let mut text = TextEngine::new();
 let style = TextStyle::built_in(16);
 

@@ -29,7 +29,7 @@ denise-render = { workspace = true, features = ["std"] }
 denise-keyboard = { workspace = true }
 denise-layout = { workspace = true }
 denise-text = { workspace = true, features = ["truetype"] }
-denise-ui = { workspace = true, features = ["truetype"] }
+denise-ui = { workspace = true, features = ["truetype", "raster"] }
 denise-winit = { workspace = true, optional = true }
 system-font = { path = "../system-font" }
 
