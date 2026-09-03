@@ -39,20 +39,30 @@
 //! # }
 //! ```
 //!
+//! # Glyphs
+//!
+//! Text arrives through [`blit_glyph`](Painter::blit_glyph) as a rectangle of
+//! an atlas page with an id and a version. The page is uploaded once per
+//! version — that is, whenever the text engine packs a glyph it has not seen —
+//! and every glyph after that is six vertices sampling it. A label costs what a
+//! rectangle costs.
+//!
 //! # What it does not do yet
 //!
-//! Every [`blit`](Painter::blit) and [`blit_mask`](Painter::blit_mask) uploads
-//! its source as a fresh texture. Correct, and the first thing a profile will
-//! point at: a glyph atlas and an image handle are the next two pieces, and both
-//! are additions to the trait rather than changes to this crate alone.
+//! Every [`blit`](Painter::blit) still uploads its source as a fresh texture.
+//! Correct, and the next thing a profile will point at: an image handle is the
+//! remaining piece, and like the glyph page it is an addition to the trait
+//! rather than a change to this crate alone.
 
 #![forbid(unsafe_code)]
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ops::Range;
 
 use denise::angle::{ONE, TURN};
 use denise::painter::ClipToken;
-use denise::{Color, Mask, Paint, Painter, PixelFormat, PixelView, Point, Rect, Size};
+use denise::{AtlasPage, Color, Mask, Paint, Painter, PixelFormat, PixelView, Point, Rect, Size};
 use wgpu::util::DeviceExt as _;
 
 /// What can go wrong between asking for a GPU and reading pixels back.
@@ -108,6 +118,9 @@ const KIND_TEXTURED: u32 = 7;
 const KIND_MASK: u32 = 8;
 const KIND_TEXTURED_ROUNDED: u32 = 9;
 
+/// The UV rectangle that samples a whole texture.
+const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
 /// A device, a queue, and the one pipeline every frame is drawn with.
 ///
 /// Built once per device and kept; [`Gpu::painter`] hands out a painter per
@@ -123,6 +136,15 @@ pub struct Gpu {
     /// A one-pixel white texture bound while drawing shapes, so the pipeline
     /// never has to change.
     white: wgpu::BindGroup,
+    /// Glyph atlas pages, by atlas id: the version uploaded and its texture.
+    ///
+    /// One entry per atlas, replaced when its version moves on. Interior
+    /// mutability because painters borrow the `Gpu` shared, and a cache that
+    /// only a `&mut Gpu` could fill would never fill.
+    pages: RefCell<HashMap<u64, (u64, wgpu::BindGroup)>>,
+    /// How many atlas pages have been uploaded, ever. The number a profile
+    /// wants, and the number the tests hold to "once per version".
+    page_uploads: Cell<u64>,
 }
 
 impl Gpu {
@@ -271,6 +293,8 @@ impl Gpu {
             texture_layout,
             sampler,
             white,
+            pages: RefCell::new(HashMap::new()),
+            page_uploads: Cell::new(0),
         }
     }
 
@@ -306,6 +330,16 @@ impl Gpu {
         &self.queue
     }
 
+    /// How many glyph atlas pages this device has uploaded, in total.
+    ///
+    /// A page is uploaded once per [`AtlasPage::version`], so for a text engine
+    /// whose glyphs have all been seen this stops moving; a number that keeps
+    /// climbing means an atlas too small for its working set, which the
+    /// engine's own `resets` will confirm.
+    pub fn page_uploads(&self) -> u64 {
+        self.page_uploads.get()
+    }
+
     /// The texture format [`GpuPainter::finish`] expects its target to have.
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
@@ -321,6 +355,28 @@ impl Gpu {
             draws: Vec::new(),
             textures: Vec::new(),
         }
+    }
+
+    /// The texture holding `page`, uploaded now if this version has not been.
+    fn page_texture(&self, page: &AtlasPage<'_>) -> wgpu::BindGroup {
+        if let Some((version, group)) = self.pages.borrow().get(&page.id)
+            && *version == page.version
+        {
+            return group.clone();
+        }
+        let mask = &page.mask;
+        let (w, h) = (mask.width().max(1) as u32, mask.height().max(1) as u32);
+        let mut bytes = Vec::with_capacity((w * h) as usize);
+        for y in 0..mask.height() {
+            bytes.extend_from_slice(mask.row(y));
+        }
+        bytes.resize((w * h) as usize, 0);
+        let group = self.upload(w, h, wgpu::TextureFormat::R8Unorm, &bytes);
+        self.page_uploads.set(self.page_uploads.get() + 1);
+        self.pages
+            .borrow_mut()
+            .insert(page.id, (page.version, group.clone()));
+        group
     }
 
     fn upload(
@@ -646,22 +702,27 @@ impl GpuPainter<'_> {
     }
 
     /// A textured quad covering `dest`, sampling the whole of texture `index`.
+    /// A textured quad covering `dest`, sampling `uv` (`u0, v0, u1, v1`) of
+    /// texture `index` — the whole of it for a blit, a glyph's rectangle for
+    /// an atlas page.
     fn textured_quad(
         &mut self,
         kind: u32,
         color: [f32; 4],
         index: usize,
         dest: Rect,
+        uv: [f32; 4],
         radius_box: ([f32; 4], f32),
     ) {
         let clip = self.clip_f();
         let (x0, y0) = (dest.x as f32, dest.y as f32);
         let (x1, y1) = (dest.right() as f32, dest.bottom() as f32);
+        let [u0, v0, u1, v1] = uv;
         let corners = [
-            ([x0, y0], [0.0, 0.0]),
-            ([x1, y0], [1.0, 0.0]),
-            ([x1, y1], [1.0, 1.0]),
-            ([x0, y1], [0.0, 1.0]),
+            ([x0, y0], [u0, v0]),
+            ([x1, y0], [u1, v0]),
+            ([x1, y1], [u1, v1]),
+            ([x0, y1], [u0, v1]),
         ];
         let (b, radius) = radius_box;
         let start = self.vertices.len() as u32;
@@ -961,8 +1022,31 @@ impl Painter for GpuPainter<'_> {
             rgba(paint),
             index,
             mask.bounds_at(at),
+            WHOLE,
             ([0.0; 4], 0.0),
         );
+    }
+
+    fn blit_glyph(&mut self, at: Point, page: &AtlasPage<'_>, rect: Rect, paint: Paint) {
+        if paint.is_invisible() || rect.is_empty() || self.clip.is_empty() {
+            return;
+        }
+        let (pw, ph) = (page.mask.width() as f32, page.mask.height() as f32);
+        if pw <= 0.0 || ph <= 0.0 {
+            return;
+        }
+        // The page is uploaded once per version; this is six vertices.
+        let group = self.gpu.page_texture(page);
+        self.textures.push(group);
+        let index = self.textures.len() - 1;
+        let uv = [
+            rect.x as f32 / pw,
+            rect.y as f32 / ph,
+            rect.right() as f32 / pw,
+            rect.bottom() as f32 / ph,
+        ];
+        let dest = Rect::new(at.x, at.y, rect.width, rect.height);
+        self.textured_quad(KIND_MASK, rgba(paint), index, dest, uv, ([0.0; 4], 0.0));
     }
 
     fn blit(&mut self, src: &PixelView<'_>, at: Point) {
@@ -972,7 +1056,7 @@ impl Painter for GpuPainter<'_> {
         }
         let index = self.upload_view(src);
         let dest = Rect::new(at.x, at.y, size.width as i32, size.height as i32);
-        self.textured_quad(KIND_TEXTURED, [1.0; 4], index, dest, ([0.0; 4], 0.0));
+        self.textured_quad(KIND_TEXTURED, [1.0; 4], index, dest, WHOLE, ([0.0; 4], 0.0));
     }
 
     fn blit_scaled(&mut self, src: &PixelView<'_>, dest: Rect) {
@@ -980,7 +1064,7 @@ impl Painter for GpuPainter<'_> {
             return;
         }
         let index = self.upload_view(src);
-        self.textured_quad(KIND_TEXTURED, [1.0; 4], index, dest, ([0.0; 4], 0.0));
+        self.textured_quad(KIND_TEXTURED, [1.0; 4], index, dest, WHOLE, ([0.0; 4], 0.0));
     }
 
     fn blit_rounded(&mut self, src: &PixelView<'_>, dest: Rect, shape: Rect, radius: i32) {
@@ -994,6 +1078,7 @@ impl Painter for GpuPainter<'_> {
             [1.0; 4],
             index,
             dest,
+            WHOLE,
             (box_of(shape), r),
         );
     }

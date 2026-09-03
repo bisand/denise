@@ -972,6 +972,15 @@ rather than to the byte — the two anti-alias differently and are not meant to
 agree bit for bit. Text comes out identical, translucent fills exact, and the
 worst case is polygon edges, which the GPU path does not yet anti-alias.
 
+Text crosses the seam as `blit_glyph`: a rectangle of an atlas page that
+carries an id and a version, where the version moves whenever the page's bytes
+do and never otherwise. The rasteriser's provided answer cuts the rectangle out
+and composites it, which is exactly what `blit_mask` did and is bit-identical to
+it. The GPU's answer uploads the page once per version and draws six vertices
+per glyph from then on — a frame of familiar text uploads nothing. The page is
+the unit rather than the glyph because the atlas already is one: a fixed buffer
+that is reset wholesale, so its version is one counter and not a free list.
+
 `denise-winit` presents through it behind a `gpu` feature: a window asks for
 `Present::Gpu` and draws through `DeniseApp::paint`, the painter-agnostic half of
 `render`, which is provided in terms of it on the software path. Every GPU frame

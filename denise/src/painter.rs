@@ -17,7 +17,7 @@ use crate::Color;
 use crate::geom::{Point, Rect, Size};
 use crate::icon::Icon;
 use crate::paint::Paint;
-use crate::pixels::{Mask, PixelView};
+use crate::pixels::{AtlasPage, Mask, PixelView};
 use crate::surface::PixelFormat;
 
 /// Proof that a clip was narrowed, and the only way to widen one back.
@@ -120,6 +120,20 @@ pub trait Painter {
 
     /// Composites an 8-bit coverage mask. How glyphs arrive.
     fn blit_mask(&mut self, at: Point, mask: &Mask<'_>, paint: Paint);
+
+    /// Composites the glyph at `rect` of an atlas `page`.
+    ///
+    /// Provided as "cut the rectangle out and [`blit_mask`](Painter::blit_mask)
+    /// it", which is all the software rasteriser wants. A backend that keeps
+    /// textures overrides it to upload the page once per
+    /// [`version`](AtlasPage::version) and draw rectangles of it from then on,
+    /// which is the difference between a glyph costing an upload and costing
+    /// six vertices.
+    fn blit_glyph(&mut self, at: Point, page: &AtlasPage<'_>, rect: Rect, paint: Paint) {
+        if let Some(mask) = page.mask.sub(rect) {
+            self.blit_mask(at, &mask, paint);
+        }
+    }
 
     /// Copies a premultiplied source over the target at `at`.
     fn blit(&mut self, src: &PixelView<'_>, at: Point);
@@ -441,6 +455,18 @@ impl<'a> Pen<'a> {
     #[inline]
     pub fn blit_mask(&mut self, at: Point, mask: &Mask<'_>, color: impl Into<Paint>) {
         self.painter.blit_mask(at, mask, color.into());
+    }
+
+    /// Composites the glyph at `rect` of an atlas `page`.
+    #[inline]
+    pub fn blit_glyph(
+        &mut self,
+        at: Point,
+        page: &AtlasPage<'_>,
+        rect: Rect,
+        color: impl Into<Paint>,
+    ) {
+        self.painter.blit_glyph(at, page, rect, color.into());
     }
 
     /// Copies a premultiplied source over the target at `at`.
