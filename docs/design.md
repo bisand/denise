@@ -964,10 +964,19 @@ one, since the target might be a texture. `Ui::paint` has the frame and does it;
 cost, and it is smallest exactly where it is paid: on anything that composites,
 shifting rows was never the expensive part.
 
-What this is *not* is a GPU backend. Nothing here renders on a GPU on any
-platform; on macOS, Windows and Wayland the compositor uploads a CPU-rendered
-buffer as a texture, which it always did. The seam only means such a backend
-would be an additive crate rather than a rewrite.
+`denise-wgpu` is the second implementor, and the reason to have written the
+trait down at all: every call becomes a triangle, curves are signed distances
+evaluated per fragment, the clip rides on the vertex and a frame with no images
+is one draw call. It is parity-tested against the rasteriser within a tolerance
+rather than to the byte — the two anti-alias differently and are not meant to
+agree bit for bit. Text comes out identical, translucent fills exact, and the
+worst case is polygon edges, which the GPU path does not yet anti-alias.
+
+What it is *not* is a target for the panels this toolkit exists for. A kiosk on
+a Pi draws with the rasteriser, needs no Mesa and no compositor, and was never
+short of frames; the GPU is for the desktop, where the designer runs on a Retina
+display and a compositor already exists. Nothing in the embedded path changed to
+admit it, which is the seam doing its job.
 
 ### Numbers
 

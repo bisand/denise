@@ -247,6 +247,7 @@ megapixel.
 | Bare Linux, DRM/KMS | `denise-drm` | ✅ Pi 3 A+ at 1920×1080, async page flips, hardware cursor plane, console restored on exit |
 | Bare Linux, fbdev | `denise-fbdev` | ✅ fallback when there is no `/dev/dri` |
 | Desktop: macOS, Windows, Linux | `denise-winit` | ✅ development and preview |
+| Desktop, on the GPU | `denise-wgpu` | 🚧 a `Painter` on wgpu, for the designer and large windows; parity-tested against the rasteriser |
 | Embedded in a macOS app | `denise-macos` | ✅ `NSView` over a CoreGraphics bitmap context |
 | Embedded in a Windows app | `denise-win32` | ✅ child `HWND` over a DIB section |
 | Embedded via COM/ActiveX | `denise-activex` | ✅ registered, sited, scriptable, with a type library PowerShell reads |
@@ -351,6 +352,7 @@ framebuffer.
 |---|---|---|
 | [`denise`](https://crates.io/crates/denise) | Core types, the surface and painting traits, damage tracking, theming | `no_std + alloc` |
 | [`denise-render`](https://crates.io/crates/denise-render) | Software rasteriser and the built-in font | `no_std + alloc` |
+| [`denise-wgpu`](https://crates.io/crates/denise-wgpu) | The same painting trait on wgpu, for the desktop | `std` |
 | [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout, word wrapping | `no_std + alloc` |
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
 | [`denise-image`](https://crates.io/crates/denise-image) | PNG/JPEG/GIF/BMP decoding into premultiplied pixels | `std` |
