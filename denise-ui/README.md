@@ -286,6 +286,7 @@ place in the layout.
 | Feature | Default | What it does |
 |---|:---:|---|
 | `std` | ✅ | Off gives `no_std + alloc` |
+| `raster` | ✅ | `Ui::paint` and `Ui::render`, drawing into a `Frame` with `denise-render`. Off drops the rasteriser from the tree and leaves `Ui::paint_with`, which takes a `Pen` over any painter |
 | `truetype` | | Real TrueType fonts, via `denise-text` |
 | `shaping` | | Ligatures, bidi and font fallback, via `denise-text` |
 

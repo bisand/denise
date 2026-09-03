@@ -944,11 +944,30 @@ narrowed clip needs a `ClipToken`, whose field is private: the only way to widen
 a clip is to have narrowed it, so a child still cannot escape the region its
 parent gave it.
 
+The vocabulary itself lives in `denise`, not in the rasteriser: a premultiplied
+word is arithmetic, a mask is a borrowed buffer, an icon is a table of vertices,
+and a binary turn is geometry. `denise-render` implements the trait and is
+otherwise only a renderer. So `denise-ui` depends on it through one optional
+feature rather than as a fact of life.
+
+`raster` is that feature, and it is on by default. It carries `Ui::paint`, which
+takes a `Frame` and rasterises into it, and `Ui::render`, which acquires one from
+a `Surface` first. Underneath both is `Ui::paint_with`, which takes a `Pen` and a
+buffer age and knows nothing about how the pixels get made. Turning the feature
+off leaves that one and drops `denise-render` out of the tree entirely.
+
+The split falls where it does because of the scroll optimisation. A viewport that
+scrolls moves the rows it can keep with a `copy_within` on the frame's own words,
+and no painter operation expresses an overlapping self-to-self copy — nor should
+one, since the target might be a texture. `Ui::paint` has the frame and does it;
+`Ui::paint_with` does not and repaints the viewport instead. That is the honest
+cost, and it is smallest exactly where it is paid: on anything that composites,
+shifting rows was never the expensive part.
+
 What this is *not* is a GPU backend. Nothing here renders on a GPU on any
 platform; on macOS, Windows and Wayland the compositor uploads a CPU-rendered
 buffer as a texture, which it always did. The seam only means such a backend
-would be an additive crate rather than a rewrite — and `Surface` handing out a
-`Frame`, which is `&mut [u32]`, is the half that would still have to change.
+would be an additive crate rather than a rewrite.
 
 ### Numbers
 

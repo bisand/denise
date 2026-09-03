@@ -99,6 +99,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --no-default-features
+      # `denise-ui`'s rasteriser is an optional dependency, so the line above now
+      # also covers the build that has no `denise-render` in it at all. This one
+      # keeps `Ui::paint` under test without `std`, which is the combination a
+      # kiosk actually ships.
+      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --no-default-features --features denise-ui/raster
 
   advisories:
     name: the dependency tree is allowed

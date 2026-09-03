@@ -5,10 +5,12 @@ use alloc::vec;
 use alloc::vec::{Drain, Vec};
 
 use denise::{
-    Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, MAX_DAMAGE_RECTS,
-    MAX_TRACKED_FRAMES, Modifiers, Point, Rect, Role, Size, Surface, SurfaceError, Theme,
+    BufferAge, Color, DamageTracker, ElementState, InputEvent, KeyCode, MAX_DAMAGE_RECTS,
+    MAX_TRACKED_FRAMES, Modifiers, Pen, Point, Rect, Role, Size, Theme,
 };
-use denise::Pen;
+#[cfg(feature = "raster")]
+use denise::{Frame, Surface, SurfaceError};
+#[cfg(feature = "raster")]
 use denise_render::Canvas;
 use denise_text::{FontId, GlyphSource, TextEngine};
 use slotmap::SlotMap;
@@ -2202,6 +2204,7 @@ impl<M: 'static> Ui<M> {
     ///   ghost where it used to be;
     /// - the damage is anything but that viewport, so the strip would not be
     ///   the whole of what needs drawing.
+    #[cfg(feature = "raster")]
     fn scroll_blit(&mut self, frame: &mut Frame<'_>) -> Option<Rect> {
         let frames = match frame.age() {
             denise::BufferAge::Frames(n) if (n as usize) <= MAX_TRACKED_FRAMES => n as usize,
@@ -2284,11 +2287,32 @@ impl<M: 'static> Ui<M> {
         }
     }
 
-    /// Draws every damaged region of the scene stack into `frame`.
+    /// Draws every damaged region of the scene stack through `canvas`.
     ///
     /// The pipeline, in order: clear, base scene, each further scene over its
     /// backdrop, cursor sprite. All of it inside the damage clip, so an untouched
     /// panel costs nothing and a moved cursor costs two sprite-sized rectangles.
+    ///
+    /// `age` is the buffer age the pen's target was acquired with, which decides
+    /// how far back the damage has to reach. This is the entry point that knows
+    /// nothing about how the pixels are produced; [`Ui::paint`] is the one that
+    /// takes a [`Frame`] and rasterises into it with `denise-render`.
+    ///
+    /// The scroll optimisation is not applied here. Moving rows within the target
+    /// needs the target's own words, which a [`Painter`](denise::Painter) does not
+    /// expose — so a scrolled viewport is repainted rather than shifted. On a CPU
+    /// buffer that is what [`Ui::paint`] avoids; on anything that composites, the
+    /// shift was never the expensive part.
+    pub fn paint_with(&mut self, canvas: &mut Pen<'_>, age: BufferAge) {
+        self.ensure_order();
+        self.paint_regions(canvas, age, None);
+    }
+
+    /// Draws every damaged region of the scene stack into `frame`.
+    ///
+    /// [`Ui::paint_with`] with a [`Canvas`] over `frame`, plus the scroll
+    /// optimisation that needs the frame's own words.
+    #[cfg(feature = "raster")]
     pub fn paint(&mut self, frame: &mut Frame<'_>) {
         self.ensure_order();
 
@@ -2297,10 +2321,17 @@ impl<M: 'static> Ui<M> {
         // as damage is untouched: the screen still needs the whole viewport,
         // because the rows moved in this buffer and not in the one on the panel.
         let blitted = self.scroll_blit(frame);
+        let age = frame.age();
 
+        let mut raster = Canvas::new(frame);
+        let mut canvas = Pen::new(&mut raster);
+        self.paint_regions(&mut canvas, age, blitted);
+    }
+
+    fn paint_regions(&mut self, canvas: &mut Pen<'_>, age: BufferAge, blitted: Option<Rect>) {
         let mut regions = [Rect::ZERO; MAX_DAMAGE_RECTS];
         let count = {
-            let resolved = self.damage.resolve(frame.age());
+            let resolved = self.damage.resolve(age);
             regions[..resolved.len()].copy_from_slice(resolved);
             resolved.len()
         };
@@ -2313,8 +2344,6 @@ impl<M: 'static> Ui<M> {
         };
 
         let base = self.theme.color(Role::Base100);
-        let mut raster = Canvas::new(frame);
-        let mut canvas = Pen::new(&mut raster);
 
         for region in &regions[..count] {
             let mut region_canvas = canvas.with_clip(*region);
@@ -2371,6 +2400,11 @@ impl<M: 'static> Ui<M> {
 
     /// Acquires, paints and presents in one call. Returns `false` when nothing was
     /// dirty and no frame was drawn.
+    ///
+    /// A [`Surface`] hands out a [`Frame`] of words, so this is the rasterising
+    /// path by construction; without the `raster` feature, drive
+    /// [`Ui::paint_with`] from your own loop instead.
+    #[cfg(feature = "raster")]
     pub fn render(&mut self, surface: &mut impl Surface) -> Result<bool, SurfaceError> {
         if !self.needs_paint() {
             return Ok(false);
