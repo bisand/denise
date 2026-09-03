@@ -76,17 +76,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // async flips tear visibly enough to read as flicker. See the header for
     // what asking for the other one is worth.
     let mut vsync = true;
+    let mut gpu = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--font" => font = args.next(),
             "--present" => {
-                vsync = match args.next().as_deref() {
-                    Some("vsync") => true,
-                    Some("immediate") => false,
+                match args.next().as_deref() {
+                    Some("vsync") => vsync = true,
+                    Some("immediate") => vsync = false,
+                    // Through `denise-wgpu`, on a desktop, with the `gpu` feature.
+                    Some("gpu") => gpu = true,
                     other => {
-                        eprintln!("--present takes vsync or immediate, not {other:?}");
+                        eprintln!("--present takes vsync, immediate or gpu, not {other:?}");
                         return Ok(());
                     }
                 }
@@ -156,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return write_snapshot(&mut app, size, &out).map_err(Into::into);
     }
-    backend::run(font, size, seconds, motion, vsync, keyboard)
+    backend::run(font, size, seconds, motion, vsync, gpu, keyboard)
 }
 
 /// Times `Ui::paint` alone, on a scrolled frame, with no display attached.
@@ -320,8 +323,8 @@ mod window_backend {
     use std::time::Duration;
 
     use super::{App, Font};
-    use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect};
-    use denise_winit::{DeniseApp, WindowConfig, run_with};
+    use denise::{BufferAge, DamageTracker, ElementState, Frame, InputEvent, KeyCode, Pen, Rect};
+    use denise_winit::{DeniseApp, Present, WindowConfig, run_with};
 
     use super::Message;
 
@@ -333,6 +336,7 @@ mod window_backend {
         // A window does not choose: the compositor owns the flip, and softbuffer
         // has nowhere to put the preference even if it did.
         _vsync: bool,
+        gpu: bool,
         keyboard: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // `run_with`, not `run`: the tree is built after the window exists, which
@@ -344,6 +348,7 @@ mod window_backend {
             WindowConfig {
                 title: "Denise — gallery".into(),
                 size,
+                present: if gpu { Present::Gpu } else { Present::Software },
                 ..WindowConfig::default()
             },
             move |surface, scale| {
@@ -425,8 +430,16 @@ mod window_backend {
         }
 
         fn render(&mut self, frame: &mut Frame<'_>, _damage: &[Rect]) {
+            // Kept beside `paint` for the scroll optimisation, which needs the
+            // frame's own words: the software path takes this, the GPU the other.
             self.app.ui.paint(frame);
             self.app.ui.presented();
+        }
+
+        fn paint(&mut self, pen: &mut Pen<'_>, age: BufferAge, _damage: &[Rect]) -> bool {
+            self.app.ui.paint_with(pen, age);
+            self.app.ui.presented();
+            true
         }
 
         fn exit_requested(&self) -> bool {
@@ -539,6 +552,8 @@ mod kiosk_backend {
         seconds: u64,
         motion: denise_ui::Motion,
         vsync: bool,
+        // A framebuffer has no GPU path; the flag is the desktop's.
+        _gpu: bool,
         keyboard: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // A display's size is the one it has; `--size` is a window thing.

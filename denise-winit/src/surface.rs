@@ -1,7 +1,7 @@
 //! A [`denise::Surface`] over a winit window, presented with softbuffer.
 
 use std::num::NonZeroU32;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use denise::{
     BufferAge, DamageTracker, Frame, InputEvent, InputSource, MAX_DAMAGE_RECTS, PixelFormat, Rect,
@@ -23,8 +23,8 @@ use crate::Error;
 /// That extra blit is a development-backend cost and nothing else. On DRM and fbdev
 /// the buffer the application draws into *is* the scanout buffer.
 pub struct WinitSurface {
-    window: Rc<Window>,
-    softbuffer: softbuffer::Surface<Rc<Window>, Rc<Window>>,
+    window: Arc<Window>,
+    softbuffer: softbuffer::Surface<Arc<Window>, Arc<Window>>,
     /// Persistent CPU-side surface. Tightly packed, so stride == width.
     shadow: Vec<u32>,
     size: Size,
@@ -40,7 +40,7 @@ pub struct WinitSurface {
 
 impl WinitSurface {
     /// Binds a surface to an existing window.
-    pub fn new(window: Rc<Window>) -> Result<Self, Error> {
+    pub fn new(window: Arc<Window>) -> Result<Self, Error> {
         let context = softbuffer::Context::new(window.clone())?;
         let softbuffer = softbuffer::Surface::new(&context, window.clone())?;
 
@@ -64,7 +64,7 @@ impl WinitSurface {
     }
 
     /// The window this surface draws to.
-    pub fn window(&self) -> &Rc<Window> {
+    pub fn window(&self) -> &Arc<Window> {
         &self.window
     }
 

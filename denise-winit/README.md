@@ -181,8 +181,63 @@ the minimum at which "the trait describes the problem" stops being an assertion.
 
 Runs on Linux, macOS and Windows. Windowing and input come from **winit**
 everywhere; presentation comes from **softbuffer**, except on macOS where it
-comes from [`denise-macos`] for the reasons above. They are the only
+comes from [`denise-macos`] for the reasons above — or, behind the `gpu`
+feature, from `denise-wgpu` on any of them. They are the only
 dependencies in the whole workspace that are there purely for convenience.
+
+## On the GPU
+
+Behind the `gpu` feature, a window can present through
+[`denise-wgpu`](https://crates.io/crates/denise-wgpu) instead of a buffer of
+words. Nothing about the window, the input or the scheduling changes; only what
+draws. Ask for it with `Present::Gpu`, and draw through `paint` instead of
+`render`:
+
+```rust,no_run
+use denise::{BufferAge, DamageTracker, InputEvent, Pen, Rect, theme};
+use denise_ui::Ui;
+use denise_winit::{DeniseApp, Present, WindowConfig, run_with};
+
+struct Panel {
+    ui: Ui<()>,
+}
+
+impl DeniseApp for Panel {
+    fn update(&mut self, events: &[InputEvent], _damage: &mut DamageTracker) {
+        self.ui.handle(events);
+    }
+
+    // The painter-agnostic half. On the GPU `age` is always `Undefined`; on
+    // the software path `render` is provided and calls this with the frame's.
+    fn paint(&mut self, pen: &mut Pen<'_>, age: BufferAge, _damage: &[Rect]) -> bool {
+        self.ui.paint_with(pen, age);
+        self.ui.presented();
+        true
+    }
+}
+
+# fn main() -> Result<(), denise_winit::Error> {
+run_with(
+    WindowConfig {
+        title: "On the GPU".into(),
+        present: Present::Gpu,
+        ..WindowConfig::default()
+    },
+    |size, scale| Panel {
+        ui: Ui::new(size, theme::DARK.scaled(scale)),
+    },
+)
+# }
+```
+
+Every GPU frame is a full repaint. A swapchain keeps no reliable buffer age and
+a desktop GPU redraws a window for nothing, so the damage tracker's work is not
+needed there and `BufferAge::Undefined` is what tells the application so. An
+application that implements only `render` — one that wants a `Frame` — gets
+`Error::Gpu` at window creation rather than a blank window.
+
+This is for the designer on a large display. A preview of a panel does not
+need it, and a panel never has it: the kiosk path is unchanged.
 
 ## Where this sits
 

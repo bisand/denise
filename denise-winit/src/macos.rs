@@ -18,7 +18,7 @@
 //!
 //! [`denise-macos`]: https://crates.io/crates/denise-macos
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use denise::{Frame, InputEvent, InputSource, PixelFormat, Rect, Size, Surface, SurfaceError};
 use denise_macos::ViewSurface;
@@ -35,7 +35,7 @@ use crate::Error;
 
 /// A [`denise::Surface`] over a winit window's `CALayer`.
 pub struct MacSurface {
-    window: Rc<Window>,
+    window: Arc<Window>,
     layer: Retained<CALayer>,
     surface: ViewSurface,
     events: Vec<InputEvent>,
@@ -45,7 +45,7 @@ pub struct MacSurface {
 
 impl MacSurface {
     /// Makes the window's view layer-backed and binds a surface to its layer.
-    pub fn new(window: Rc<Window>) -> Result<Self, Error> {
+    pub fn new(window: Arc<Window>) -> Result<Self, Error> {
         let size = window.inner_size();
         let size = Size::new(size.width, size.height);
         let scale = window.scale_factor() as f32;
@@ -65,7 +65,7 @@ impl MacSurface {
     }
 
     /// The window this surface draws to.
-    pub fn window(&self) -> &Rc<Window> {
+    pub fn window(&self) -> &Arc<Window> {
         &self.window
     }
 

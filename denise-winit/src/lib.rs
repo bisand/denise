@@ -4,6 +4,12 @@
 //! without a Raspberry Pi on the desk. It is not a deployment target: shipping
 //! Denise on a desktop means shipping a compositor you did not need.
 //!
+//! Pixels come from the software rasteriser into a buffer the compositor
+//! uploads — or, behind the `gpu` feature and [`Present::Gpu`], from
+//! `denise-wgpu` into a swapchain. The second is for the designer on a large
+//! display; an application chooses it per window and draws through
+//! [`DeniseApp::paint`], which is the same call on either path.
+//!
 //! ```no_run
 //! use denise::{Color, DamageTracker, Frame, InputEvent, Rect};
 //! use denise_render::Canvas;
@@ -25,6 +31,8 @@
 //! run(WindowConfig::default(), Hello).unwrap();
 //! ```
 
+#[cfg(feature = "gpu")]
+mod gpu;
 mod keymap;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -35,11 +43,13 @@ mod surface;
 
 use std::time::Duration;
 
-use denise::{DamageTracker, Frame, InputEvent, Rect, Size};
+use denise::{BufferAge, DamageTracker, Frame, InputEvent, Pen, Rect, Size};
 use winit::event_loop::EventLoop;
 
 use runner::Runner;
 
+#[cfg(feature = "gpu")]
+pub use gpu::GpuSurface;
 #[cfg(target_os = "macos")]
 pub use macos::MacSurface;
 #[cfg(not(target_os = "macos"))]
@@ -84,6 +94,27 @@ pub enum Error {
     /// The platform's presentation path could not be set up.
     #[error("present: {0}")]
     Present(String),
+
+    /// The GPU path was asked for and could not be taken: no adapter, a device
+    /// that would not open, or a build without the `gpu` feature.
+    #[error("gpu: {0}")]
+    Gpu(String),
+}
+
+/// What draws a window's pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Present {
+    /// The software rasteriser into a buffer of words, copied to the
+    /// compositor by damage. The default, and what every kiosk does.
+    #[default]
+    Software,
+    /// `denise-wgpu` into a swapchain, every frame a full repaint.
+    ///
+    /// Needs the `gpu` feature and an application that implements
+    /// [`DeniseApp::paint`]; without either, opening the window fails with
+    /// [`Error::Gpu`] rather than silently drawing the other way. For the
+    /// designer on a large display, not for a preview of a panel.
+    Gpu,
 }
 
 /// How the preview window is created.
@@ -111,6 +142,8 @@ pub struct WindowConfig {
     /// costs close to nothing — which is the behaviour we actually care about on
     /// the target hardware.
     pub frame_interval: Duration,
+    /// What draws the pixels. See [`Present`].
+    pub present: Present,
 }
 
 impl Default for WindowConfig {
@@ -120,6 +153,7 @@ impl Default for WindowConfig {
             size: Size::new(800, 480),
             resizable: true,
             frame_interval: Duration::from_nanos(1_000_000_000 / 60),
+            present: Present::Software,
         }
     }
 }
@@ -141,7 +175,37 @@ pub trait DeniseApp {
     /// `damage` is the region that must be repainted for this particular buffer,
     /// already widened for its age and clipped to the surface. Drawing outside it
     /// is wasted work; drawing less than it leaves stale pixels.
-    fn render(&mut self, frame: &mut Frame<'_>, damage: &[Rect]);
+    fn render(&mut self, frame: &mut Frame<'_>, damage: &[Rect]) {
+        let age = frame.age();
+        let mut canvas = denise_render::Canvas::new(frame);
+        let drawn = self.paint(&mut canvas.pen(), age, damage);
+        assert!(
+            drawn,
+            "a DeniseApp must implement `render` or `paint`; this one implements neither"
+        );
+    }
+
+    /// Draws every region in `damage` through `pen`, whatever is behind it.
+    ///
+    /// The painter-agnostic half of [`render`](DeniseApp::render): the same
+    /// call reaches a `Frame` through the rasteriser and a swapchain through
+    /// `denise-wgpu`. `age` is what the target remembers of previous frames —
+    /// [`BufferAge::Undefined`] on the GPU, where every frame starts blank — and
+    /// a `Ui` wants it for [`paint_with`](https://docs.rs/denise-ui).
+    ///
+    /// Return `true` if this application draws this way. The default returns
+    /// `false`, which means "frames only": the software path keeps calling
+    /// `render`, and the GPU path refuses the window with [`Error::Gpu`]
+    /// instead of showing nothing.
+    ///
+    /// Implement this alone and `render` is provided: a `Canvas` over the frame,
+    /// then this. Implement both when the frame path wants something a pen
+    /// cannot offer, which for a `Ui` is the scroll optimisation `Ui::paint`
+    /// does with the frame's own words.
+    fn paint(&mut self, pen: &mut Pen<'_>, age: BufferAge, damage: &[Rect]) -> bool {
+        let _ = (pen, age, damage);
+        false
+    }
 
     /// Return `true` to quit after the current frame.
     fn exit_requested(&self) -> bool {

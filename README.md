@@ -246,7 +246,7 @@ megapixel.
 |---|---|---|
 | Bare Linux, DRM/KMS | `denise-drm` | ✅ Pi 3 A+ at 1920×1080, async page flips, hardware cursor plane, console restored on exit |
 | Bare Linux, fbdev | `denise-fbdev` | ✅ fallback when there is no `/dev/dri` |
-| Desktop: macOS, Windows, Linux | `denise-winit` | ✅ development and preview |
+| Desktop: macOS, Windows, Linux | `denise-winit` | ✅ development and preview; `Present::Gpu` behind the `gpu` feature |
 | Desktop, on the GPU | `denise-wgpu` | 🚧 a `Painter` on wgpu, for the designer and large windows; parity-tested against the rasteriser |
 | Embedded in a macOS app | `denise-macos` | ✅ `NSView` over a CoreGraphics bitmap context |
 | Embedded in a Windows app | `denise-win32` | ✅ child `HWND` over a DIB section |
