@@ -18,6 +18,7 @@ members = [
     "denise-text",
     "denise-ui",
     "denise-video",
+    "denise-wgpu",
     "denise-win32",
     "denise-winit",
     "examples/arranged",
@@ -73,6 +74,7 @@ denise-ui = { version = "0.19.0", path = "denise-ui", default-features = false }
 denise-video = { version = "0.19.0", path = "denise-video" }
 denise-win32 = { version = "0.19.0", path = "denise-win32" }
 denise-winit = { version = "0.19.0", path = "denise-winit" }
+denise-wgpu = { version = "0.19.0", path = "denise-wgpu" }
 
 # The form file is KDL: a node tree with properties, which is what a form is,
 # and a parser that hands back a document rather than a value — see docs/forms.md.
@@ -104,6 +106,8 @@ objc2-quartz-core = { version = "0.3", default-features = false, features = ["st
 windows = "0.62"
 windows-core = "0.62"
 winit = "0.30"
+wgpu = "30"
+pollster = "1.0"
 softbuffer = "0.4"
 
 [profile.release]
