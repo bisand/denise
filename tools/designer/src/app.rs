@@ -1766,7 +1766,7 @@ impl Designer {
     /// Every row here comes from a descriptor — the widget's own for what the
     /// widget holds, and [`denise_forms::NODE_PROPERTIES`] for what the tree
     /// holds. This file names no widget and no property, which is what keeps a
-    /// twenty-sixth widget from needing a line of it.
+    /// twenty-seventh widget from needing a line of it.
     fn refresh_inspector(&mut self) {
         // Rebuilt rather than reconciled: a selection change replaces every row,
         // and a row holds no state worth carrying across one.
@@ -10354,7 +10354,7 @@ mod tests {
         let designer = designer_on("forms/hello.dform");
         assert_eq!(designer.palette.len(), denise_ui::widgets::all().len());
         // Named by the catalogue rather than by this file, which is the point:
-        // a twenty-sixth widget appears here without the designer changing.
+        // a twenty-seventh widget appears here without the designer changing.
         assert!(designer.palette.contains(&"button"));
         assert!(designer.palette.contains(&"radial-progress"));
     }

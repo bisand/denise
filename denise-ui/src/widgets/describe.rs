@@ -676,7 +676,7 @@ impl Value {
 ///
 /// [`Describe::apply`] returns this and [`Describe::set`] turns it into a
 /// [`PropertyError`] that names the widget and the property. The split exists so
-/// that twenty-six `apply` implementations do not each repeat the context they
+/// that twenty-seven `apply` implementations do not each repeat the context they
 /// all share.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mismatch {
@@ -940,7 +940,7 @@ impl Group {
 
 /// Every widget that ships with this crate.
 ///
-/// A palette lists these rather than naming widgets itself, so the twenty-sixth
+/// A palette lists these rather than naming widgets itself, so the twenty-seventh
 /// widget appears in the designer without the designer changing. A test asserts
 /// that this and [`widgets`](super) hold the same set, so joining it is not
 /// something a new widget can be merged without.
@@ -964,6 +964,7 @@ static ALL: &[WidgetInfo] = &[
     WidgetInfo::of::<super::Image>(),
     WidgetInfo::of::<super::Label>(),
     WidgetInfo::of::<super::List<crate::Void>>(),
+    WidgetInfo::of::<super::MenuBar<crate::Void>>(),
     WidgetInfo::of::<super::Panel>(),
     WidgetInfo::of::<super::Progress>(),
     WidgetInfo::of::<super::RadialProgress>(),
