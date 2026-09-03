@@ -72,7 +72,7 @@ pub use input::{
 };
 pub use paint::Paint;
 pub use painter::{ClipToken, Clipped, Painter, PainterExt, Pen};
-pub use pixels::{AtlasPage, Mask, PixelView};
+pub use pixels::{AtlasPage, ImageRef, Mask, PixelView};
 pub use surface::{BufferAge, Frame, PixelFormat, Surface, SurfaceError, required_words};
 pub use theme::{ColorScheme, Metrics, Radius, Role, Theme};
 

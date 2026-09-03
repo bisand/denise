@@ -981,6 +981,13 @@ per glyph from then on — a frame of familiar text uploads nothing. The page is
 the unit rather than the glyph because the atlas already is one: a fixed buffer
 that is reset wholesale, so its version is one counter and not a free list.
 
+Pictures cross it the same way, as `blit_image`: an `ImageRef` with an id and
+a version, the version moving when the pixels are replaced and never otherwise.
+The `Image` widget owns the identity — every picture in the widget set is one —
+and a clone of it is a new image rather than the same one twice, so replacing
+one clone's pixels cannot stale a texture cached for the other. The raw `blit`
+family stays for pixels that genuinely differ every frame, and pays per call.
+
 `denise-winit` presents through it behind a `gpu` feature: a window asks for
 `Present::Gpu` and draws through `DeniseApp::paint`, the painter-agnostic half of
 `render`, which is provided in terms of it on the software path. Every GPU frame

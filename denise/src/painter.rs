@@ -17,7 +17,7 @@ use crate::Color;
 use crate::geom::{Point, Rect, Size};
 use crate::icon::Icon;
 use crate::paint::Paint;
-use crate::pixels::{AtlasPage, Mask, PixelView};
+use crate::pixels::{AtlasPage, ImageRef, Mask, PixelView};
 use crate::surface::PixelFormat;
 
 /// Proof that a clip was narrowed, and the only way to widen one back.
@@ -144,6 +144,24 @@ pub trait Painter {
     /// Copies a premultiplied source, scaled to `dest` and masked to a rounded
     /// `shape`.
     fn blit_rounded(&mut self, src: &PixelView<'_>, dest: Rect, shape: Rect, radius: i32);
+
+    /// Draws an image, scaled to `dest`.
+    ///
+    /// Provided as [`blit_scaled`](Painter::blit_scaled) of the pixels, which
+    /// is all the software rasteriser wants. A backend that keeps textures
+    /// overrides it to upload the image once per
+    /// [`version`](ImageRef::version) and draw a quad from then on.
+    fn blit_image(&mut self, src: &ImageRef<'_>, dest: Rect) {
+        self.blit_scaled(&src.view, dest);
+    }
+
+    /// Draws an image, scaled to `dest` and masked to a rounded `shape`.
+    ///
+    /// The rounded counterpart of [`blit_image`](Painter::blit_image), provided
+    /// as [`blit_rounded`](Painter::blit_rounded) of the pixels.
+    fn blit_image_rounded(&mut self, src: &ImageRef<'_>, dest: Rect, shape: Rect, radius: i32) {
+        self.blit_rounded(&src.view, dest, shape, radius);
+    }
 
     // ---- derived ----------------------------------------------------------
     // Written in terms of the primitives above, so a new backend need not
@@ -486,6 +504,18 @@ impl<'a> Pen<'a> {
     #[inline]
     pub fn blit_rounded(&mut self, src: &PixelView<'_>, dest: Rect, shape: Rect, radius: i32) {
         self.painter.blit_rounded(src, dest, shape, radius);
+    }
+
+    /// Draws an image, scaled to `dest`.
+    #[inline]
+    pub fn blit_image(&mut self, src: &ImageRef<'_>, dest: Rect) {
+        self.painter.blit_image(src, dest);
+    }
+
+    /// Draws an image, scaled to `dest` and masked to a rounded `shape`.
+    #[inline]
+    pub fn blit_image_rounded(&mut self, src: &ImageRef<'_>, dest: Rect, shape: Rect, radius: i32) {
+        self.painter.blit_image_rounded(src, dest, shape, radius);
     }
 }
 

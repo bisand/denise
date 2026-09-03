@@ -53,12 +53,19 @@ the text engine packs a glyph it has not seen — and every glyph after that is
 six vertices sampling it. A frame of familiar text uploads nothing, and
 `Gpu::page_uploads` is the number that says so.
 
+## Images
+
+Pictures arrive through `Painter::blit_image` with an id and a version, the
+same way a glyph page does, and are cached the same way: one upload when the
+pixels change, a quad every time after. `Gpu::image_uploads` counts them. A
+photo in a carousel costs what a rectangle costs.
+
 ## What it does not do yet
 
-Every `blit` still uploads its source as a fresh texture. Correct, and the next
-thing a profile will point at: an image handle is the remaining piece, and like
-the glyph page it is an addition to the painting trait rather than a change to
-this crate alone.
+The raw `blit` family — a `PixelView` with no identity — still uploads per
+call. Nothing in the widget set uses it any more; it is there for a caller
+whose pixels genuinely are different every frame, which is what an upload per
+call is the honest price of.
 
 The output is not byte-identical to the software rasteriser and is not meant to
 be — the two anti-alias differently. The parity tests compare within a
