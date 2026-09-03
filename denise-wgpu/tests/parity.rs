@@ -410,3 +410,50 @@ fn paint_is_premultiplied_on_the_way_in() {
     let p = Paint::new(Color::rgba(200, 100, 0, 128));
     assert!(p.premultiplied() & 0x00FF_0000 < 0x0065_0000);
 }
+
+// ------------------------------------------------------------ the atlas page
+
+/// The whole point of `blit_glyph`: a text engine's page is uploaded when it
+/// changes and never otherwise, so a frame of familiar text uploads nothing.
+#[test]
+fn an_atlas_page_is_uploaded_once_per_version() {
+    let gpu = match Gpu::headless() {
+        Ok(gpu) => gpu,
+        Err(err) => {
+            eprintln!("skipping: {err}");
+            return;
+        }
+    };
+    let mut text = TextEngine::new();
+    let style = TextStyle::built_in(16);
+
+    let frame = |text: &mut TextEngine, s: &str| {
+        let mut painter = gpu.painter(SIZE);
+        {
+            let mut pen = Pen::new(&mut painter);
+            text.draw(&mut pen, style, Point::new(4, 4), s, Color::WHITE);
+        }
+        painter.finish_to_pixels().expect("readback");
+    };
+
+    frame(&mut text, "denise");
+    assert_eq!(gpu.page_uploads(), 1, "the first frame uploads the page");
+
+    frame(&mut text, "denise");
+    frame(&mut text, "sindee");
+    assert_eq!(
+        gpu.page_uploads(),
+        1,
+        "glyphs already on the page cost no upload, in any order"
+    );
+
+    frame(&mut text, "denise + x");
+    assert_eq!(
+        gpu.page_uploads(),
+        2,
+        "a glyph not seen before repacks the page once"
+    );
+
+    frame(&mut text, "x + denise");
+    assert_eq!(gpu.page_uploads(), 2, "and then it, too, is free");
+}

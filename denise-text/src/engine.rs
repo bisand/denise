@@ -426,12 +426,15 @@ impl TextEngine {
             let Some(placed) = self.placed(style, glyph.id) else {
                 continue;
             };
-            if let Some(mask) = self.atlas.mask(&placed) {
+            if !placed.rect.is_empty() {
                 let at = Point::new(
                     origin.x + glyph.x + placed.metrics.bearing_x,
                     origin.y + glyph.y - placed.metrics.bearing_y,
                 );
-                canvas.blit_mask(at, &mask, color);
+                // The page with its identity, not a mask cut from it: a painter
+                // that keeps textures uploads the page once and draws
+                // rectangles of it; the rasteriser cuts the rectangle itself.
+                canvas.blit_glyph(at, &self.atlas.page(), placed.rect, color);
             }
         }
         width

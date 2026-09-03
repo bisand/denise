@@ -376,3 +376,74 @@ fn layout_positions_match_the_advances() {
     assert!(pens[1].1 > pens[0].1 && pens[2].1 > pens[1].1);
     assert!(total > pens[2].1, "the last glyph still advances the pen");
 }
+
+// ------------------------------------------------------------- the page
+
+/// The page's version follows its bytes and nothing else: a hit leaves it
+/// alone, a new glyph moves it, a clear moves it. A painter that caches the
+/// page by version can therefore trust a match.
+#[test]
+fn the_page_version_moves_only_when_the_bytes_do() {
+    let mut atlas = GlyphAtlas::new(Size::new(128, 128));
+    let mut source = BitmapSource::new();
+    let v0 = atlas.version();
+
+    let a = atlas
+        .get_or_insert(GlyphKey::from_char(FontId(0), 16, 'a'), &mut source)
+        .expect("a");
+    let v1 = atlas.version();
+    assert_ne!(v0, v1, "packing a glyph changes the page");
+
+    let again = atlas
+        .get_or_insert(GlyphKey::from_char(FontId(0), 16, 'a'), &mut source)
+        .expect("a again");
+    assert_eq!(again, a);
+    assert_eq!(atlas.version(), v1, "a hit leaves the page alone");
+
+    // A blank glyph packs nothing and so changes nothing.
+    atlas
+        .get_or_insert(GlyphKey::from_char(FontId(0), 16, ' '), &mut source)
+        .expect("space");
+    assert_eq!(atlas.version(), v1, "a blank glyph writes no bytes");
+
+    atlas
+        .get_or_insert(GlyphKey::from_char(FontId(0), 16, 'b'), &mut source)
+        .expect("b");
+    let v2 = atlas.version();
+    assert_ne!(v1, v2);
+
+    atlas.clear();
+    assert_ne!(atlas.version(), v2, "a clear changes the page");
+}
+
+/// A glyph cut from the page is the glyph the atlas would have handed out.
+#[test]
+fn the_page_is_the_masks_it_was_cut_into() {
+    let mut atlas = GlyphAtlas::new(Size::new(128, 128));
+    let mut source = BitmapSource::new();
+    for ch in "Denise".chars() {
+        let placed = atlas
+            .get_or_insert(GlyphKey::from_char(FontId(0), 16, ch), &mut source)
+            .expect("glyph");
+        let direct = atlas.mask(&placed).expect("mask");
+        let page = atlas.page();
+        let cut = page.mask.sub(placed.rect).expect("sub");
+        assert_eq!(cut.width(), direct.width());
+        assert_eq!(cut.height(), direct.height());
+        for y in 0..direct.height() {
+            assert_eq!(cut.row(y), direct.row(y), "{ch:?} row {y}");
+        }
+        assert_eq!(page.id, atlas.id());
+        assert_eq!(page.version, atlas.version());
+    }
+}
+
+/// Two atlases are two pages, however alike: a painter keyed on the id never
+/// serves one atlas's glyphs from the other's texture.
+#[test]
+fn every_atlas_has_its_own_id() {
+    let a = GlyphAtlas::new(Size::new(32, 32));
+    let b = GlyphAtlas::new(Size::new(32, 32));
+    assert_ne!(a.id(), b.id());
+    assert_eq!(a.page().id, a.id());
+}

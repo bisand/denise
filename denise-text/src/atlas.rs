@@ -20,10 +20,14 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use denise::{Rect, Size};
-use denise_render::Mask;
+use denise::{AtlasPage, Mask, Rect, Size};
+
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::source::{FontId, GlyphId, GlyphMetrics, GlyphSource};
+
+/// Hands out atlas ids. Relaxed is enough: uniqueness is all that is asked.
+static NEXT_ATLAS: AtomicU64 = AtomicU64::new(1);
 
 /// Identifies one rasterised glyph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -93,6 +97,11 @@ struct Shelf {
 
 /// A fixed-size cache of rasterised glyphs.
 pub struct GlyphAtlas {
+    /// Unique per atlas for the life of the process, so a painter caching the
+    /// page can tell two atlases apart even at the same address.
+    id: u64,
+    /// Bumped whenever `coverage` changes: a glyph packed, a reset, a clear.
+    version: u64,
     coverage: Vec<u8>,
     size: Size,
     shelves: Vec<Shelf>,
@@ -109,6 +118,8 @@ impl GlyphAtlas {
     pub fn new(size: Size) -> Self {
         let size = Size::new(size.width.max(1), size.height.max(1));
         Self {
+            id: NEXT_ATLAS.fetch_add(1, Ordering::Relaxed),
+            version: 0,
             coverage: vec![0; size.area() as usize],
             size,
             shelves: Vec::new(),
@@ -155,6 +166,7 @@ impl GlyphAtlas {
 
     /// Empties the cache. The next lookup for every glyph will miss.
     pub fn clear(&mut self) {
+        self.version = self.version.wrapping_add(1);
         self.entries.clear();
         self.shelves.clear();
         self.used_height = 0;
@@ -211,10 +223,39 @@ impl GlyphAtlas {
             self.coverage[to..to + width as usize]
                 .copy_from_slice(&glyph.coverage[from..from + width as usize]);
         }
+        self.version = self.version.wrapping_add(1);
 
         let placed = Placed { rect, metrics };
         self.entries.insert(key, placed);
         Some(placed)
+    }
+
+    /// Unique per atlas for the life of the process.
+    #[inline]
+    pub const fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Changes whenever the page's bytes do — a glyph packed, a reset, a clear.
+    #[inline]
+    pub const fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The whole page with its identity, for a painter that would rather
+    /// upload it once than be handed a glyph at a time.
+    pub fn page(&self) -> AtlasPage<'_> {
+        AtlasPage {
+            id: self.id,
+            version: self.version,
+            mask: Mask::new(
+                &self.coverage,
+                self.size.width as i32,
+                self.size.height as i32,
+                self.size.width as usize,
+            )
+            .expect("the page is exactly its own size"),
+        }
     }
 
     /// The coverage of a placed glyph, as a mask over the atlas buffer.

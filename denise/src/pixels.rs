@@ -106,10 +106,51 @@ impl<'a> Mask<'a> {
         Rect::new(at.x, at.y, self.width, self.height)
     }
 
+    /// The stride between rows, in bytes.
+    #[inline]
+    pub const fn stride(&self) -> usize {
+        self.stride
+    }
+
+    /// The part of this mask inside `rect`, sharing its bytes.
+    ///
+    /// `None` if `rect` is empty or reaches outside the mask. This is how a
+    /// glyph is cut from an atlas page without copying it.
+    pub fn sub(&self, rect: Rect) -> Option<Mask<'a>> {
+        if rect.is_empty()
+            || rect.x < 0
+            || rect.y < 0
+            || rect.right() > self.width
+            || rect.bottom() > self.height
+        {
+            return None;
+        }
+        let offset = rect.y as usize * self.stride + rect.x as usize;
+        Mask::new(&self.data[offset..], rect.width, rect.height, self.stride)
+    }
+
     /// The coverage values of row `y`, which the caller must know is in range.
     #[inline]
     pub fn row(&self, y: i32) -> &'a [u8] {
         let base = y as usize * self.stride;
         &self.data[base..base + self.width as usize]
     }
+}
+
+/// A glyph atlas page, with the identity a painter needs to cache it.
+///
+/// A text engine keeps its glyphs on one page of coverage and hands a painter
+/// a rectangle of it per glyph. The software rasteriser composites the
+/// rectangle and is done; a GPU would rather upload the page once and draw
+/// rectangles of it forever. `id` says which page this is and `version` says
+/// whether the bytes are the ones it uploaded last time: it changes whenever a
+/// glyph is packed or the page is reset, and never otherwise.
+#[derive(Clone, Copy, Debug)]
+pub struct AtlasPage<'a> {
+    /// Unique per atlas for the life of the process.
+    pub id: u64,
+    /// Changes whenever the page's bytes do.
+    pub version: u64,
+    /// The whole page.
+    pub mask: Mask<'a>,
 }

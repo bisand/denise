@@ -45,12 +45,20 @@ a texture bound. The clip is carried per vertex and applied per fragment, so a
 frame is one pipeline and as few draws as the textures force: a widget tree
 with no images is a single draw call.
 
+## Glyphs
+
+Text arrives through `Painter::blit_glyph` as a rectangle of an atlas page with
+an id and a version. The page is uploaded once per version — that is, whenever
+the text engine packs a glyph it has not seen — and every glyph after that is
+six vertices sampling it. A frame of familiar text uploads nothing, and
+`Gpu::page_uploads` is the number that says so.
+
 ## What it does not do yet
 
-Every `blit` and `blit_mask` uploads its source as a fresh texture. Correct,
-and the first thing a profile will point at: a glyph atlas and an image handle
-are the next two pieces, and both are additions to the painting trait rather
-than changes to this crate alone.
+Every `blit` still uploads its source as a fresh texture. Correct, and the next
+thing a profile will point at: an image handle is the remaining piece, and like
+the glyph page it is an addition to the painting trait rather than a change to
+this crate alone.
 
 The output is not byte-identical to the software rasteriser and is not meant to
 be — the two anti-alias differently. The parity tests compare within a
