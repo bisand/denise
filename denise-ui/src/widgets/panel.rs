@@ -1,7 +1,7 @@
 //! A themed rectangle: the background every other widget sits on.
 
-use denise::{Radius, Role};
 use denise::Pen;
+use denise::{Radius, Role};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{

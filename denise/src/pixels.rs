@@ -113,4 +113,3 @@ impl<'a> Mask<'a> {
         &self.data[base..base + self.width as usize]
     }
 }
-

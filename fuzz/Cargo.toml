@@ -20,7 +20,7 @@ denise = { path = "../denise", features = ["std"] }
 denise-image = { path = "../denise-image" }
 denise-ffi = { path = "../denise-ffi" }
 denise-forms = { path = "../denise-forms" }
-denise-ui = { path = "../denise-ui", features = ["std"] }
+denise-ui = { path = "../denise-ui", features = ["std", "raster"] }
 
 [[bin]]
 name = "decode_image"

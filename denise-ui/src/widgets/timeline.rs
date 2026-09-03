@@ -3,8 +3,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use denise::{Point, Rect, Role, Theme};
 use denise::Pen;
+use denise::{Point, Rect, Role, Theme};
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};

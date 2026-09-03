@@ -33,6 +33,7 @@ mod app {
     use std::os::fd::BorrowedFd;
     use std::time::{Duration, Instant};
 
+    use denise::Pen;
     use denise::{
         Color, DamageTracker, ElementState, InputEvent, InputSource, KeyCode, MAX_DAMAGE_RECTS,
         Modifiers, Point, Radius, Rect, Role, Size, Surface, Theme,
@@ -40,7 +41,7 @@ mod app {
     use denise_drm::{DrmSurface, PresentMode, SurfaceConfig};
     use denise_evdev::InputBackend;
     use denise_fbdev::FbdevSurface;
-    use denise_render::{Canvas, Pen, Pen};
+    use denise_render::Canvas;
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
     const CURSOR: i32 = 28;
@@ -400,7 +401,8 @@ mod app {
             damage_px.push(damage.iter().map(Rect::area).sum::<u64>() as u32);
 
             {
-                let mut canvas = Canvas::new(&mut target);
+                let mut raster = Canvas::new(&mut target);
+                let mut canvas = raster.pen();
                 for region in damage {
                     let mut clipped = canvas.with_clip(*region);
                     scene.paint(&mut clipped);

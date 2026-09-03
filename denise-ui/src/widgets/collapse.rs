@@ -4,8 +4,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
 use denise::Pen;
+use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
 use denise_text::TextStyle;
 
 use crate::widget::{

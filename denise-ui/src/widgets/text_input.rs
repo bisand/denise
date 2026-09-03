@@ -2,8 +2,8 @@
 
 use alloc::string::String;
 
-use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
 use denise::Pen;
+use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;

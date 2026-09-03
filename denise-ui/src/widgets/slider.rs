@@ -1,7 +1,7 @@
 //! A value in a range, dragged or typed.
 
-use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
 use denise::Pen;
+use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{

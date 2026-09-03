@@ -31,10 +31,10 @@ use denise::{Point, Rect};
 
 pub use denise::TURN;
 
-use denise::angle::direction;
 use crate::blend::Paint;
 use crate::canvas::Canvas;
 use crate::rounded::{COORD_LIMIT, ONE, SUB_STEP, SUBSAMPLES, Scan, ceil_px, floor_px, to_fx};
+use denise::angle::direction;
 
 /// Sentinel for an unbounded side of a row interval. Far beyond any coordinate
 /// fixed point can carry, and far from overflowing anything it is added to.

@@ -16,5 +16,5 @@ homepage.workspace = true
 # `Ui::push_scene`, which the `panel` and `table-editor` examples show.
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-denise-ui = { workspace = true }
+denise-ui = { workspace = true, features = ["raster"] }
 denise-winit = { workspace = true }

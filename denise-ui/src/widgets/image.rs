@@ -2,8 +2,8 @@
 
 use alloc::vec::Vec;
 
-use denise::{Rect, Size};
 use denise::{Pen, PixelView};
+use denise::{Rect, Size};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{

@@ -38,7 +38,7 @@ truetype = ["denise-ui/truetype", "dep:denise-text"]
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-denise-ui = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std", "raster"] }
 
 # The document, kept rather than consumed. `serde` is off because nothing here
 # deserialises into a struct — that is the whole point, and it is what lets the
@@ -66,7 +66,7 @@ trybuild = "1"
 # Nameable from a `trybuild` fixture, which gets the dev-dependencies rather
 # than the ordinary ones.
 denise = { workspace = true, features = ["std"] }
-denise-ui = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std", "raster"] }
 
 [lints.rust]
 unsafe_code = "forbid"

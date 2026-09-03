@@ -2,8 +2,8 @@
 
 use alloc::vec::Vec;
 
-use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Size};
 use denise::Pen;
+use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Size};
 
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};

@@ -19,7 +19,7 @@ kiosk = ["dep:bare-linux", "dep:rustix"]
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-denise-ui = { workspace = true }
+denise-ui = { workspace = true, features = ["raster"] }
 denise-winit = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -24,7 +24,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-render = { workspace = true, features = ["std"] }
-denise-ui = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std", "raster"] }
 
 [lints.rust]
 missing_docs = "warn"

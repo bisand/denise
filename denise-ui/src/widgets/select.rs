@@ -3,8 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
 use denise::Pen;
+use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
 use denise_text::TextStyle;
 
 use crate::widget::{

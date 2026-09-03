@@ -2,9 +2,9 @@
 
 use alloc::string::String;
 
-use denise::{ElementState, InputEvent, KeyCode, Radius, Rect, Role};
 use denise::Pen;
 use denise::icon::Icon;
+use denise::{ElementState, InputEvent, KeyCode, Radius, Rect, Role};
 use denise_text::TextStyle;
 
 use crate::widget::{

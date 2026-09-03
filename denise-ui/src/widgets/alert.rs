@@ -2,8 +2,8 @@
 
 use alloc::string::{String, ToString};
 
-use denise::{Point, Radius, Role};
 use denise::Pen;
+use denise::{Point, Radius, Role};
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};

@@ -1,8 +1,8 @@
 //! Shared visual vocabulary, so the widgets agree with each other.
 
+use denise::Pen;
 use denise::theme::{AA_LARGE, contrast_x100, derive_content};
 use denise::{Color, Point, Rect, Role, Size, Theme};
-use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::VisualState;

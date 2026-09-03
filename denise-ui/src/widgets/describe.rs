@@ -67,8 +67,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
-use denise::{Radius, Role};
 use denise::icon::Icon;
+use denise::{Radius, Role};
 
 use super::{Align, Fit, Orientation, avatar::Presence};
 

@@ -1,7 +1,7 @@
 //! Stars, filled to a value.
 
-use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role};
 use denise::Pen;
+use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role};
 
 use crate::widget::{
     Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, VisualState, Widget,

@@ -73,9 +73,9 @@ impl Canvas<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use denise::Rect;
     use crate::testing::TestCanvas;
     use denise::Color;
+    use denise::Rect;
 
     /// A mask with a solid interior and a half-covered rim, like a real glyph.
     fn ring() -> ([u8; 36], i32, i32) {

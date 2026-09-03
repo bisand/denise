@@ -2,8 +2,8 @@
 
 use alloc::string::{String, ToString};
 
-use denise::{Point, Rect, Role};
 use denise::{Pen, TURN};
+use denise::{Point, Rect, Role};
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};

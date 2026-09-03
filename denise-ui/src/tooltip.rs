@@ -20,8 +20,8 @@
 
 use alloc::string::String;
 
-use denise::{Point, Radius, Rect, Role, Size, Theme};
 use denise::Pen;
+use denise::{Point, Radius, Rect, Role, Size, Theme};
 use denise_text::{TextEngine, TextStyle};
 
 use crate::overlay::{Side, anchored};

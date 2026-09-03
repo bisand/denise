@@ -91,7 +91,6 @@ pub fn direction(angle: i32) -> (i32, i32) {
     (sin_bam(angle), -sin_bam(angle + TURN / 4))
 }
 
-
 /// Fractional bits in the fixed-point coordinates the shape code uses.
 pub const FRAC_BITS: u32 = 8;
 
@@ -154,5 +153,4 @@ mod tests {
             previous = s;
         }
     }
-
 }

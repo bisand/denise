@@ -119,4 +119,3 @@ pub fn fx_along(origin: i32, extent: i32, grid: i16) -> i32 {
     let base = i64::from(origin.clamp(-COORD_LIMIT, COORD_LIMIT)) * i64::from(ONE);
     (base + offset).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
-

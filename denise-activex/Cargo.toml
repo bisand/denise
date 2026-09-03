@@ -25,7 +25,7 @@ crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(windows)'.dependencies]
 denise = { workspace = true, features = ["std"] }
-denise-ui = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std", "raster"] }
 denise-win32 = { workspace = true }
 # `windows-core` is named directly because that is what `#[implement]` expands
 # to: the macro emits `windows_core::` paths and needs the crate in scope. It is

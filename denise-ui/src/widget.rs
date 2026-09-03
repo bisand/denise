@@ -9,8 +9,8 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use denise::{InputEvent, Rect, Size, Theme};
 use denise::Pen;
+use denise::{InputEvent, Rect, Size, Theme};
 use denise_text::TextEngine;
 
 use crate::motion::Wake;

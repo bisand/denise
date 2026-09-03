@@ -19,8 +19,6 @@ pub(crate) const SUBSAMPLES: usize = 4;
 /// Vertical distance between sub-rows.
 pub(crate) const SUB_STEP: i32 = ONE / SUBSAMPLES as i32;
 
-
-
 #[inline]
 pub(crate) fn floor_px(v: i32) -> i32 {
     v.div_euclid(ONE)

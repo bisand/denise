@@ -1,7 +1,7 @@
 //! A track and a fill. The one widget here that is purely an output.
 
-use denise::{Rect, Role};
 use denise::Pen;
+use denise::{Rect, Role};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{

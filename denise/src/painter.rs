@@ -13,12 +13,12 @@
 //! concrete canvas is unaffected — but the trait itself takes the premultiplied
 //! form, and widget code converts at the call site.
 
+use crate::Color;
 use crate::geom::{Point, Rect, Size};
 use crate::icon::Icon;
 use crate::paint::Paint;
 use crate::pixels::{Mask, PixelView};
 use crate::surface::PixelFormat;
-use crate::Color;
 
 /// Proof that a clip was narrowed, and the only way to widen one back.
 ///
@@ -530,4 +530,3 @@ impl<P: Painter + ?Sized> core::ops::DerefMut for Clipped<'_, P> {
         self.painter
     }
 }
-

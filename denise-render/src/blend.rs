@@ -9,7 +9,6 @@ pub use denise::Paint;
 pub use denise::paint::scale_premul;
 use denise::paint::{LANES, mul_lanes};
 
-
 /// Premultiplies straight-alpha `0xAARRGGBB` words in place.
 ///
 /// This is [`Paint::new`]'s arithmetic applied to a buffer: exact at both

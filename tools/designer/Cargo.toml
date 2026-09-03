@@ -14,7 +14,7 @@ homepage.workspace = true
 [dependencies]
 denise = { workspace = true, features = ["std"] }
 denise-forms = { workspace = true }
-denise-ui = { workspace = true, features = ["std"] }
+denise-ui = { workspace = true, features = ["std", "raster"] }
 # The open-the-handler button wears a glyph drawn in the same format as the
 # palette's, and the format is this crate's.
 denise-render = { workspace = true }
