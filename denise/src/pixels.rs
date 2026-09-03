@@ -3,7 +3,7 @@
 //! Neither of these rasterises anything: a [`Mask`] is a rectangle of 8-bit
 //! coverage — how an anti-aliased glyph arrives — and a [`PixelView`] is
 //! somebody else's premultiplied pixels. Every backend is given the same two
-//! shapes, so they belong beside [`Frame`](crate::Frame) rather than inside any
+//! shapes, so they belong beside [`Frame`] rather than inside any
 //! one renderer.
 
 use crate::geom::{Point, Rect, Size};

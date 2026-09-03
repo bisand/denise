@@ -173,7 +173,7 @@ impl Canvas<'_> {
     /// `0.38` of the outer radius is the classic pentagram, and an inner radius
     /// approaching the outer one is a polygon with `2 × points` sides.
     ///
-    /// `rotation` is in the same binary turns as the arcs — see [`TURN`] — and
+    /// `rotation` is in the same binary turns as the arcs — see [`TURN`](crate::TURN) — and
     /// zero puts a tip at twelve o'clock.
     ///
     /// Vertices are computed to sub-pixel precision even though the centre is
@@ -181,7 +181,7 @@ impl Canvas<'_> {
     ///
     /// # A five-pointed star is not exactly five-fold symmetric
     ///
-    /// [`TURN`] is a power of two, so it divides exactly by two, four and eight
+    /// [`TURN`](crate::TURN) is a power of two, so it divides exactly by two, four and eight
     /// and not by five. A five-pointed star's vertex angles are therefore each
     /// rounded to the nearest unit — at most half a unit in 65536, which is
     /// under a hundredth of a pixel at any radius a screen can show, and

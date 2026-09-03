@@ -412,7 +412,7 @@ impl<M> Describe for MenuBar<M> {
 
 /// Opens `items` as a menu below title `index` of a [`MenuBar`].
 ///
-/// The popup is an ordinary one — [`Ui::push_popup_at`] — so it flips near a
+/// The popup is an ordinary one — [`push_popup_at`](crate::Ui::push_popup_at) — so it flips near a
 /// screen edge, closes on Escape or a press outside (swallowing that press),
 /// and returns focus to the bar. `message` is emitted with the row's index when
 /// a row is **chosen**, by Enter or by a tap; the arrow keys move the highlight

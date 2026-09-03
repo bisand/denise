@@ -52,7 +52,7 @@ impl Pixels {
 ///
 /// # The pixels are premultiplied `0xAARRGGBB`
 ///
-/// The same contract as [`Canvas::blit`]: colour channels already multiplied
+/// The same contract as [`Pen::blit`]: colour channels already multiplied
 /// by alpha, converted once at load time —
 /// [`denise_render::blend::premultiply`] does it in place. Fully opaque pixels
 /// are identical in both conventions, so an image with no transparency needs
