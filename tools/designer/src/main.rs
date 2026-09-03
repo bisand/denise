@@ -78,8 +78,8 @@ mod zoom;
 
 use std::time::{Duration, Instant};
 
-use denise::{DamageTracker, ElementState, Frame, InputEvent, KeyCode, Rect, Size};
-use denise_winit::{DeniseApp, WindowConfig, run_with};
+use denise::{BufferAge, DamageTracker, ElementState, Frame, InputEvent, KeyCode, Pen, Rect, Size};
+use denise_winit::{DeniseApp, Present, WindowConfig, run_with};
 
 use app::{Designer, Message};
 use document::Document;
@@ -104,6 +104,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut zoom: Option<String> = None;
     let mut hover: Option<String> = None;
     let mut clash: Option<String> = None;
+    // `--gpu`: present through `denise-wgpu`. Needs the `gpu` feature; without
+    // it the window refuses to open and says why, rather than drawing the
+    // other way in silence.
+    let mut gpu = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -119,6 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--new" => new_form = true,
             "--tab-order" => tab_order = true,
             "--font" => font = rest.next().cloned(),
+            "--gpu" => gpu = true,
             "--zoom" => zoom = rest.next().cloned(),
             "--scale" => {
                 scale = rest
@@ -252,6 +257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             title,
             size: Size::new(settings.width, settings.height),
             resizable: true,
+            present: if gpu { Present::Gpu } else { Present::Software },
             ..WindowConfig::default()
         },
         move |size, scale| {
@@ -405,8 +411,16 @@ impl DeniseApp for Main {
     }
 
     fn render(&mut self, frame: &mut Frame<'_>, _damage: &[Rect]) {
+        // Kept beside `paint`: on a frame, `Ui::paint` shifts the rows a scroll
+        // left valid instead of redrawing them, which a pen cannot do.
         self.designer.ui.paint(frame);
         self.designer.ui.presented();
+    }
+
+    fn paint(&mut self, pen: &mut Pen<'_>, age: BufferAge, _damage: &[Rect]) -> bool {
+        self.designer.ui.paint_with(pen, age);
+        self.designer.ui.presented();
+        true
     }
 
     fn next_frame_in(&self) -> Option<Duration> {
