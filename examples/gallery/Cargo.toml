@@ -19,6 +19,8 @@ homepage.workspace = true
 [features]
 default = ["desktop"]
 desktop = ["dep:denise-winit"]
+# `--present gpu`: the same window drawn through `denise-wgpu`.
+gpu = ["desktop", "denise-winit/gpu"]
 kiosk = ["dep:bare-linux", "dep:denise-evdev", "dep:rustix"]
 
 [dependencies]

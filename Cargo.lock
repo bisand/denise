@@ -1057,13 +1057,17 @@ dependencies = [
  "denise",
  "denise-macos",
  "denise-render",
+ "denise-ui",
+ "denise-wgpu",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
  "objc2-io-surface",
  "objc2-quartz-core 0.3.2",
+ "pollster 1.0.1",
  "softbuffer",
  "thiserror 2.0.20",
+ "wgpu",
  "winit",
 ]
 

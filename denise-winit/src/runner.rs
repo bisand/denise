@@ -11,7 +11,7 @@
 //! [`run_with`]: crate::run_with
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use denise::{
@@ -25,8 +25,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::ModifiersState;
 use winit::window::{Window, WindowId};
 
+#[cfg(feature = "gpu")]
+use crate::GpuSurface;
 use crate::{
-    Build, DeniseApp, Error, LINE_HEIGHT_PX, Modality, PlatformSurface, WindowConfig,
+    Build, DeniseApp, Error, LINE_HEIGHT_PX, Modality, PlatformSurface, Present, WindowConfig,
     WindowRequest, keymap, owner,
 };
 
@@ -36,9 +38,71 @@ use crate::{
 /// `cursor` especially: modifier state belongs to whichever window has keyboard
 /// focus, and a shared cursor position would hand a dialog the coordinates of a
 /// pointer that is over the window behind it.
+/// What a window draws with: the platform's CPU surface, or a swapchain.
+///
+/// Everything the runner asks of a surface besides `acquire`/`present` is the
+/// same on both, and dispatches here; the paint step is where they differ.
+enum Backend {
+    /// Both boxed: each surface carries buffers and bookkeeping of its own
+    /// size, and a window's state should not be sized for the larger one.
+    Software(Box<PlatformSurface>),
+    #[cfg(feature = "gpu")]
+    Gpu(Box<GpuSurface>),
+}
+
+impl Backend {
+    fn size(&self) -> Size {
+        match self {
+            Backend::Software(s) => s.size(),
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(s) => s.size(),
+        }
+    }
+
+    fn scale_factor(&self) -> f32 {
+        match self {
+            Backend::Software(s) => s.scale_factor(),
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(s) => s.scale_factor(),
+        }
+    }
+
+    fn window(&self) -> &Arc<Window> {
+        match self {
+            Backend::Software(s) => s.window(),
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(s) => s.window(),
+        }
+    }
+
+    fn resize(&mut self, size: Size, scale_factor: f32) {
+        match self {
+            Backend::Software(s) => s.resize(size, scale_factor),
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(s) => s.resize(size, scale_factor),
+        }
+    }
+
+    fn poll(&mut self, out: &mut Vec<InputEvent>) {
+        match self {
+            Backend::Software(s) => s.poll(out),
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(s) => s.poll(out),
+        }
+    }
+
+    fn push_event(&mut self, event: InputEvent) {
+        match self {
+            Backend::Software(s) => s.push_event(event),
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(s) => s.push_event(event),
+        }
+    }
+}
+
 struct WindowState {
-    window: Rc<Window>,
-    surface: PlatformSurface,
+    window: Arc<Window>,
+    surface: Backend,
     app: Box<dyn DeniseApp>,
     damage: DamageTracker,
     events: Vec<InputEvent>,
@@ -127,8 +191,18 @@ impl Runner {
             attrs = owner::own(attrs, &owner_state.window);
         }
 
-        let window = Rc::new(event_loop.create_window(attrs)?);
-        let surface = PlatformSurface::new(window.clone())?;
+        let window = Arc::new(event_loop.create_window(attrs)?);
+        let surface = match config.present {
+            Present::Software => Backend::Software(Box::new(PlatformSurface::new(window.clone())?)),
+            #[cfg(feature = "gpu")]
+            Present::Gpu => Backend::Gpu(Box::new(GpuSurface::new(window.clone())?)),
+            #[cfg(not(feature = "gpu"))]
+            Present::Gpu => {
+                return Err(Error::Gpu(
+                    "denise-winit was built without the `gpu` feature".into(),
+                ));
+            }
+        };
         let id = window.id();
 
         if modality != Modality::Independent
@@ -322,28 +396,61 @@ impl Runner {
             return Ok(false);
         }
 
-        let mut frame = match state.surface.acquire() {
-            Ok(frame) => frame,
-            Err(denise::SurfaceError::NotReady) => return Ok(false),
-            Err(err) => return Err(err.into()),
-        };
+        let WindowState {
+            surface,
+            app,
+            damage,
+            ..
+        } = state;
+        match surface {
+            Backend::Software(surface) => {
+                let mut frame = match surface.acquire() {
+                    Ok(frame) => frame,
+                    Err(denise::SurfaceError::NotReady) => return Ok(false),
+                    Err(err) => return Err(err.into()),
+                };
 
-        // Widen this frame's damage to cover everything the acquired buffer missed,
-        // then copy it out so the tracker can be advanced afterwards.
-        let mut resolved = [Rect::ZERO; MAX_DAMAGE_RECTS];
-        let count = {
-            let src = state.damage.resolve(frame.age());
-            resolved[..src.len()].copy_from_slice(src);
-            src.len()
-        };
-        let region = &resolved[..count];
+                // Widen this frame's damage to cover everything the acquired buffer missed,
+                // then copy it out so the tracker can be advanced afterwards.
+                let mut resolved = [Rect::ZERO; MAX_DAMAGE_RECTS];
+                let count = {
+                    let src = damage.resolve(frame.age());
+                    resolved[..src.len()].copy_from_slice(src);
+                    src.len()
+                };
+                let region = &resolved[..count];
 
-        state.app.render(&mut frame, region);
-        drop(frame);
+                app.render(&mut frame, region);
+                drop(frame);
 
-        state.surface.present(region)?;
-        state.damage.end_frame();
-        Ok(true)
+                surface.present(region)?;
+                damage.end_frame();
+                Ok(true)
+            }
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(surface) => {
+                // A swapchain remembers nothing, so the damage is the window,
+                // whatever the tracker accumulated; the tracker still advances
+                // so the app's `update` bookkeeping stays honest.
+                let whole = [Rect::from_size(surface.size())];
+                let age = surface.age();
+                let mut supported = true;
+                let drawn = surface.paint(|pen| {
+                    supported = app.paint(pen, age, &whole);
+                })?;
+                if !supported {
+                    return Err(Error::Gpu(
+                        "this application draws into frames only; implement \
+                         `DeniseApp::paint` to present through the GPU"
+                            .into(),
+                    ));
+                }
+                if drawn {
+                    damage.end_frame();
+                }
+                Ok(drawn)
+            }
+        }
     }
 
     /// Creates every window asked for since the last wait.

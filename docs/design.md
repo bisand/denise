@@ -972,6 +972,14 @@ rather than to the byte — the two anti-alias differently and are not meant to
 agree bit for bit. Text comes out identical, translucent fills exact, and the
 worst case is polygon edges, which the GPU path does not yet anti-alias.
 
+`denise-winit` presents through it behind a `gpu` feature: a window asks for
+`Present::Gpu` and draws through `DeniseApp::paint`, the painter-agnostic half of
+`render`, which is provided in terms of it on the software path. Every GPU frame
+is a full repaint — a swapchain keeps no buffer age worth trusting and a desktop
+GPU redraws a window for nothing — so `BufferAge::Undefined` is what the
+application is told, and an application that implements only `render` is
+refused the window rather than shown a blank one.
+
 What it is *not* is a target for the panels this toolkit exists for. A kiosk on
 a Pi draws with the rasteriser, needs no Mesa and no compositor, and was never
 short of frames; the GPU is for the desktop, where the designer runs on a Retina
