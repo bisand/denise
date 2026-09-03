@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -960,7 +960,7 @@ impl<M> Describe for Tree<M> {
     const KIND: &'static str = "tree";
     const DOC: &'static str = "A hierarchy of rows that open and shut, indented by depth.";
     const GROUP: Group = Group::Data;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TREE;
+    const ICON: &'static denise::icon::Icon = &super::icons::TREE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

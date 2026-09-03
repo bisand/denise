@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Size};
-use denise_render::Pen;
+use denise::Pen;
 
 use crate::motion::Wake;
 use crate::widget::{Animation, Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
@@ -564,7 +564,7 @@ impl<M> Describe for Carousel<M> {
     const KIND: &'static str = "carousel";
     const DOC: &'static str = "Pictures shown one at a time, sliding between them.";
     const GROUP: Group = Group::Media;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::CAROUSEL;
+    const ICON: &'static denise::icon::Icon = &super::icons::CAROUSEL;
 
     // The pictures are not here. They are child nodes of the form — one
     // `picture` per page, loaded by the engine — because this crate decodes

@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{
@@ -346,7 +346,7 @@ impl<M> Describe for Select<M> {
     const KIND: &'static str = "select";
     const DOC: &'static str = "One choice out of many, picked from a dropdown list.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::SELECT;
+    const ICON: &'static denise::icon::Icon = &super::icons::SELECT;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

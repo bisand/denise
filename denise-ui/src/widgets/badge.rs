@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString};
 
 use denise::Role;
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -205,7 +205,7 @@ impl Describe for Badge {
     const KIND: &'static str = "badge";
     const DOC: &'static str = "A count, a status or a short word, in a pill of its role's colour.";
     const GROUP: Group = Group::Display;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::BADGE;
+    const ICON: &'static denise::icon::Icon = &super::icons::BADGE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The text."),

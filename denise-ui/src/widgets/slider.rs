@@ -1,7 +1,7 @@
 //! A value in a range, dragged or typed.
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
-use denise_render::Pen;
+use denise::Pen;
 
 use crate::widget::{Event, EventCtx, Handled, PaintCtx, VisualState, Widget};
 use crate::widgets::describe::{
@@ -406,7 +406,7 @@ impl<M> Describe for Slider<M> {
     const KIND: &'static str = "slider";
     const DOC: &'static str = "A value in a range, dragged along a track.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::SLIDER;
+    const ICON: &'static denise::icon::Icon = &super::icons::SLIDER;
 
     // The bounds on `value` and `step` are the widest a float can be rather
     // than a guess: what an editor should really offer is `min..=max`, and

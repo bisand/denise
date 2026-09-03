@@ -8,7 +8,8 @@ use denise::{
     Color, DamageTracker, ElementState, Frame, InputEvent, KeyCode, MAX_DAMAGE_RECTS,
     MAX_TRACKED_FRAMES, Modifiers, Point, Rect, Role, Size, Surface, SurfaceError, Theme,
 };
-use denise_render::{Canvas, Pen};
+use denise::Pen;
+use denise_render::Canvas;
 use denise_text::{FontId, GlyphSource, TextEngine};
 use slotmap::SlotMap;
 

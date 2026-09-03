@@ -4,7 +4,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{
@@ -716,7 +716,7 @@ impl<M> Describe for Table<M> {
     const KIND: &'static str = "table";
     const DOC: &'static str = "Columns of cells under a header that stays put.";
     const GROUP: Group = Group::Data;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TABLE;
+    const ICON: &'static denise::icon::Icon = &super::icons::TABLE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

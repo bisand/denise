@@ -47,7 +47,7 @@ depends on the contract — putting them together would be a dependency cycle. I
 also means a signage application that draws its own scene links no arena, no tree
 and no widget code at all.
 
-### The two traits
+### The backend traits
 
 Everything a backend has to provide:
 

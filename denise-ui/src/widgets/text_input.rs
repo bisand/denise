@@ -3,7 +3,7 @@
 use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
@@ -487,7 +487,7 @@ impl<M> Describe for TextInput<M> {
     const KIND: &'static str = "text-input";
     const DOC: &'static str = "A line of text somebody types into.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TEXT_INPUT;
+    const ICON: &'static denise::icon::Icon = &super::icons::TEXT_INPUT;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "Initial contents."),

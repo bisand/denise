@@ -34,7 +34,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{Color, Point, Radius, Rect, Role, Size, Theme};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Motion;

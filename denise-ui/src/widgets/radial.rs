@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString};
 
 use denise::{Point, Rect, Role};
-use denise_render::{Pen, TURN};
+use denise::{Pen, TURN};
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
@@ -314,7 +314,7 @@ impl Describe for RadialProgress {
     const KIND: &'static str = "radial-progress";
     const DOC: &'static str = "A ring that fills clockwise, with room for a number inside it.";
     const GROUP: Group = Group::Indicator;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::RADIAL_PROGRESS;
+    const ICON: &'static denise::icon::Icon = &super::icons::RADIAL_PROGRESS;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

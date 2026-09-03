@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use denise::{Rect, Size};
-use denise_render::{Pen, PixelView};
+use denise::{Pen, PixelView};
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
@@ -224,7 +224,7 @@ impl Describe for Image {
     const KIND: &'static str = "image";
     const DOC: &'static str = "A picture, fitted to a rectangle.";
     const GROUP: Group = Group::Media;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::IMAGE;
+    const ICON: &'static denise::icon::Icon = &super::icons::IMAGE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

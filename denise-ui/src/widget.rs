@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 
 use denise::{InputEvent, Rect, Size, Theme};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::TextEngine;
 
 use crate::motion::Wake;

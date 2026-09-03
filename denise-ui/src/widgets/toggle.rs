@@ -3,7 +3,7 @@
 use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Rect, Role, Theme};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::motion::Wake;
@@ -433,7 +433,7 @@ impl<M> Describe for Toggle<M> {
     const KIND: &'static str = "toggle";
     const DOC: &'static str = "The same on-or-off as a checkbox, shaped like a switch.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::TOGGLE;
+    const ICON: &'static denise::icon::Icon = &super::icons::TOGGLE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The label beside the track."),

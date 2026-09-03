@@ -3,8 +3,8 @@
 use alloc::string::String;
 
 use denise::{ElementState, InputEvent, KeyCode, Radius, Rect, Role};
-use denise_render::Pen;
-use denise_render::icon::Icon;
+use denise::Pen;
+use denise::icon::Icon;
 use denise_text::TextStyle;
 
 use crate::widget::{
@@ -636,7 +636,7 @@ impl<M> Describe for Button<M> {
     const KIND: &'static str = "button";
     const DOC: &'static str = "A rectangle somebody presses to make something happen.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::BUTTON;
+    const ICON: &'static denise::icon::Icon = &super::icons::BUTTON;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The label."),

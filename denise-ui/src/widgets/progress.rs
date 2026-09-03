@@ -1,7 +1,7 @@
 //! A track and a fill. The one widget here that is purely an output.
 
 use denise::{Rect, Role};
-use denise_render::Pen;
+use denise::Pen;
 
 use crate::widget::{PaintCtx, Widget};
 use crate::widgets::describe::{
@@ -195,7 +195,7 @@ impl Describe for Progress {
     const KIND: &'static str = "progress";
     const DOC: &'static str = "A bar that fills to show how far along something is.";
     const GROUP: Group = Group::Indicator;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::PROGRESS;
+    const ICON: &'static denise::icon::Icon = &super::icons::PROGRESS;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

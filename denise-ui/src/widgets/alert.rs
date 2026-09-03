@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString};
 
 use denise::{Point, Radius, Role};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{MeasureCtx, Measured, Offer, PaintCtx, Widget};
@@ -226,7 +226,7 @@ impl Describe for Alert {
     const DOC: &'static str =
         "A coloured banner saying something happened, in the place it happened.";
     const GROUP: Group = Group::Display;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::ALERT;
+    const ICON: &'static denise::icon::Icon = &super::icons::ALERT;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new("text", PropertyKind::Text, "The message."),

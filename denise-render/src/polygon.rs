@@ -37,7 +37,7 @@ pub(crate) const MAX_VERTICES: usize = 32;
 /// The same number, published because an icon's shapes are written by hand and
 /// silently dropping the thirty-third point would be a shape that is subtly
 /// wrong rather than absent.
-pub const MAX_ICON_VERTICES: usize = MAX_VERTICES;
+pub use denise::MAX_ICON_VERTICES;
 
 /// Crossings of one sub-row, sorted ascending, in fixed point.
 struct Crossings {

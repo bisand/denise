@@ -2,7 +2,7 @@
 //! happening.
 
 use denise::Role;
-use denise_render::{Pen, TURN};
+use denise::{Pen, TURN};
 
 use crate::motion::{Motion, Wake};
 use crate::widget::{Animation, PaintCtx, Widget};
@@ -278,7 +278,7 @@ impl Describe for Spinner {
     const DOC: &'static str =
         "A turning arc, for when all there is to say is that something is happening.";
     const GROUP: Group = Group::Indicator;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::SPINNER;
+    const ICON: &'static denise::icon::Icon = &super::icons::SPINNER;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

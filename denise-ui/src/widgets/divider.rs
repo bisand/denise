@@ -3,7 +3,7 @@
 use alloc::string::String;
 
 use denise::{Point, Rect, Role};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{PaintCtx, Widget};
@@ -218,7 +218,7 @@ impl Describe for Divider {
     const KIND: &'static str = "divider";
     const DOC: &'static str = "A line between things, with an optional label in the middle.";
     const GROUP: Group = Group::Display;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::DIVIDER;
+    const ICON: &'static denise::icon::Icon = &super::icons::DIVIDER;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

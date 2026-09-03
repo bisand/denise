@@ -68,7 +68,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use denise::{Radius, Role};
-use denise_render::icon::Icon;
+use denise::icon::Icon;
 
 use super::{Align, Fit, Orientation, avatar::Presence};
 
@@ -768,7 +768,7 @@ pub trait Describe {
     /// The widget's glyph: a small portrait of the thing, for a palette to
     /// draw beside — or instead of — its name.
     ///
-    /// Drawn in [`denise_render::icon`]'s format rather than looked up in a
+    /// Drawn in [`denise::icon`]'s format rather than looked up in a
     /// font, for the reason that module gives: a picture that depends on the
     /// installed font is a box on the machine least able to spare one. The
     /// glyphs themselves live in [`icons`](super::icons), which also says what

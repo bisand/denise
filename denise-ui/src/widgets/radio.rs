@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Rect, Role, Theme};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::{TextEngine, TextStyle};
 
 use crate::widget::{
@@ -403,7 +403,7 @@ impl<M> Describe for RadioGroup<M> {
     const KIND: &'static str = "radio-group";
     const DOC: &'static str = "One choice out of a few, all of them visible at once.";
     const GROUP: Group = Group::Input;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::RADIO_GROUP;
+    const ICON: &'static denise::icon::Icon = &super::icons::RADIO_GROUP;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

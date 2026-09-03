@@ -1,55 +1,10 @@
 //! The drawing target: a borrowed frame plus a clip rectangle.
 
+pub use denise::PixelView;
+
 use denise::{Color, Frame, PixelFormat, Rect, Size};
 
 use crate::blend::{Paint, blend_pixel, blend_span};
-
-/// A read-only view of somebody else's pixels, for [`Canvas::copy_from`].
-#[derive(Clone, Copy, Debug)]
-pub struct PixelView<'a> {
-    pixels: &'a [u32],
-    size: Size,
-    stride: usize,
-}
-
-impl<'a> PixelView<'a> {
-    /// Wraps a pixel slice. Returns `None` if `pixels` is too small for the
-    /// geometry, or if `stride` is narrower than `size.width`.
-    pub fn new(pixels: &'a [u32], size: Size, stride: u32) -> Option<Self> {
-        if size.is_empty() || stride < size.width {
-            return None;
-        }
-        // `required_words` computes in `u64` on purpose; see its documentation for
-        // the 32-bit wrap this avoids.
-        let required = denise::required_words(size, stride);
-        let stride = stride as usize;
-        (pixels.len() as u64 >= required).then_some(Self {
-            pixels,
-            size,
-            stride,
-        })
-    }
-
-    /// Borrows a frame's pixels for reading.
-    pub fn from_frame(frame: &'a Frame<'_>) -> Option<Self> {
-        Self::new(frame.pixels(), frame.size(), frame.stride())
-    }
-
-    /// Visible extent.
-    #[inline]
-    pub const fn size(&self) -> Size {
-        self.size
-    }
-
-    #[inline]
-    pub(crate) fn row(&self, y: i32, x0: i32, x1: i32) -> Option<&[u32]> {
-        if y < 0 || y >= self.size.height as i32 || x0 >= x1 || x0 < 0 {
-            return None;
-        }
-        let base = y as usize * self.stride;
-        self.pixels.get(base + x0 as usize..base + x1 as usize)
-    }
-}
 
 /// A clipped, writable pixel target.
 ///
@@ -227,8 +182,8 @@ impl<'a> Canvas<'a> {
     /// not a general blitter. Regions are clipped to both buffers.
     pub fn copy_from(&mut self, src: &PixelView<'_>, regions: &[Rect]) {
         let bounds = Rect::from_size(Size::new(
-            self.size.width.min(src.size.width),
-            self.size.height.min(src.size.height),
+            self.size.width.min(src.size().width),
+            self.size.height.min(src.size().height),
         ));
         for region in regions {
             let Some(r) = region.intersect(&bounds) else {

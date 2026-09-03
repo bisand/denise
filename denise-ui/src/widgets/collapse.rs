@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use denise::{ElementState, InputEvent, KeyCode, Point, Radius, Rect, Role, Theme};
-use denise_render::Pen;
+use denise::Pen;
 use denise_text::TextStyle;
 
 use crate::widget::{
@@ -457,7 +457,7 @@ impl<M> Describe for Collapse<M> {
     const KIND: &'static str = "collapse";
     const DOC: &'static str = "A section that folds away to its header and opens again.";
     const GROUP: Group = Group::Container;
-    const ICON: &'static denise_render::icon::Icon = &super::icons::COLLAPSE;
+    const ICON: &'static denise::icon::Icon = &super::icons::COLLAPSE;
 
     const PROPERTIES: &'static [Property] = &[
         Property::new(

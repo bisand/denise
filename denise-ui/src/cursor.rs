@@ -18,7 +18,7 @@
 //! and [`CursorImage::rasterise`] is how the same sprite reaches the plane.
 
 use denise::{Color, Point, Rect, Role, Theme};
-use denise_render::Pen;
+use denise::Pen;
 
 /// A cursor bitmap: three levels, drawn in two theme colours.
 ///
