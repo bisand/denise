@@ -441,8 +441,40 @@ impl<M: 'static> Ui<M> {
         size: Size,
         side: crate::overlay::Side,
     ) -> Option<NodeId> {
-        let anchor_bounds = self.bounds(anchor)?;
-        let rect = crate::overlay::anchored(self.size, anchor_bounds, size, side, POPUP_GAP);
+        let bounds = self.bounds(anchor)?;
+        self.push_popup_at(anchor, bounds, size, side)
+    }
+
+    /// Pushes a popup beside an explicit rectangle rather than beside the whole
+    /// of `anchor`.
+    ///
+    /// Everything [`push_popup`](Ui::push_popup) says still holds — this is that
+    /// method with the placement rectangle handed in — and `anchor` is still
+    /// where focus returns when the popup closes.
+    ///
+    /// Two things need it, and neither can say what it wants with a node:
+    ///
+    /// - **A menu bar**, whose menu belongs under *one title* and not under the
+    ///   left edge of the whole strip. The titles are drawn by one widget, so
+    ///   there is no node to name.
+    /// - **A context menu**, which belongs where the pointer was. A one-pixel
+    ///   rectangle at the click is the anchor, and the popup opens beside it
+    ///   like anything else — flipping near an edge for free.
+    ///
+    /// The rectangle is in surface coordinates, the same as
+    /// [`bounds`](Ui::bounds) reports. Returns `None` when `anchor` does not
+    /// exist.
+    pub fn push_popup_at(
+        &mut self,
+        anchor: NodeId,
+        at: Rect,
+        size: Size,
+        side: crate::overlay::Side,
+    ) -> Option<NodeId> {
+        if !self.contains(anchor) {
+            return None;
+        }
+        let rect = crate::overlay::anchored(self.size, at, size, side, POPUP_GAP);
         let root = self.push_scene(0);
         let container = self
             .add(root, Void, rect)

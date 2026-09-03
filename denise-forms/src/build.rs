@@ -9,8 +9,8 @@ use denise_ui::widgets::describe::{
 };
 use denise_ui::widgets::{
     Alert, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Column, Divider, Fit, Image, Label,
-    List, ListItem, Panel, Progress, RadialProgress, RadioGroup, Rating, Select, Slider, Spinner,
-    Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, Tree, TreeItem, Video,
+    List, ListItem, MenuBar, Panel, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
+    Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, Tree, TreeItem, Video,
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 use kdl::{KdlDocument, KdlNode, KdlValue};
@@ -427,7 +427,9 @@ pub fn node_property(name: &str) -> Option<&'static Property> {
 }
 
 /// Child nodes that are a parent's *content* rather than nodes of their own.
-const COLLECTIONS: &[&str] = &["option", "item", "column", "row", "event", "picture", "tab"];
+const COLLECTIONS: &[&str] = &[
+    "option", "item", "column", "row", "event", "picture", "tab", "title",
+];
 
 /// The block a designer's placeholder content lives in.
 ///
@@ -522,6 +524,7 @@ pub fn default_size(kind: &str) -> Size {
         "table" => (320, 180),
         "tree" => (220, 180),
         "tabs" => (320, 36),
+        "menubar" => (320, 28),
         "timeline" => (220, 140),
         "video" => (160, 90),
         // `label`, and anything this list has not heard of.
@@ -1429,6 +1432,17 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 let widget = match self.handler(node, "on-change", Payload::Index)? {
                     Some(h) => RadioGroup::new(options, self.on_index(node, "on-change", h)?),
                     None => RadioGroup::inert(options),
+                };
+                self.ui.add(parent, widget, rect)
+            }
+            "menubar" => {
+                let titles = self.strings(node, "title");
+                // Without `on-open` there is nothing to press: the bar reports
+                // which title was chosen and the application opens the menu, so
+                // an inert one is titles and nothing else. See `MenuBar::inert`.
+                let widget = match self.handler(node, "on-open", Payload::Index)? {
+                    Some(h) => MenuBar::new(titles, self.on_index(node, "on-open", h)?),
+                    None => MenuBar::inert(titles),
                 };
                 self.ui.add(parent, widget, rect)
             }

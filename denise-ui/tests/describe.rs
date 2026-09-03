@@ -10,9 +10,9 @@
 use denise::{Role, Size, theme};
 use denise_ui::widgets::{
     Alert, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Divider, DynDescribe, Image, Label,
-    List, Mismatch, Panel, Progress, Property, PropertyKind, RadialProgress, RadioGroup, Rating,
-    Select, Slider, Spinner, Table, Tabs, TextInput, Timeline, Toggle, Tree, TreeItem, Value,
-    Video, all,
+    List, MenuBar, Mismatch, Panel, Progress, Property, PropertyKind, RadialProgress, RadioGroup,
+    Rating, Select, Slider, Spinner, Table, Tabs, TextInput, Timeline, Toggle, Tree, TreeItem,
+    Value, Video, all,
 };
 use denise_ui::{Ui, Void};
 
@@ -44,6 +44,7 @@ fn fresh(kind: &str) -> Box<dyn DynDescribe> {
         "image" => Box::new(Image::new(vec![0; 4], Size::new(2, 2))),
         "label" => Box::new(Label::new("Text")),
         "list" => Box::new(List::<Void>::inert(["One", "Two", "Three"])),
+        "menubar" => Box::new(MenuBar::<Void>::inert(["File", "Edit", "View"])),
         "panel" => Box::new(Panel::default()),
         "progress" => Box::new(Progress::new(0.0)),
         "radial-progress" => Box::new(RadialProgress::new(0.0)),
