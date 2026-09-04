@@ -60,6 +60,61 @@ same way a glyph page does, and are cached the same way: one upload when the
 pixels change, a quad every time after. `Gpu::image_uploads` counts them. A
 photo in a carousel costs what a rectangle costs.
 
+## What it costs, and where it wins
+
+`cargo bench -p denise-benches --bench gpu`, on an M-series Mac, over the `ui`
+bench's five-hundred-node HMI. Two sizes, because the interesting number is the
+slope: the rasteriser's cost is per pixel, this crate's is per primitive.
+
+| | 1920×1080 | 3840×2160 | scaling |
+|---|---:|---:|---:|
+| software, full repaint | 600 µs | 2 485 µs | ×4.1 |
+| software, damage only | 6.3 µs | 5.2 µs | ×0.8 |
+| GPU, full repaint (encode + submit) | 306 µs | 641 µs | ×2.1 |
+| GPU, full repaint (to completion) | 777 µs | 1 315 µs | ×1.7 |
+
+Read it in three parts.
+
+**The slope is the point.** Four times the area is 4.1× the work for the
+rasteriser and 1.7× for the GPU, which is the difference between a cost that is
+per pixel and one that is mostly per primitive.
+
+**On CPU cost the GPU wins at both sizes** — 306 µs against 600 µs at 1080p,
+641 µs against 2 485 µs at 4K — because the fragments are the device's problem
+rather than a core's. That is the row a 60 Hz application actually pays: it
+pipelines, so the device's own time hides behind the next frame.
+
+**The `to completion` row is the pessimistic one, deliberately.** It makes the
+CPU sit and wait, which is a latency measurement rather than a throughput one,
+and no real loop does it. It is why software appears to win at 1080p (600 µs
+against 777 µs) and it should not be read as the rasteriser being faster:
+the same frame costs the CPU half as much through the GPU. At 4K the GPU wins
+even this row, 1 315 µs against 2 485 µs.
+
+**Damage beats both, by two orders of magnitude — but it is not a rendering
+comparison.** A pointer moving between two buttons dirties two small
+rectangles, and the rasteriser repaints just those in about 6 µs against a full
+GPU frame's 777 µs. That 124× is two rectangles against two million pixels: it
+measures how much work each path *does*, not how fast either draws. A swapchain remembers
+nothing, so the GPU path repaints the window every time and cannot play this
+game at all. For a panel that is idle most of the second, that is the whole
+comparison, and it is why the kiosk path never grew a GPU.
+
+So this crate earns its keep on a large window whose content genuinely changes
+every frame — a designer canvas being panned or zoomed on a Retina display —
+and loses badly on an idle one. Damage on the GPU path, by keeping a persistent
+target and scissoring the redraw, is the change that would close that gap; it is
+not written yet.
+
+The `encode + submit` row is the CPU's share, but not purely: it grows with
+resolution, so the driver is doing work proportional to the attachment inside
+submit. Treat it as an upper bound on what a frame costs a core, not as a
+measurement of recording alone.
+
+For scale, every row here fits inside a 60 Hz budget of 16 667 µs — the slowest
+is 15% of a frame. None of this is the difference between working and not; it
+is headroom, and on a laptop it is battery and fan noise.
+
 ## What it does not do yet
 
 The raw `blit` family — a `PixelView` with no identity — still uploads per
