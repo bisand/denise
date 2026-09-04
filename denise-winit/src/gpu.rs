@@ -5,14 +5,24 @@
 //! [`denise_wgpu::GpuPainter`] and presents a swapchain texture. Nothing about
 //! the window, the input or the scheduling changes; only what draws.
 //!
-//! Every frame is a full repaint. A swapchain gives no reliable buffer age, and
-//! on a desktop GPU redrawing a window is nothing — this is the one place the
-//! damage tracker's work is not needed, and [`BufferAge::Undefined`] is what
-//! says so to the application.
+//! # Damage
+//!
+//! A swapchain image rotates and its age cannot be trusted, so nothing
+//! incremental can be built on it directly. This surface therefore keeps a
+//! texture of its own, draws the damage onto that with the rest left exactly as
+//! the last frame left it, and copies the result to the swapchain. The copy is
+//! whole-texture and costs a blit; the drawing — which is what actually costs —
+//! is only the damage.
+//!
+//! That makes the age honest: [`BufferAge::Frames(1)`](BufferAge::Frames), the
+//! same as a persistent shadow buffer, because the target holds exactly the
+//! previous frame. It is [`BufferAge::Undefined`](BufferAge::Undefined) for one
+//! frame after the target is made or resized, which is the one frame that must
+//! repaint everything.
 
 use std::sync::Arc;
 
-use denise::{BufferAge, InputEvent, InputSource, Pen, Size};
+use denise::{BufferAge, InputEvent, InputSource, Pen, Rect, Size};
 use denise_wgpu::Gpu;
 use winit::window::Window;
 
@@ -32,6 +42,18 @@ pub struct GpuSurface {
     size: Size,
     scale_factor: f32,
     events: Vec<InputEvent>,
+    /// The target kept between frames, so a frame can draw only its damage.
+    /// `None` until the first paint and after every resize.
+    canvas: Option<Canvas>,
+}
+
+/// The persistent target and the view onto it.
+struct Canvas {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    /// Set until something has been drawn into it. An undefined texture must be
+    /// painted whole before any of it can be kept.
+    fresh: bool,
 }
 
 impl GpuSurface {
@@ -69,6 +91,9 @@ impl GpuSurface {
             config.format = format;
         }
         config.present_mode = wgpu::PresentMode::AutoVsync;
+        // The swapchain is copied into rather than drawn into, so it needs to
+        // be a copy destination as well as an attachment.
+        config.usage |= wgpu::TextureUsages::COPY_DST;
         surface.configure(&device, &config);
 
         let gpu = Gpu::new(device, queue, config.format);
@@ -80,6 +105,7 @@ impl GpuSurface {
             gpu,
             size,
             events: Vec::new(),
+            canvas: None,
         })
     }
 
@@ -111,6 +137,8 @@ impl GpuSurface {
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(self.gpu.device(), &self.config);
+        // A target of the old size holds nothing useful for the new one.
+        self.canvas = None;
     }
 
     pub(crate) fn push_event(&mut self, event: InputEvent) {
@@ -122,7 +150,11 @@ impl GpuSurface {
     /// Returns `Ok(false)` when the swapchain had nothing to give — the window
     /// is occluded, or the surface was just rebuilt — which is a frame to skip,
     /// not an error. The next redraw gets a fresh texture.
-    pub fn paint(&mut self, draw: impl FnOnce(&mut Pen<'_>)) -> Result<bool, Error> {
+    pub fn paint(
+        &mut self,
+        damage: &[Rect],
+        draw: impl FnOnce(&mut Pen<'_>),
+    ) -> Result<bool, Error> {
         use wgpu::CurrentSurfaceTexture as Current;
 
         if self.size.is_empty() {
@@ -139,23 +171,87 @@ impl GpuSurface {
                 return Err(Error::Gpu("the swapchain failed validation".into()));
             }
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let canvas = self.canvas.get_or_insert_with(|| {
+            let texture = self.gpu.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("denise canvas"),
+                size: wgpu::Extent3d {
+                    width: self.size.width,
+                    height: self.size.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            Canvas {
+                texture,
+                view,
+                fresh: true,
+            }
+        });
 
         let mut painter = self.gpu.painter(self.size);
         draw(&mut Pen::new(&mut painter));
-        painter.finish(&view);
+        if canvas.fresh {
+            // Nothing to keep yet, and the caller was told `Undefined` so it
+            // has drawn the lot: clear and take all of it.
+            painter.finish(&canvas.view);
+            canvas.fresh = false;
+        } else {
+            painter.finish_onto(&canvas.view, damage);
+        }
+
+        // Whole-texture, because the swapchain image rotates and only the
+        // target we keep is known to be the previous frame. A blit of the
+        // window is cheap next to rasterising it.
+        let mut encoder =
+            self.gpu
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("denise present"),
+                });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &canvas.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &frame.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: self.size.width,
+                height: self.size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.gpu.queue().submit([encoder.finish()]);
 
         self.window.pre_present_notify();
         self.gpu.queue().present(frame);
         Ok(true)
     }
 
-    /// What an application is told about the buffer it is about to draw: every
-    /// frame here starts from nothing.
-    pub const fn age(&self) -> BufferAge {
-        BufferAge::Undefined
+    /// What an application is told about the target it is about to draw into.
+    ///
+    /// [`Frames(1)`](BufferAge::Frames) once there is a target holding the
+    /// previous frame, which is what lets an application repaint only what
+    /// changed; [`Undefined`](BufferAge::Undefined) on the first frame and
+    /// after a resize, when everything must be drawn.
+    pub fn age(&self) -> BufferAge {
+        match &self.canvas {
+            Some(canvas) if !canvas.fresh => BufferAge::Frames(1),
+            _ => BufferAge::Undefined,
+        }
     }
 }
 

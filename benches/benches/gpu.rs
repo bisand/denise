@@ -153,7 +153,7 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
             return;
         }
     };
-    let (mut ui, _) = busy_panel(size);
+    let (mut ui, buttons) = busy_panel(size);
 
     // One offscreen target, made once: a swapchain's texture in a window, and
     // not part of what is being timed either way.
@@ -206,6 +206,44 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("poll");
             ui.presented();
+        })
+    });
+    // What damage buys on the GPU: the same pointer move as the software case,
+    // repainting only what it dirtied onto a target kept between frames. The
+    // same tree as above, deliberately — a second `Ui` would bring a second
+    // glyph atlas and a second page upload, which is what the assertion at the
+    // end of this function is for.
+    let at = centre(&ui, buttons[7]);
+    let elsewhere = Point::new(at.x, at.y + 400);
+    let mut damage = [Rect::ZERO; 16];
+    group.bench_function("gpu, damaged", |b| {
+        b.iter(|| {
+            ui.handle(&[InputEvent::PointerMoved { position: at }]);
+            ui.handle(&[InputEvent::PointerMoved {
+                position: elsewhere,
+            }]);
+            let count = {
+                let pending = ui.pending_damage();
+                let n = pending.len().min(damage.len());
+                damage[..n].copy_from_slice(&pending[..n]);
+                n
+            };
+            let mut painter = gpu.painter(size);
+            ui.paint_with(&mut Pen::new(&mut painter), BufferAge::Frames(1));
+            painter.finish_onto(black_box(&view), &damage[..count]);
+            ui.presented();
+        })
+    });
+    // Nothing drawn at all: a painter made, no widgets recorded, one tiny
+    // damage submitted. Everything a frame costs *except* recording and
+    // drawing — two buffers built, a bind group, an encoder, a pass, a submit.
+    // This is the floor a small repaint cannot get under, and the reason the
+    // rasteriser wins one.
+    let speck = [Rect::new(0, 0, 8, 8)];
+    group.bench_function("gpu, empty frame (fixed cost)", |b| {
+        b.iter(|| {
+            let painter = gpu.painter(size);
+            painter.finish_onto(black_box(&view), &speck);
         })
     });
     group.finish();

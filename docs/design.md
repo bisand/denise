@@ -956,6 +956,21 @@ a `Surface` first. Underneath both is `Ui::paint_with`, which takes a `Pen` and 
 buffer age and knows nothing about how the pixels get made. Turning the feature
 off leaves that one and drops `denise-render` out of the tree entirely.
 
+A window on the GPU keeps a texture of its own and copies it to the swapchain,
+rather than drawing into the swapchain image directly. That image rotates and
+its age cannot be trusted, so nothing incremental can be built on it; a target
+the surface owns holds exactly the previous frame, which makes the age honestly
+`Frames(1)` and a frame's work the damage rather than the window. An
+incremental frame is byte-identical to a full one, which is the property the
+whole arrangement stands on and is tested as such.
+
+What that buys is measured rather than assumed: a damaged GPU frame costs 51 µs
+at 1080p and 54 µs at 4K — ×1.06 for four times the pixels, because what
+remains is fixed per-frame cost and not pixel work. The rasteriser still wins a
+*small* repaint, at 6.6 µs, and the two cross at a constant area of about
+410×410 pixels: below that the fixed cost dominates, above it the per-pixel
+work does. A hovered button is below. A panned canvas is above.
+
 The split falls where it does because of the scroll optimisation. A viewport that
 scrolls moves the rows it can keep with a `copy_within` on the frame's own words,
 and no painter operation expresses an overlapping self-to-self copy — nor should
