@@ -164,6 +164,10 @@ pub struct Gpu {
     images: RefCell<HashMap<u64, (u64, wgpu::BindGroup)>>,
     /// How many images have been uploaded, ever.
     image_uploads: Cell<u64>,
+    /// The globals buffer and its bind group, with the size they describe.
+    /// They change only when the target does, so they are built on a resize
+    /// rather than on a frame.
+    globals: RefCell<Option<(Size, wgpu::Buffer, wgpu::BindGroup)>>,
 }
 
 impl Gpu {
@@ -316,6 +320,7 @@ impl Gpu {
             page_uploads: Cell::new(0),
             images: RefCell::new(HashMap::new()),
             image_uploads: Cell::new(0),
+            globals: RefCell::new(None),
         }
     }
 
@@ -349,6 +354,40 @@ impl Gpu {
     /// The queue frames are submitted to.
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    /// The globals buffer and bind group for a target of `size`, built only if
+    /// the last pair was for a different size.
+    ///
+    /// Both are reference-counted handles, so the clones are pointer bumps and
+    /// a render pass can hold them without keeping the cache borrowed.
+    fn globals_for(&self, size: Size) -> wgpu::BindGroup {
+        if let Some((cached, _, group)) = self.globals.borrow().as_ref()
+            && *cached == size
+        {
+            return group.clone();
+        }
+        let buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("denise globals"),
+                contents: bytemuck::bytes_of(&Globals {
+                    size: [size.width as f32, size.height as f32],
+                    srgb: u32::from(self.format.is_srgb()),
+                    _pad: 0,
+                }),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("denise globals"),
+            layout: &self.globals_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        *self.globals.borrow_mut() = Some((size, buffer, group.clone()));
+        group
     }
 
     /// Reads a texture back as `0xAARRGGBB` words, row after row with no
@@ -704,31 +743,17 @@ impl GpuPainter<'_> {
         scissor: Option<Rect>,
     ) {
         let gpu = self.gpu;
-        let globals = gpu
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("denise globals"),
-                contents: bytemuck::bytes_of(&Globals {
-                    size: [self.size.width as f32, self.size.height as f32],
-                    srgb: u32::from(gpu.format.is_srgb()),
-                    _pad: 0,
-                }),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let globals_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("denise globals"),
-            layout: &gpu.globals_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals.as_entire_binding(),
-            }],
-        });
+        let globals_group = gpu.globals_for(self.size);
         // An empty frame still clears; a zero-sized buffer is not allowed.
         let vertex_bytes: &[u8] = if self.vertices.is_empty() {
             &[0u8; std::mem::size_of::<Vertex>()]
         } else {
             bytemuck::cast_slice(&self.vertices)
         };
+        // Allocated per frame, not written into a kept buffer: `write_buffer`
+        // stages the copy, and for the small payload a damaged frame carries
+        // that machinery costs more than the allocation it saves. Measured, in
+        // both directions -- see the crate README.
         let vertices = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
