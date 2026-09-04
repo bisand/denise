@@ -73,6 +73,7 @@ slope: the rasteriser's cost is per pixel, this crate's is per primitive.
 | GPU, full repaint (encode + submit) | 324 µs | 639 µs | ×2.0 |
 | GPU, full repaint (to completion) | 790 µs | 1 284 µs | ×1.6 |
 | GPU, damage only | 51 µs | 54 µs | **×1.06** |
+| GPU, empty frame — the floor | 31 µs | — | — |
 
 **On a full repaint the GPU wins, and by more the bigger the window gets** —
 324 µs against 628 µs at 1080p, 639 µs against 2 656 µs at 4K. Four times the
@@ -84,9 +85,13 @@ between a cost that is per pixel and one that is mostly per primitive.
 is fixed per-frame cost: two buffers built, a pass encoded, two submits, a
 present. It does not care how large the window is.
 
-**Which is why the rasteriser still wins a small repaint.** 6.6 µs against
-51 µs, because 50 µs of fixed cost is a great deal to pay to change a few
-hundred pixels. The two costs cross where the damaged area is large enough for
+**Which is why the rasteriser still wins a small repaint.** An *empty* GPU
+frame — a painter made, nothing recorded, one 8×8 damage submitted — costs
+31 µs. That is the floor, and it is already five times what the rasteriser
+spends doing the entire job. None of it is drawing: it is two buffers built, a
+bind group, an encoder, a render pass and a submit, each a call into a driver.
+The rasteriser writes into memory it already holds and hands nothing to
+anybody, so it has no such floor at all. The two costs cross where the damaged area is large enough for
 the rasteriser's per-pixel work to reach the GPU's fixed 50 µs, and that is a
 constant *area* rather than a constant fraction:
 
@@ -111,7 +116,7 @@ is 16% of a frame. None of this is the difference between working and not.
 
 ## What it does not do yet
 
-The 50 µs of fixed per-frame cost is not irreducible. A globals buffer and a
+The 31 µs floor is not irreducible. A globals buffer and a
 vertex buffer are built from scratch every frame, the swapchain copy is a
 second submit, and neither has to be that way. That is where a small repaint
 would have to get cheaper for this crate to win one.

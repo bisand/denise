@@ -234,6 +234,18 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
             ui.presented();
         })
     });
+    // Nothing drawn at all: a painter made, no widgets recorded, one tiny
+    // damage submitted. Everything a frame costs *except* recording and
+    // drawing — two buffers built, a bind group, an encoder, a pass, a submit.
+    // This is the floor a small repaint cannot get under, and the reason the
+    // rasteriser wins one.
+    let speck = [Rect::new(0, 0, 8, 8)];
+    group.bench_function("gpu, empty frame (fixed cost)", |b| {
+        b.iter(|| {
+            let painter = gpu.painter(size);
+            painter.finish_onto(black_box(&view), &speck);
+        })
+    });
     group.finish();
 
     // The atlas is the point of #187: a bench that uploaded a page per frame
