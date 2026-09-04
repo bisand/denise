@@ -3,8 +3,10 @@
 // A vertex carries the pixel it sits on, the clip it must not leave, a
 // premultiplied colour, two vec4s of shape parameters and a kind. The fragment
 // shader turns the kind into a signed distance, the distance into coverage, and
-// the coverage into how much of the colour reaches the target. Rectangles and
-// polygons are kind 0 and skip all of that: their edges are the triangle's own.
+// the coverage into how much of the colour reaches the target. Rectangles are
+// kind 0 and skip all of that: their edges are the triangle's own. A polygon
+// has more edges than a vertex can carry, so it carries a range of a storage
+// buffer that holds them instead.
 
 struct Globals {
     // Target size in pixels, for the NDC transform.
@@ -17,6 +19,9 @@ struct Globals {
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
+// Every edge of every polygon in the frame, as x0, y0, x1, y1. A polygon's
+// vertices say where its own run starts and how long it is.
+@group(2) @binding(0) var<storage, read> edges: array<vec4<f32>>;
 
 struct VsIn {
     @location(0) pos: vec2<f32>,
@@ -25,6 +30,8 @@ struct VsIn {
     @location(3) a: vec4<f32>,
     @location(4) b: vec4<f32>,
     @location(5) kind: u32,
+    // First edge and edge count, for a polygon; zero for everything else.
+    @location(6) poly: vec2<u32>,
 };
 
 struct VsOut {
@@ -34,6 +41,7 @@ struct VsOut {
     @location(2) a: vec4<f32>,
     @location(3) b: vec4<f32>,
     @location(4) @interpolate(flat) kind: u32,
+    @location(5) @interpolate(flat) poly: vec2<u32>,
 };
 
 @vertex
@@ -49,6 +57,7 @@ fn vs(in: VsIn) -> VsOut {
     out.a = in.a;
     out.b = in.b;
     out.kind = in.kind;
+    out.poly = in.poly;
     return out;
 }
 
@@ -94,9 +103,10 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     var cov = 1.0;
     let a = in.a;
     let b = in.b;
+    let poly = in.poly;
 
     switch in.kind {
-        // 0: solid triangle — rectangles and polygons.
+        // 0: solid triangle — a rectangle, or a quad another kind rides on.
         case 0u: {}
         // 1: rounded rectangle, filled.
         case 1u: {
@@ -142,6 +152,31 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         case 9u: {
             color = texel;
             cov = coverage(sd_round_box(p - b.xy, b.zw, a.z));
+        }
+        // 10: a polygon, over the run of edges poly.x..poly.x + poly.y.
+        //
+        // The distance to the nearest edge is how far the fragment is from the
+        // outline; the even-odd crossing count is which side of it the
+        // fragment is on. Together they are the polygon's signed distance, and
+        // the same one-pixel ramp every other shape gets applies to it. Odd
+        // means inside, the same rule the software rasteriser fills by, so a
+        // shape that crosses itself is filled the same way by both.
+        case 10u: {
+            var near = 1e30;
+            var inside = false;
+            for (var i = 0u; i < poly.y; i = i + 1u) {
+                let e = edges[poly.x + i];
+                near = min(near, sd_segment(p, e.xy, e.zw));
+                // Does a ray to the right of the fragment cross this edge? The
+                // ends are half open in y, so a vertex on the ray counts once.
+                if (e.y > p.y) != (e.w > p.y) {
+                    let t = (p.y - e.y) / (e.w - e.y);
+                    if p.x < e.x + t * (e.z - e.x) {
+                        inside = !inside;
+                    }
+                }
+            }
+            cov = coverage(select(near, -near, inside));
         }
         default: {}
     }

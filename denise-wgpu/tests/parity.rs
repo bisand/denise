@@ -302,9 +302,10 @@ fn stars_and_icons_are_close() {
     }) else {
         return;
     };
-    // Polygon edges have no anti-aliasing on the GPU path yet, so the edge
-    // pixels differ by design; the interiors must not.
-    assert_close("stars", &sw, &hw, 3.0, 0.03);
+    // A polygon is the one shape the two paths agree on almost exactly: both
+    // fill it by the even-odd rule and both measure the same distance to the
+    // same outline, so the tolerance here is tighter than any other shape's.
+    assert_close("stars", &sw, &hw, 0.6, 0.001);
 }
 
 #[test]
@@ -571,6 +572,17 @@ fn an_incremental_frame_matches_a_full_one() {
         pen.clear(Color::from_rgb888(0x1E1E2E));
         pen.fill_rounded_rect(Rect::new(10, 10, 80, 40), 8, Color::from_rgb888(0x89B4FA));
         pen.fill_circle(Point::new(150, 80), 24, Color::from_rgb888(0xA6E3A1));
+        // Over the damage, so the incremental pass redraws it clipped: a
+        // polygon reads its edges out of a buffer the frame builds, and this
+        // is what says a damaged frame builds the same one.
+        pen.fill_star(
+            Point::new(118, 74),
+            22,
+            9,
+            5,
+            0,
+            Color::from_rgb888(0xF9E2AF),
+        );
         let y = if moved { 70 } else { 60 };
         pen.fill_rect(Rect::new(100, y, 30, 20), Color::from_rgb888(0xF38BA8));
     };

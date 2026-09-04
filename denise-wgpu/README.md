@@ -37,11 +37,14 @@ have, and `GpuPainter::finish` draws into the swapchain's texture view.
 
 ## How a frame is drawn
 
-Every call on the painter appends vertices. Rectangles and polygons are plain
-triangles; everything with a curve — rounded corners, circles, arcs, lines — is
-a bounding quad whose fragment shader evaluates a signed distance and turns it
-into one pixel of anti-aliasing. Images and glyph masks are the same quads with
-a texture bound. The clip is carried per vertex and applied per fragment, so a
+Every call on the painter appends vertices. Rectangles are plain triangles;
+everything with a curve — rounded corners, circles, arcs, lines — is a bounding
+quad whose fragment shader evaluates a signed distance and turns it into one
+pixel of anti-aliasing. A polygon has more edges than a vertex can carry, so its
+quad carries a range of a buffer that holds them, and the shader walks that
+range for the nearest edge and for which side of the outline the fragment is on
+— by the even-odd rule, the same one the rasteriser fills by. Images and glyph
+masks are the same quads with a texture bound. The clip is carried per vertex and applied per fragment, so a
 frame is one pipeline and as few draws as the textures force: a widget tree
 with no images is a single draw call.
 
