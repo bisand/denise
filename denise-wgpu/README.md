@@ -72,35 +72,45 @@ slope: the rasteriser's cost is per pixel, this crate's is per primitive.
 | software, damage only | 6.6 µs | 5.4 µs | ×0.8 |
 | GPU, full repaint (encode + submit) | 324 µs | 639 µs | ×2.0 |
 | GPU, full repaint (to completion) | 790 µs | 1 284 µs | ×1.6 |
-| GPU, damage only | 51 µs | 54 µs | **×1.06** |
-| GPU, empty frame — the floor | 31 µs | — | — |
+| GPU, damage only | 38 µs | 37 µs | **×0.98** |
+| GPU, empty frame — a diagnostic | 48 µs | 48 µs | ×1.00 |
 
 **On a full repaint the GPU wins, and by more the bigger the window gets** —
 324 µs against 628 µs at 1080p, 639 µs against 2 656 µs at 4K. Four times the
 area is 4.2× the work for the rasteriser and 2.0× here, which is the difference
 between a cost that is per pixel and one that is mostly per primitive.
 
-**Incremental repaint is all but free of resolution.** Damage on the GPU costs
-51 µs at 1080p and 54 µs at 4K — ×1.06 for four times the pixels. What is left
-is fixed per-frame cost: two buffers built, a pass encoded, two submits, a
-present. It does not care how large the window is.
+**Incremental repaint is free of resolution.** Damage on the GPU costs 38 µs at
+1080p and 37 µs at 4K. What is left is fixed per-frame cost — a vertex buffer
+built, a pass encoded, a submit — and it does not care how large the window is.
+The globals buffer and its bind group are built on a resize rather than on a
+frame, which is worth about 15% of that.
 
-**Which is why the rasteriser still wins a small repaint.** An *empty* GPU
-frame — a painter made, nothing recorded, one 8×8 damage submitted — costs
-31 µs. That is the floor, and it is already five times what the rasteriser
-spends doing the entire job. None of it is drawing: it is two buffers built, a
-bind group, an encoder, a render pass and a submit, each a call into a driver.
-The rasteriser writes into memory it already holds and hands nothing to
-anybody, so it has no such floor at all. The two costs cross where the damaged area is large enough for
+**Which is why the rasteriser still wins a small repaint.** 6.6 µs against
+38 µs. Almost none of those 38 µs is drawing — it is a buffer built, an
+encoder, a render pass and a submit, each a call into a driver, and each
+costing the same whether eight pixels change or eight million. The rasteriser
+writes into memory it already holds and hands nothing to anybody, so it has no
+such cost at all.
+
+The `empty frame` row measures that floor directly: a painter made, nothing
+recorded, one 8×8 damage submitted. **It is 48 µs — higher than a real damaged
+frame's 38 µs, which cannot be right, and is not explained.** Caching the
+globals moved it from 31 µs to 48 µs while moving a real damaged frame from
+45 µs to 38 µs: the same change, measured in isolation, in opposite directions
+and reproducibly. Something about a bind group reused across frames costs wgpu
+or the driver more per submit than building a throwaway one, and it evidently
+interacts with how much else the frame carries. Until that is understood, read
+the `empty frame` row as an open question rather than as the floor. The two costs cross where the damaged area is large enough for
 the rasteriser's per-pixel work to reach the GPU's fixed 50 µs, and that is a
 constant *area* rather than a constant fraction:
 
 | | software per 1000 px | crossover |
 |---|---:|---|
-| 1920×1080 | 0.303 µs | 168 000 px — a 410×410 square, 8.1% of the screen |
-| 3840×2160 | 0.320 µs | 169 000 px — a 411×411 square, 2.0% of the screen |
+| 1920×1080 | 0.303 µs | 127 000 px — a 356×356 square, 6.1% of the screen |
+| 3840×2160 | 0.320 µs | 117 000 px — a 342×342 square, 1.4% of the screen |
 
-**So: change less than about a 410×410 square and the rasteriser is cheaper;
+**So: change less than about a 350×350 square and the rasteriser is cheaper;
 change more and this crate is, by a margin that grows with the window.** A
 hovered button is the first case. A canvas being panned, a scrolling list, a
 resize, anything animating across a Retina window is the second.
@@ -116,10 +126,13 @@ is 16% of a frame. None of this is the difference between working and not.
 
 ## What it does not do yet
 
-The 31 µs floor is not irreducible. A globals buffer and a
-vertex buffer are built from scratch every frame, the swapchain copy is a
-second submit, and neither has to be that way. That is where a small repaint
-would have to get cheaper for this crate to win one.
+The remaining fixed cost is not irreducible, but the obvious moves are not
+free. Keeping the vertex buffer and writing into it with `write_buffer` was
+tried and made things *worse* — the staging machinery costs more than the
+allocation it saves at these sizes, in both a ring of three buffers and a
+single one. The swapchain copy is still a second submit, and that has not been
+tried. Neither has understanding the `empty frame` anomaly above, which should
+probably come first.
 
 `finish_onto` scissors to the *union* of the damage rather than rectangle by
 rectangle, so two distant regions cost their bounding box in fragments. Doing

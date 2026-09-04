@@ -964,12 +964,12 @@ the surface owns holds exactly the previous frame, which makes the age honestly
 incremental frame is byte-identical to a full one, which is the property the
 whole arrangement stands on and is tested as such.
 
-What that buys is measured rather than assumed: a damaged GPU frame costs 51 µs
-at 1080p and 54 µs at 4K — ×1.06 for four times the pixels, because what
-remains is fixed per-frame cost and not pixel work. The rasteriser still wins a
-*small* repaint, at 6.6 µs, and the two cross at a constant area of about
-410×410 pixels: below that the fixed cost dominates, above it the per-pixel
-work does. A hovered button is below. A panned canvas is above.
+What that buys is measured rather than assumed: a damaged GPU frame costs 38 µs
+at 1080p and 37 µs at 4K — flat in the pixel count, because what remains is
+fixed per-frame cost and not pixel work. The rasteriser still wins a *small*
+repaint, at 6.6 µs, and the two cross at a constant area of about 350×350
+pixels: below that the fixed cost dominates, above it the per-pixel work does.
+A hovered button is below. A panned canvas is above.
 
 The split falls where it does because of the scroll optimisation. A viewport that
 scrolls moves the rows it can keep with a `copy_within` on the frame's own words,
