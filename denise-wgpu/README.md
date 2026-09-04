@@ -73,7 +73,7 @@ slope: the rasteriser's cost is per pixel, this crate's is per primitive.
 | GPU, full repaint (encode + submit) | 324 µs | 639 µs | ×2.0 |
 | GPU, full repaint (to completion) | 790 µs | 1 284 µs | ×1.6 |
 | GPU, damage only | 38 µs | 37 µs | **×0.98** |
-| GPU, empty frame — a diagnostic | 48 µs | 48 µs | ×1.00 |
+| GPU, empty frame — submit throughput, not a floor | 48 µs | 48 µs | ×1.00 |
 
 **On a full repaint the GPU wins, and by more the bigger the window gets** —
 324 µs against 628 µs at 1080p, 639 µs against 2 656 µs at 4K. Four times the
@@ -93,15 +93,19 @@ costing the same whether eight pixels change or eight million. The rasteriser
 writes into memory it already holds and hands nothing to anybody, so it has no
 such cost at all.
 
-The `empty frame` row measures that floor directly: a painter made, nothing
-recorded, one 8×8 damage submitted. **It is 48 µs — higher than a real damaged
-frame's 38 µs, which cannot be right, and is not explained.** Caching the
-globals moved it from 31 µs to 48 µs while moving a real damaged frame from
-45 µs to 38 µs: the same change, measured in isolation, in opposite directions
-and reproducibly. Something about a bind group reused across frames costs wgpu
-or the driver more per submit than building a throwaway one, and it evidently
-interacts with how much else the frame carries. Until that is understood, read
-the `empty frame` row as an open question rather than as the floor. The two costs cross where the damaged area is large enough for
+The `empty frame` row was added to measure that floor directly and **does not
+measure it**, which took a while to establish. It reports 48 µs — higher than a
+real damaged frame's 38 µs, which cannot be a floor. The cause is the
+benchmark: an undrained loop submits some thirty thousand frames a second, far
+faster than the device retires them, so what it reports is how fast submits
+*pile up*. A bind group shared by every queued command buffer costs the tracker
+more than a throwaway one, and that shows up only in a loop nothing throttles.
+
+Draining the queue each iteration settles it. Measured that way the two are the
+same — 189 µs against 191 µs — while the real damaged frame keeps its
+improvement, 196 µs against 230 µs. The same 15% the undrained numbers report.
+So the change is real, the anomaly was the measurement, and the row is kept
+under a name that says what it actually watches. The two costs cross where the damaged area is large enough for
 the rasteriser's per-pixel work to reach the GPU's fixed 50 µs, and that is a
 constant *area* rather than a constant fraction:
 
@@ -131,8 +135,8 @@ free. Keeping the vertex buffer and writing into it with `write_buffer` was
 tried and made things *worse* — the staging machinery costs more than the
 allocation it saves at these sizes, in both a ring of three buffers and a
 single one. The swapchain copy is still a second submit, and that has not been
-tried. Neither has understanding the `empty frame` anomaly above, which should
-probably come first.
+tried. The `empty frame` anomaly, which used to be listed here, turned out to be the
+benchmark and is settled.
 
 `finish_onto` scissors to the *union* of the damage rather than rectangle by
 rectangle, so two distant regions cost their bounding box in fragments. Doing

@@ -235,15 +235,58 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
         })
     });
     // Nothing drawn at all: a painter made, no widgets recorded, one tiny
-    // damage submitted. Everything a frame costs *except* recording and
-    // drawing — two buffers built, a bind group, an encoder, a pass, a submit.
-    // This is the floor a small repaint cannot get under, and the reason the
-    // rasteriser wins one.
+    // damage submitted.
+    //
+    // This was added to measure the floor a small repaint cannot get under, and
+    // it does not measure that. An undrained loop submits some thirty thousand
+    // frames a second, far faster than the device retires them, so what it
+    // reports is how fast submits can *pile up* — and that is sensitive to
+    // whether a frame's resources are shared or thrown away, in a direction
+    // that has nothing to do with what a frame costs. Kept because submit
+    // throughput is worth watching, and paired with the drained case below,
+    // which is the honest comparison.
     let speck = [Rect::new(0, 0, 8, 8)];
-    group.bench_function("gpu, empty frame (fixed cost)", |b| {
+    group.bench_function("gpu, empty frame (submit throughput)", |b| {
         b.iter(|| {
             let painter = gpu.painter(size);
             painter.finish_onto(black_box(&view), &speck);
+        })
+    });
+    // The same, draining the queue every iteration, so nothing piles up. This
+    // is a round-trip latency and includes the device's own time, which a 60 Hz
+    // application never waits for — but it is measured the same way for every
+    // variant, so a difference here is a difference in the frame rather than in
+    // the queue.
+    group.bench_function("gpu, empty frame (round trip)", |b| {
+        b.iter(|| {
+            let painter = gpu.painter(size);
+            painter.finish_onto(black_box(&view), &speck);
+            gpu.device()
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
+        })
+    });
+    // And the real workload drained, for the same reason. Where this and the
+    // undrained case agree on the direction of a change, the change is real.
+    group.bench_function("gpu, damaged (round trip)", |b| {
+        b.iter(|| {
+            ui.handle(&[InputEvent::PointerMoved { position: at }]);
+            ui.handle(&[InputEvent::PointerMoved {
+                position: elsewhere,
+            }]);
+            let count = {
+                let pending = ui.pending_damage();
+                let n = pending.len().min(damage.len());
+                damage[..n].copy_from_slice(&pending[..n]);
+                n
+            };
+            let mut painter = gpu.painter(size);
+            ui.paint_with(&mut Pen::new(&mut painter), BufferAge::Frames(1));
+            painter.finish_onto(black_box(&view), &damage[..count]);
+            ui.presented();
+            gpu.device()
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
         })
     });
     group.finish();
