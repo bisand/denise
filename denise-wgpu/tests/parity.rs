@@ -14,9 +14,29 @@
 use denise::{BufferAge, Color, Frame, Paint, Pen, PixelFormat, Point, Rect, Size};
 use denise_render::Canvas;
 use denise_text::{TextEngine, TextStyle};
-use denise_wgpu::Gpu;
+use denise_wgpu::{Gpu, wgpu};
 
 const SIZE: Size = Size::new(200, 120);
+
+/// A target this test owns, so an incremental frame has somewhere to persist.
+fn target(gpu: &Gpu) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("parity target"),
+        size: wgpu::Extent3d {
+            width: SIZE.width,
+            height: SIZE.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: gpu.format(),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
 
 /// Draws `scene` through both painters and returns (software, gpu) frames.
 fn both(scene: impl Fn(&mut Pen<'_>)) -> Option<(Vec<u32>, Vec<u32>)> {
@@ -527,4 +547,96 @@ fn an_image_is_uploaded_once_per_version() {
     );
     frame(&mut ui);
     assert_eq!(gpu.image_uploads(), 2);
+}
+
+// ------------------------------------------------------------------ damage
+
+/// The claim `finish_onto` makes: painting a scene in two passes — the whole of
+/// it once, then only a damaged strip of a changed scene — lands the same
+/// pixels as painting the changed scene whole. If that is not true, an
+/// incremental frame shows a seam and the whole idea is unusable.
+#[test]
+fn an_incremental_frame_matches_a_full_one() {
+    let gpu = match Gpu::headless() {
+        Ok(gpu) => gpu,
+        Err(err) => {
+            eprintln!("skipping: {err}");
+            return;
+        }
+    };
+
+    // A scene, and the same scene with one square moved. Only that square's
+    // before-and-after is damaged.
+    let scene = |pen: &mut Pen<'_>, moved: bool| {
+        pen.clear(Color::from_rgb888(0x1E1E2E));
+        pen.fill_rounded_rect(Rect::new(10, 10, 80, 40), 8, Color::from_rgb888(0x89B4FA));
+        pen.fill_circle(Point::new(150, 80), 24, Color::from_rgb888(0xA6E3A1));
+        let y = if moved { 70 } else { 60 };
+        pen.fill_rect(Rect::new(100, y, 30, 20), Color::from_rgb888(0xF38BA8));
+    };
+    // The rectangle's old and new positions, with a pixel of margin.
+    let damage = [Rect::new(99, 59, 32, 32)];
+
+    // Incremental: the unmoved scene in full, then only the damage of the moved
+    // one — which is what a window does every frame after the first.
+    let (texture, view) = target(&gpu);
+    {
+        let mut painter = gpu.painter(SIZE);
+        scene(&mut Pen::new(&mut painter), false);
+        painter.finish(&view);
+    }
+    {
+        let mut painter = gpu.painter(SIZE);
+        {
+            let mut pen = Pen::new(&mut painter);
+            // Exactly what `Ui` does: clip to the damage, repaint the scene.
+            let mut clipped = pen.with_clip(damage[0]);
+            scene(&mut clipped, true);
+        }
+        painter.finish_onto(&view, &damage);
+    }
+    let incremental = gpu.read_texture(&texture).expect("readback");
+
+    // And the moved scene painted whole, which is the answer it must match.
+    let mut painter = gpu.painter(SIZE);
+    scene(&mut Pen::new(&mut painter), true);
+    let full = painter.finish_to_pixels().expect("readback");
+
+    let s = stats(&full, &incremental);
+    eprintln!("incremental vs full: mean {:.4}, max {}", s.mean, s.max);
+    assert_eq!(
+        s.max, 0,
+        "an incremental frame differs from a full one by {} per channel",
+        s.max
+    );
+}
+
+/// Nothing damaged is nothing drawn: the target keeps exactly what it had.
+#[test]
+fn an_empty_damage_draws_nothing() {
+    let gpu = match Gpu::headless() {
+        Ok(gpu) => gpu,
+        Err(err) => {
+            eprintln!("skipping: {err}");
+            return;
+        }
+    };
+    let (texture, view) = target(&gpu);
+    {
+        let mut painter = gpu.painter(SIZE);
+        Pen::new(&mut painter).fill_rect(Rect::new(0, 0, 200, 120), Color::from_rgb888(0x94E2D5));
+        painter.finish(&view);
+    }
+    let before = gpu.read_texture(&texture).expect("readback");
+
+    let mut painter = gpu.painter(SIZE);
+    Pen::new(&mut painter).clear(Color::from_rgb888(0xF38BA8));
+    painter.finish_onto(&view, &[]);
+    let after = gpu.read_texture(&texture).expect("readback");
+
+    assert_eq!(
+        stats(&before, &after).max,
+        0,
+        "an empty damage changed pixels"
+    );
 }

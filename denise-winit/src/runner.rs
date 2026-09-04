@@ -429,14 +429,21 @@ impl Runner {
             }
             #[cfg(feature = "gpu")]
             Backend::Gpu(surface) => {
-                // A swapchain remembers nothing, so the damage is the window,
-                // whatever the tracker accumulated; the tracker still advances
-                // so the app's `update` bookkeeping stays honest.
-                let whole = [Rect::from_size(surface.size())];
+                // The same resolve the software path does, against the age of
+                // the target this surface keeps between frames: `Frames(1)`
+                // once there is one, so an incremental repaint is a repaint of
+                // the damage rather than of the window.
                 let age = surface.age();
+                let mut resolved = [Rect::ZERO; MAX_DAMAGE_RECTS];
+                let count = {
+                    let src = damage.resolve(age);
+                    resolved[..src.len()].copy_from_slice(src);
+                    src.len()
+                };
+                let region = &resolved[..count];
                 let mut supported = true;
-                let drawn = surface.paint(|pen| {
-                    supported = app.paint(pen, age, &whole);
+                let drawn = surface.paint(region, |pen| {
+                    supported = app.paint(pen, age, region);
                 })?;
                 if !supported {
                     return Err(Error::Gpu(

@@ -22,7 +22,10 @@
 //! force: a whole widget tree with no images is a single draw call.
 //!
 //! [`GpuPainter::finish`] then encodes the frame into a texture view — a
-//! swapchain's, or an offscreen one — and [`GpuPainter::finish_to_pixels`]
+//! swapchain's, or an offscreen one — clearing it first.
+//! [`GpuPainter::finish_onto`] is the incremental form: it keeps what is
+//! already on the target and scissors to the damage, for a caller that owns its
+//! target between frames. [`GpuPainter::finish_to_pixels`]
 //! renders offscreen and reads the result back as `0xAARRGGBB` words, which is
 //! how the parity tests compare it to the software rasteriser.
 //!
@@ -72,6 +75,8 @@ use denise::painter::ClipToken;
 use denise::{
     AtlasPage, Color, ImageRef, Mask, Paint, Painter, PixelFormat, PixelView, Point, Rect, Size,
 };
+pub use wgpu;
+
 use wgpu::util::DeviceExt as _;
 
 /// What can go wrong between asking for a GPU and reading pixels back.
@@ -346,6 +351,81 @@ impl Gpu {
         &self.queue
     }
 
+    /// Reads a texture back as `0xAARRGGBB` words, row after row with no
+    /// padding — the layout a [`denise::Frame`] uses.
+    ///
+    /// The texture must carry [`COPY_SRC`](wgpu::TextureUsages::COPY_SRC) and
+    /// this device's [`format`](Gpu::format). Blocks until the GPU is done; for
+    /// tests, snapshots and tools.
+    pub fn read_texture(&self, texture: &wgpu::Texture) -> Result<Vec<u32>, Error> {
+        let (width, height) = (texture.width().max(1), texture.height().max(1));
+        // Buffer rows must be 256-byte aligned for a texture-to-buffer copy.
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let unpadded = width * 4;
+        let padded = unpadded.div_ceil(align) * align;
+        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("denise readback"),
+            size: u64::from(padded) * u64::from(height),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("denise readback"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+
+        let slice = readback.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        rx.recv().map_err(|_| Error::NoAdapter)??;
+
+        let bgra = matches!(
+            self.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+        let data = slice.get_mapped_range()?;
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+        for row in data.chunks_exact(padded as usize) {
+            for &[c0, c1, c2, c3] in row[..unpadded as usize].as_chunks::<4>().0 {
+                let (r, g, b, a) = if bgra {
+                    (c2, c1, c0, c3)
+                } else {
+                    (c0, c1, c2, c3)
+                };
+                pixels.push(u32::from_be_bytes([a, r, g, b]));
+            }
+        }
+        drop(data);
+        readback.unmap();
+        Ok(pixels)
+    }
+
     /// How many glyph atlas pages this device has uploaded, in total.
     ///
     /// A page is uploaded once per [`AtlasPage::version`], so for a text engine
@@ -533,7 +613,47 @@ impl GpuPainter<'_> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("denise frame"),
             });
-        self.encode(&mut encoder, target);
+        self.encode(
+            &mut encoder,
+            target,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            None,
+        );
+        gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// Draws onto `target` **without clearing it**, restricted to `damage`.
+    ///
+    /// For a target the caller keeps between frames. What `damage` does not
+    /// cover is left exactly as the previous frame left it, which is what makes
+    /// an incremental repaint possible: a swapchain image cannot be used this
+    /// way because it rotates and its age cannot be trusted, so the caller owns
+    /// a texture of its own and copies from it.
+    ///
+    /// `damage` is scissored to its **union**, not rectangle by rectangle. Two
+    /// distant rectangles therefore cost their bounding box in fragments — the
+    /// per-vertex clip still makes each region exact, so this decides how much
+    /// is skipped rather than what is drawn. One pass is worth more than the
+    /// tightest possible scissor, because doing better means replaying the
+    /// vertices once per region.
+    ///
+    /// An empty `damage` draws nothing at all.
+    pub fn finish_onto(self, target: &wgpu::TextureView, damage: &[Rect]) {
+        let Some(union) = damage
+            .iter()
+            .filter(|r| !r.is_empty())
+            .copied()
+            .reduce(|a, b| a.union(&b))
+        else {
+            return;
+        };
+        let gpu = self.gpu;
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("denise damaged frame"),
+            });
+        self.encode(&mut encoder, target, wgpu::LoadOp::Load, Some(union));
         gpu.queue.submit([encoder.finish()]);
     }
 
@@ -561,77 +681,28 @@ impl GpuPainter<'_> {
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Buffer rows must be 256-byte aligned for a texture-to-buffer copy.
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let unpadded = width * 4;
-        let padded = unpadded.div_ceil(align) * align;
-        let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("denise readback"),
-            size: u64::from(padded) * u64::from(height),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("denise offscreen frame"),
             });
-        let format = gpu.format;
-        self.encode(&mut encoder, &view);
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
+        self.encode(
+            &mut encoder,
+            &view,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            None,
         );
         gpu.queue.submit([encoder.finish()]);
-
-        let slice = readback.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
-        rx.recv().map_err(|_| Error::NoAdapter)??;
-
-        let bgra = matches!(
-            format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        );
-        let data = slice.get_mapped_range()?;
-        let mut pixels = Vec::with_capacity((width * height) as usize);
-        for row in data.chunks_exact(padded as usize) {
-            for &[c0, c1, c2, c3] in row[..unpadded as usize].as_chunks::<4>().0 {
-                let (r, g, b, a) = if bgra {
-                    (c2, c1, c0, c3)
-                } else {
-                    (c0, c1, c2, c3)
-                };
-                pixels.push(u32::from_be_bytes([a, r, g, b]));
-            }
-        }
-        drop(data);
-        readback.unmap();
-        Ok(pixels)
+        gpu.read_texture(&texture)
     }
 
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<Rect>,
+    ) {
         let gpu = self.gpu;
         let globals = gpu
             .device
@@ -673,7 +744,7 @@ impl GpuPainter<'_> {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -682,6 +753,19 @@ impl GpuPainter<'_> {
         pass.set_pipeline(&gpu.pipeline);
         pass.set_bind_group(0, &globals_group, &[]);
         pass.set_vertex_buffer(0, vertices.slice(..));
+        // The rasteriser skips everything outside the damage, so those
+        // fragments never run; the per-vertex clip is what makes each region
+        // exact within it.
+        if let Some(r) = scissor {
+            let x = r.x.clamp(0, self.size.width as i32) as u32;
+            let y = r.y.clamp(0, self.size.height as i32) as u32;
+            let w = (r.right().clamp(0, self.size.width as i32) as u32).saturating_sub(x);
+            let h = (r.bottom().clamp(0, self.size.height as i32) as u32).saturating_sub(y);
+            if w == 0 || h == 0 {
+                return;
+            }
+            pass.set_scissor_rect(x, y, w, h);
+        }
         for draw in &self.draws {
             match draw {
                 Draw::Shapes(range) => {

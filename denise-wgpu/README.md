@@ -68,54 +68,58 @@ slope: the rasteriser's cost is per pixel, this crate's is per primitive.
 
 | | 1920×1080 | 3840×2160 | scaling |
 |---|---:|---:|---:|
-| software, full repaint | 600 µs | 2 485 µs | ×4.1 |
-| software, damage only | 6.3 µs | 5.2 µs | ×0.8 |
-| GPU, full repaint (encode + submit) | 306 µs | 641 µs | ×2.1 |
-| GPU, full repaint (to completion) | 777 µs | 1 315 µs | ×1.7 |
+| software, full repaint | 628 µs | 2 656 µs | ×4.2 |
+| software, damage only | 6.6 µs | 5.4 µs | ×0.8 |
+| GPU, full repaint (encode + submit) | 324 µs | 639 µs | ×2.0 |
+| GPU, full repaint (to completion) | 790 µs | 1 284 µs | ×1.6 |
+| GPU, damage only | 51 µs | 54 µs | **×1.06** |
 
-Read it in three parts.
+**On a full repaint the GPU wins, and by more the bigger the window gets** —
+324 µs against 628 µs at 1080p, 639 µs against 2 656 µs at 4K. Four times the
+area is 4.2× the work for the rasteriser and 2.0× here, which is the difference
+between a cost that is per pixel and one that is mostly per primitive.
 
-**The slope is the point.** Four times the area is 4.1× the work for the
-rasteriser and 1.7× for the GPU, which is the difference between a cost that is
-per pixel and one that is mostly per primitive.
+**Incremental repaint is all but free of resolution.** Damage on the GPU costs
+51 µs at 1080p and 54 µs at 4K — ×1.06 for four times the pixels. What is left
+is fixed per-frame cost: two buffers built, a pass encoded, two submits, a
+present. It does not care how large the window is.
 
-**On CPU cost the GPU wins at both sizes** — 306 µs against 600 µs at 1080p,
-641 µs against 2 485 µs at 4K — because the fragments are the device's problem
-rather than a core's. That is the row a 60 Hz application actually pays: it
-pipelines, so the device's own time hides behind the next frame.
+**Which is why the rasteriser still wins a small repaint.** 6.6 µs against
+51 µs, because 50 µs of fixed cost is a great deal to pay to change a few
+hundred pixels. The two costs cross where the damaged area is large enough for
+the rasteriser's per-pixel work to reach the GPU's fixed 50 µs, and that is a
+constant *area* rather than a constant fraction:
 
-**The `to completion` row is the pessimistic one, deliberately.** It makes the
-CPU sit and wait, which is a latency measurement rather than a throughput one,
-and no real loop does it. It is why software appears to win at 1080p (600 µs
-against 777 µs) and it should not be read as the rasteriser being faster:
-the same frame costs the CPU half as much through the GPU. At 4K the GPU wins
-even this row, 1 315 µs against 2 485 µs.
+| | software per 1000 px | crossover |
+|---|---:|---|
+| 1920×1080 | 0.303 µs | 168 000 px — a 410×410 square, 8.1% of the screen |
+| 3840×2160 | 0.320 µs | 169 000 px — a 411×411 square, 2.0% of the screen |
 
-**Damage beats both, by two orders of magnitude — but it is not a rendering
-comparison.** A pointer moving between two buttons dirties two small
-rectangles, and the rasteriser repaints just those in about 6 µs against a full
-GPU frame's 777 µs. That 124× is two rectangles against two million pixels: it
-measures how much work each path *does*, not how fast either draws. A swapchain remembers
-nothing, so the GPU path repaints the window every time and cannot play this
-game at all. For a panel that is idle most of the second, that is the whole
-comparison, and it is why the kiosk path never grew a GPU.
+**So: change less than about a 410×410 square and the rasteriser is cheaper;
+change more and this crate is, by a margin that grows with the window.** A
+hovered button is the first case. A canvas being panned, a scrolling list, a
+resize, anything animating across a Retina window is the second.
 
-So this crate earns its keep on a large window whose content genuinely changes
-every frame — a designer canvas being panned or zoomed on a Retina display —
-and loses badly on an idle one. Damage on the GPU path, by keeping a persistent
-target and scissoring the redraw, is the change that would close that gap; it is
-not written yet.
+The `to completion` row is deliberately pessimistic: it makes the CPU wait for
+the device, which no 60 Hz loop does, and it is a latency measurement rather
+than a throughput one. `encode + submit` is what an application actually pays,
+though not purely — it grows with resolution, so the driver is doing work
+proportional to the attachment inside submit.
 
-The `encode + submit` row is the CPU's share, but not purely: it grows with
-resolution, so the driver is doing work proportional to the attachment inside
-submit. Treat it as an upper bound on what a frame costs a core, not as a
-measurement of recording alone.
-
-For scale, every row here fits inside a 60 Hz budget of 16 667 µs — the slowest
-is 15% of a frame. None of this is the difference between working and not; it
-is headroom, and on a laptop it is battery and fan noise.
+For scale, every row here fits inside a 60 Hz budget of 16 667 µs; the slowest
+is 16% of a frame. None of this is the difference between working and not.
 
 ## What it does not do yet
+
+The 50 µs of fixed per-frame cost is not irreducible. A globals buffer and a
+vertex buffer are built from scratch every frame, the swapchain copy is a
+second submit, and neither has to be that way. That is where a small repaint
+would have to get cheaper for this crate to win one.
+
+`finish_onto` scissors to the *union* of the damage rather than rectangle by
+rectangle, so two distant regions cost their bounding box in fragments. Doing
+better means replaying the vertices once per region, which is not obviously a
+win and has not been tried.
 
 The raw `blit` family — a `PixelView` with no identity — still uploads per
 call. Nothing in the widget set uses it any more; it is there for a caller

@@ -153,7 +153,7 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
             return;
         }
     };
-    let (mut ui, _) = busy_panel(size);
+    let (mut ui, buttons) = busy_panel(size);
 
     // One offscreen target, made once: a swapchain's texture in a window, and
     // not part of what is being timed either way.
@@ -205,6 +205,32 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
             gpu.device()
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("poll");
+            ui.presented();
+        })
+    });
+    // What damage buys on the GPU: the same pointer move as the software case,
+    // repainting only what it dirtied onto a target kept between frames. The
+    // same tree as above, deliberately — a second `Ui` would bring a second
+    // glyph atlas and a second page upload, which is what the assertion at the
+    // end of this function is for.
+    let at = centre(&ui, buttons[7]);
+    let elsewhere = Point::new(at.x, at.y + 400);
+    let mut damage = [Rect::ZERO; 16];
+    group.bench_function("gpu, damaged", |b| {
+        b.iter(|| {
+            ui.handle(&[InputEvent::PointerMoved { position: at }]);
+            ui.handle(&[InputEvent::PointerMoved {
+                position: elsewhere,
+            }]);
+            let count = {
+                let pending = ui.pending_damage();
+                let n = pending.len().min(damage.len());
+                damage[..n].copy_from_slice(&pending[..n]);
+                n
+            };
+            let mut painter = gpu.painter(size);
+            ui.paint_with(&mut Pen::new(&mut painter), BufferAge::Frames(1));
+            painter.finish_onto(black_box(&view), &damage[..count]);
             ui.presented();
         })
     });
