@@ -992,7 +992,11 @@ evaluated per fragment, the clip rides on the vertex and a frame with no images
 is one draw call. It is parity-tested against the rasteriser within a tolerance
 rather than to the byte — the two anti-alias differently and are not meant to
 agree bit for bit. Text comes out identical, translucent fills exact, and the
-worst case is polygon edges, which the GPU path does not yet anti-alias.
+worst case is a curve, where a distance evaluated per fragment and a coverage
+integrated per scanline round differently. Polygons are the closest of all: a
+star is one quad whose shader walks the polygon's own edges, so both paths
+measure the same distance to the same outline and fill by the same even-odd
+rule.
 
 Text crosses the seam as `blit_glyph`: a rectangle of an atlas page that
 carries an id and a version, where the version moves whenever the page's bytes

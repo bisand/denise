@@ -13,13 +13,16 @@
 //!
 //! # How a frame is drawn
 //!
-//! Every call on the painter appends vertices. Rectangles and polygons are
-//! plain triangles; everything with a curve — rounded corners, circles, arcs,
-//! lines — is a bounding quad whose fragment shader evaluates a signed distance
-//! and turns it into one pixel of anti-aliasing. Images and glyph masks are the
-//! same quads with a texture bound. The clip is carried per vertex and applied
-//! per fragment, so a frame is one pipeline and as few draws as the textures
-//! force: a whole widget tree with no images is a single draw call.
+//! Every call on the painter appends vertices. Rectangles are plain triangles;
+//! everything with a curve — rounded corners, circles, arcs, lines — is a
+//! bounding quad whose fragment shader evaluates a signed distance and turns it
+//! into one pixel of anti-aliasing. A polygon has more edges than a vertex can
+//! carry, so its quad carries a range of a buffer that holds them and its
+//! fragment shader walks that range for the nearest edge and for which side of
+//! the outline it is on. Images and glyph masks are the same quads with a
+//! texture bound. The clip is carried per vertex and applied per fragment, so a
+//! frame is one pipeline and as few draws as the textures force: a whole widget
+//! tree with no images is a single draw call.
 //!
 //! [`GpuPainter::finish`] then encodes the frame into a texture view — a
 //! swapchain's, or an offscreen one — clearing it first.
@@ -110,7 +113,11 @@ struct Vertex {
     a: [f32; 4],
     b: [f32; 4],
     kind: u32,
-    _pad: [u32; 3],
+    /// Where this polygon's edges start in the frame's edge buffer, and how
+    /// many there are. Zero for every other kind, and it costs nothing: the
+    /// vertex was padded to a multiple of sixteen bytes anyway.
+    poly: [u32; 2],
+    _pad: u32,
 }
 
 #[repr(C)]
@@ -131,6 +138,7 @@ const KIND_LINE: u32 = 6;
 const KIND_TEXTURED: u32 = 7;
 const KIND_MASK: u32 = 8;
 const KIND_TEXTURED_ROUNDED: u32 = 9;
+const KIND_POLYGON: u32 = 10;
 
 /// The UV rectangle that samples a whole texture.
 const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
@@ -146,10 +154,16 @@ pub struct Gpu {
     pipeline: wgpu::RenderPipeline,
     globals_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
+    edges_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// A one-pixel white texture bound while drawing shapes, so the pipeline
     /// never has to change.
     white: wgpu::BindGroup,
+    /// One empty edge, bound by every frame that draws no polygon. The
+    /// pipeline layout says the group exists, so something must fill it, and
+    /// most frames draw no polygon at all: this keeps them from allocating a
+    /// buffer to say so.
+    no_edges: wgpu::BindGroup,
     /// Glyph atlas pages, by atlas id: the version uploaded and its texture.
     ///
     /// One entry per atlas, replaced when its version moves on. Interior
@@ -219,9 +233,27 @@ impl Gpu {
             ],
         });
 
+        let edges_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("denise polygon edges"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("denise"),
-            bind_group_layouts: &[Some(&globals_layout), Some(&texture_layout)],
+            bind_group_layouts: &[
+                Some(&globals_layout),
+                Some(&texture_layout),
+                Some(&edges_layout),
+            ],
             ..Default::default()
         });
 
@@ -235,6 +267,7 @@ impl Gpu {
                 3 => Float32x4,
                 4 => Float32x4,
                 5 => Uint32,
+                6 => Uint32x2,
             ],
         };
 
@@ -307,6 +340,22 @@ impl Gpu {
             &[255, 255, 255, 255],
         );
 
+        let no_edges = {
+            let empty = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("denise polygon edges (none)"),
+                contents: &[0u8; std::mem::size_of::<[f32; 4]>()],
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("denise polygon edges (none)"),
+                layout: &edges_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: empty.as_entire_binding(),
+                }],
+            })
+        };
+
         Self {
             device,
             queue,
@@ -314,8 +363,10 @@ impl Gpu {
             pipeline,
             globals_layout,
             texture_layout,
+            edges_layout,
             sampler,
             white,
+            no_edges,
             pages: RefCell::new(HashMap::new()),
             page_uploads: Cell::new(0),
             images: RefCell::new(HashMap::new()),
@@ -498,6 +549,7 @@ impl Gpu {
             vertices: Vec::with_capacity(4096),
             draws: Vec::new(),
             textures: Vec::new(),
+            edges: Vec::new(),
         }
     }
 
@@ -640,6 +692,10 @@ pub struct GpuPainter<'g> {
     vertices: Vec<Vertex>,
     draws: Vec<Draw>,
     textures: Vec<wgpu::BindGroup>,
+    /// Every edge of every polygon in the frame, as `x0, y0, x1, y1`. A
+    /// polygon's vertices carry where its own run begins and how long it is,
+    /// and the fragment shader reads the run back out.
+    edges: Vec<[f32; 4]>,
 }
 
 impl GpuPainter<'_> {
@@ -762,6 +818,29 @@ impl GpuPainter<'_> {
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
+        // Most frames draw no polygon and bind the empty group the device was
+        // built with; the rest pay for a buffer, per frame and for the same
+        // reason the vertices are allocated per frame.
+        let edges_group = if self.edges.is_empty() {
+            None
+        } else {
+            let edges = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("denise polygon edges"),
+                    contents: bytemuck::cast_slice(&self.edges),
+                    usage: wgpu::BufferUsages::STORAGE,
+                });
+            Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("denise polygon edges"),
+                layout: &gpu.edges_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: edges.as_entire_binding(),
+                }],
+            }))
+        };
+
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("denise"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -777,6 +856,7 @@ impl GpuPainter<'_> {
         });
         pass.set_pipeline(&gpu.pipeline);
         pass.set_bind_group(0, &globals_group, &[]);
+        pass.set_bind_group(2, edges_group.as_ref().unwrap_or(&gpu.no_edges), &[]);
         pass.set_vertex_buffer(0, vertices.slice(..));
         // The rasteriser skips everything outside the damage, so those
         // fragments never run; the per-vertex clip is what makes each region
@@ -840,7 +920,8 @@ impl GpuPainter<'_> {
                 a,
                 b,
                 kind,
-                _pad: [0; 3],
+                poly: [0; 2],
+                _pad: 0,
             });
         }
         let end = start + 3;
@@ -855,6 +936,32 @@ impl GpuPainter<'_> {
         let [x0, y0, x1, y1] = bounds;
         self.triangle(kind, color, a, b, [[x0, y0], [x1, y0], [x1, y1]]);
         self.triangle(kind, color, a, b, [[x0, y0], [x1, y1], [x0, y1]]);
+    }
+
+    /// The quad a polygon is drawn over, carrying its run of the frame's edge
+    /// buffer. The only shape whose vertices say anything the fragment shader
+    /// has to go and look up.
+    fn polygon_quad(&mut self, color: [f32; 4], bounds: [f32; 4], run: [u32; 2]) {
+        let clip = self.clip_f();
+        let [x0, y0, x1, y1] = bounds;
+        let start = self.vertices.len() as u32;
+        for pos in [[x0, y0], [x1, y0], [x1, y1], [x0, y0], [x1, y1], [x0, y1]] {
+            self.vertices.push(Vertex {
+                pos,
+                clip,
+                color,
+                a: [0.0; 4],
+                b: [0.0; 4],
+                kind: KIND_POLYGON,
+                poly: run,
+                _pad: 0,
+            });
+        }
+        let end = start + 6;
+        match self.draws.last_mut() {
+            Some(Draw::Shapes(range)) if range.end == start => range.end = end,
+            _ => self.draws.push(Draw::Shapes(start..end)),
+        }
     }
 
     /// A textured quad covering `dest`, sampling the whole of texture `index`.
@@ -891,7 +998,8 @@ impl GpuPainter<'_> {
                 a: [uv[0], uv[1], radius, 0.0],
                 b,
                 kind,
-                _pad: [0; 3],
+                poly: [0; 2],
+                _pad: 0,
             });
         }
         self.draws.push(Draw::Textured {
@@ -1152,14 +1260,25 @@ impl Painter for GpuPainter<'_> {
         if points.len() < 3 || paint.is_invisible() || self.clip.is_empty() {
             return;
         }
-        let pts: Vec<[f32; 2]> = points
-            .iter()
-            .map(|&(x, y)| [x as f32 / ONE as f32, y as f32 / ONE as f32])
-            .collect();
-        let c = rgba(paint);
-        for [i, j, k] in ear_clip(&pts) {
-            self.triangle(KIND_SOLID, c, [0.0; 4], [0.0; 4], [pts[i], pts[j], pts[k]]);
+        let first = self.edges.len() as u32;
+        let (mut left, mut top) = (f32::MAX, f32::MAX);
+        let (mut right, mut bottom) = (f32::MIN, f32::MIN);
+        let at = |(x, y): (i32, i32)| [x as f32 / ONE as f32, y as f32 / ONE as f32];
+        for i in 0..points.len() {
+            let p = at(points[i]);
+            let q = at(points[(i + 1) % points.len()]);
+            self.edges.push([p[0], p[1], q[0], q[1]]);
+            left = left.min(p[0]);
+            top = top.min(p[1]);
+            right = right.max(p[0]);
+            bottom = bottom.max(p[1]);
         }
+        // One quad over the bounds, grown by a pixel so the fragments the
+        // outline passes through are inside it and can be partly covered. The
+        // shader does the rest: nothing here decides what is filled.
+        let bounds = [left - 1.0, top - 1.0, right + 1.0, bottom + 1.0];
+        let run = [first, points.len() as u32];
+        self.polygon_quad(rgba(paint), bounds, run);
     }
 
     fn blit_mask(&mut self, at: Point, mask: &Mask<'_>, paint: Paint) {
@@ -1277,75 +1396,6 @@ impl Painter for GpuPainter<'_> {
     }
 }
 
-/// Triangulates a simple polygon by ear clipping. `O(n²)`, which for the
-/// thirty-two vertices an icon may have is nothing.
-///
-/// Stars are concave, so a fan from the first vertex would fill the wrong
-/// shape; this handles any simple polygon in either winding.
-fn ear_clip(pts: &[[f32; 2]]) -> Vec<[usize; 3]> {
-    let n = pts.len();
-    let mut tris = Vec::with_capacity(n.saturating_sub(2));
-    if n < 3 {
-        return tris;
-    }
-    // Signed area: positive means the vertices run clockwise on a y-down
-    // screen, which is the orientation the ear test below assumes.
-    let area: f32 = (0..n)
-        .map(|i| {
-            let (p, q) = (pts[i], pts[(i + 1) % n]);
-            p[0] * q[1] - q[0] * p[1]
-        })
-        .sum();
-    let mut idx: Vec<usize> = if area >= 0.0 {
-        (0..n).collect()
-    } else {
-        (0..n).rev().collect()
-    };
-
-    let cross = |a: [f32; 2], b: [f32; 2], c: [f32; 2]| {
-        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-    };
-    let inside = |a: [f32; 2], b: [f32; 2], c: [f32; 2], p: [f32; 2]| {
-        cross(a, b, p) >= 0.0 && cross(b, c, p) >= 0.0 && cross(c, a, p) >= 0.0
-    };
-
-    let mut guard = 0;
-    while idx.len() > 3 && guard < n * n {
-        guard += 1;
-        let m = idx.len();
-        let mut clipped = false;
-        for i in 0..m {
-            let (ia, ib, ic) = (idx[(i + m - 1) % m], idx[i], idx[(i + 1) % m]);
-            let (a, b, c) = (pts[ia], pts[ib], pts[ic]);
-            if cross(a, b, c) <= 0.0 {
-                continue; // reflex, not an ear
-            }
-            let blocked = idx
-                .iter()
-                .filter(|&&j| j != ia && j != ib && j != ic)
-                .any(|&j| inside(a, b, c, pts[j]));
-            if blocked {
-                continue;
-            }
-            tris.push([ia, ib, ic]);
-            idx.remove(i);
-            clipped = true;
-            break;
-        }
-        if !clipped {
-            // Degenerate input (collinear or self-intersecting). Fan the rest
-            // rather than draw nothing.
-            break;
-        }
-    }
-    if idx.len() >= 3 {
-        for i in 1..idx.len() - 1 {
-            tris.push([idx[0], idx[i], idx[i + 1]]);
-        }
-    }
-    tris
-}
-
 /// Compiles the examples in this crate's README, so they cannot drift from the API
 /// they claim to demonstrate. Never built except under `cargo test --doc`.
 #[cfg(doctest)]
@@ -1355,27 +1405,6 @@ struct Readme;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_star_clips_into_the_right_number_of_ears() {
-        // A five-pointed star: ten vertices, eight triangles.
-        let mut pts = Vec::new();
-        for i in 0..10 {
-            let ang = i as f32 / 10.0 * std::f32::consts::TAU;
-            let r = if i % 2 == 0 { 40.0 } else { 16.0 };
-            pts.push([50.0 + ang.sin() * r, 50.0 - ang.cos() * r]);
-        }
-        assert_eq!(ear_clip(&pts).len(), 8);
-    }
-
-    #[test]
-    fn either_winding_triangulates() {
-        let cw = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
-        let mut ccw = cw;
-        ccw.reverse();
-        assert_eq!(ear_clip(&cw).len(), 2);
-        assert_eq!(ear_clip(&ccw).len(), 2);
-    }
 
     #[test]
     fn paint_converts_to_premultiplied_floats() {
