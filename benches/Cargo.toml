@@ -18,6 +18,9 @@ denise-ui = { workspace = true, features = ["std", "raster"] }
 # The GPU bench measures this against the rasteriser; the crate is desktop-only
 # and the bench skips itself where wgpu finds no adapter.
 denise-wgpu = { workspace = true }
+# For `getrusage`: the CPU-time bench measures what a frame costs a core,
+# which no wall clock can report.
+libc = "0.2"
 wgpu = { workspace = true }
 
 [dev-dependencies]
@@ -41,4 +44,8 @@ harness = false
 
 [[bench]]
 name = "gpu"
+harness = false
+
+[[bench]]
+name = "gpu_cpu"
 harness = false

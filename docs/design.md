@@ -964,12 +964,19 @@ the surface owns holds exactly the previous frame, which makes the age honestly
 incremental frame is byte-identical to a full one, which is the property the
 whole arrangement stands on and is tested as such.
 
-What that buys is measured rather than assumed: a damaged GPU frame costs 38 µs
-at 1080p and 37 µs at 4K — flat in the pixel count, because what remains is
-fixed per-frame cost and not pixel work. The rasteriser still wins a *small*
-repaint, at 6.6 µs, and the two cross at a constant area of about 350×350
-pixels: below that the fixed cost dominates, above it the per-pixel work does.
-A hovered button is below. A panned canvas is above.
+What that buys is measured rather than assumed, and measuring it honestly took
+three attempts. Wall clock cannot answer it: undrained it reports how fast
+frames pile up, drained it is floored by a synchronisation round trip, and both
+hide that this path runs threads of its own. Process CPU time with one drain
+inside the window is the number that decides whether an application has
+headroom.
+
+By that measure a damaged GPU frame costs 139 µs at 1080p and 145 µs at 4K,
+flat in the pixel count, against the rasteriser's 7 µs. The rasteriser wins a
+small repaint by nineteen times, and the two cross at a constant area of about
+600×600 pixels: below that the GPU's per-frame cost dominates, above it the
+rasteriser's per-pixel work does. A hovered button is below. A panned canvas is
+above. On a *full* repaint the GPU wins, 1.4× at 1080p and 4.2× at 4K.
 
 The split falls where it does because of the scroll optimisation. A viewport that
 scrolls moves the rows it can keep with a `copy_within` on the frame's own words,

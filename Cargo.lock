@@ -864,6 +864,7 @@ dependencies = [
  "denise-text",
  "denise-ui",
  "denise-wgpu",
+ "libc",
  "wgpu",
 ]
 
