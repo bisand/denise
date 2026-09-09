@@ -177,10 +177,30 @@ impl Runner {
     ) -> Result<WindowId, Error> {
         let mut attrs = Window::default_attributes()
             .with_title(config.title.clone())
+            .with_resizable(config.resizable);
+
+        // The monitor's own size, in physical pixels, when the application asked
+        // for it. Physical because that is what a monitor reports and what the
+        // surface will be; converting through logical to ask for the same number
+        // back is a rounding error waiting to happen.
+        let monitor = config
+            .fill_monitor
+            .then(|| {
+                event_loop
+                    .primary_monitor()
+                    .or_else(|| event_loop.available_monitors().next())
+            })
+            .flatten();
+        attrs = match monitor {
+            Some(m) => {
+                let s = m.size();
+                attrs.with_inner_size(PhysicalSize::new(s.width, s.height))
+            }
             // Logical, so the window covers the same apparent area whatever the
             // display's DPI. What comes back is physical and may be larger.
-            .with_inner_size(LogicalSize::new(config.size.width, config.size.height))
-            .with_resizable(config.resizable);
+            None => attrs
+                .with_inner_size(LogicalSize::new(config.size.width, config.size.height)),
+        };
 
         // The owner relationship is a creation-time fact on Windows, so it has to
         // be said here even though the platform that needs it most is not the one

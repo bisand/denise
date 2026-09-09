@@ -144,6 +144,18 @@ pub struct WindowConfig {
     pub frame_interval: Duration,
     /// What draws the pixels. See [`Present`].
     pub present: Present,
+    /// Open at the size of the monitor instead of at [`size`](Self::size).
+    ///
+    /// For an application that is going to cover the screen anyway — a kiosk, a
+    /// panel, anything a window manager is about to fullscreen — where asking
+    /// for a window the screen cannot hold is asking to be resized on the way
+    /// up. Some window managers hand such a window a size, then the size it
+    /// asked for, then the size again, and what reaches the glass afterwards is
+    /// not always the last of them.
+    ///
+    /// Falls back to `size` when no monitor can be identified, which is the
+    /// case on some headless and remote displays.
+    pub fill_monitor: bool,
 }
 
 impl Default for WindowConfig {
@@ -154,6 +166,7 @@ impl Default for WindowConfig {
             resizable: true,
             frame_interval: Duration::from_nanos(1_000_000_000 / 60),
             present: Present::Software,
+            fill_monitor: false,
         }
     }
 }
