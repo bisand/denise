@@ -337,13 +337,20 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
+          # --repo on every call: this job builds nothing, so it has no checkout,
+          # and `gh` with neither a repository argument nor a git remote in the
+          # working directory fails the same way as a missing release. It took
+          # the guard below with it -- the first release this workflow ever ran
+          # for uploaded its four archives and then reported "no release called
+          # v0.20.0 — nothing to write notes on", a minute after attaching the
+          # assets to that very release.
+          if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             echo "::notice::no release called $TAG — nothing to write notes on."
             exit 0
           fi
 
           marker="<!-- downloads -->"
-          body=$(gh release view "$TAG" --json body --jq .body)
+          body=$(gh release view "$TAG" --repo "$REPO" --json body --jq .body)
           if printf '%s' "$body" | grep -qF "$marker"; then
             echo "the notes already say this"
             exit 0
@@ -377,5 +384,5 @@ jobs:
           NOTES
           } > notes.md
 
-          gh release edit "$TAG" --notes-file notes.md
+          gh release edit "$TAG" --repo "$REPO" --notes-file notes.md
           echo "the release page now says where the downloads are"
