@@ -198,8 +198,7 @@ impl Runner {
             }
             // Logical, so the window covers the same apparent area whatever the
             // display's DPI. What comes back is physical and may be larger.
-            None => attrs
-                .with_inner_size(LogicalSize::new(config.size.width, config.size.height)),
+            None => attrs.with_inner_size(LogicalSize::new(config.size.width, config.size.height)),
         };
 
         // The owner relationship is a creation-time fact on Windows, so it has to
