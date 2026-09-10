@@ -100,7 +100,9 @@ pub use divider::Divider;
 pub use image::{Fit, Image};
 pub use label::Label;
 pub use list::{List, ListItem};
-pub use menu::{MenuBar, MenuItem, open_menu, open_menu_at, shortcut, title_layout};
+pub use menu::{
+    Menu, MenuBar, MenuEvent, MenuItem, open_menu, open_menu_at, shortcut, title_layout,
+};
 pub use panel::Panel;
 pub use progress::Progress;
 pub use radial::RadialProgress;

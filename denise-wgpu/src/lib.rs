@@ -772,7 +772,7 @@ impl GpuPainter<'_> {
     /// An empty `damage` draws nothing at all.
     ///
     /// Takes the texture rather than a view of it because a frame may first
-    /// move rows the previous frame drew ([`Pen::scroll_rows`]), and a copy
+    /// move rows the previous frame drew ([`Pen::scroll_rows`](denise::Pen::scroll_rows)), and a copy
     /// needs the texture; it must therefore be a copy source and destination
     /// as well as an attachment. The rows are moved before anything is drawn,
     /// so the strip a scroll exposes is painted over what the move left there.
