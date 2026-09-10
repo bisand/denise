@@ -185,6 +185,40 @@ impl Rect {
         self.width <= 0 || self.height <= 0
     }
 
+    /// What is left of `self` once `other` is taken out of it: up to four
+    /// rectangles — the bands above and below the overlap, then what is left
+    /// beside it at the overlap's own height — or `self` itself, whole, when
+    /// the two never meet. Nothing at all when `other` covers `self`.
+    ///
+    /// The pieces never overlap each other, so painting all of them paints
+    /// the difference exactly once.
+    pub fn difference(&self, other: &Rect) -> impl Iterator<Item = Rect> {
+        let mut pieces = [None; 4];
+        match self.intersect(other) {
+            None => pieces[0] = Some(*self),
+            Some(hole) => {
+                pieces[0] = Some(Rect::from_edges(self.x, self.y, self.right(), hole.y));
+                pieces[1] = Some(Rect::from_edges(
+                    self.x,
+                    hole.bottom(),
+                    self.right(),
+                    self.bottom(),
+                ));
+                pieces[2] = Some(Rect::from_edges(self.x, hole.y, hole.x, hole.bottom()));
+                pieces[3] = Some(Rect::from_edges(
+                    hole.right(),
+                    hole.y,
+                    self.right(),
+                    hole.bottom(),
+                ));
+            }
+        }
+        pieces
+            .into_iter()
+            .flatten()
+            .filter(|piece| !piece.is_empty())
+    }
+
     /// Pixel count.
     #[inline]
     pub const fn area(&self) -> u64 {
@@ -295,6 +329,34 @@ impl Rect {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_difference_is_the_pieces_around_the_hole_and_nothing_twice() {
+        let whole = Rect::new(0, 0, 100, 80);
+        let hole = Rect::new(20, 10, 30, 40);
+        let pieces: Vec<Rect> = whole.difference(&hole).collect();
+        assert_eq!(pieces.len(), 4);
+        let covered: u64 = pieces.iter().map(Rect::area).sum();
+        assert_eq!(covered, whole.area() - hole.area());
+        for (i, a) in pieces.iter().enumerate() {
+            assert!(!a.intersects(&hole), "{a:?} overlaps the hole");
+            for b in &pieces[i + 1..] {
+                assert!(!a.intersects(b), "{a:?} and {b:?} overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn a_difference_with_a_stranger_is_the_whole_and_with_a_cover_is_nothing() {
+        let whole = Rect::new(0, 0, 100, 80);
+        let apart: Vec<Rect> = whole.difference(&Rect::new(200, 0, 10, 10)).collect();
+        assert_eq!(apart, vec![whole]);
+        assert_eq!(whole.difference(&Rect::new(-1, -1, 200, 200)).count(), 0);
+        assert_eq!(whole.difference(&whole).count(), 0);
+        // A band along one edge leaves one piece, not four empties.
+        let band = Rect::new(0, 70, 100, 10);
+        let rest: Vec<Rect> = whole.difference(&band).collect();
+        assert_eq!(rest, vec![Rect::new(0, 0, 100, 70)]);
+    }
 
     /// The reason `Rect::scaled` works by edges: two rectangles that touch in
     /// the logical layout must still touch at every scale. Independent

@@ -204,7 +204,9 @@ fn suite(size: Size, label: &str) {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: gpu.format(),
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -252,7 +254,7 @@ fn suite(size: Size, label: &str) {
             };
             let mut painter = gpu.painter(size);
             ui.paint_with(&mut Pen::new(&mut painter), BufferAge::Frames(1));
-            painter.finish_onto(&view, &damage[..count]);
+            painter.finish_onto(&texture, &damage[..count]);
             ui.presented();
         },
         drain,
@@ -262,7 +264,7 @@ fn suite(size: Size, label: &str) {
         "gpu, empty frame",
         || {
             let painter = gpu.painter(size);
-            painter.finish_onto(&view, &speck);
+            painter.finish_onto(&texture, &speck);
         },
         drain,
     );

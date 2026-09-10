@@ -161,6 +161,51 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Moves the pixels inside `rect` up by `dy` rows, or down by `-dy` rows
+    /// when `dy` is negative, within the clip, leaving the rows that came into
+    /// view as they were. [`Painter::scroll_rows`](denise::Painter::scroll_rows)
+    /// for a buffer of words, which is the one kind of target that can: a
+    /// `copy_within` per row, top to bottom when the content moves up and
+    /// bottom to top when it moves down, so the destination always trails the
+    /// source. Answers `false` only when there is nothing to copy — no rows
+    /// inside the clip, or a move further than the rectangle is tall.
+    pub fn scroll_rows(&mut self, rect: Rect, dy: i32) -> bool {
+        let Some(rect) = rect
+            .intersect(&self.clip)
+            .and_then(|r| r.intersect(&Rect::from_size(self.size)))
+        else {
+            return false;
+        };
+        let shift = dy.unsigned_abs() as usize;
+        let (width, height) = (rect.width as usize, rect.height as usize);
+        if dy == 0 || shift >= height || width == 0 {
+            return false;
+        }
+        let stride = self.stride;
+        let (left, top) = (rect.x as usize, rect.y as usize);
+        // The rectangle is inside the surface and the stride covers a row, so
+        // this holds; it is checked because a panic here would be a panic in
+        // the paint.
+        if (top + height - 1) * stride + left + width > self.pixels.len() {
+            return false;
+        }
+        if dy > 0 {
+            // The content moved up, so row `y` takes what row `y + shift` had.
+            for row in 0..height - shift {
+                let from = (top + row + shift) * stride + left;
+                self.pixels
+                    .copy_within(from..from + width, (top + row) * stride + left);
+            }
+        } else {
+            for row in (shift..height).rev() {
+                let from = (top + row - shift) * stride + left;
+                self.pixels
+                    .copy_within(from..from + width, (top + row) * stride + left);
+            }
+        }
+        true
+    }
+
     /// Fills the entire clip with an opaque colour.
     ///
     /// This is the full-frame clear when the clip is untouched, and the
@@ -208,6 +253,49 @@ impl<'a> Canvas<'a> {
 mod tests {
     use super::*;
     use crate::testing::TestCanvas;
+
+    /// Rows moved by a scroll land exactly where a repaint would put them, in
+    /// both directions, and rows outside the rectangle and the clip stay.
+    #[test]
+    fn scrolled_rows_move_within_the_rectangle_and_the_clip() {
+        let mut t = TestCanvas::with_stride(8, 8, 10);
+        {
+            let mut c = t.canvas();
+            for y in 0..8 {
+                c.fill_rect(Rect::new(0, y, 8, 1), Color::rgb(y as u8, 0, 0));
+            }
+            // Rows 1..7 of columns 2..6, moved up two: row 1 takes row 3.
+            assert!(c.scroll_rows(Rect::new(2, 1, 4, 6), 2));
+        }
+        let row = |t: &TestCanvas, x: usize, y: usize| (t.pixels()[y * 10 + x] >> 16) & 0xFF;
+        assert_eq!(row(&t, 3, 1), 3);
+        assert_eq!(row(&t, 3, 4), 6);
+        // The two rows that came into view are left as they were.
+        assert_eq!(row(&t, 3, 5), 5);
+        assert_eq!(row(&t, 3, 6), 6);
+        // Outside the rectangle nothing moved.
+        assert_eq!(row(&t, 0, 1), 1);
+        assert_eq!(row(&t, 3, 0), 0);
+        assert_eq!(row(&t, 3, 7), 7);
+
+        // Down by one inside a clip narrower than the rectangle: only the
+        // clipped columns move, and the row that came into view at the top
+        // keeps what it had.
+        {
+            let mut c = t.canvas();
+            c.clip_to(Rect::new(0, 0, 4, 8));
+            assert!(c.scroll_rows(Rect::new(0, 0, 8, 8), -1));
+        }
+        assert_eq!(row(&t, 1, 2), 1);
+        assert_eq!(row(&t, 1, 0), 0);
+        assert_eq!(row(&t, 6, 2), 2);
+
+        // Nothing to copy is not a move.
+        let mut c = t.canvas();
+        assert!(!c.scroll_rows(Rect::new(0, 0, 8, 8), 8));
+        assert!(!c.scroll_rows(Rect::new(0, 0, 8, 8), 0));
+        assert!(!c.scroll_rows(Rect::new(20, 0, 8, 8), 1));
+    }
 
     #[test]
     fn clip_only_narrows() {

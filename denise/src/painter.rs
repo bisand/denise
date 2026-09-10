@@ -111,6 +111,23 @@ pub trait Painter {
     /// Draws a one-pixel line.
     fn draw_line(&mut self, a: Point, b: Point, paint: Paint);
 
+    /// Moves the pixels inside `rect` up by `dy` rows, or down by `-dy` rows
+    /// when `dy` is negative, within the clip. The `dy` rows that come into
+    /// view at the trailing edge are left as they were, for the caller to
+    /// paint. Answers `false` when this target cannot move its own pixels, in
+    /// which case nothing has changed and the caller repaints the lot.
+    ///
+    /// What a scrolled viewport is made of: most of its rows are the previous
+    /// frame's, one strip higher or lower, and a backend that can shift them
+    /// in place turns a repaint of the viewport into a repaint of the strip.
+    /// The default is honest rather than helpful — a compositor that draws
+    /// every frame whole has nothing to gain from it — and a rasteriser with
+    /// a buffer of words answers with the copy.
+    fn scroll_rows(&mut self, rect: Rect, dy: i32) -> bool {
+        let _ = (rect, dy);
+        false
+    }
+
     /// Fills a polygon whose vertices are in the rasteriser's 8.8 fixed point.
     ///
     /// The primitive icons and stars are made of, which is why it is on the
@@ -516,6 +533,13 @@ impl<'a> Pen<'a> {
     #[inline]
     pub fn blit_image_rounded(&mut self, src: &ImageRef<'_>, dest: Rect, shape: Rect, radius: i32) {
         self.painter.blit_image_rounded(src, dest, shape, radius);
+    }
+
+    /// Moves the pixels inside `rect` up by `dy` rows, down when negative, or
+    /// answers `false` when the painter cannot. See [`Painter::scroll_rows`].
+    #[inline]
+    pub fn scroll_rows(&mut self, rect: Rect, dy: i32) -> bool {
+        self.painter.scroll_rows(rect, dy)
     }
 }
 

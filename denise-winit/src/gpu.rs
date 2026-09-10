@@ -184,7 +184,11 @@ impl GpuSurface {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: self.config.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                // A copy destination too: a scrolled frame moves the rows
+                // the last one drew before painting the strip it exposed.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -203,7 +207,7 @@ impl GpuSurface {
             painter.finish(&canvas.view);
             canvas.fresh = false;
         } else {
-            painter.finish_onto(&canvas.view, damage);
+            painter.finish_onto(&canvas.texture, damage);
         }
 
         // Whole-texture, because the swapchain image rotates and only the

@@ -168,7 +168,10 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: gpu.format(),
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // A copy destination too, since a damaged frame may move rows in it.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -230,7 +233,7 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
             };
             let mut painter = gpu.painter(size);
             ui.paint_with(&mut Pen::new(&mut painter), BufferAge::Frames(1));
-            painter.finish_onto(black_box(&view), &damage[..count]);
+            painter.finish_onto(black_box(&texture), &damage[..count]);
             ui.presented();
         })
     });
@@ -249,7 +252,7 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
     group.bench_function("gpu, empty frame (submit throughput)", |b| {
         b.iter(|| {
             let painter = gpu.painter(size);
-            painter.finish_onto(black_box(&view), &speck);
+            painter.finish_onto(black_box(&texture), &speck);
         })
     });
     // The same, draining the queue every iteration, so nothing piles up. This
@@ -260,7 +263,7 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
     group.bench_function("gpu, empty frame (round trip)", |b| {
         b.iter(|| {
             let painter = gpu.painter(size);
-            painter.finish_onto(black_box(&view), &speck);
+            painter.finish_onto(black_box(&texture), &speck);
             gpu.device()
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("poll");
@@ -282,7 +285,7 @@ fn gpu(c: &mut Criterion, size: Size, label: &str) {
             };
             let mut painter = gpu.painter(size);
             ui.paint_with(&mut Pen::new(&mut painter), BufferAge::Frames(1));
-            painter.finish_onto(black_box(&view), &damage[..count]);
+            painter.finish_onto(black_box(&texture), &damage[..count]);
             ui.presented();
             gpu.device()
                 .poll(wgpu::PollType::wait_indefinitely())

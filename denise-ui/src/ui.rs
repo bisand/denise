@@ -102,11 +102,12 @@ impl LayoutTween {
 /// which is most frames.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Scrolled {
-    /// The viewport that moved.
+    /// The viewport that moved, or the widget that moved its own content.
     node: NodeId,
     /// How far its content moved, this frame.
     by: Point,
-    /// Where the viewport was, so a relayout in the meantime disqualifies it.
+    /// Where the moved content was, so a relayout in the meantime disqualifies
+    /// it. A viewport's clip; whatever part of itself a widget said moved.
     clip: Rect,
 }
 
@@ -2211,18 +2212,20 @@ impl<M: 'static> Ui<M> {
         self.scrolled[self.scroll_head] = None;
     }
 
-    /// Moves the rows a scroll left still valid, and hands back the strip that
-    /// came into view.
+    /// Moves the rows a scroll left still valid, and hands back what moved and
+    /// the strip that came into view.
     ///
     /// A viewport scrolled by `dy` has the same content, moved. Copying what is
     /// still good and drawing only what is new turns a 1584x1016 repaint into a
     /// 1584x20 one, which on a Pi at 1080p is the difference between 25 ms and
     /// about 8 — see [#46](https://github.com/bisand/denise/issues/46).
     ///
-    /// The copy is *within the buffer being drawn into*, which is what makes
-    /// this need nothing new from a backend: that buffer is `age` frames old, so
-    /// it holds the content from `age` frames ago, and the scroll since then is
-    /// what the ring in [`Scrolled`] has been recording.
+    /// The copy is *within the target being drawn into*, through
+    /// [`Pen::scroll_rows`]: that target is `age` frames old, so it holds the
+    /// content from `age` frames ago, and the scroll since then is what the
+    /// ring in [`Scrolled`] has been recording. A painter that cannot move its
+    /// own pixels answers `false`, and the viewport is repainted as it always
+    /// was.
     ///
     /// `None` for anything at all uncertain, and every one of these is a case
     /// where the caller repaints the viewport exactly as it always has:
@@ -2231,14 +2234,15 @@ impl<M: 'static> Ui<M> {
     /// - any of those frames did something other than scroll that one viewport;
     /// - the viewport moved or resized in the meantime;
     /// - the scroll was sideways, or further than the viewport is tall;
-    /// - anything is drawn *over* it — a scene, a tooltip, a toast, the cursor —
-    ///   because an overlay would be copied along with the rows and leave a
-    ///   ghost where it used to be;
-    /// - the damage is anything but that viewport, so the strip would not be
-    ///   the whole of what needs drawing.
-    #[cfg(feature = "raster")]
-    fn scroll_blit(&mut self, frame: &mut Frame<'_>) -> Option<Rect> {
-        let frames = match frame.age() {
+    /// - anything is drawn *over* it — a scene, a tooltip, a toast, the cursor,
+    ///   a node painted later in the order — because an overlay would be
+    ///   copied along with the rows and leave a ghost where it used to be;
+    /// - something inside the viewport is dirty besides the scroll itself.
+    ///
+    /// Damage *outside* the moved rectangle is fine: it is painted as usual,
+    /// with the rectangle cut out of whatever the tracker merged it into.
+    fn scroll_blit_with(&mut self, canvas: &mut Pen<'_>, age: BufferAge) -> Option<(Rect, Rect)> {
+        let frames = match age {
             denise::BufferAge::Frames(n) if (n as usize) <= MAX_TRACKED_FRAMES => n as usize,
             _ => return None,
         };
@@ -2272,51 +2276,49 @@ impl<M: 'static> Ui<M> {
         }
 
         let clip = first.clip.intersect(&Rect::from_size(self.size))?;
-        let shift = moved.y.unsigned_abs() as usize;
-        let (width, height) = (clip.width.max(0) as usize, clip.height.max(0) as usize);
-        if shift == 0 || shift >= height || width == 0 {
+        if moved.y.unsigned_abs() as i32 >= clip.height {
             return None;
         }
 
-        // And nothing else may be dirty, or the strip would not cover it.
-        let only_the_viewport = {
-            let resolved = self.damage.resolve(frame.age());
-            resolved.len() == 1 && resolved[0] == first.clip
-        };
-        if !only_the_viewport {
+        // A node painted after this one that reaches into the rectangle — a
+        // bar the application floated over its log, a panel beside it that
+        // overlaps by a pixel — would be moved with the rows. Its own
+        // descendants are the rows.
+        let start = self.order.iter().position(|&id| id == first.node)?;
+        let end = self.scene_end.first().copied().unwrap_or(self.order.len());
+        let covered = self.order[(start + 1).min(end)..end].iter().any(|&id| {
+            !self.is_descendant_or_self(id, first.node)
+                && self
+                    .nodes
+                    .get(id)
+                    .is_some_and(|node| node.paintable() && node.clip.intersects(&clip))
+        });
+        if covered {
             return None;
         }
 
-        let stride = frame.stride() as usize;
-        let (left, top) = (clip.x.max(0) as usize, clip.y.max(0) as usize);
-        let words = frame.pixels_mut();
-        // Belt and braces: the clip is inside the surface and the stride covers
-        // it, so this holds — and a panic here would be a panic in the paint.
-        if (top + height - 1) * stride + left + width > words.len() {
+        // Anything dirty inside the rectangle other than the scroll itself
+        // means the rows are not what they were. The scroll's own damage is
+        // the rectangle, possibly merged into something larger by the
+        // tracker; a rectangle that cuts into it is neither.
+        let consistent = self
+            .damage
+            .resolve(age)
+            .iter()
+            .all(|r| !r.intersects(&clip) || r.contains_rect(&clip));
+        if !consistent {
             return None;
         }
 
-        if moved.y > 0 {
-            // The content moved up, so row `y` takes what row `y + shift` had.
-            // Top to bottom, because the destination trails the source.
-            for row in 0..height - shift {
-                let from = (top + row + shift) * stride + left;
-                words.copy_within(from..from + width, (top + row) * stride + left);
-            }
-            Some(Rect::new(
-                clip.x,
-                clip.bottom() - moved.y,
-                clip.width,
-                moved.y,
-            ))
+        if !canvas.scroll_rows(clip, moved.y) {
+            return None;
+        }
+        let strip = if moved.y > 0 {
+            Rect::new(clip.x, clip.bottom() - moved.y, clip.width, moved.y)
         } else {
-            // And the other way, bottom to top for the same reason.
-            for row in (shift..height).rev() {
-                let from = (top + row - shift) * stride + left;
-                words.copy_within(from..from + width, (top + row) * stride + left);
-            }
-            Some(Rect::new(clip.x, clip.y, clip.width, -moved.y))
-        }
+            Rect::new(clip.x, clip.y, clip.width, -moved.y)
+        };
+        Some((clip, strip))
     }
 
     /// Draws every damaged region of the scene stack through `canvas`.
@@ -2330,47 +2332,62 @@ impl<M: 'static> Ui<M> {
     /// nothing about how the pixels are produced; [`Ui::paint`] is the one that
     /// takes a [`Frame`] and rasterises into it with `denise-render`.
     ///
-    /// The scroll optimisation is not applied here. Moving rows within the target
-    /// needs the target's own words, which a [`Painter`](denise::Painter) does not
-    /// expose — so a scrolled viewport is repainted rather than shifted. On a CPU
-    /// buffer that is what [`Ui::paint`] avoids; on anything that composites, the
-    /// shift was never the expensive part.
+    /// A frame that was nothing but one viewport scrolling is drawn by moving
+    /// the rows still on screen and painting the strip that came into view,
+    /// when the painter can move its own pixels ([`Pen::scroll_rows`]); one
+    /// that cannot repaints the viewport, which on anything that composites
+    /// was never the expensive part. What is *reported* as damage is untouched
+    /// either way: the screen still needs the whole viewport, because the
+    /// rows moved in this target and not in the one on the panel.
     pub fn paint_with(&mut self, canvas: &mut Pen<'_>, age: BufferAge) {
         self.ensure_order();
-        self.paint_regions(canvas, age, None);
+        let blitted = self.scroll_blit_with(canvas, age);
+        self.paint_regions(canvas, age, blitted);
     }
 
     /// Draws every damaged region of the scene stack into `frame`.
     ///
-    /// [`Ui::paint_with`] with a [`Canvas`] over `frame`, plus the scroll
-    /// optimisation that needs the frame's own words.
+    /// [`Ui::paint_with`] with a [`Canvas`] over `frame`, which is a painter
+    /// that can move rows, so a scrolled viewport costs its strip here.
     #[cfg(feature = "raster")]
     pub fn paint(&mut self, frame: &mut Frame<'_>) {
-        self.ensure_order();
-
-        // The rows a scroll left still valid are moved rather than redrawn, and
-        // what comes back is the strip that came into view. What is *reported*
-        // as damage is untouched: the screen still needs the whole viewport,
-        // because the rows moved in this buffer and not in the one on the panel.
-        let blitted = self.scroll_blit(frame);
         let age = frame.age();
-
         let mut raster = Canvas::new(frame);
         let mut canvas = Pen::new(&mut raster);
-        self.paint_regions(&mut canvas, age, blitted);
+        self.paint_with(&mut canvas, age);
     }
 
-    fn paint_regions(&mut self, canvas: &mut Pen<'_>, age: BufferAge, blitted: Option<Rect>) {
-        let mut regions = [Rect::ZERO; MAX_DAMAGE_RECTS];
+    /// `blitted` is what [`Ui::scroll_blit_with`] moved and the strip it left
+    /// to paint: the strip replaces the moved rectangle in the regions, and
+    /// the rectangle is cut out of any region the tracker merged it into.
+    fn paint_regions(
+        &mut self,
+        canvas: &mut Pen<'_>,
+        age: BufferAge,
+        blitted: Option<(Rect, Rect)>,
+    ) {
+        // The tracker's rectangles, plus what cutting one of them around a
+        // moved rectangle can add: at most one contains it, and that one
+        // becomes up to four.
+        let mut regions = [Rect::ZERO; MAX_DAMAGE_RECTS + 4];
         let count = {
             let resolved = self.damage.resolve(age);
             regions[..resolved.len()].copy_from_slice(resolved);
             resolved.len()
         };
         let count = match blitted {
-            Some(strip) => {
-                regions[0] = strip;
-                1
+            Some((moved, strip)) => {
+                let mut cut = [Rect::ZERO; MAX_DAMAGE_RECTS + 4];
+                cut[0] = strip;
+                let mut n = 1;
+                for region in &regions[..count] {
+                    for piece in region.difference(&moved) {
+                        cut[n] = piece;
+                        n += 1;
+                    }
+                }
+                regions = cut;
+                n
             }
             None => count,
         };
@@ -2729,8 +2746,23 @@ impl<M: 'static> Ui<M> {
         let handled = node.widget.on_event(event, &mut ctx);
         let outcome = ctx.finish();
         let clip = node.clip;
-        if outcome.dirty || handled.is_handled() {
-            self.dirty(clip);
+        match outcome.scrolled {
+            // The widget moved its own content: recorded the way a viewport's
+            // scroll is, before the damage and not through `dirty`, which
+            // would take the record away. What the move did not cover — a
+            // scrollbar, a header — is dirtied like anything else.
+            Some((within, by)) if !outcome.dirty => match within.intersect(&clip) {
+                Some(within) => {
+                    self.note_scroll(id, by, within);
+                    self.damage.add(within);
+                    for rest in clip.difference(&within) {
+                        self.dirty(rest);
+                    }
+                }
+                None => self.dirty(clip),
+            },
+            _ if outcome.dirty || handled.is_handled() => self.dirty(clip),
+            _ => {}
         }
         if outcome.wants_animation {
             self.request_animation(id);

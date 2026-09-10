@@ -979,12 +979,30 @@ rasteriser's per-pixel work does. A hovered button is below. A panned canvas is
 above. On a *full* repaint the GPU wins, 1.4× at 1080p and 4.2× at 4K.
 
 The split falls where it does because of the scroll optimisation. A viewport that
-scrolls moves the rows it can keep with a `copy_within` on the frame's own words,
-and no painter operation expresses an overlapping self-to-self copy — nor should
-one, since the target might be a texture. `Ui::paint` has the frame and does it;
-`Ui::paint_with` does not and repaints the viewport instead. That is the honest
-cost, and it is smallest exactly where it is paid: on anything that composites,
-shifting rows was never the expensive part.
+scrolls moves the rows it can keep and paints only the strip that came into
+view, and for a while that lived in `Ui::paint` alone, as a `copy_within` on the
+frame's own words, on the grounds that no painter operation should express an
+overlapping self-to-self copy when the target might be a texture. It is a
+painter operation now — `Painter::scroll_rows`, which a backend that cannot
+answers `false` to, and the tree repaints the viewport as before — because a
+texture can do it too, just not in place: `denise-wgpu` copies the surviving
+rows out to a scratch texture and back in at their new place, encoded ahead of
+the strip's draw. So `Ui::paint_with` has the optimisation, and the cost stays
+smallest where it is paid: on anything that composites, shifting rows was never
+the expensive part.
+
+The same record serves a widget that scrolls itself. A log view that keeps its
+own top line, or a table with a pinned header, reports the move through
+`EventCtx::scrolled` — the rectangle its content moved within and how far — and
+the tree treats it exactly as a viewport's scroll: the rows are shifted, the
+strip is painted, and whatever the widget left out of the rectangle, a
+scrollbar say, is repainted as usual with the rectangle cut out of any damage
+the tracker merged it into. Anything painted over the rows later in the order
+stops the move, because it would be carried along and leave a ghost; so does
+any other damage inside the rectangle, and `invalidate`, which means what it
+says. A log of seventy lines then costs its two new ones per frame, and the
+measurement that motivated it was a trackpad gesture on a 120 Hz panel where
+the rasteriser's full repaint took most of the 8.3 ms refresh.
 
 `denise-wgpu` is the second implementor, and the reason to have written the
 trait down at all: every call becomes a triangle, curves are signed distances

@@ -93,6 +93,10 @@ impl Painter for Canvas<'_> {
         Canvas::blit_rounded(self, src, dest, shape, radius);
     }
 
+    fn scroll_rows(&mut self, rect: Rect, dy: i32) -> bool {
+        Canvas::scroll_rows(self, rect, dy)
+    }
+
     // `fill_rects`, `stroke_rect`, `fill_star` and `draw_icon` are the trait's
     // provided bodies -- the same arithmetic that used to live in `rect.rs`,
     // `polygon.rs` and `icon.rs`, now inherited by every backend. The inherent

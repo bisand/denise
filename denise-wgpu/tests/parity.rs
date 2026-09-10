@@ -31,7 +31,9 @@ fn target(gpu: &Gpu) -> (wgpu::Texture, wgpu::TextureView) {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: gpu.format(),
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -605,7 +607,7 @@ fn an_incremental_frame_matches_a_full_one() {
             let mut clipped = pen.with_clip(damage[0]);
             scene(&mut clipped, true);
         }
-        painter.finish_onto(&view, &damage);
+        painter.finish_onto(&texture, &damage);
     }
     let incremental = gpu.read_texture(&texture).expect("readback");
 
@@ -643,7 +645,7 @@ fn an_empty_damage_draws_nothing() {
 
     let mut painter = gpu.painter(SIZE);
     Pen::new(&mut painter).clear(Color::from_rgb888(0xF38BA8));
-    painter.finish_onto(&view, &[]);
+    painter.finish_onto(&texture, &[]);
     let after = gpu.read_texture(&texture).expect("readback");
 
     assert_eq!(
@@ -651,4 +653,72 @@ fn an_empty_damage_draws_nothing() {
         0,
         "an empty damage changed pixels"
     );
+}
+
+/// Rows a frame moved land where a repaint would put them, in both
+/// directions, and the strip painted over what the move exposed completes
+/// the picture: the same claim [`an_incremental_frame_matches_a_full_one`]
+/// makes, for the frame a scrolled viewport produces.
+#[test]
+fn scrolled_rows_match_a_repaint() {
+    let gpu = match Gpu::headless() {
+        Ok(gpu) => gpu,
+        Err(err) => {
+            eprintln!("skipping: {err}");
+            return;
+        }
+    };
+    // A viewport of rows whose colour says which row of content they are,
+    // between a header above it and a footer below that never move.
+    let viewport = Rect::new(20, 20, 160, 80);
+    let scene = |pen: &mut Pen<'_>, top: i32| {
+        pen.clear(Color::from_rgb888(0x1E1E2E));
+        pen.fill_rect(Rect::new(0, 0, 200, 20), Color::from_rgb888(0x89B4FA));
+        pen.fill_rect(Rect::new(0, 100, 200, 20), Color::from_rgb888(0xA6E3A1));
+        for y in 0..viewport.height {
+            let content = (top + y) as u8;
+            pen.fill_rect(
+                Rect::new(viewport.x, viewport.y + y, viewport.width, 1),
+                Color::rgb(content, content.wrapping_mul(3), 40),
+            );
+        }
+    };
+
+    for dy in [7, -5] {
+        let (texture, view) = target(&gpu);
+        {
+            let mut painter = gpu.painter(SIZE);
+            scene(&mut Pen::new(&mut painter), 100);
+            painter.finish(&view);
+        }
+        // What `Ui` does: move the rows, then paint only the strip.
+        {
+            let mut painter = gpu.painter(SIZE);
+            {
+                let mut pen = Pen::new(&mut painter);
+                assert!(pen.scroll_rows(viewport, dy));
+                let strip = if dy > 0 {
+                    Rect::new(viewport.x, viewport.bottom() - dy, viewport.width, dy)
+                } else {
+                    Rect::new(viewport.x, viewport.y, viewport.width, -dy)
+                };
+                let mut clipped = pen.with_clip(strip);
+                scene(&mut clipped, 100 + dy);
+            }
+            painter.finish_onto(&texture, &[viewport]);
+        }
+        let scrolled = gpu.read_texture(&texture).expect("readback");
+
+        let mut painter = gpu.painter(SIZE);
+        scene(&mut Pen::new(&mut painter), 100 + dy);
+        let full = painter.finish_to_pixels().expect("readback");
+
+        let s = stats(&full, &scrolled);
+        eprintln!("scroll by {dy}: mean {:.4}, max {}", s.mean, s.max);
+        assert_eq!(
+            s.max, 0,
+            "a frame scrolled by {dy} differs from a repaint by {} per channel",
+            s.max
+        );
+    }
 }

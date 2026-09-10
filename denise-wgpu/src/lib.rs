@@ -178,6 +178,10 @@ pub struct Gpu {
     images: RefCell<HashMap<u64, (u64, wgpu::BindGroup)>>,
     /// How many images have been uploaded, ever.
     image_uploads: Cell<u64>,
+    /// A texture rows pass through when a frame scrolls them: a copy within
+    /// one texture is not allowed, so the rows go out and come back. Kept
+    /// between frames and grown when a taller move needs it.
+    scratch: RefCell<Option<wgpu::Texture>>,
     /// The globals buffer and its bind group, with the size they describe.
     /// They change only when the target does, so they are built on a resize
     /// rather than on a frame.
@@ -372,7 +376,35 @@ impl Gpu {
             images: RefCell::new(HashMap::new()),
             image_uploads: Cell::new(0),
             globals: RefCell::new(None),
+            scratch: RefCell::new(None),
         }
+    }
+
+    /// The scratch texture, at least `width` by `height`.
+    fn scratch(&self, width: u32, height: u32) -> wgpu::Texture {
+        let mut slot = self.scratch.borrow_mut();
+        if let Some(texture) = slot.as_ref()
+            && texture.width() >= width
+            && texture.height() >= height
+        {
+            return texture.clone();
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("denise scroll scratch"),
+            size: wgpu::Extent3d {
+                width: width.max(slot.as_ref().map_or(1, wgpu::Texture::width)),
+                height: height.max(slot.as_ref().map_or(1, wgpu::Texture::height)),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        *slot = Some(texture.clone());
+        texture
     }
 
     /// Any adapter wgpu can find, drawing into `Rgba8Unorm`.
@@ -550,6 +582,7 @@ impl Gpu {
             draws: Vec::new(),
             textures: Vec::new(),
             edges: Vec::new(),
+            scrolls: Vec::new(),
         }
     }
 
@@ -696,6 +729,10 @@ pub struct GpuPainter<'g> {
     /// polygon's vertices carry where its own run begins and how long it is,
     /// and the fragment shader reads the run back out.
     edges: Vec<[f32; 4]>,
+    /// Rows to move before anything is drawn, as the rectangle and how far up
+    /// (down when negative). Only [`finish_onto`](GpuPainter::finish_onto)
+    /// can honour them: a cleared target has no rows to move.
+    scrolls: Vec<(Rect, i32)>,
 }
 
 impl GpuPainter<'_> {
@@ -733,23 +770,84 @@ impl GpuPainter<'_> {
     /// vertices once per region.
     ///
     /// An empty `damage` draws nothing at all.
-    pub fn finish_onto(self, target: &wgpu::TextureView, damage: &[Rect]) {
-        let Some(union) = damage
+    ///
+    /// Takes the texture rather than a view of it because a frame may first
+    /// move rows the previous frame drew ([`Pen::scroll_rows`]), and a copy
+    /// needs the texture; it must therefore be a copy source and destination
+    /// as well as an attachment. The rows are moved before anything is drawn,
+    /// so the strip a scroll exposes is painted over what the move left there.
+    pub fn finish_onto(self, target: &wgpu::Texture, damage: &[Rect]) {
+        let union = damage
             .iter()
             .filter(|r| !r.is_empty())
             .copied()
-            .reduce(|a, b| a.union(&b))
-        else {
+            .reduce(|a, b| a.union(&b));
+        if union.is_none() && self.scrolls.is_empty() {
             return;
-        };
+        }
         let gpu = self.gpu;
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("denise damaged frame"),
             });
-        self.encode(&mut encoder, target, wgpu::LoadOp::Load, Some(union));
+        for &(rect, dy) in &self.scrolls {
+            self.encode_scroll(&mut encoder, target, rect, dy);
+        }
+        if let Some(union) = union {
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            self.encode(&mut encoder, &view, wgpu::LoadOp::Load, Some(union));
+        }
         gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// Moves the rows of `rect` that survive a scroll by `dy`: out to the
+    /// scratch texture and back in at their new place, because wgpu will not
+    /// copy a texture onto itself.
+    fn encode_scroll(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Texture,
+        rect: Rect,
+        dy: i32,
+    ) {
+        let shift = dy.unsigned_abs();
+        let height = (rect.height as u32).saturating_sub(shift);
+        let width = rect.width as u32;
+        if height == 0 || width == 0 {
+            return;
+        }
+        // Up: the surviving rows start `shift` below the top and land at the
+        // top. Down: they start at the top and land `shift` below it.
+        let (from_y, to_y) = if dy > 0 {
+            (rect.y as u32 + shift, rect.y as u32)
+        } else {
+            (rect.y as u32, rect.y as u32 + shift)
+        };
+        let scratch = self.gpu.scratch(width, height);
+        let extent = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+        fn at(texture: &wgpu::Texture, x: u32, y: u32) -> wgpu::TexelCopyTextureInfo<'_> {
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            }
+        }
+        encoder.copy_texture_to_texture(
+            at(target, rect.x as u32, from_y),
+            at(&scratch, 0, 0),
+            extent,
+        );
+        encoder.copy_texture_to_texture(
+            at(&scratch, 0, 0),
+            at(target, rect.x as u32, to_y),
+            extent,
+        );
     }
 
     /// Renders offscreen and reads the frame back as `0xAARRGGBB` words, row
@@ -1377,6 +1475,20 @@ impl Painter for GpuPainter<'_> {
         }
         let index = self.upload_view(src);
         self.textured_quad(KIND_TEXTURED, [1.0; 4], index, dest, WHOLE, ([0.0; 4], 0.0));
+    }
+
+    fn scroll_rows(&mut self, rect: Rect, dy: i32) -> bool {
+        let Some(rect) = rect
+            .intersect(&self.clip)
+            .and_then(|r| r.intersect(&Rect::from_size(self.size)))
+        else {
+            return false;
+        };
+        if dy == 0 || dy.unsigned_abs() as i32 >= rect.height {
+            return false;
+        }
+        self.scrolls.push((rect, dy));
+        true
     }
 
     fn blit_rounded(&mut self, src: &PixelView<'_>, dest: Rect, shape: Rect, radius: i32) {

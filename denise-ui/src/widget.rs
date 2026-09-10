@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 
 use denise::Pen;
-use denise::{InputEvent, Rect, Size, Theme};
+use denise::{InputEvent, Point, Rect, Size, Theme};
 use denise_text::TextEngine;
 
 use crate::motion::Wake;
@@ -317,6 +317,7 @@ pub struct EventCtx<'a, M> {
     wants_animation: bool,
     reveal: Option<Rect>,
     resize: Option<(i32, u64)>,
+    scrolled: Option<(Rect, Point)>,
 }
 
 impl<'a, M> EventCtx<'a, M> {
@@ -340,6 +341,7 @@ impl<'a, M> EventCtx<'a, M> {
             wants_animation: false,
             reveal: None,
             resize: None,
+            scrolled: None,
         }
     }
 
@@ -409,6 +411,28 @@ impl<'a, M> EventCtx<'a, M> {
         self.resize = Some((height, duration_ms));
     }
 
+    /// Records that this widget moved its own content by `by` inside
+    /// `within` — a rectangle in surface coordinates, like
+    /// [`bounds`](EventCtx::bounds) — and changed nothing else there.
+    ///
+    /// For a widget that scrolls itself: a log that keeps its own top line, a
+    /// table with a pinned header. It is what lets the tree move the rows
+    /// still on screen instead of drawing them again, the optimisation a
+    /// viewport scrolled through [`Ui::set_scroll`](crate::Ui::set_scroll)
+    /// already gets, on a target that can shift its own pixels. The rest of
+    /// the widget's rectangle is repainted as usual, which is where a
+    /// scrollbar that did not move belongs: leave it out of `within`.
+    ///
+    /// Only a vertical `by` is moved today; a sideways one repaints. The claim
+    /// is trusted — a widget that says its content moved by `by` and then
+    /// paints something else inside `within` gets whatever that looks like.
+    /// Answer the event `Handled::Yes` as usual; do not also
+    /// [`invalidate`](EventCtx::invalidate), which says "repaint me" and
+    /// takes the move back.
+    pub fn scrolled(&mut self, within: Rect, by: Point) {
+        self.scrolled = Some((within, by));
+    }
+
     pub(crate) fn finish(self) -> Outcome {
         Outcome {
             dirty: self.dirty,
@@ -416,6 +440,7 @@ impl<'a, M> EventCtx<'a, M> {
             wants_animation: self.wants_animation,
             reveal: self.reveal,
             resize: self.resize,
+            scrolled: self.scrolled,
         }
     }
 }
@@ -431,6 +456,7 @@ pub(crate) struct Outcome {
     pub(crate) wants_animation: bool,
     pub(crate) reveal: Option<Rect>,
     pub(crate) resize: Option<(i32, u64)>,
+    pub(crate) scrolled: Option<(Rect, Point)>,
 }
 
 /// What a widget reports back after [`Widget::animate`].
