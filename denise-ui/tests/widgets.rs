@@ -6,7 +6,7 @@ use denise::{
 use denise_ui::widgets::{
     Alert, Avatar, Badge, Button, Carousel, Checkbox, Column, Divider, Fit, Image, Label, List,
     ListItem, Panel, Presence, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
-    Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle,
+    Spinner, TabEvent, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, tab_rect,
 };
 use denise_ui::{Animation, Motion, NodeId, PaintCtx, Ui, Widget};
 
@@ -23,6 +23,7 @@ enum Msg {
     Mode(usize),
     Level(f32),
     Page(usize),
+    Tab(TabEvent),
     Row(usize),
     Open(usize),
     Stars(f32),
@@ -3413,6 +3414,238 @@ fn a_tab_strip_fills_its_node_until_it_is_hosting_pages() {
     assert!(
         banded < theme::DARK.metrics.size_field,
         "the rule sits inside the strip band ({banded})"
+    );
+}
+
+// ------------------------------------------------------ tabs that report events
+
+/// Three closable tabs at 20,20, reporting everything.
+fn document_strip() -> (Ui<Msg>, NodeId) {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            Tabs::with_events(["En", "To", "Tre"], Msg::Tab).with_close_buttons(true),
+            Rect::new(20, 20, 360, 40),
+        )
+        .expect("tabs");
+    (ui, id)
+}
+
+fn centre_of(ui: &mut Ui<Msg>, id: NodeId, index: usize) -> Point {
+    let tab = tab_rect(ui, id, index).expect("a tab");
+    Point::new(tab.x + tab.width / 2, tab.y + tab.height / 2)
+}
+
+fn button_event(button: PointerButton, state: ElementState, at: Point) -> InputEvent {
+    InputEvent::PointerButton {
+        button,
+        state,
+        position: at,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+fn pointer_to(at: Point) -> InputEvent {
+    InputEvent::PointerMoved { position: at }
+}
+
+fn tab_labels(ui: &Ui<Msg>, id: NodeId) -> Vec<String> {
+    ui.widget::<Tabs<Msg>>(id).expect("tabs").labels().to_vec()
+}
+
+/// A tab dragged along the strip goes where it is let go, taking the
+/// selection, and the move is reported once — not once per tab it passed.
+#[test]
+fn a_dragged_tab_moves_and_the_move_is_reported_once() {
+    let (mut ui, id) = document_strip();
+    let from = centre_of(&mut ui, id, 0);
+    let to = centre_of(&mut ui, id, 2);
+    ui.handle(&[
+        pointer_to(from),
+        button_event(PointerButton::Left, ElementState::Down, from),
+        pointer_to(Point::new(from.x + 10, from.y)),
+        pointer_to(Point::new(to.x + 10, to.y)),
+        // Let go outside the strip altogether: a drag keeps the pointer.
+        pointer_to(Point::new(to.x + 10, to.y + 100)),
+        button_event(
+            PointerButton::Left,
+            ElementState::Up,
+            Point::new(to.x + 10, to.y + 100),
+        ),
+    ]);
+    assert_eq!(tab_labels(&ui, id), ["To", "Tre", "En"]);
+    assert_eq!(
+        page(&ui, id),
+        2,
+        "the selected tab moved, and is still selected"
+    );
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Tab(TabEvent::Moved { from: 0, to: 2 })],
+        "the same tab is selected, so no selection is reported"
+    );
+
+    // A tab that was not selected is selected by being dragged, and the move is
+    // reported first, so the index the selection carries is already the new one.
+    let from = centre_of(&mut ui, id, 1);
+    let to = centre_of(&mut ui, id, 0);
+    let dropped = Point::new(to.x - 10, to.y);
+    ui.handle(&[
+        pointer_to(from),
+        button_event(PointerButton::Left, ElementState::Down, from),
+        pointer_to(dropped),
+        button_event(PointerButton::Left, ElementState::Up, dropped),
+    ]);
+    assert_eq!(tab_labels(&ui, id), ["Tre", "To", "En"]);
+    assert_eq!(page(&ui, id), 0);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![
+            Msg::Tab(TabEvent::Moved { from: 1, to: 0 }),
+            Msg::Tab(TabEvent::Selected(0)),
+        ]
+    );
+}
+
+/// A press that wobbles a pixel or two is a click, not a drag.
+#[test]
+fn a_press_that_barely_moves_is_a_click() {
+    let (mut ui, id) = document_strip();
+    let at = centre_of(&mut ui, id, 1);
+    let nudged = Point::new(at.x + 2, at.y + 1);
+    ui.handle(&[
+        pointer_to(at),
+        button_event(PointerButton::Left, ElementState::Down, at),
+        pointer_to(nudged),
+        button_event(PointerButton::Left, ElementState::Up, nudged),
+    ]);
+    assert_eq!(tab_labels(&ui, id), ["En", "To", "Tre"]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Tab(TabEvent::Selected(1))]
+    );
+}
+
+/// A strip that reports only indices cannot tell anybody a tab moved, so it
+/// does not move them: it behaves exactly as it did before strips could.
+#[test]
+fn a_strip_reporting_indices_does_not_drag() {
+    let (mut ui, _, id, _) = strip();
+    let from = centre_of(&mut ui, id, 0);
+    let to = centre_of(&mut ui, id, 2);
+    ui.handle(&[
+        pointer_to(from),
+        button_event(PointerButton::Left, ElementState::Down, from),
+        pointer_to(to),
+        button_event(PointerButton::Left, ElementState::Up, to),
+    ]);
+    assert_eq!(tab_labels(&ui, id), ["En", "To", "Tre"]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Page(2)],
+        "selected where it was let go, as before"
+    );
+}
+
+/// The close button asks; the tab stays until the application removes it. A
+/// middle click asks the same, for any tab, without selecting it.
+#[test]
+fn closing_is_asked_for_and_never_done() {
+    let (mut ui, id) = document_strip();
+    let tab = tab_rect(&mut ui, id, 0).expect("tab");
+    // The trailing end of the selected tab, where its close button is.
+    let close = Point::new(tab.right() - 12, tab.y + tab.height / 2 - 2);
+    ui.handle(&click(close.x, close.y));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Tab(TabEvent::Close(0))]
+    );
+    assert_eq!(tab_labels(&ui, id).len(), 3);
+
+    let two = centre_of(&mut ui, id, 2);
+    ui.handle(&[
+        pointer_to(two),
+        button_event(PointerButton::Middle, ElementState::Down, two),
+        button_event(PointerButton::Middle, ElementState::Up, two),
+    ]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Tab(TabEvent::Close(2))]
+    );
+    assert_eq!(page(&ui, id), 0, "a middle click does not select");
+}
+
+/// A right click reports where it was, for a menu, and selects nothing.
+#[test]
+fn a_right_click_asks_for_a_menu_where_it_landed() {
+    let (mut ui, id) = document_strip();
+    let at = centre_of(&mut ui, id, 1);
+    ui.handle(&[
+        pointer_to(at),
+        button_event(PointerButton::Right, ElementState::Down, at),
+        button_event(PointerButton::Right, ElementState::Up, at),
+    ]);
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![Msg::Tab(TabEvent::Menu { index: 1, at })]
+    );
+    assert_eq!(page(&ui, id), 0);
+}
+
+/// Two quick clicks on a tab select it and then activate it; two slow ones only
+/// select.
+#[test]
+fn a_double_click_activates_a_tab() {
+    let (mut ui, id) = document_strip();
+    let at = centre_of(&mut ui, id, 1);
+    ui.tick(1_000);
+    ui.handle(&click(at.x, at.y));
+    ui.tick(1_150);
+    ui.handle(&click(at.x, at.y));
+    assert_eq!(
+        ui.drain_messages().collect::<Vec<_>>(),
+        vec![
+            Msg::Tab(TabEvent::Selected(1)),
+            Msg::Tab(TabEvent::Activated(1))
+        ]
+    );
+
+    ui.tick(5_000);
+    ui.handle(&click(at.x, at.y));
+    ui.tick(9_000);
+    ui.handle(&click(at.x, at.y));
+    assert!(ui.messages().is_empty(), "slow clicks on the selected tab");
+}
+
+/// The selected tab of a row too wide for its strip is drawn inside the strip.
+#[test]
+fn the_selected_tab_of_a_crowded_strip_is_in_view() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let bounds = Rect::new(20, 20, 150, 40);
+    let id = ui
+        .add(
+            root,
+            Tabs::with_events(
+                ["a-long-first-name", "a-long-second-name", "third"],
+                Msg::Tab,
+            )
+            .with_selected(2),
+            bounds,
+        )
+        .expect("tabs");
+    let tab = tab_rect(&mut ui, id, 2).expect("tab");
+    assert!(
+        tab.x >= bounds.x && tab.right() <= bounds.right(),
+        "{tab:?}"
+    );
+    let at = centre_of(&mut ui, id, 2);
+    ui.handle(&click(at.x, at.y));
+    assert!(
+        ui.messages().is_empty(),
+        "the click lands on the tab drawn there"
     );
 }
 

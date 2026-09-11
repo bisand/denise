@@ -22,7 +22,7 @@
 //! | [`Divider`] | A rule, optionally with a label in it |
 //! | [`Badge`] | A short string in a coloured pill |
 //! | [`Alert`] | A coloured banner with a wrapped message |
-//! | [`Tabs`] | A row of labels, one selected. **One node, so one tab stop** |
+//! | [`Tabs`] | A row of labels, one selected. **One node, so one tab stop.** With events, tabs close, drag, rename and take colours |
 //! | [`List`] | Rows, at most one selected. Selecting and activating are separate |
 //! | [`RadialProgress`] | The circular counterpart, with room for a number in the middle |
 //! | [`Spinner`] | An arc that turns. **The one widget that can keep a device awake** |
@@ -115,7 +115,7 @@ pub use slider::Slider;
 pub use spinner::Spinner;
 pub use style::{Align, Orientation};
 pub use table::{Column, Table};
-pub use tabs::Tabs;
+pub use tabs::{TabEvent, Tabs, tab_rect};
 pub use text_area::{ClipboardRequest, Pos, Span, TextArea, TextBuffer, TextDocument, end_of};
 pub use text_input::TextInput;
 pub use timeline::{Timeline, TimelineItem};
