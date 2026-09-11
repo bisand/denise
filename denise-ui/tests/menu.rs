@@ -2,7 +2,10 @@
 //! pointer and closes when the pointer settles on another row, a release
 //! chooses, a press outside dismisses, and sliding along the bar switches.
 
-use denise::{ElementState, InputEvent, KeyCode, Modifiers, Point, Rect, Size, theme};
+use denise::{
+    BufferAge, ElementState, Frame, InputEvent, KeyCode, Modifiers, PixelFormat, Point, Rect, Size,
+    theme,
+};
 use denise_ui::widgets::{Menu, MenuBar, MenuEvent, MenuItem, open_menu, title_layout};
 use denise_ui::{NodeId, Ui};
 
@@ -117,6 +120,83 @@ impl Fixture {
             .style();
         title_layout(&titles, BAR, style, self.ui.text_mut())[index]
     }
+
+    /// The rows drawn lit, as `(panel, row)`, read from a painted frame: a row
+    /// is lit when the edge of its highlight is not the panel's own colour.
+    fn lit(&mut self) -> Vec<(usize, usize)> {
+        let mut pixels = vec![0u32; (SIZE.width * SIZE.height) as usize];
+        {
+            let mut frame = Frame::new(
+                &mut pixels,
+                SIZE,
+                SIZE.width,
+                PixelFormat::Xrgb8888,
+                BufferAge::Undefined,
+            )
+            .expect("frame");
+            self.ui.paint(&mut frame);
+        }
+        let at = |x: i32, y: i32| pixels[(y as u32 * SIZE.width + x as u32) as usize] & 0x00FF_FFFF;
+        let mut lit = Vec::new();
+        for (k, panel) in self.panels().into_iter().enumerate() {
+            let ground = at(panel.x + panel.width / 2, panel.y + 2);
+            let mut row = 0;
+            while let Some(r) = self.menu().row_rect(k, row) {
+                if at(r.right() - 3, r.y + r.height / 2) != ground {
+                    lit.push((k, row));
+                }
+                row += 1;
+            }
+        }
+        lit
+    }
+}
+
+#[test]
+fn a_pointer_that_leaves_the_menu_leaves_no_row_lit_for_it() {
+    let mut f = Fixture::open();
+    f.move_to(f.centre(0, 0));
+    assert_eq!(f.lit(), vec![(0, 0)]);
+    let panel = f.panels()[0];
+    f.move_to(Point::new(panel.x + panel.width / 2, panel.bottom() + 40));
+    assert!(f.lit().is_empty(), "nothing under the pointer, nothing lit");
+
+    // Recent opens its submenu, and the pointer crosses Quit on its way out
+    // before the submenu has followed it. Quit is not left lit: only Recent,
+    // whose submenu is still open — until it closes, as it would have.
+    let mut f = Fixture::open();
+    f.move_to(f.centre(0, 2));
+    f.move_to(f.centre(0, 4));
+    assert_eq!(f.lit(), vec![(0, 2), (0, 4)]);
+    let panel = f.panels()[0];
+    f.move_to(Point::new(panel.x + panel.width / 2, panel.bottom() + 40));
+    assert_eq!(f.lit(), vec![(0, 2)], "the row the pointer crossed is not");
+    f.ui.tick(500);
+    assert_eq!(f.panels().len(), 1, "the submenu still closed");
+    assert!(f.lit().is_empty());
+}
+
+#[test]
+fn inside_a_submenu_the_panel_it_opened_from_lights_only_the_row_that_opened_it() {
+    let mut f = Fixture::open();
+    f.move_to(f.centre(0, 2));
+    f.move_to(f.centre(0, 4)); // cutting the corner over Quit
+    f.move_to(f.centre(1, 0));
+    assert_eq!(f.lit(), vec![(0, 2), (1, 0)]);
+}
+
+#[test]
+fn a_pointer_that_leaves_the_window_leaves_no_row_lit() {
+    let mut f = Fixture::open();
+    f.move_to(f.centre(0, 0));
+    assert_eq!(f.lit(), vec![(0, 0)]);
+    f.ui.handle(&[InputEvent::PointerLeft]);
+    assert!(
+        f.lit().is_empty(),
+        "the pointer is not over the menu any more"
+    );
+    f.move_to(f.centre(0, 4));
+    assert_eq!(f.lit(), vec![(0, 4)], "and lights the row it comes back to");
 }
 
 #[test]

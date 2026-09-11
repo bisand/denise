@@ -14,6 +14,8 @@ use crate::overlay::{Side, anchored};
 use crate::widget::{
     Animation, Event, EventCtx, Handled, MeasureCtx, Measured, Offer, PaintCtx, Widget,
 };
+
+use super::style::hovered_row;
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, ROLES, Value,
 };
@@ -914,6 +916,19 @@ impl<M: 'static> Menu<M> {
         None
     }
 
+    /// Drops the pointer's highlight from every panel but `keep`, reporting
+    /// whether any was lit. A row holding a submenu open stays lit regardless:
+    /// that comes from the submenu being open, not from the pointer.
+    fn unhover_except(&mut self, keep: Option<usize>) -> bool {
+        let mut changed = false;
+        for (i, panel) in self.panels.iter_mut().enumerate() {
+            if Some(i) != keep {
+                changed |= panel.hovered.take().is_some();
+            }
+        }
+        changed
+    }
+
     fn pointer_moved(&mut self, p: Point, ctx: &mut EventCtx<'_, M>) -> Handled {
         // Sliding along the bar: another title opens that menu instead.
         if let Some(title) = self.title_at(p)
@@ -928,12 +943,11 @@ impl<M: 'static> Menu<M> {
         self.announced = None;
 
         let Some((k, row)) = self.hit(p) else {
-            // Off every panel: the deepest panel drops its highlight unless
-            // it is holding a submenu open, which the pointer may be on its
-            // way to.
-            let deepest = self.panels.len() - 1;
-            let changed = self.panels[deepest].hovered.take().is_some();
-            self.pending = None;
+            // Off every panel: no row is under the pointer, so none is lit
+            // for it. A submenu already closing for a row the pointer rested
+            // on still closes — the pointer left that way, not into it — and
+            // one still open keeps its row lit.
+            let changed = self.unhover_except(None);
             return if changed { Handled::Yes } else { Handled::No };
         };
         let (row, opens) = {
@@ -941,13 +955,11 @@ impl<M: 'static> Menu<M> {
             let row = row.filter(|&r| items[r].selectable());
             (row, row.is_some_and(|r| !items[r].items.is_empty()))
         };
-        let mut changed = false;
 
-        // Panels deeper than the one under the pointer lose their highlight;
-        // the one under it follows the pointer.
-        for deeper in &mut self.panels[k + 1..] {
-            changed |= deeper.hovered.take().is_some();
-        }
+        // Only the panel under the pointer follows it. The panels it opened
+        // from show the rows holding their submenus open, and not a row the
+        // pointer crossed on its way in.
+        let mut changed = self.unhover_except(Some(k));
         if self.panels[k].hovered != row {
             self.panels[k].hovered = row;
             changed = true;
@@ -1119,8 +1131,11 @@ impl<M: 'static> Menu<M> {
                 );
                 continue;
             }
+            // The pointer's row only while the tree still says the pointer is
+            // here: leaving the window is not an event this widget receives.
+            let hovered = hovered_row(ctx.state, panel.hovered);
             let highlighted = item.selectable()
-                && (panel.selected == Some(i) || panel.hovered == Some(i) || self.submenu_of(k, i));
+                && (panel.selected == Some(i) || hovered == Some(i) || self.submenu_of(k, i));
             let fg = if highlighted {
                 canvas.fill_rounded_rect(row, g.radius_row, theme.color(Role::Primary));
                 theme.content_of(Role::Primary)
