@@ -346,8 +346,12 @@ pub struct TextArea<M, D = TextBuffer> {
     goal_x: Option<i32>,
     /// First line drawn.
     top: usize,
-    /// Pixels the text is scrolled sideways.
-    scroll_x: i32,
+    /// Pixels the text is scrolled sideways. A `Cell`, because a range
+    /// selected from outside an event — [`select_range`](Self::select_range)
+    /// — can only be measured, and so scrolled to, by the next paint.
+    scroll_x: Cell<i32>,
+    /// Paint is to scroll the caret's range into view sideways.
+    reveal_pending: Cell<bool>,
     /// Wheel pixels not yet worth a whole line.
     wheel_rest: i32,
     style: TextStyle,
@@ -407,7 +411,7 @@ impl<M> TextArea<M, TextBuffer> {
         self.caret = Pos::ZERO;
         self.anchor = None;
         self.top = 0;
-        self.scroll_x = 0;
+        self.scroll_x.set(0);
     }
 }
 
@@ -427,7 +431,8 @@ impl<M, D: TextDocument> TextArea<M, D> {
             anchor: None,
             goal_x: None,
             top: 0,
-            scroll_x: 0,
+            scroll_x: Cell::new(0),
+            reveal_pending: Cell::new(false),
             wheel_rest: 0,
             style: TextStyle::built_in(16),
             gutter: true,
@@ -504,7 +509,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.caret = Pos::ZERO;
         self.anchor = None;
         self.top = 0;
-        self.scroll_x = 0;
+        self.scroll_x.set(0);
     }
 
     /// The font and size.
@@ -617,7 +622,30 @@ impl<M, D: TextDocument> TextArea<M, D> {
         let rows = self.rows_seen.get();
         let top = self.caret.line.saturating_sub(rows / 2);
         self.top = top.min(self.max_top(rows));
-        self.scroll_x = 0;
+        self.scroll_x.set(0);
+    }
+
+    /// Selects `[from, to)` with the caret at `to`, both clamped to the
+    /// document, and scrolls the selection into view: centred on its first
+    /// line if that was off screen, and sideways on the next paint, which has
+    /// the fonts to measure it with. What a find lands on. Silent.
+    pub fn select_range(&mut self, from: Pos, to: Pos) {
+        let (from, to) = (self.clamp(from), self.clamp(to));
+        self.anchor = Some(from);
+        self.caret = to;
+        self.goal_x = None;
+        let rows = self.rows_seen.get();
+        let shown = rows > 0 && from.line >= self.top && to.line < self.top + rows;
+        if !shown {
+            let top = from.line.saturating_sub(rows / 2);
+            self.top = top.min(self.max_top(rows));
+        }
+        self.reveal_pending.set(true);
+    }
+
+    /// Pixels the text is scrolled sideways.
+    pub fn scroll_x(&self) -> i32 {
+        self.scroll_x.get()
     }
 
     /// The largest top that still fills `rows` rows, or the last line when
@@ -782,7 +810,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
         let row = ((point.y - bounds.y).max(0) / row_h).max(0) as usize;
         let line = (self.top + row).min(self.known_lines() - 1);
         let text = self.line_text(line).unwrap_or_default();
-        let x = point.x - self.text_rect(engine, bounds).x + self.scroll_x;
+        let x = point.x - self.text_rect(engine, bounds).x + self.scroll_x.get();
         Pos::new(line, self.col_at_x(engine, &text, x))
     }
 
@@ -794,6 +822,11 @@ impl<M, D: TextDocument> TextArea<M, D> {
         } else if self.caret.line >= self.top + rows {
             self.top = self.caret.line + 1 - rows;
         }
+        self.reveal_caret_x(engine, bounds);
+    }
+
+    /// Scrolls sideways so the caret is on screen.
+    fn reveal_caret_x(&self, engine: &mut TextEngine, bounds: Rect) {
         let area = self.text_rect(engine, bounds);
         if area.width <= 0 {
             return;
@@ -803,10 +836,31 @@ impl<M, D: TextDocument> TextArea<M, D> {
         };
         let x = self.x_of(engine, &line, self.caret.col);
         let caret_w = self.caret_width() + self.pad();
-        if x < self.scroll_x {
-            self.scroll_x = x;
-        } else if x + caret_w > self.scroll_x + area.width {
-            self.scroll_x = x + caret_w - area.width;
+        let scroll = self.scroll_x.get();
+        if x < scroll {
+            self.scroll_x.set(x);
+        } else if x + caret_w > scroll + area.width {
+            self.scroll_x.set(x + caret_w - area.width);
+        }
+    }
+
+    /// Scrolls sideways so the caret is on screen and, when the selection is
+    /// on one line and fits, the start of it too: a match at the far end of a
+    /// long line is shown whole rather than cut at the left edge.
+    fn reveal_range_x(&self, engine: &mut TextEngine, bounds: Rect) {
+        self.reveal_caret_x(engine, bounds);
+        let Some(anchor) = self.anchor else { return };
+        if anchor.line != self.caret.line || anchor.col >= self.caret.col {
+            return;
+        }
+        let Some(line) = self.line_text(self.caret.line) else {
+            return;
+        };
+        let width = self.text_rect(engine, bounds).width;
+        let start = self.x_of(engine, &line, anchor.col);
+        let end = self.x_of(engine, &line, self.caret.col) + self.caret_width() + self.pad();
+        if start < self.scroll_x.get() && end - start <= width {
+            self.scroll_x.set(start);
         }
     }
 
@@ -1153,12 +1207,12 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.wheel_rest -= lines * row_h;
         let max_top = self.max_top(self.rows(engine, bounds));
         let top = self.top.saturating_add_signed(lines as isize).min(max_top);
-        let scroll_x = (self.scroll_x + delta_x as i32).max(0);
-        if top == self.top && scroll_x == self.scroll_x {
+        let scroll_x = (self.scroll_x.get() + delta_x as i32).max(0);
+        if top == self.top && scroll_x == self.scroll_x.get() {
             return Handled::No;
         }
         self.top = top;
-        self.scroll_x = scroll_x;
+        self.scroll_x.set(scroll_x);
         Handled::Yes
     }
 }
@@ -1233,8 +1287,11 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
 
         let row_h = self.row_height(ctx.text);
         let gutter_w = self.gutter_width(ctx.text);
+        if self.reveal_pending.take() {
+            self.reveal_range_x(ctx.text, bounds);
+        }
         let area = self.text_rect(ctx.text, bounds);
-        let text_x = area.x - self.scroll_x;
+        let text_x = area.x - self.scroll_x.get();
         let content = if disabled {
             theme.color(Role::Base300)
         } else {

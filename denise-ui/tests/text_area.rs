@@ -423,6 +423,57 @@ fn go_to_centres_the_line_once_the_rows_are_known() {
     assert_eq!(area(&ui, id).top(), 1000 - rows);
 }
 
+/// Paints the whole tree once into a throwaway frame.
+fn paint_once(ui: &mut Ui<Msg>) {
+    let mut pixels = vec![0u32; (SIZE.width * SIZE.height) as usize];
+    let mut frame = denise::Frame::new(
+        &mut pixels,
+        SIZE,
+        SIZE.width,
+        denise::PixelFormat::Xrgb8888,
+        denise::BufferAge::Undefined,
+    )
+    .expect("frame");
+    ui.paint(&mut frame);
+}
+
+#[test]
+fn a_selected_range_is_scrolled_into_view() {
+    let mut lines: Vec<String> = (1..=1000).map(|n| format!("line {n}")).collect();
+    lines[700] = format!("{}needle", "x".repeat(400));
+    let (mut ui, id) = editor(&lines.join("\n"));
+    paint_once(&mut ui);
+    let rows = area(&ui, id).visible_rows();
+
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .select_range(Pos::new(700, 400), Pos::new(700, 406));
+    assert_eq!(
+        area(&ui, id).selection(),
+        Some((Pos::new(700, 400), Pos::new(700, 406)))
+    );
+    assert_eq!(area(&ui, id).caret(), Pos::new(700, 406));
+    assert_eq!(area(&ui, id).selected_text().as_deref(), Some("needle"));
+    assert_eq!(area(&ui, id).top(), 700 - rows / 2, "centred on its line");
+    assert_eq!(area(&ui, id).scroll_x(), 0, "sideways waits for a paint");
+    paint_once(&mut ui);
+    let scrolled = area(&ui, id).scroll_x();
+    assert!(scrolled > 0, "the paint scrolled across to the match");
+
+    // A range already on screen leaves the view where it is.
+    let top = area(&ui, id).top();
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .select_range(Pos::new(top + 1, 0), Pos::new(top + 1, 4));
+    assert_eq!(area(&ui, id).top(), top);
+    paint_once(&mut ui);
+    assert_eq!(
+        area(&ui, id).scroll_x(),
+        0,
+        "and sideways back to its start"
+    );
+}
+
 #[test]
 fn moving_the_caret_off_screen_scrolls_to_it() {
     let lines: Vec<String> = (1..=100).map(|n| format!("line {n}")).collect();
