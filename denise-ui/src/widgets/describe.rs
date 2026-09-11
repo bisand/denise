@@ -676,7 +676,7 @@ impl Value {
 ///
 /// [`Describe::apply`] returns this and [`Describe::set`] turns it into a
 /// [`PropertyError`] that names the widget and the property. The split exists so
-/// that twenty-seven `apply` implementations do not each repeat the context they
+/// that twenty-eight `apply` implementations do not each repeat the context they
 /// all share.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mismatch {

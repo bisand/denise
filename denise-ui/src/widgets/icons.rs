@@ -1,6 +1,6 @@
 //! Every widget's glyph: a portrait of the thing, drawn rather than looked up.
 //!
-//! A palette that lists twenty-seven widgets by name serves the person who
+//! A palette that lists twenty-eight widgets by name serves the person who
 //! already knows which one they want. A glyph beside the name serves everybody
 //! else — and the glyph has to be drawable on every machine, which rules out an
 //! icon font before the argument starts: [`denise::icon`] exists because
@@ -35,7 +35,7 @@
 //! A widget names its glyph through [`Describe::ICON`](super::Describe::ICON),
 //! next to its `DOC` and its `GROUP`, and [`all`](super::all) carries it in
 //! [`WidgetInfo`](super::WidgetInfo) — so a palette draws glyphs without naming
-//! widgets, and the twenty-eighth widget cannot be merged without one. The
+//! widgets, and the twenty-ninth widget cannot be merged without one. The
 //! tests at the bottom hold every glyph to the format's real limits.
 //!
 //! [`Ink::Back`]: denise::icon::Ink::Back
