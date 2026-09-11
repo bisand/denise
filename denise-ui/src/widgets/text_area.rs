@@ -367,6 +367,8 @@ pub struct TextArea<M, D = TextBuffer> {
     wheel_rest: i32,
     style: TextStyle,
     gutter: bool,
+    /// Columns from one tab stop to the next, a column being a space wide.
+    tab_width: u8,
     read_only: bool,
     on_change: Option<M>,
     on_clipboard: Option<fn(ClipboardRequest) -> M>,
@@ -447,6 +449,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
             wheel_rest: 0,
             style: TextStyle::built_in(16),
             gutter: true,
+            tab_width: 4,
             read_only: false,
             on_change: None,
             on_clipboard: None,
@@ -493,6 +496,14 @@ impl<M, D: TextDocument> TextArea<M, D> {
     #[must_use]
     pub fn with_gutter(mut self, gutter: bool) -> Self {
         self.gutter = gutter;
+        self
+    }
+
+    /// Sets how many columns apart the tab stops are; four unless told.
+    /// A column is a space wide, and at least one.
+    #[must_use]
+    pub fn with_tab_width(mut self, columns: u8) -> Self {
+        self.tab_width = columns.max(1);
         self
     }
 
@@ -543,6 +554,17 @@ impl<M, D: TextDocument> TextArea<M, D> {
     /// Numbers the lines, or stops.
     pub fn set_gutter(&mut self, gutter: bool) {
         self.gutter = gutter;
+    }
+
+    /// How many columns apart the tab stops are.
+    #[inline]
+    pub const fn tab_width(&self) -> u8 {
+        self.tab_width
+    }
+
+    /// Moves the tab stops `columns` apart, at least one.
+    pub fn set_tab_width(&mut self, columns: u8) {
+        self.tab_width = columns.max(1);
     }
 
     /// Whether editing is off.
@@ -778,9 +800,60 @@ impl<M, D: TextDocument> TextArea<M, D> {
         (bounds.height / self.row_height(engine)).max(1) as usize
     }
 
-    /// Horizontal offset of `col` within `line`, unscrolled.
+    /// Horizontal offset of `col` within `line`, unscrolled, with every tab
+    /// before it reaching its stop.
+    ///
+    /// Everything that turns a column into a position goes through here or
+    /// through [`advance`](Self::advance) — the caret, a click, the
+    /// selection, the marks, scrolling to the caret — so a tab is as wide to
+    /// all of them as it is drawn.
     fn x_of(&self, engine: &mut TextEngine, line: &str, col: usize) -> i32 {
-        engine.measure_line(self.style, &line[..col.min(line.len())])
+        self.advance(engine, 0, &line[..col.min(line.len())])
+    }
+
+    /// Where `text` ends when it starts `x` pixels into its line: its width
+    /// added, except that a tab jumps to the next stop. Stops are counted
+    /// from the start of the line, so `x` must be too.
+    fn advance(&self, engine: &mut TextEngine, mut x: i32, text: &str) -> i32 {
+        for (i, piece) in text.split('\t').enumerate() {
+            if i > 0 {
+                x = self.next_stop(engine, x);
+            }
+            if !piece.is_empty() {
+                x += engine.measure_line(self.style, piece);
+            }
+        }
+        x
+    }
+
+    /// The first tab stop past `x`: a tab at a stop goes on to the next one,
+    /// as it does in every terminal.
+    fn next_stop(&self, engine: &mut TextEngine, x: i32) -> i32 {
+        let stop = engine.measure_line(self.style, " ").max(1) * i32::from(self.tab_width.max(1));
+        (x.max(0) / stop + 1) * stop
+    }
+
+    /// Draws `text` starting `x` pixels into the line that begins at
+    /// `origin`, tabs reaching their stops, and returns where it ends.
+    fn draw_run(
+        &self,
+        engine: &mut TextEngine,
+        canvas: &mut Pen<'_>,
+        origin: Point,
+        mut x: i32,
+        text: &str,
+        color: Color,
+    ) -> i32 {
+        for (i, piece) in text.split('\t').enumerate() {
+            if i > 0 {
+                x = self.next_stop(engine, x);
+            }
+            if !piece.is_empty() {
+                let at = Point::new(origin.x + x, origin.y);
+                x += engine.draw(canvas, self.style, at, piece, color).width as i32;
+            }
+        }
+        x
     }
 
     /// The character boundary of `line` nearest to `x`.
@@ -1354,7 +1427,9 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             // long line is thousands of marks, and measuring every prefix
             // would be quadratic in the line. Marks past the right edge are
             // not measured at all.
-            let (mut col, mut x) = (0, text_x);
+            // Positions are kept from the start of the line, where tab stops
+            // are counted from, and moved by the scroll only to be drawn.
+            let (mut col, mut x) = (0, 0);
             for mark in &marks {
                 if mark.start < col
                     || mark.start >= mark.end
@@ -1364,18 +1439,15 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 {
                     continue;
                 }
-                let x0 = x + ctx.text.measure_line(self.style, &line[col..mark.start]);
-                if x0 >= area.right() {
+                let start = self.advance(ctx.text, x, &line[col..mark.start]);
+                if text_x + start >= area.right() {
                     break;
                 }
-                let x1 = x0
-                    + ctx
-                        .text
-                        .measure_line(self.style, &line[mark.start..mark.end]);
-                if x1 > area.x {
-                    clipped.fill_rect(Rect::new(x0, y, x1 - x0, row_h), marked);
+                let end = self.advance(ctx.text, start, &line[mark.start..mark.end]);
+                if text_x + end > area.x {
+                    clipped.fill_rect(Rect::new(text_x + start, y, end - start, row_h), marked);
                 }
-                (col, x) = (mark.end, x1);
+                (col, x) = (mark.end, end);
             }
 
             if let Some((from, to)) = selection
@@ -1397,44 +1469,23 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             if !disabled {
                 self.doc().spans(n, &mut spans);
             }
-            let mut x = text_x;
+            let origin = Point::new(text_x, y);
+            let mut x = 0;
             let mut at = 0;
             for span in spans
                 .iter()
                 .filter(|s| s.start < s.end && s.end <= line.len())
             {
                 if span.start > at {
-                    x += ctx
-                        .text
-                        .draw(
-                            &mut clipped,
-                            self.style,
-                            Point::new(x, y),
-                            &line[at..span.start],
-                            content,
-                        )
-                        .width as i32;
+                    let run = &line[at..span.start];
+                    x = self.draw_run(ctx.text, &mut clipped, origin, x, run, content);
                 }
-                x += ctx
-                    .text
-                    .draw(
-                        &mut clipped,
-                        self.style,
-                        Point::new(x, y),
-                        &line[span.start..span.end],
-                        span.color,
-                    )
-                    .width as i32;
+                let run = &line[span.start..span.end];
+                x = self.draw_run(ctx.text, &mut clipped, origin, x, run, span.color);
                 at = span.end;
             }
             if at < line.len() {
-                ctx.text.draw(
-                    &mut clipped,
-                    self.style,
-                    Point::new(x, y),
-                    &line[at..],
-                    content,
-                );
+                self.draw_run(ctx.text, &mut clipped, origin, x, &line[at..], content);
             }
 
             if n == self.caret.line && focused && self.caret_on && !disabled {
@@ -1593,6 +1644,11 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
             "Text size in logical pixels.",
         )
         .in_pixels(),
+        Property::new(
+            "tab-width",
+            PropertyKind::Int { min: 1, max: 16 },
+            "Columns from one tab stop to the next.",
+        ),
     ];
 
     fn get(&self, name: &str) -> Option<Value> {
@@ -1600,6 +1656,7 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
             "gutter" => Value::Bool(self.gutter),
             "read-only" => Value::Bool(self.read_only),
             "size" => Value::Int(i32::from(self.style.size_px)),
+            "tab-width" => Value::Int(i32::from(self.tab_width)),
             _ => return None,
         })
     }
@@ -1609,6 +1666,7 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
             "gutter" => self.gutter = value.as_bool()?,
             "read-only" => self.read_only = value.as_bool()?,
             "size" => self.style.size_px = value.as_size()?,
+            "tab-width" => self.tab_width = value.as_index()?.clamp(1, 16) as u8,
             _ => return Err(Mismatch::Unknown),
         }
         Ok(())
