@@ -13,6 +13,7 @@
 //! | [`Label`] | Static text, aligned in its box |
 //! | [`Button`] | Emits a message of your type |
 //! | [`TextInput`] | Editing, a caret, and the only widget that animates by default |
+//! | [`TextArea`] | Lines of text, edited through a [`TextDocument`] it does not own. **Reads only the lines on screen** |
 //! | [`Checkbox`] | A boolean. Space toggles, Enter does not, the label is part of the hit area |
 //! | [`Toggle`] | The same boolean as a switch, with a sliding knob |
 //! | [`RadioGroup`] | One choice from a few. **One node, so one tab stop** |
@@ -79,6 +80,7 @@ mod spinner;
 mod style;
 mod table;
 mod tabs;
+mod text_area;
 mod text_input;
 mod timeline;
 mod toggle;
@@ -114,6 +116,7 @@ pub use spinner::Spinner;
 pub use style::{Align, Orientation};
 pub use table::{Column, Table};
 pub use tabs::Tabs;
+pub use text_area::{ClipboardRequest, Pos, Span, TextArea, TextBuffer, TextDocument, end_of};
 pub use text_input::TextInput;
 pub use timeline::{Timeline, TimelineItem};
 pub use toggle::Toggle;

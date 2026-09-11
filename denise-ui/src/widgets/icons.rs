@@ -186,6 +186,15 @@ pub static TEXT_INPUT: Icon = Icon::new(&[
     Shape::fore(&[(24, 42), (30, 42), (30, 58), (24, 58)]),
 ]);
 
+/// Text area: a taller outlined field with three lines of text in it.
+pub static TEXT_AREA: Icon = Icon::new(&[
+    Shape::fore(&[(8, 12), (92, 12), (92, 88), (8, 88)]),
+    Shape::back(&[(15, 19), (85, 19), (85, 81), (15, 81)]),
+    Shape::fore(&[(24, 30), (70, 30), (70, 38), (24, 38)]),
+    Shape::fore(&[(24, 46), (76, 46), (76, 54), (24, 54)]),
+    Shape::fore(&[(24, 62), (52, 62), (52, 70), (24, 70)]),
+]);
+
 /// Select: an outlined field with the arrow that opens it.
 pub static SELECT: Icon = Icon::new(&[
     Shape::fore(&[(8, 28), (92, 28), (92, 72), (8, 72)]),

@@ -10,7 +10,8 @@ use denise_ui::widgets::describe::{
 use denise_ui::widgets::{
     Alert, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Column, Divider, Fit, Image, Label,
     List, ListItem, MenuBar, Panel, Progress, RadialProgress, RadioGroup, Rating, Select, Slider,
-    Spinner, Table, Tabs, TextInput, Timeline, TimelineItem, Toggle, Tree, TreeItem, Video,
+    Spinner, Table, Tabs, TextArea, TextInput, Timeline, TimelineItem, Toggle, Tree, TreeItem,
+    Video,
 };
 use denise_ui::{Anchors, Dock, NodeId, Ui};
 use kdl::{KdlDocument, KdlNode, KdlValue};
@@ -519,6 +520,7 @@ pub fn default_size(kind: &str) -> Size {
         "radio-group" => (220, 76),
         "rating" => (140, 24),
         "select" | "text-input" => (220, 34),
+        "text-area" => (320, 180),
         "slider" => (200, 24),
         "spinner" => (24, 24),
         "table" => (320, 180),
@@ -1384,6 +1386,7 @@ impl<M: Clone + 'static, W: Wiring<M>> Builder<'_, M, W> {
                 };
                 self.ui.add(parent, button, rect)
             }
+            "text-area" => self.ui.add(parent, TextArea::<M>::from_text(&text), rect),
             "text-input" => {
                 let mut field = TextInput::<M>::new();
                 if let Some(h) = self.handler(node, "on-submit", Payload::None)? {

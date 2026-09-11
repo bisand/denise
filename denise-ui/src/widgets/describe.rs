@@ -975,6 +975,7 @@ static ALL: &[WidgetInfo] = &[
     WidgetInfo::of::<super::Spinner>(),
     WidgetInfo::of::<super::Table<crate::Void>>(),
     WidgetInfo::of::<super::Tabs<crate::Void>>(),
+    WidgetInfo::of::<super::TextArea<crate::Void>>(),
     WidgetInfo::of::<super::TextInput<crate::Void>>(),
     WidgetInfo::of::<super::Timeline>(),
     WidgetInfo::of::<super::Toggle<crate::Void>>(),

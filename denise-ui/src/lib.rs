@@ -69,8 +69,8 @@ pub use widget::{
 pub use widgets::{
     Alert, Align, Badge, Button, Checkbox, Describe, Divider, DynDescribe, Label, List, ListItem,
     Mismatch, Orientation, Panel, Progress, Property, PropertyError, PropertyKind, RadialProgress,
-    RadioGroup, Select, Slider, Spinner, Tabs, TextInput, Toggle, Tree, TreeItem, Value,
-    open_select,
+    RadioGroup, Select, Slider, Spinner, Tabs, TextArea, TextBuffer, TextDocument, TextInput,
+    Toggle, Tree, TreeItem, Value, open_select,
 };
 
 // Re-exported so an application names one crate rather than three to style a
