@@ -707,13 +707,16 @@ impl<M, D: TextDocument> TextArea<M, D> {
             return None;
         }
         let bar = self.bar_rect(bounds);
-        let inset = 2;
-        let track_h = (bar.height - inset * 2).max(1);
+        // A pixel of strip either side of the thumb, and two above and
+        // below: wide enough to find and grab, with the strip still showing
+        // as its track.
+        let (side, end) = (1, 2);
+        let track_h = (bar.height - end * 2).max(1);
         let (y, h) = thumb_span(track_h, rows, total, self.top, self.bar_width() * 2);
         Some(Rect::new(
-            bar.x + inset,
-            bar.y + inset + y,
-            (bar.width - inset * 2).max(1),
+            bar.x + side,
+            bar.y + end + y,
+            (bar.width - side * 2).max(1),
             h,
         ))
     }
