@@ -257,7 +257,8 @@ impl Runner {
         Ok(id)
     }
 
-    /// Closes a window and everything opened from it.
+    /// Closes a window and everything opened from it, telling each application
+    /// it is done as it goes.
     ///
     /// Depth first, so a modal over a settings form is gone before the form it
     /// belonged to — which is the order that leaves no window without an owner,
@@ -267,9 +268,10 @@ impl Runner {
 
         let links: Vec<Link> = self.links().collect();
         for doomed in closing_order(&links, id) {
-            let Some(closed) = self.windows.remove(&doomed) else {
+            let Some(mut closed) = self.windows.remove(&doomed) else {
                 continue;
             };
+            closed.app.exiting();
             if let (Modality::Modal, Some(owner_id)) = (closed.modality, closed.owner) {
                 unblocked.push(owner_id);
             }
@@ -735,6 +737,25 @@ impl ApplicationHandler for Runner {
             None => ControlFlow::Wait,
         });
     }
+
+    /// The run is over, whoever ended it.
+    ///
+    /// Most ways out come through this runner first — a close, `exit_requested`,
+    /// an error — but not all of them. On macOS the application menu's Quit, the
+    /// Dock's and a logout all send `terminate:`, which winit answers by calling
+    /// this from `applicationWillTerminate:`, and AppKit ends the process as soon
+    /// as it returns: no close request, no frame, and `run_app` never returns to
+    /// drop anything. So this is where every application still open is told,
+    /// and the windows are left standing for whatever drops them, if anything
+    /// does.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        let links: Vec<Link> = self.links().collect();
+        for id in exiting_order(&links, self.main) {
+            if let Some(state) = self.windows.get_mut(&id) {
+                state.app.exiting();
+            }
+        }
+    }
 }
 
 fn element_state(state: winit::event::ElementState) -> ElementState {
@@ -778,6 +799,29 @@ fn closing_order(links: &[Link], id: WindowId) -> Vec<WindowId> {
         }
     }
     order.push(id);
+    order
+}
+
+/// Every window, each after everything it owns, with the main window's tree last.
+///
+/// The order the end of the run tells applications in, which is `closing_order`'s
+/// for the same reason plus one: a form that writes into state it shares with the
+/// main window has written it before the main window saves.
+fn exiting_order(links: &[Link], main: Option<WindowId>) -> Vec<WindowId> {
+    let open = |id| links.iter().any(|(window, _, _)| *window == id);
+    let mut order = Vec::with_capacity(links.len());
+    for (window, owner, _) in links {
+        // A window whose owner is not open starts a tree of its own. `close`
+        // never leaves one behind, but the promise is "every window", and it
+        // should not rest on that.
+        let root = !owner.is_some_and(open);
+        if root && Some(*window) != main {
+            order.extend(closing_order(links, *window));
+        }
+    }
+    if let Some(main) = main.filter(|main| open(*main)) {
+        order.extend(closing_order(links, main));
+    }
     order
 }
 
@@ -870,5 +914,50 @@ mod tests {
         assert_eq!(blocker_of(links.iter().copied(), id(1)), Some(id(3)));
         links.retain(|(window, _, _)| *window != id(3));
         assert_eq!(blocker_of(links.iter().copied(), id(1)), None);
+    }
+
+    // `Runner::exiting` itself is not tested: calling it needs an
+    // `ActiveEventLoop`, and every `WindowState` a real window and surface, which
+    // a test runner without a display cannot make. What can break is who is told
+    // and in which order, and that is plain data.
+
+    /// Every window is told once, each before its owner, and the main window last.
+    #[test]
+    fn the_end_of_the_run_tells_every_window_owners_last() {
+        let mut links = tree();
+        links.push((id(5), None, Modality::Independent));
+        links.push((id(6), Some(id(5)), Modality::Owned));
+        let order = exiting_order(&links, Some(id(1)));
+
+        assert_eq!(order.len(), links.len());
+        let at = |window| {
+            order
+                .iter()
+                .position(|listed| *listed == window)
+                .expect("every open window is told")
+        };
+        for (window, owner, _) in &links {
+            if let Some(owner) = owner {
+                assert!(at(*window) < at(*owner), "{window:?} before {owner:?}");
+            }
+        }
+        assert_eq!(order.last(), Some(&id(1)));
+    }
+
+    #[test]
+    fn a_window_whose_owner_is_gone_is_still_told() {
+        let links = [
+            (id(1), None, Modality::Independent),
+            (id(2), Some(id(9)), Modality::Owned),
+        ];
+        assert_eq!(exiting_order(&links, Some(id(1))), vec![id(2), id(1)]);
+    }
+
+    /// A main window that never opened is not told, and nothing else is missed.
+    #[test]
+    fn a_run_without_its_main_window_tells_what_is_open() {
+        let links = [(id(2), None, Modality::Independent)];
+        assert_eq!(exiting_order(&links, Some(id(1))), vec![id(2)]);
+        assert_eq!(exiting_order(&links, None), vec![id(2)]);
     }
 }

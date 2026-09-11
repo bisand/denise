@@ -267,9 +267,12 @@ pub trait DeniseApp {
     ///
     /// Defaults to `true`, because a close button that does not close is a bug in
     /// every application that has not deliberately decided otherwise. The request
-    /// also arrives in [`update`](DeniseApp::update) as
-    /// [`InputEvent::CloseRequested`], which is where saving on the way out
-    /// belongs.
+    /// is also queued for [`update`](DeniseApp::update) as
+    /// [`InputEvent::CloseRequested`], but an accepted close takes effect at once
+    /// and a window on its way out is not drawn again, so `update` may never see
+    /// it. Saving on the way out belongs in [`exiting`](DeniseApp::exiting)
+    /// instead, which every way out reaches — including the ones that never ask
+    /// this at all, like ⌘Q on macOS.
     ///
     /// Override it to `false` to *veto* the close — an unsaved-changes prompt is
     /// the reason to, and the application then quits by way of
@@ -280,6 +283,30 @@ pub trait DeniseApp {
     fn close_requested(&mut self) -> bool {
         true
     }
+
+    /// The last call this application gets: its window is closing or the run is
+    /// ending, and nothing here will be asked anything again.
+    ///
+    /// Called once for every window, whatever ends it — its close button,
+    /// [`exit_requested`](DeniseApp::exit_requested), the window that opened it
+    /// closing, the main window closing, an error, and the ways out that never
+    /// pass through a window at all: on macOS, ⌘Q and the application menu's
+    /// Quit, Quit from the Dock, and logging out. Those last ones send no close
+    /// request and no further [`update`](DeniseApp::update), and the process
+    /// ends as soon as this returns: [`run`] and [`run_with`] never return, so
+    /// nothing written after them runs, and neither does `Drop`. That makes this
+    /// the one place saving on the way out is sure to happen.
+    ///
+    /// It cannot stop anything, so it answers nothing — by the time it is called
+    /// the decision has been made. Asking first is
+    /// [`close_requested`](DeniseApp::close_requested), which only a window's own
+    /// close request reaches.
+    ///
+    /// A window is told before the window that opened it, and the main window
+    /// last, so a form that writes into state it shares with its owner has
+    /// written it before the owner saves. Nothing is drawn while this runs, and
+    /// at logout the system is waiting on it: keep it to the saving.
+    fn exiting(&mut self) {}
 
     /// Windows this application wants opened, taken once per frame.
     ///
