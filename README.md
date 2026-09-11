@@ -16,6 +16,11 @@ desktop environment.**
 [![Milestone](https://img.shields.io/badge/milestone-M5-F5C2E7)](#status)
 [![Core](https://img.shields.io/badge/core-forbid(unsafe__code)-A6E3A1)](#constraints)
 [![Targets](https://img.shields.io/badge/targets-aarch64_%7C_armv7_%7C_x86__64-94E2D5)](#constraints)
+[![Website](https://img.shields.io/badge/website-bisand.github.io%2Fdenise-CBA6F7)](https://bisand.github.io/denise/)
+
+**[bisand.github.io/denise](https://bisand.github.io/denise/)** — the guides, and the
+widget gallery **running in your browser**: this toolkit compiled to WebAssembly,
+drawing with the same rasteriser it uses on a panel.
 
 </div>
 
