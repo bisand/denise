@@ -1,0 +1,76 @@
+name: Website
+
+# The marketing site and guide at https://bisand.github.io/denise/.
+#
+# It carries the live demo, which is the gallery and the record editor compiled
+# to `wasm32-wasip1` from `site/wasm` — so a change to those examples or to the
+# crates they use changes what the site shows, and the paths below say so.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+      - 'examples/gallery/**'
+      - 'examples/table-editor/**'
+      - 'denise*/**'
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: site/wasm
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - run: npm ci
+        working-directory: site
+
+      # The demo first: the site's build fails if `static/wasm/denise.wasm` is
+      # missing, which is the point — a page promising a live toolkit must not
+      # deploy without one.
+      - run: npm run wasm
+        working-directory: site
+
+      - run: npm run build
+        working-directory: site
+        env:
+          # Served from https://bisand.github.io/denise/. Drop this if a custom
+          # domain (CNAME) ever points at the site.
+          BASE_PATH: /${{ github.event.repository.name }}
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

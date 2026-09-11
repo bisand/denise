@@ -1,0 +1,203 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+@import '@fontsource-variable/space-grotesk';
+
+@plugin 'daisyui' {
+	themes: false;
+	logs: false;
+}
+
+/* Catppuccin Mocha: the logo's palette, and the toolkit's own dark seeds. */
+@plugin 'daisyui/theme' {
+	name: 'denise-dark';
+	default: false;
+	prefersdark: true;
+	color-scheme: dark;
+	--color-base-100: #1e1e2e;
+	--color-base-200: #181825;
+	--color-base-300: #313244;
+	--color-base-content: #cdd6f4;
+	--color-primary: #89b4fa;
+	--color-primary-content: #11111b;
+	--color-secondary: #f5c2e7;
+	--color-secondary-content: #11111b;
+	--color-accent: #94e2d5;
+	--color-accent-content: #11111b;
+	--color-neutral: #45475a;
+	--color-neutral-content: #cdd6f4;
+	--color-info: #89dceb;
+	--color-info-content: #11111b;
+	--color-success: #a6e3a1;
+	--color-success-content: #11111b;
+	--color-warning: #f9e2af;
+	--color-warning-content: #11111b;
+	--color-error: #f38ba8;
+	--color-error-content: #11111b;
+	--radius-selector: 0.5rem;
+	--radius-field: 0.5rem;
+	--radius-box: 1rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 0;
+	--noise: 0;
+}
+
+/* Catppuccin Latte. */
+@plugin 'daisyui/theme' {
+	name: 'denise-light';
+	default: true;
+	prefersdark: false;
+	color-scheme: light;
+	--color-base-100: #eff1f5;
+	--color-base-200: #e6e9ef;
+	--color-base-300: #ccd0da;
+	--color-base-content: #4c4f69;
+	--color-primary: #1e66f5;
+	--color-primary-content: #ffffff;
+	--color-secondary: #ea76cb;
+	--color-secondary-content: #ffffff;
+	--color-accent: #179299;
+	--color-accent-content: #ffffff;
+	--color-neutral: #5c5f77;
+	--color-neutral-content: #eff1f5;
+	--color-info: #04a5e5;
+	--color-info-content: #ffffff;
+	--color-success: #40a02b;
+	--color-success-content: #ffffff;
+	--color-warning: #df8e1d;
+	--color-warning-content: #ffffff;
+	--color-error: #d20f39;
+	--color-error-content: #ffffff;
+	--radius-selector: 0.5rem;
+	--radius-field: 0.5rem;
+	--radius-box: 1rem;
+	--size-selector: 0.25rem;
+	--size-field: 0.25rem;
+	--border: 1px;
+	--depth: 0;
+	--noise: 0;
+}
+
+@theme {
+	--font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+	--font-display: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+html {
+	scroll-behavior: smooth;
+	font-feature-settings: 'cv11', 'ss01';
+}
+@media (prefers-reduced-motion: reduce) {
+	html {
+		scroll-behavior: auto;
+	}
+}
+
+h1,
+h2,
+h3,
+.font-display {
+	font-family: var(--font-display);
+	letter-spacing: -0.02em;
+}
+
+/* A soft grid, like the designer's canvas. */
+.bg-grid {
+	background-image:
+		linear-gradient(to right, color-mix(in oklab, var(--color-base-content) 7%, transparent) 1px, transparent 1px),
+		linear-gradient(to bottom, color-mix(in oklab, var(--color-base-content) 7%, transparent) 1px, transparent 1px);
+	background-size: 32px 32px;
+}
+
+.glow {
+	background:
+		radial-gradient(40% 50% at 20% 10%, color-mix(in oklab, var(--color-primary) 28%, transparent), transparent 70%),
+		radial-gradient(35% 45% at 85% 20%, color-mix(in oklab, var(--color-secondary) 22%, transparent), transparent 70%),
+		radial-gradient(40% 40% at 60% 90%, color-mix(in oklab, var(--color-accent) 18%, transparent), transparent 70%);
+}
+
+.text-gradient {
+	background: linear-gradient(100deg, var(--color-primary), var(--color-secondary) 55%, var(--color-accent));
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+/* Shiki emits both themes as CSS variables; pick one to match the site. */
+.shiki,
+.shiki span {
+	color: var(--shiki-light);
+	background-color: transparent !important;
+}
+:root[data-theme='denise-dark'] .shiki,
+:root[data-theme='denise-dark'] .shiki span {
+	color: var(--shiki-dark);
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='denise-light']) .shiki,
+	:root:not([data-theme='denise-light']) .shiki span {
+		color: var(--shiki-dark);
+	}
+}
+
+.code-block pre {
+	@apply max-w-full overflow-x-auto p-5 text-[13px] leading-relaxed font-mono;
+}
+
+/* A grid or flex item defaults to min-width:auto, so one long line of code
+   widens its whole column — which on a phone pushes the page sideways. */
+.code-block {
+	min-width: 0;
+}
+
+.prose-docs {
+	@apply leading-relaxed;
+}
+.prose-docs :where(h1) {
+	@apply mb-4 text-4xl font-bold;
+}
+.prose-docs :where(h2) {
+	@apply mt-12 mb-3 text-2xl font-semibold scroll-mt-24;
+}
+.prose-docs :where(h3) {
+	@apply mt-8 mb-2 text-lg font-semibold scroll-mt-24;
+}
+.prose-docs :where(p) {
+	@apply my-4;
+}
+.prose-docs :where(ul) {
+	@apply my-4 list-disc pl-6 space-y-1.5;
+}
+.prose-docs :where(ol) {
+	@apply my-4 list-decimal pl-6 space-y-1.5;
+}
+.prose-docs :where(a) {
+	@apply link link-primary;
+}
+.prose-docs :where(code):not(pre code) {
+	@apply rounded bg-base-300/60 px-1.5 py-0.5 text-[0.88em] font-mono;
+}
+.prose-docs :where(pre) {
+	@apply my-5 overflow-x-auto rounded-box border border-base-300 bg-base-200 p-4 text-[13px] leading-relaxed font-mono;
+}
+.prose-docs :where(table) {
+	@apply table table-sm my-5;
+}
+.prose-docs :where(blockquote) {
+	@apply my-5 border-l-4 border-primary/60 pl-4 text-base-content/80;
+}
+.prose-docs :where(img) {
+	@apply my-6 rounded-box border border-base-300 shadow-lg;
+}
+.prose-docs :where(kbd) {
+	@apply kbd kbd-sm;
+}
+.prose-docs :where(hr) {
+	@apply my-10 border-base-300;
+}
+.prose-docs :where(strong) {
+	@apply font-semibold text-base-content;
+}

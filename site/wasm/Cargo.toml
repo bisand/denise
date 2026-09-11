@@ -1,0 +1,34 @@
+[package]
+name = "denise-web"
+description = "The gallery and the record editor, unchanged, drawing into a browser canvas for the website."
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+# Its own workspace, like `fuzz`: it is built for one target, by the website's
+# build, and it is never published. Being a member would put wasm-only code in
+# front of every `cargo test --workspace`.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+denise = { path = "../../denise", features = ["std"] }
+denise-render = { path = "../../denise-render", features = ["std"] }
+denise-text = { path = "../../denise-text", features = ["truetype"] }
+denise-ui = { path = "../../denise-ui", features = ["truetype", "raster"] }
+denise-keyboard = { path = "../../denise-keyboard" }
+denise-layout = { path = "../../denise-layout" }
+# A browser tab has no font directory to search, so the page ships the one face
+# it was measured against — which is what a panel does too.
+ttf-noto-sans = "0.1.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -22,11 +22,19 @@ on:
       #
       # A commit touching prose *and* code runs everything: `paths-ignore` skips
       # only when every changed file matches.
+      #
+      # `site/**` is here although `site/wasm` is Rust: it is a website backend
+      # that no crate depends on, it is never published, and the Website
+      # workflow builds it for `wasm32-wasip1` before every deploy — so it is
+      # checked, just not by these fourteen jobs. A change to a crate *does*
+      # run them, and it also runs the Website workflow, which is where that
+      # crate failing to build for the web would show up.
       - 'docs/**'
       - 'README.md'
       - 'assets/**'
       - 'LICENSE'
       - '.gitignore'
+      - 'site/**'
   pull_request:
     paths-ignore: *prose
   # For the Release workflow: its version-bump commit is pushed with the
