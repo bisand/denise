@@ -11,8 +11,8 @@ use denise::{Role, Size, theme};
 use denise_ui::widgets::{
     Alert, Avatar, Badge, Button, Carousel, Checkbox, Collapse, Divider, DynDescribe, Image, Label,
     List, MenuBar, Mismatch, Panel, Progress, Property, PropertyKind, RadialProgress, RadioGroup,
-    Rating, Select, Slider, Spinner, Table, Tabs, TextInput, Timeline, Toggle, Tree, TreeItem,
-    Value, Video, all,
+    Rating, Select, Slider, Spinner, Table, Tabs, TextArea, TextInput, Timeline, Toggle, Tree,
+    TreeItem, Value, Video, all,
 };
 use denise_ui::{Ui, Void};
 
@@ -58,6 +58,7 @@ fn fresh(kind: &str) -> Box<dyn DynDescribe> {
                 .with_rows([["Ada", "Lovelace"], ["Grace", "Hopper"]]),
         ),
         "tabs" => Box::new(Tabs::<Void>::inert(["One", "Two", "Three"])),
+        "text-area" => Box::new(TextArea::<Void>::from_text("One\nTwo\nThree")),
         "text-input" => Box::new(TextInput::<Void>::new()),
         "timeline" => Box::new(Timeline::new(["Started", "Finished"])),
         "toggle" => Box::new(Toggle::<Void>::inert("Switch")),

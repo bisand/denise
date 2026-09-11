@@ -272,14 +272,15 @@ fn the_clipboard_is_asked_for_through_messages() {
 fn a_click_places_the_caret_and_a_drag_selects() {
     let (mut ui, id) = editor("first\nsecond\nthird");
     let row = row_height();
-    // Past the gutter, on the third row; x far right lands at the line end.
-    let third = Point::new(AREA.right() - 5, AREA.y + row * 2 + row / 2);
+    // Past the gutter, on the third row; x far right — short of the
+    // scrollbar strip — lands at the line end.
+    let third = Point::new(AREA.right() - 20, AREA.y + row * 2 + row / 2);
     ui.handle(&[press(third, Modifiers::NONE), release(third)]);
     assert_eq!(area(&ui, id).caret(), Pos::new(2, 5));
 
     // The clock moves on between clicks, or the next one is a double-click.
     ui.tick(1_000);
-    let first = Point::new(AREA.right() - 5, AREA.y + row / 2);
+    let first = Point::new(AREA.right() - 20, AREA.y + row / 2);
     ui.handle(&[press(first, Modifiers::NONE), moved(third), release(third)]);
     ui.tick(2_000);
     assert_eq!(
@@ -342,6 +343,84 @@ fn the_wheel_scrolls_the_view_and_not_the_caret() {
         position: Point::new(100, 100),
     }]);
     assert_eq!(area(&ui, id).top(), 0, "and stops at the top");
+}
+
+#[test]
+fn the_scrollbar_pages_on_a_click_and_follows_a_dragged_thumb() {
+    let lines: Vec<String> = (1..=1000).map(|n| format!("line {n}")).collect();
+    let (mut ui, id) = editor(&lines.join("\n"));
+    let rows = (AREA.height / row_height()) as usize;
+    let bar_x = AREA.right() - 3;
+
+    // Below the thumb, which starts at the top: a page down. The caret is
+    // untouched — the scrollbar moves the view, not the place in the text.
+    let below = Point::new(bar_x, AREA.bottom() - 10);
+    ui.handle(&[press(below, Modifiers::NONE), release(below)]);
+    assert_eq!(area(&ui, id).top(), rows);
+    assert_eq!(area(&ui, id).caret(), Pos::ZERO);
+    ui.tick(1_000);
+    ui.handle(&[press(below, Modifiers::NONE), release(below)]);
+    assert_eq!(area(&ui, id).top(), rows * 2);
+
+    // The thumb is near the top of the strip now — two pages into a
+    // thousand lines puts it a few pixels down, and it is at least twenty
+    // tall. Take it and drag it to the bottom, and the view is at the end.
+    ui.tick(2_000);
+    let thumb = Point::new(bar_x, AREA.y + 18);
+    let bottom = Point::new(bar_x, AREA.bottom() + 500);
+    ui.handle(&[press(thumb, Modifiers::NONE), moved(bottom)]);
+    assert_eq!(
+        area(&ui, id).top(),
+        1000 - rows,
+        "the last line on the last row"
+    );
+    ui.handle(&[release(bottom)]);
+    assert_eq!(area(&ui, id).caret(), Pos::ZERO);
+
+    // Above the thumb, now at the bottom: a page up.
+    ui.tick(3_000);
+    let above = Point::new(bar_x, AREA.y + 4);
+    ui.handle(&[press(above, Modifiers::NONE), release(above)]);
+    assert_eq!(area(&ui, id).top(), 1000 - rows * 2);
+}
+
+#[test]
+fn go_to_centres_the_line_once_the_rows_are_known() {
+    let lines: Vec<String> = (1..=1000).map(|n| format!("line {n}")).collect();
+    let (mut ui, id) = editor(&lines.join("\n"));
+    // Nothing has been painted: the line simply goes to the top.
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .go_to(499);
+    assert_eq!(area(&ui, id).caret(), Pos::new(499, 0));
+    assert_eq!(area(&ui, id).top(), 499);
+
+    // A paint records the rows, and the next jump is centred.
+    let mut pixels = vec![0u32; (SIZE.width * SIZE.height) as usize];
+    let mut frame = denise::Frame::new(
+        &mut pixels,
+        SIZE,
+        SIZE.width,
+        denise::PixelFormat::Xrgb8888,
+        denise::BufferAge::Undefined,
+    )
+    .expect("frame");
+    ui.paint(&mut frame);
+    let rows = (AREA.height / row_height()) as usize;
+    assert_eq!(area(&ui, id).visible_rows(), rows);
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .go_to(700);
+    assert_eq!(area(&ui, id).top(), 700 - rows / 2);
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .go_to(5_000);
+    assert_eq!(
+        area(&ui, id).caret(),
+        Pos::new(999, 0),
+        "past the end is the end"
+    );
+    assert_eq!(area(&ui, id).top(), 1000 - rows);
 }
 
 #[test]

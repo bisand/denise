@@ -28,7 +28,7 @@
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::cell::{RefCell, RefMut};
+use core::cell::{Cell, RefCell, RefMut};
 
 use denise::Pen;
 use denise::{
@@ -356,10 +356,35 @@ pub struct TextArea<M, D = TextBuffer> {
     on_change: Option<M>,
     on_clipboard: Option<fn(ClipboardRequest) -> M>,
     dragging: bool,
+    /// The scrollbar's thumb is held: the pointer's y when it was taken, and
+    /// the top line then.
+    thumb_drag: Option<(i32, usize)>,
+    /// Whole rows the last paint had room for, so a jump made from outside
+    /// an event — [`go_to`](Self::go_to) — can centre its line.
+    rows_seen: Cell<usize>,
     last_click: Option<(Pos, u64)>,
     blink_epoch: u64,
     caret_on: bool,
     has_focus: bool,
+}
+
+/// Where the scrollbar's thumb sits on a track `track_h` tall, as
+/// `(offset, height)`: as tall a share of the track as the rows are of the
+/// lines, never under `min_h`, and as far down as `top` is through the range
+/// of tops that keep the last line on screen.
+fn thumb_span(track_h: i32, rows: usize, total: usize, top: usize, min_h: i32) -> (i32, i32) {
+    let total = total.max(1) as i64;
+    let rows = rows.max(1) as i64;
+    let h = ((track_h as i64 * rows / total) as i32)
+        .max(min_h)
+        .min(track_h.max(1));
+    let max_top = (total - rows).max(0);
+    let y = if max_top == 0 {
+        0
+    } else {
+        ((track_h - h) as i64 * (top as i64).min(max_top) / max_top) as i32
+    };
+    (y, h)
 }
 
 impl<M> TextArea<M, TextBuffer> {
@@ -410,6 +435,8 @@ impl<M, D: TextDocument> TextArea<M, D> {
             on_change: None,
             on_clipboard: None,
             dragging: false,
+            thumb_drag: None,
+            rows_seen: Cell::new(0),
             last_click: None,
             blink_epoch: 0,
             caret_on: true,
@@ -577,6 +604,28 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.top = line.min(last);
     }
 
+    /// Whole rows the last paint had room for; 0 before the first.
+    pub fn visible_rows(&self) -> usize {
+        self.rows_seen.get()
+    }
+
+    /// Puts the caret at the start of 0-based `line`, clamped to the lines
+    /// known, and scrolls so the line sits in the middle of the view — as
+    /// far as the last paint's row count can say where the middle is.
+    pub fn go_to(&mut self, line: usize) {
+        self.set_caret(Pos::new(line, 0));
+        let rows = self.rows_seen.get();
+        let top = self.caret.line.saturating_sub(rows / 2);
+        self.top = top.min(self.max_top(rows));
+        self.scroll_x = 0;
+    }
+
+    /// The largest top that still fills `rows` rows, or the last line when
+    /// there are fewer lines than that.
+    fn max_top(&self, rows: usize) -> usize {
+        self.known_lines().saturating_sub(rows.max(1))
+    }
+
     fn doc(&self) -> RefMut<'_, D> {
         self.doc.borrow_mut()
     }
@@ -638,13 +687,46 @@ impl<M, D: TextDocument> TextArea<M, D> {
         engine.measure_line(self.style, "0").max(1) * digits + self.pad() * 2
     }
 
-    /// The rectangle the text is drawn in.
+    /// Width of the scrollbar strip down the right.
+    #[inline]
+    fn bar_width(&self) -> i32 {
+        (self.style.size_px as i32 * 5 / 8).max(6)
+    }
+
+    /// The scrollbar's strip.
+    fn bar_rect(&self, bounds: Rect) -> Rect {
+        let w = self.bar_width().min(bounds.width.max(0));
+        Rect::new(bounds.right() - w, bounds.y, w, bounds.height)
+    }
+
+    /// The thumb within the strip, or `None` when everything fits.
+    fn thumb_rect(&self, engine: &TextEngine, bounds: Rect) -> Option<Rect> {
+        let rows = self.rows(engine, bounds);
+        let total = self.known_lines();
+        if total <= rows {
+            return None;
+        }
+        let bar = self.bar_rect(bounds);
+        let inset = 2;
+        let track_h = (bar.height - inset * 2).max(1);
+        let (y, h) = thumb_span(track_h, rows, total, self.top, self.bar_width() * 2);
+        Some(Rect::new(
+            bar.x + inset,
+            bar.y + inset + y,
+            (bar.width - inset * 2).max(1),
+            h,
+        ))
+    }
+
+    /// The rectangle the text is drawn in: between the gutter and the
+    /// scrollbar.
     fn text_rect(&self, engine: &mut TextEngine, bounds: Rect) -> Rect {
         let gutter = self.gutter_width(engine);
+        let bar = self.bar_width();
         Rect::new(
             bounds.x + gutter,
             bounds.y,
-            (bounds.width - gutter).max(0),
+            (bounds.width - gutter - bar).max(0),
             bounds.height,
         )
     }
@@ -880,10 +962,8 @@ impl<M, D: TextDocument> TextArea<M, D> {
                 self.move_to(to, shift);
                 // The view pages with the caret rather than merely following
                 // it, so the caret keeps its row on screen.
-                self.top = self
-                    .top
-                    .saturating_add_signed(by)
-                    .min(self.known_lines() - 1);
+                let max_top = self.max_top(rows as usize);
+                self.top = self.top.saturating_add_signed(by).min(max_top);
                 return self.moved(ctx);
             }
             KeyCode::Home => {
@@ -1001,6 +1081,9 @@ impl<M, D: TextDocument> TextArea<M, D> {
         ctx: &mut EventCtx<'_, M>,
     ) -> Handled {
         let bounds = ctx.bounds;
+        if self.bar_rect(bounds).contains(position) {
+            return self.press_bar(position, ctx);
+        }
         let pos = self.pos_at(ctx.text, bounds, position);
         let now = ctx.now_ms;
         let again = self
@@ -1023,13 +1106,50 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.moved(ctx)
     }
 
-    fn wheel(&mut self, engine: &TextEngine, delta_x: f32, delta_y: f32) -> Handled {
+    /// A press in the scrollbar: takes the thumb, or pages towards the press.
+    fn press_bar(&mut self, position: Point, ctx: &mut EventCtx<'_, M>) -> Handled {
+        let bounds = ctx.bounds;
+        let Some(thumb) = self.thumb_rect(ctx.text, bounds) else {
+            return Handled::No;
+        };
+        let rows = self.rows(ctx.text, bounds);
+        if thumb.contains(position) {
+            self.thumb_drag = Some((position.y, self.top));
+        } else if position.y < thumb.y {
+            self.top = self.top.saturating_sub(rows);
+        } else {
+            self.top = (self.top + rows).min(self.max_top(rows));
+        }
+        Handled::Yes
+    }
+
+    /// The thumb, held, followed the pointer to `y`.
+    fn drag_thumb(&mut self, engine: &TextEngine, bounds: Rect, y: i32) -> Handled {
+        let Some((from_y, from_top)) = self.thumb_drag else {
+            return Handled::No;
+        };
+        let Some(thumb) = self.thumb_rect(engine, bounds) else {
+            return Handled::No;
+        };
+        let rows = self.rows(engine, bounds);
+        let max_top = self.max_top(rows);
+        let travel = (self.bar_rect(bounds).height - 4 - thumb.height).max(1) as i64;
+        let moved = (y - from_y) as i64 * max_top as i64 / travel;
+        let top = (from_top as i64 + moved).clamp(0, max_top as i64) as usize;
+        if top == self.top {
+            return Handled::No;
+        }
+        self.top = top;
+        Handled::Yes
+    }
+
+    fn wheel(&mut self, engine: &TextEngine, bounds: Rect, delta_x: f32, delta_y: f32) -> Handled {
         let row_h = self.row_height(engine);
         self.wheel_rest += delta_y as i32;
         let lines = self.wheel_rest / row_h;
         self.wheel_rest -= lines * row_h;
-        let last = self.known_lines() - 1;
-        let top = self.top.saturating_add_signed(lines as isize).min(last);
+        let max_top = self.max_top(self.rows(engine, bounds));
+        let top = self.top.saturating_add_signed(lines as isize).min(max_top);
         let scroll_x = (self.scroll_x + delta_x as i32).max(0);
         if top == self.top && scroll_x == self.scroll_x {
             return Handled::No;
@@ -1127,6 +1247,7 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             canvas.fill_rect(gutter, theme.color(Role::Base200));
         }
 
+        self.rows_seen.set(self.rows(ctx.text, bounds));
         let mut spans = Vec::new();
         let rows = (bounds.height / row_h + 1).max(1) as usize;
         for row in 0..rows {
@@ -1218,6 +1339,18 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 );
             }
         }
+
+        // The scrollbar: a strip down the right, a thumb only when there is
+        // more than fits. Its share of the strip is the rows' share of the
+        // lines, so a file still being counted shows a thumb that shrinks as
+        // the count climbs.
+        if let Some(thumb) = self.thumb_rect(ctx.text, bounds) {
+            let bar = self.bar_rect(bounds);
+            let radius = bar.width / 3;
+            canvas.fill_rect(bar, theme.color(Role::Base200));
+            let alpha = if self.thumb_drag.is_some() { 170 } else { 110 };
+            canvas.fill_rounded_rect(thumb, radius, content.with_alpha(alpha));
+        }
     }
 
     fn on_event(&mut self, event: &Event<'_>, ctx: &mut EventCtx<'_, M>) -> Handled {
@@ -1231,11 +1364,13 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             Event::FocusLost => {
                 self.has_focus = false;
                 self.dragging = false;
+                self.thumb_drag = None;
                 self.wake_caret(ctx.now_ms);
                 Handled::No
             }
             Event::PressCancelled => {
                 self.dragging = false;
+                self.thumb_drag = None;
                 Handled::No
             }
             Event::Input(InputEvent::Text { ch }) if !ch.is_control() => {
@@ -1267,7 +1402,13 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 ..
             }) => {
                 self.dragging = false;
-                Handled::No
+                let held = self.thumb_drag.take().is_some();
+                // The thumb draws differently while held.
+                if held { Handled::Yes } else { Handled::No }
+            }
+            Event::Input(InputEvent::PointerMoved { position }) if self.thumb_drag.is_some() => {
+                let bounds = ctx.bounds;
+                self.drag_thumb(ctx.text, bounds, position.y)
             }
             Event::Input(InputEvent::PointerMoved { position }) if self.dragging => {
                 let bounds = ctx.bounds;
@@ -1281,7 +1422,10 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             }
             Event::Input(InputEvent::PointerScroll {
                 delta_x, delta_y, ..
-            }) => self.wheel(ctx.text, *delta_x, *delta_y),
+            }) => {
+                let bounds = ctx.bounds;
+                self.wheel(ctx.text, bounds, *delta_x, *delta_y)
+            }
             _ => Handled::No,
         }
     }
@@ -1431,6 +1575,25 @@ mod tests {
         assert_eq!(word_at("a (b", 2), (1, 3), "a run of non-word characters");
         assert_eq!(word_at("", 0), (0, 0));
         assert_eq!(word_at("æøå bc", 0), (0, 6));
+    }
+
+    #[test]
+    fn the_thumb_is_the_rows_share_of_the_lines_and_never_a_sliver() {
+        // Ten rows of a hundred lines: a tenth of the track.
+        assert_eq!(thumb_span(1000, 10, 100, 0, 20), (0, 100));
+        // At the last top the thumb touches the bottom.
+        assert_eq!(thumb_span(1000, 10, 100, 90, 20), (900, 100));
+        // Halfway through the tops is halfway down the travel.
+        assert_eq!(thumb_span(1000, 10, 100, 45, 20), (450, 100));
+        // A million lines would make a sub-pixel thumb; the floor holds.
+        assert_eq!(thumb_span(1000, 10, 1_000_000, 0, 20), (0, 20));
+        // Everything fits: the thumb is the whole track and does not move.
+        assert_eq!(thumb_span(1000, 50, 20, 0, 20), (0, 1000));
+        assert_eq!(
+            thumb_span(0, 10, 100, 5, 20),
+            (0, 1),
+            "a track with no height"
+        );
     }
 
     #[test]
