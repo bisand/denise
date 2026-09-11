@@ -29,6 +29,7 @@ use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell, RefMut};
+use core::ops::Range;
 
 use denise::Pen;
 use denise::{
@@ -128,6 +129,16 @@ pub trait TextDocument: 'static {
     /// colour. The default highlights nothing.
     fn spans(&mut self, n: usize, out: &mut Vec<Span>) {
         let _ = (n, out);
+    }
+
+    /// Byte ranges of line `n` to mark behind the text — every match of a
+    /// search, say — appended to `out` in ascending order without overlaps.
+    /// `line` is the line's text as the widget already has it, so marking
+    /// costs no second read. A range out of order, past the end or not on a
+    /// character boundary is skipped; the selection is drawn over the marks.
+    /// The default marks nothing.
+    fn highlights(&mut self, n: usize, line: &str, out: &mut Vec<Range<usize>>) {
+        let _ = (n, line, out);
     }
 }
 
@@ -1299,6 +1310,7 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
         };
         let dim = muted(theme.color(Role::Base100), content);
         let selected = theme.color(Role::Accent).with_alpha(60);
+        let marked = theme.color(Role::Warning).with_alpha(90);
         let space_w = ctx.text.measure_line(self.style, " ").max(1);
         let selection = self.selection();
 
@@ -1309,6 +1321,7 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
 
         self.rows_seen.set(self.rows(ctx.text, bounds));
         let mut spans = Vec::new();
+        let mut marks: Vec<Range<usize>> = Vec::new();
         let rows = (bounds.height / row_h + 1).max(1) as usize;
         for row in 0..rows {
             let n = self.top + row;
@@ -1332,6 +1345,39 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             }
 
             let mut clipped = canvas.with_clip(area);
+            marks.clear();
+            if !disabled {
+                self.doc().highlights(n, &line, &mut marks);
+            }
+            // Measured a stretch at a time from the last mark's end, rather
+            // than each from the start of the line: a one-letter search on a
+            // long line is thousands of marks, and measuring every prefix
+            // would be quadratic in the line. Marks past the right edge are
+            // not measured at all.
+            let (mut col, mut x) = (0, text_x);
+            for mark in &marks {
+                if mark.start < col
+                    || mark.start >= mark.end
+                    || mark.end > line.len()
+                    || !line.is_char_boundary(mark.start)
+                    || !line.is_char_boundary(mark.end)
+                {
+                    continue;
+                }
+                let x0 = x + ctx.text.measure_line(self.style, &line[col..mark.start]);
+                if x0 >= area.right() {
+                    break;
+                }
+                let x1 = x0
+                    + ctx
+                        .text
+                        .measure_line(self.style, &line[mark.start..mark.end]);
+                if x1 > area.x {
+                    clipped.fill_rect(Rect::new(x0, y, x1 - x0, row_h), marked);
+                }
+                (col, x) = (mark.end, x1);
+            }
+
             if let Some((from, to)) = selection
                 && n >= from.line
                 && n <= to.line
