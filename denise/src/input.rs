@@ -317,6 +317,11 @@ pub enum InputEvent {
         scale_factor: f32,
     },
     /// The user asked to close. The application decides whether to honour it.
+    ///
+    /// A request, not a notice of shutdown: a backend that honours it may end
+    /// the run before this is read, and some ways out send no request at all —
+    /// ⌘Q on macOS. Saving belongs in the backend's own last call, which on the
+    /// desktop backend is `denise_winit::DeniseApp::exiting`.
     CloseRequested,
 }
 

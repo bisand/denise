@@ -65,11 +65,20 @@ A later scale change — dragging the window to a second display — arrives as
 
 ## Closing
 
-The window manager's close button ends the run, and the request also arrives as
-`InputEvent::CloseRequested` so an application can save on the way out. An
-application that needs to *stop* the close — unsaved changes, a confirmation —
-overrides `DeniseApp::close_requested` to return `false`, and quits later
-through `exit_requested` once it has its answer.
+The window manager's close button ends the run. The request is also queued as
+`InputEvent::CloseRequested`, but a window that is closing is not drawn again, so
+an application cannot count on reading it. An application that needs to *stop*
+the close — unsaved changes, a confirmation — overrides
+`DeniseApp::close_requested` to return `false`, and quits later through
+`exit_requested` once it has its answer.
+
+Saving on the way out belongs in `DeniseApp::exiting`, the last call every
+application gets. It is made once per window however that window ends — its close
+button, `exit_requested`, its owner closing, the run ending — and it is the only
+call that hears about the ways out that never ask: on macOS, ⌘Q, Quit in the Dock
+and logging out end the process as soon as it returns, with no close request and
+without `run` returning. It cannot veto anything; by then the answer is in. A
+window is told before the window that opened it, and the main window last.
 
 ## Secondary windows
 
