@@ -19,7 +19,7 @@ use denise::{
     Rect, Size, Surface,
 };
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{MouseButton, MouseScrollDelta, StartCause, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::ModifiersState;
@@ -121,6 +121,9 @@ struct WindowState {
     /// same thing every frame is a comparison rather than a call into the
     /// window system.
     title: String,
+    /// The position and maximised state last reported as `SurfaceMoved`, so a
+    /// window that is resized without moving does not say it moved.
+    placed: Option<(Point, bool)>,
 }
 
 pub(crate) struct Runner {
@@ -201,6 +204,19 @@ impl Runner {
             None => attrs.with_inner_size(LogicalSize::new(config.size.width, config.size.height)),
         };
 
+        // Where it was last time, when that is somewhere the user can still
+        // reach: a window remembered onto a display that has since been
+        // unplugged would open off the desk entirely.
+        let place_at = config
+            .position
+            .filter(|at| reachable(monitor_bounds(event_loop), *at));
+        if let Some(at) = place_at {
+            attrs = attrs.with_position(PhysicalPosition::new(at.x, at.y));
+        }
+        if config.maximized {
+            attrs = attrs.with_maximized(true);
+        }
+
         // The owner relationship is a creation-time fact on Windows, so it has to
         // be said here even though the platform that needs it most is not the one
         // this is usually compiled for.
@@ -211,6 +227,20 @@ impl Runner {
         }
 
         let window = Arc::new(event_loop.create_window(attrs)?);
+
+        // And again, because the two ways of saying where a window goes do not
+        // mean the same thing on macOS: the attribute places the *content*
+        // below the title bar, while `outer_position` — what `SurfaceMoved`
+        // reports — is the frame's own corner, title bar included. A window
+        // remembered through that pair climbs its own title bar's height every
+        // time it is opened. This says it in the units it will be read back
+        // in, so the round trip is exact.
+        //
+        // Not while maximised: the window manager has the frame then, and the
+        // remembered corner is where the window goes when it is let go of.
+        if let Some(at) = place_at.filter(|_| !config.maximized) {
+            window.set_outer_position(PhysicalPosition::new(at.x, at.y));
+        }
         let surface = match config.present {
             Present::Software => Backend::Software(Box::new(PlatformSurface::new(window.clone())?)),
             #[cfg(feature = "gpu")]
@@ -252,8 +282,10 @@ impl Runner {
                 owner: owned_by.filter(|_| modality != Modality::Independent),
                 modality,
                 frame_interval: config.frame_interval,
+                placed: None,
             },
         );
+        self.report_place(id);
         Ok(id)
     }
 
@@ -310,6 +342,37 @@ impl Runner {
         self.windows.get(&blocker)
     }
 
+    /// Tells a window's application where the window is, when that has changed
+    /// since the last time it was told.
+    ///
+    /// Called when the window is created — an application wants to know where
+    /// it ended up even if nobody ever moves it, and where it ended up is not
+    /// always where it asked to be — and whenever it moves or changes size,
+    /// because maximising is both at once and restoring is neither on its own.
+    ///
+    /// A backend that will not say where its windows are says nothing: asking
+    /// Wayland for a window's position is an error there by design, and an
+    /// application that never hears is no worse off than one on a system that
+    /// never moves anything.
+    fn report_place(&mut self, id: WindowId) {
+        let Some(state) = self.windows.get_mut(&id) else {
+            return;
+        };
+        let Ok(at) = state.window.outer_position() else {
+            return;
+        };
+        let position = Point::new(at.x, at.y);
+        let maximized = state.window.is_maximized();
+        if state.placed == Some((position, maximized)) {
+            return;
+        }
+        state.placed = Some((position, maximized));
+        state.events.push(InputEvent::SurfaceMoved {
+            position,
+            maximized,
+        });
+    }
+
     fn on_resize(&mut self, id: WindowId, size: PhysicalSize<u32>) {
         let Some(state) = self.windows.get_mut(&id) else {
             return;
@@ -322,6 +385,9 @@ impl Runner {
             size,
             scale_factor: scale,
         });
+        // Maximising is a move and a resize together, and on some window
+        // managers only the resize arrives.
+        self.report_place(id);
     }
 
     fn draw(&mut self, event_loop: &ActiveEventLoop, id: WindowId) {
@@ -540,6 +606,8 @@ impl ApplicationHandler for Runner {
             WindowEvent::RedrawRequested => return self.draw(event_loop, id),
 
             WindowEvent::Resized(size) => return self.on_resize(id, size),
+
+            WindowEvent::Moved(_) => return self.report_place(id),
 
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = self.windows.get(&id).map(|s| s.window.inner_size());
@@ -825,6 +893,31 @@ fn exiting_order(links: &[Link], main: Option<WindowId>) -> Vec<WindowId> {
     order
 }
 
+/// Every plugged-in display's extent, in the desktop's physical pixels.
+fn monitor_bounds(event_loop: &ActiveEventLoop) -> impl Iterator<Item = Rect> {
+    event_loop.available_monitors().map(|monitor| {
+        let origin = monitor.position();
+        let size = monitor.size();
+        Rect::new(origin.x, origin.y, size.width as i32, size.height as i32)
+    })
+}
+
+/// Whether a remembered window position still lands on one of `monitors`.
+///
+/// A machine that reports no monitors at all — headless, and some remote
+/// displays — is taken at its word rather than argued with: there is nothing
+/// there to say the position is wrong, so it is honoured.
+fn reachable(monitors: impl IntoIterator<Item = Rect>, at: Point) -> bool {
+    let mut any = false;
+    for screen in monitors {
+        any = true;
+        if screen.contains(at) {
+            return true;
+        }
+    }
+    !any
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -885,6 +978,32 @@ mod tests {
         );
         assert!(at(id(2)) < at(id(1)));
         assert!(at(id(4)) < at(id(1)));
+    }
+
+    /// A laptop with a second display above and to the left of it.
+    fn desk() -> Vec<Rect> {
+        vec![
+            Rect::new(0, 0, 1512, 982),
+            Rect::new(-1920, -400, 1920, 1080),
+        ]
+    }
+
+    #[test]
+    fn a_position_on_a_display_that_is_still_there_is_honoured() {
+        assert!(reachable(desk(), Point::new(40, 40)));
+        // The display left of the built-in one: negative, and still a place.
+        assert!(reachable(desk(), Point::new(-1800, -200)));
+    }
+
+    #[test]
+    fn a_position_on_a_display_that_has_been_unplugged_is_not() {
+        assert!(!reachable(desk(), Point::new(-1800, 900)), "below it");
+        assert!(!reachable(desk(), Point::new(2000, 40)), "right of both");
+    }
+
+    #[test]
+    fn a_machine_that_reports_no_displays_is_taken_at_its_word() {
+        assert!(reachable(Vec::new(), Point::new(4000, 4000)));
     }
 
     #[test]

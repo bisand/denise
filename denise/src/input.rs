@@ -316,6 +316,31 @@ pub enum InputEvent {
         /// New physical-per-logical pixel ratio.
         scale_factor: f32,
     },
+    /// The window moved, or the window manager maximised or restored it.
+    ///
+    /// The other half of [`SurfaceResized`](InputEvent::SurfaceResized): that
+    /// one says how big the window is, this one says where it is and what the
+    /// window manager has done with it. Together they are everything an
+    /// application needs to open next time the way it closed — which is why
+    /// this exists at all, and why it is reported rather than asked for: there
+    /// is no window handle on this side of the backend.
+    ///
+    /// `position` is the window's top-left **including its frame**, in the
+    /// desktop's physical pixels, and it is negative on a display left of or
+    /// above the primary one. Physical rather than logical because a desktop
+    /// spanning displays of different DPI has no single logical grid to name a
+    /// point in, and a position handed straight back to
+    /// [`WindowConfig::position`](https://docs.rs/denise-winit) in the units it
+    /// arrived in needs no conversion to land where it was.
+    ///
+    /// Sent when either half changes, and not while the window is being
+    /// dragged on backends that report a move only when it is dropped.
+    SurfaceMoved {
+        /// The window's top-left, frame included, in physical pixels.
+        position: Point,
+        /// Whether the window manager has the window maximised.
+        maximized: bool,
+    },
     /// The user asked to close. The application decides whether to honour it.
     ///
     /// A request, not a notice of shutdown: a backend that honours it may end

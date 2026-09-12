@@ -43,7 +43,7 @@ mod surface;
 
 use std::time::Duration;
 
-use denise::{BufferAge, DamageTracker, Frame, InputEvent, Pen, Rect, Size};
+use denise::{BufferAge, DamageTracker, Frame, InputEvent, Pen, Point, Rect, Size};
 use winit::event_loop::EventLoop;
 
 use runner::Runner;
@@ -156,6 +156,26 @@ pub struct WindowConfig {
     /// Falls back to `size` when no monitor can be identified, which is the
     /// case on some headless and remote displays.
     pub fill_monitor: bool,
+    /// Where to put the window's top-left, frame included, in the desktop's
+    /// **physical** pixels — or `None` to let the window manager place it.
+    ///
+    /// The units are the ones
+    /// [`InputEvent::SurfaceMoved`](denise::InputEvent::SurfaceMoved) reports
+    /// in, so an application that keeps what it was last told and hands it back
+    /// here opens where it closed, with nothing to convert on the way. Logical
+    /// pixels are right for [`size`](Self::size) and wrong for this: a desktop
+    /// spanning a Retina display and a 1× one beside it has no single logical
+    /// grid to name a point in.
+    ///
+    /// A position no monitor covers is ignored rather than honoured — a
+    /// display that has since been unplugged would otherwise open the window
+    /// where nobody can reach it.
+    pub position: Option<Point>,
+    /// Open maximised, whatever [`size`](Self::size) says.
+    ///
+    /// The size is still worth setting: it is what the window goes back to when
+    /// the user un-maximises it.
+    pub maximized: bool,
 }
 
 impl Default for WindowConfig {
@@ -167,6 +187,8 @@ impl Default for WindowConfig {
             frame_interval: Duration::from_nanos(1_000_000_000 / 60),
             present: Present::Software,
             fill_monitor: false,
+            position: None,
+            maximized: false,
         }
     }
 }
