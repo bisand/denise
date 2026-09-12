@@ -160,7 +160,7 @@ pub struct WindowConfig {
     /// **physical** pixels — or `None` to let the window manager place it.
     ///
     /// The units are the ones
-    /// [`InputEvent::SurfaceMoved`](denise::InputEvent::SurfaceMoved) reports
+    /// [`InputEvent::SurfaceMoved`] reports
     /// in, so an application that keeps what it was last told and hands it back
     /// here opens where it closed, with nothing to convert on the way. Logical
     /// pixels are right for [`size`](Self::size) and wrong for this: a desktop
