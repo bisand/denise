@@ -304,8 +304,10 @@ and it demanded the mid-hold re-ask test, the case where a spinner elsewhere
 on screen makes the tree ask a holding carousel every frame — which is
 exactly when the landing's restart is load-bearing.
 
-`Table` is the one widget that scrolls itself, and the reason is structural
-rather than taste: the **header**. `List` deliberately owns no scrolling — it
+`Table` was the first widget to scroll itself — `TextArea` is the other, and for
+its own structural reason: what it scrolls is a document it does not hold, so
+there are no nodes for a viewport to be over. The table's reason is structural
+too, rather than taste: the **header**. `List` deliberately owns no scrolling — it
 cooperates with a `set_scrollable` viewport — but a header inside a viewport
 scrolls away with the rows, and a header outside it is a second widget whose
 column layout has to be kept in agreement with the first, which is exactly the

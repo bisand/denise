@@ -11,6 +11,7 @@
 	const tries: Record<DemoName, { title: string; body: string }[]> = {
 		gallery: [
 			{ title: 'Click the Name field and type', body: 'The on-screen keyboard comes up, because that is what a panel with nothing plugged into it does; the key at its bottom right puts it away. Your real keyboard types too — and only the field and its caret repaint.' },
+			{ title: 'Tab into a field, then double-click a word', body: 'Focus offers the whole value for replacement; a press places the caret, a second takes the word under it, a third takes the field. Ctrl or Option and an arrow move by word, and ⌘C, ⌘X and ⌘V go through the application.' },
 			{ title: 'Drag the R, G or B slider', body: 'A seed colour changes, the theme is derived again, and everything repaints, because every widget names a role rather than a colour.' },
 			{ title: 'Turn off “Awake”', body: 'The spinner stops asking for frames. What is left is the wall clock, which asks to be woken exactly when the next second starts.' },
 			{ title: 'Open “Choose a mode”', body: 'A popup is a scene above the tree, and Escape or a click outside closes it. Tab and the arrow keys work everywhere.' },

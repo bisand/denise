@@ -92,7 +92,9 @@ Only the topmost veil paints, so a popup inside a modal does not darken the moda
 
 Mark a node with `Ui::set_scrollable` and it becomes a viewport, its offset applied in the same `reflow`. The wheel scrolls the innermost viewport under the pointer after the hovered widget declines it; PageUp and PageDown page the one holding focus; a touch on its background drags it; and focusing something below the fold scrolls it into view. A scroll shifts the rows it keeps and paints only the new strip.
 
-`Table` scrolls itself, because its header must stay pinned, and it windows its data so rows outside the window are never iterated. Smooth and inertial scrolling are deliberately absent: a kiosk animating a fling at 60 Hz is the idle-cost story in reverse.
+Two widgets scroll themselves, each for a structural reason rather than for taste. `Table`, because its header must stay pinned — and it windows its data, so rows outside the window are never iterated. `TextArea`, because what it scrolls is a document it does not hold: it cannot be a viewport over nodes that do not exist, so it keeps a first line and a sideways offset of its own, with a bar down the side and one along the bottom. The horizontal one measures the widest line it has *drawn*, because a document read a line at a time cannot be asked how wide the file is, and it is absent rather than greyed when the text fits.
+
+Smooth and inertial scrolling are deliberately absent everywhere: a kiosk animating a fling at 60 Hz is the idle-cost story in reverse.
 
 ## Motion
 
