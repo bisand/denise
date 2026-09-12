@@ -391,7 +391,7 @@ shown** is the zoom control below, which arrived with [#154].
 ## The palette
 
 Every widget the toolkit ships, from `widgets::all()` — this crate names none of
-them, so a twenty-sixth appears without it changing, on the right shelf and with
+them, so a twenty-ninth appears without it changing, on the right shelf and with
 its own description, still without this crate changing.
 
 **Six shelves**: input, display, indicator, container, data, media. Each widget
@@ -409,7 +409,7 @@ The choice is remembered in the settings file, and everything else — dragging,
 clicking, arming, the filter — works the same in all three.
 
 **Resting on a row says what the widget is** — one line, declared by the widget
-itself. Twenty-five bare names tell somebody who already knows which widget they
+itself. Twenty-eight bare names tell somebody who already knows which widget they
 want; this is for everybody else.
 
 ![The designer's palette grouped into shelves — headings reading DATA 4 and MEDIA 4 with their widgets under them, every row wearing its widget's glyph, the mode button beside the heading reading `both` — and a tooltip under the hovered `video` row reading "The rectangle a video plane is shown in."](../../assets/screenshots/designer-palette.png)
@@ -525,7 +525,7 @@ role, a field with a slider beside it for a number over a range you can aim at.
 **Nothing in the designer lists them.** A row exists because the widget's own
 `Describe` implementation says the property exists, and the properties the *tree*
 owns — `x`, `visible`, `dock` — come from `denise_forms::NODE_PROPERTIES`,
-described the same way. A twenty-sixth widget, or a twenty-seventh property on an
+described the same way. A twenty-ninth widget, or a twenty-seventh property on an
 existing one, gets its editors without a line of this crate changing.
 
 Edits apply **as they are typed**, through the same `set` the engine calls when it

@@ -244,11 +244,14 @@ out in a VM. Timing does not.
 vc4 advertises `DRM_CAP_ASYNC_PAGE_FLIP`, so Denise can flip **immediately**
 instead of at the next vblank. That removes the latency described below while
 keeping everything KMS gives you — proper mode setting, real buffer ages, a
-restored console on exit. It is [`PresentMode::Immediate`], and it is the default.
+restored console on exit. It is [`PresentMode::Immediate`], and it is what
+`immediate` asks for. **It is not the default**: since 0.16 the default is
+`Vsync`, for the reason measured further down — on a Pi 3 the vc4's async flips
+tear visibly enough to read as flicker, and a panel is read rather than aimed at.
 
 ```bash
-cargo run -p kiosk               # immediate: the default
-cargo run -p kiosk -- 20 250 vsync   # tear-free, for comparison
+cargo run -p kiosk -- 20 250 immediate   # async flips: the latency back
+cargo run -p kiosk                       # vsync: tear-free, the default
 ```
 
 On the test machine `immediate` felt clearly better than `vsync` and about the
@@ -289,8 +292,10 @@ not a defect: a flip queued after a vblank cannot land before the next one, so
 double-buffered tear-free presentation costs on the order of one refresh period.
 Every system that does this pays it.
 
-Which is why [`PresentMode::Immediate`] is the default — it keeps KMS and drops
-the wait. Choose `Vsync` deliberately, for content where a seam would show.
+Which is why [`PresentMode::Immediate`] exists — it keeps KMS and drops the wait.
+Choose it deliberately, for content where the latency matters more than a seam;
+the default is `Vsync`, because on this hardware the seam was the more visible
+of the two.
 
 ### Read input *after* waiting for the display
 

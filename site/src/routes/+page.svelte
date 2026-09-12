@@ -59,7 +59,7 @@
 	const stats = [
 		{ value: '80 ms', label: 'CPU for ten idle seconds on a Pi 3 A+' },
 		{ value: '28', label: 'widgets, all in the live demo' },
-		{ value: '18', label: 'crates on crates.io' },
+		{ value: '19', label: 'crates on crates.io' },
 		{ value: '0', label: 'compositors required' }
 	];
 </script>
@@ -324,7 +324,7 @@
 <section class="mx-auto max-w-7xl px-4 py-20">
 	<div class="max-w-2xl">
 		<span class="badge badge-soft badge-accent">On crates.io</span>
-		<h2 class="mt-3 text-3xl font-bold sm:text-4xl">Eighteen crates, one version number</h2>
+		<h2 class="mt-3 text-3xl font-bold sm:text-4xl">Nineteen crates, one version number</h2>
 		<p class="mt-4 text-base-content/70">
 			Take the core and a backend; leave the rest. Each crate has its own README — its API, its platform notes, and what it deliberately does not do — and every Rust example in them is compiled by <code class="font-mono text-[0.9em]">cargo test --doc</code>, so they cannot drift.
 		</p>

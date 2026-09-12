@@ -361,6 +361,7 @@ framebuffer.
 | [`denise-wgpu`](https://crates.io/crates/denise-wgpu) | The same painting trait on wgpu, for the desktop | `std` |
 | [`denise-text`](https://crates.io/crates/denise-text) | Glyph sources, atlas, line layout, word wrapping | `no_std + alloc` |
 | [`denise-ui`](https://crates.io/crates/denise-ui) | Scene graph, scene stack, widgets, cursor sprite | `no_std + alloc` |
+| [`denise-arrange`](https://crates.io/crates/denise-arrange) | Optional content-driven layout: rows, columns and layers over the tree | `no_std + alloc` |
 | [`denise-image`](https://crates.io/crates/denise-image) | PNG/JPEG/GIF/BMP decoding into premultiplied pixels | `std` |
 | [`denise-layout`](https://crates.io/crates/denise-layout) | Keyboard layouts, dead keys, the system's configured layout | `std` |
 | [`denise-forms`](https://crates.io/crates/denise-forms) | Loads a `.dform` file into a widget tree at runtime | `std` |
@@ -446,12 +447,16 @@ is in [docs/design.md](docs/design.md).
   its siblings. Content-driven sizing — a label as wide as its text, a row that
   grows with what is in it — is a layer *over* this rather than a change to it,
   in an optional crate an application depends on or does not:
-  [docs/arrange.md](docs/arrange.md) is the design note, and nothing is built
-  yet.
-- **Twenty-six widgets**, plus tree-owned tooltips, toasts and drawers. Label,
-  button, panel, text field, checkbox, toggle, radio group, progress bar,
-  slider, divider, badge, alert, tabs, list, tree, radial progress, spinner,
-  select, image, rating, avatar, table, timeline, carousel, collapse, video.
+  [`denise-arrange`](https://crates.io/crates/denise-arrange) is that crate —
+  rows, columns and layers, computing rectangles and calling `Ui::set_layout`,
+  which is exactly what an application doing its own arithmetic would call. The
+  tree still never measures anything, and an application that depends on none of
+  it links none of it. [docs/arrange.md](docs/arrange.md) is the design note.
+- **Twenty-eight widgets**, plus tree-owned tooltips, toasts and drawers. Label,
+  button, panel, text field, text area, checkbox, toggle, radio group, progress
+  bar, slider, divider, badge, alert, tabs, menu bar, list, tree, radial
+  progress, spinner, select, image, rating, avatar, table, timeline, carousel,
+  collapse, video.
   Everything is assembled from them, as `table-editor` shows. More are being
   added one at a time — see [#6](https://github.com/bisand/denise/issues/6).
 - **Scrolling is a tree concern, and the tree does it.** Mark a node
@@ -513,7 +518,7 @@ is in [docs/design.md](docs/design.md).
 | [docs/design.md](docs/design.md) | How it is built and why — architecture, rasteriser, text, keyboards, theming, and the milestone history |
 | [docs/raspberry-pi.md](docs/raspberry-pi.md) | Getting a Pi to hand over a display at all, and what to check when it will not |
 | [docs/windows.md](docs/windows.md) | The Win32 control and the ActiveX shim, including the toolchain traps |
-| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all eighteen share one number, and what each guard is for |
+| [docs/releasing.md](docs/releasing.md) | How a version goes to crates.io, why all nineteen share one number, and what each guard is for |
 | [docs/forms.md](docs/forms.md) | The `.dform` file: why KDL, the version 1 schema, loading one from Rust, and what a form file deliberately will not do |
 | [docs/designer.md](docs/designer.md) | From a drawing to a running screen: the designer, the file and an application, end to end |
 | [docs/arrange.md](docs/arrange.md) | The design note for `denise-arrange`: content-driven sizing in an optional crate, what it gives up, and why the tree still never measures |

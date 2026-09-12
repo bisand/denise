@@ -940,7 +940,7 @@ impl Group {
 
 /// Every widget that ships with this crate.
 ///
-/// A palette lists these rather than naming widgets itself, so the twenty-seventh
+/// A palette lists these rather than naming widgets itself, so the twenty-ninth
 /// widget appears in the designer without the designer changing. A test asserts
 /// that this and [`widgets`](super) hold the same set, so joining it is not
 /// something a new widget can be merged without.

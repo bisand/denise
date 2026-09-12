@@ -61,6 +61,7 @@ export const crates: Crate[] = [
 	{ name: 'denise-render', what: 'Software rasteriser and the built-in font', runs: 'no_std + alloc' },
 	{ name: 'denise-text', what: 'Glyph sources, atlas, line layout, word wrapping', runs: 'no_std + alloc' },
 	{ name: 'denise-ui', what: 'Scene graph, scene stack, widgets, cursor sprite', runs: 'no_std + alloc' },
+	{ name: 'denise-arrange', what: 'Optional content-driven layout: rows, columns and layers over the tree', runs: 'no_std + alloc' },
 	{ name: 'denise-wgpu', what: 'The same painting trait on wgpu, for the desktop', runs: 'std' },
 	{ name: 'denise-image', what: 'PNG, JPEG, GIF and BMP decoding into premultiplied pixels', runs: 'std' },
 	{ name: 'denise-layout', what: 'Keyboard layouts, dead keys, the system’s configured layout', runs: 'std' },

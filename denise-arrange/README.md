@@ -5,7 +5,7 @@ you depend on or do not.
 
 ```toml
 [dependencies]
-denise-arrange = "0.19"
+denise-arrange = "0.23"
 ```
 
 `denise-ui` has **no layout engine**, and that is a feature: nodes take explicit

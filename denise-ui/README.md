@@ -50,7 +50,7 @@ so every state change lands in one `match` you wrote — no closures holding
 
 ## The widgets
 
-Twenty-five of them, deliberately few:
+Twenty-eight of them, deliberately few:
 
 | | |
 |---|---|
@@ -58,11 +58,14 @@ Twenty-five of them, deliberately few:
 | `Label` | Static text, aligned in its box |
 | `Button` | Emits a message of your type |
 | `TextInput` | Editing, a caret, and the only widget that animates by default |
+| `TextArea` | Many lines, edited through a document it does not own — so a file too big to load can sit behind it |
 | `Checkbox` · `Toggle` | A boolean, as a box or as a switch |
 | `RadioGroup` | One choice from a few. **One node, so one tab stop** |
 | `Progress` · `Slider` | A value in a range, as output and as input |
 | `Divider` · `Badge` · `Alert` | A rule, a pill, a banner |
 | `Tabs` · `List` | One selected from many, horizontally or vertically |
+| `MenuBar` | A bar of menus, and the popup a menu — or a right-click — opens as |
+| `Tree` | Rows at a depth, with a disclosure triangle and a hierarchy |
 | `RadialProgress` | A ring, with room for a number in the middle |
 | `Spinner` | An arc that turns. **The one widget that can keep a device awake** |
 | `Select` | The closed half of a dropdown; `open_select` is the open half |
