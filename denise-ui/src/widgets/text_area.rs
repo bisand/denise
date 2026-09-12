@@ -19,11 +19,15 @@
 //! # What it does not do
 //!
 //! No wrapping: a line is as wide as it is, and the view scrolls sideways to
-//! follow the caret. No clipboard of its own — this crate has no system to ask
-//! — so copy, cut and paste are *messages*: the widget hands the application
-//! the text it copied, or asks for the text to paste, and the application
-//! answers through [`TextArea::insert_text`]. No Tab: the tree owns Tab for
-//! focus stepping, and an editor that took it would trap the keyboard.
+//! follow the caret — as far as the widest line the widget has drawn and a
+//! caret past its end, and no further. A document that is not all in memory
+//! cannot say how wide the file is, only how wide what has been read is, so
+//! that is what the sideways scroll and the bar along the bottom are measured
+//! against. No clipboard of its own — this crate has no system to ask — so
+//! copy, cut and paste are *messages*: the widget hands the application the
+//! text it copied, or asks for the text to paste, and the application answers
+//! through [`TextArea::insert_text`]. No Tab: the tree owns Tab for focus
+//! stepping, and an editor that took it would trap the keyboard.
 
 use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
@@ -377,6 +381,13 @@ pub struct TextArea<M, D = TextBuffer> {
     /// selected from outside an event — [`select_range`](Self::select_range)
     /// — can only be measured, and so scrolled to, by the next paint.
     scroll_x: Cell<i32>,
+    /// The widest line the widget has measured, in pixels: how far the text
+    /// scrolls sideways, and what the bar along the bottom is a share of.
+    /// Lines are measured as they are drawn, so this is the width of the text
+    /// that has been seen rather than of the file — which a document reading
+    /// a file line by line could not be asked for anyway. Only ever grows,
+    /// until the document, the font or the tab width is replaced.
+    content_w: Cell<i32>,
     /// Paint is to scroll the caret's range into view sideways.
     reveal_pending: Cell<bool>,
     /// Wheel pixels not yet worth a whole line.
@@ -392,6 +403,9 @@ pub struct TextArea<M, D = TextBuffer> {
     /// The scrollbar's thumb is held: the pointer's y when it was taken, and
     /// the top line then.
     thumb_drag: Option<(i32, usize)>,
+    /// The bottom scrollbar's thumb is held: the pointer's x when it was
+    /// taken, and the sideways scroll then.
+    h_thumb_drag: Option<(i32, i32)>,
     /// Whole rows the last paint had room for, so a jump made from outside
     /// an event — [`go_to`](Self::go_to) — can centre its line.
     rows_seen: Cell<usize>,
@@ -403,23 +417,26 @@ pub struct TextArea<M, D = TextBuffer> {
     has_focus: bool,
 }
 
-/// Where the scrollbar's thumb sits on a track `track_h` tall, as
-/// `(offset, height)`: as tall a share of the track as the rows are of the
-/// lines, never under `min_h`, and as far down as `top` is through the range
-/// of tops that keep the last line on screen.
-fn thumb_span(track_h: i32, rows: usize, total: usize, top: usize, min_h: i32) -> (i32, i32) {
+/// Where a scrollbar's thumb sits on a track `track` long, as
+/// `(offset, length)`: as long a share of the track as the `shown` part is of
+/// the `total`, never under `min`, and as far along as `at` is through the
+/// range of positions that keep the end in view.
+///
+/// Both bars use it: down the side `shown` and `total` are rows and lines,
+/// along the bottom they are pixels of width.
+fn thumb_span(track: i32, shown: usize, total: usize, at: usize, min: i32) -> (i32, i32) {
     let total = total.max(1) as i64;
-    let rows = rows.max(1) as i64;
-    let h = ((track_h as i64 * rows / total) as i32)
-        .max(min_h)
-        .min(track_h.max(1));
-    let max_top = (total - rows).max(0);
-    let y = if max_top == 0 {
+    let shown = shown.max(1) as i64;
+    let len = ((track as i64 * shown / total) as i32)
+        .max(min)
+        .min(track.max(1));
+    let max_at = (total - shown).max(0);
+    let off = if max_at == 0 {
         0
     } else {
-        ((track_h - h) as i64 * (top as i64).min(max_top) / max_top) as i32
+        ((track - len) as i64 * (at as i64).min(max_at) / max_at) as i32
     };
-    (y, h)
+    (off, len)
 }
 
 impl<M> TextArea<M, TextBuffer> {
@@ -443,6 +460,7 @@ impl<M> TextArea<M, TextBuffer> {
         self.anchor = None;
         self.top = 0;
         self.scroll_x.set(0);
+        self.content_w.set(0);
     }
 }
 
@@ -463,6 +481,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
             goal_x: None,
             top: 0,
             scroll_x: Cell::new(0),
+            content_w: Cell::new(0),
             reveal_pending: Cell::new(false),
             wheel_rest: 0,
             style: TextStyle::built_in(16),
@@ -473,6 +492,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
             on_clipboard: None,
             dragging: false,
             thumb_drag: None,
+            h_thumb_drag: None,
             rows_seen: Cell::new(0),
             last_click: None,
             blink_epoch: 0,
@@ -550,6 +570,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.anchor = None;
         self.top = 0;
         self.scroll_x.set(0);
+        self.content_w.set(0);
     }
 
     /// The font and size.
@@ -558,9 +579,11 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.style
     }
 
-    /// Replaces the font and size.
+    /// Replaces the font and size. The measured width of the text goes with
+    /// the old font, and is taken again as the lines are drawn.
     pub fn set_style(&mut self, style: TextStyle) {
         self.style = style;
+        self.content_w.set(0);
     }
 
     /// Whether the lines are numbered.
@@ -580,9 +603,11 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.tab_width
     }
 
-    /// Moves the tab stops `columns` apart, at least one.
+    /// Moves the tab stops `columns` apart, at least one. Tabs are part of
+    /// how wide a line is, so that is measured again as the lines are drawn.
     pub fn set_tab_width(&mut self, columns: u8) {
         self.tab_width = columns.max(1);
+        self.content_w.set(0);
     }
 
     /// Whether editing is off.
@@ -772,20 +797,22 @@ impl<M, D: TextDocument> TextArea<M, D> {
         (self.style.size_px as i32 * 5 / 8).max(6)
     }
 
-    /// The scrollbar's strip.
-    fn bar_rect(&self, bounds: Rect) -> Rect {
+    /// The scrollbar's strip, stopping above the bottom one when that is
+    /// there, so the two do not meet in the corner.
+    fn bar_rect(&self, engine: &mut TextEngine, bounds: Rect) -> Rect {
         let w = self.bar_width().min(bounds.width.max(0));
-        Rect::new(bounds.right() - w, bounds.y, w, bounds.height)
+        let h = (bounds.height - self.h_bar_height(engine, bounds)).max(0);
+        Rect::new(bounds.right() - w, bounds.y, w, h)
     }
 
     /// The thumb within the strip, or `None` when everything fits.
-    fn thumb_rect(&self, engine: &TextEngine, bounds: Rect) -> Option<Rect> {
+    fn thumb_rect(&self, engine: &mut TextEngine, bounds: Rect) -> Option<Rect> {
         let rows = self.rows(engine, bounds);
         let total = self.known_lines();
         if total <= rows {
             return None;
         }
-        let bar = self.bar_rect(bounds);
+        let bar = self.bar_rect(engine, bounds);
         // A pixel of strip either side of the thumb, and two above and
         // below: wide enough to find and grab, with the strip still showing
         // as its track.
@@ -800,22 +827,112 @@ impl<M, D: TextDocument> TextArea<M, D> {
         ))
     }
 
-    /// The rectangle the text is drawn in: between the gutter and the
-    /// scrollbar.
-    fn text_rect(&self, engine: &mut TextEngine, bounds: Rect) -> Rect {
+    /// The strip along the bottom, under the text and beside the gutter. As
+    /// tall as the side strip is wide, and nothing at all when the text fits.
+    fn h_bar_rect(&self, engine: &mut TextEngine, bounds: Rect) -> Rect {
+        let h = self.h_bar_height(engine, bounds);
         let gutter = self.gutter_width(engine);
-        let bar = self.bar_width();
         Rect::new(
             bounds.x + gutter,
-            bounds.y,
-            (bounds.width - gutter - bar).max(0),
-            bounds.height,
+            bounds.bottom() - h,
+            self.text_width(engine, bounds),
+            h,
         )
     }
 
-    /// Whole rows the bounds hold.
-    fn rows(&self, engine: &TextEngine, bounds: Rect) -> usize {
-        (bounds.height / self.row_height(engine)).max(1) as usize
+    /// The thumb within the bottom strip, or `None` when the text fits.
+    fn h_thumb_rect(&self, engine: &mut TextEngine, bounds: Rect) -> Option<Rect> {
+        let bar = self.h_bar_rect(engine, bounds);
+        if bar.height == 0 || bar.width <= 0 {
+            return None;
+        }
+        // The track is the width on screen; the whole of it is that and
+        // whatever is off to the right.
+        let span = bar.width + self.max_scroll_x(engine, bounds);
+        let (side, end) = (1, 2);
+        let track_w = (bar.width - end * 2).max(1);
+        let (x, w) = thumb_span(
+            track_w,
+            bar.width as usize,
+            span as usize,
+            self.scroll_x.get().max(0) as usize,
+            self.bar_width() * 2,
+        );
+        Some(Rect::new(
+            bar.x + end + x,
+            bar.y + side,
+            w,
+            (bar.height - side * 2).max(1),
+        ))
+    }
+
+    /// How tall the bottom strip is: nothing unless the text is wider than
+    /// there is room for it.
+    fn h_bar_height(&self, engine: &mut TextEngine, bounds: Rect) -> i32 {
+        let bar = self.bar_width();
+        if self.max_scroll_x(engine, bounds) > 0 && bounds.height > bar {
+            bar
+        } else {
+            0
+        }
+    }
+
+    /// Room kept past the end of the longest line: the caret standing after
+    /// its last character, and about a character of daylight after that, so
+    /// the view stops a little beyond the text rather than exactly at it.
+    fn trail(&self) -> i32 {
+        self.caret_width() + self.pad() * 2
+    }
+
+    /// The furthest the text scrolls sideways: what of the widest line
+    /// measured so far, and the room after it, is past the right edge — and
+    /// nothing at all when the line and its caret fit, which is what keeps a
+    /// document of short lines from scrolling sideways by the trail alone.
+    fn max_scroll_x(&self, engine: &mut TextEngine, bounds: Rect) -> i32 {
+        let width = self.text_width(engine, bounds);
+        let content = self.content_w.get();
+        if content + self.caret_width() > width {
+            (content + self.trail() - width).max(0)
+        } else {
+            0
+        }
+    }
+
+    /// Takes `width` into the width of the text, if it is the widest yet.
+    fn saw_width(&self, width: i32) {
+        if width > self.content_w.get() {
+            self.content_w.set(width);
+        }
+    }
+
+    /// Pulls the sideways scroll back inside what there is to scroll — after
+    /// a resize, or an edit that took the long line away.
+    fn clamp_scroll_x(&self, engine: &mut TextEngine, bounds: Rect) {
+        let max = self.max_scroll_x(engine, bounds);
+        if self.scroll_x.get() > max {
+            self.scroll_x.set(max);
+        }
+    }
+
+    /// How wide the text is drawn: between the gutter and the side bar.
+    fn text_width(&self, engine: &mut TextEngine, bounds: Rect) -> i32 {
+        let gutter = self.gutter_width(engine);
+        (bounds.width - gutter - self.bar_width()).max(0)
+    }
+
+    /// The rectangle the text is drawn in: between the gutter and the
+    /// scrollbar, and above the bottom one when that is there.
+    fn text_rect(&self, engine: &mut TextEngine, bounds: Rect) -> Rect {
+        let gutter = self.gutter_width(engine);
+        let width = self.text_width(engine, bounds);
+        let height = (bounds.height - self.h_bar_height(engine, bounds)).max(0);
+        Rect::new(bounds.x + gutter, bounds.y, width, height)
+    }
+
+    /// Whole rows the text has room for.
+    fn rows(&self, engine: &mut TextEngine, bounds: Rect) -> usize {
+        let height = self.text_rect(engine, bounds).height;
+        (height / self.row_height(engine)).max(1) as usize
     }
 
     /// Horizontal offset of `col` within `line`, unscrolled, with every tab
@@ -937,13 +1054,17 @@ impl<M, D: TextDocument> TextArea<M, D> {
             return;
         };
         let x = self.x_of(engine, &line, self.caret.col);
-        let caret_w = self.caret_width() + self.pad();
+        // The caret is on this line, so the line is as wide as the caret at
+        // least: a caret taken to the end of a line longer than any drawn so
+        // far can be scrolled to, because the width grows with it.
+        self.saw_width(x);
         let scroll = self.scroll_x.get();
         if x < scroll {
             self.scroll_x.set(x);
-        } else if x + caret_w > scroll + area.width {
-            self.scroll_x.set(x + caret_w - area.width);
+        } else if x + self.trail() > scroll + area.width {
+            self.scroll_x.set(x + self.trail() - area.width);
         }
+        self.clamp_scroll_x(engine, bounds);
     }
 
     /// Scrolls sideways so the caret is on screen and, when the selection is
@@ -1291,8 +1412,11 @@ impl<M, D: TextDocument> TextArea<M, D> {
         ctx: &mut EventCtx<'_, M>,
     ) -> Handled {
         let bounds = ctx.bounds;
-        if self.bar_rect(bounds).contains(position) {
+        if self.bar_rect(ctx.text, bounds).contains(position) {
             return self.press_bar(position, ctx);
+        }
+        if self.h_bar_rect(ctx.text, bounds).contains(position) {
+            return self.press_h_bar(position, ctx);
         }
         let pos = self.pos_at(ctx.text, bounds, position);
         let now = ctx.now_ms;
@@ -1348,8 +1472,49 @@ impl<M, D: TextDocument> TextArea<M, D> {
         Handled::Yes
     }
 
+    /// A press in the bottom scrollbar: takes the thumb, or pages sideways
+    /// towards the press.
+    fn press_h_bar(&mut self, position: Point, ctx: &mut EventCtx<'_, M>) -> Handled {
+        let bounds = ctx.bounds;
+        let Some(thumb) = self.h_thumb_rect(ctx.text, bounds) else {
+            return Handled::No;
+        };
+        if thumb.contains(position) {
+            self.h_thumb_drag = Some((position.x, self.scroll_x.get()));
+            return Handled::Yes;
+        }
+        let page = self.text_width(ctx.text, bounds);
+        let max = self.max_scroll_x(ctx.text, bounds);
+        let to = if position.x < thumb.x {
+            self.scroll_x.get() - page
+        } else {
+            self.scroll_x.get() + page
+        };
+        self.scroll_x.set(to.clamp(0, max));
+        Handled::Yes
+    }
+
+    /// The bottom thumb, held, followed the pointer to `x`.
+    fn drag_h_thumb(&mut self, engine: &mut TextEngine, bounds: Rect, x: i32) -> Handled {
+        let Some((from_x, from_scroll)) = self.h_thumb_drag else {
+            return Handled::No;
+        };
+        let Some(thumb) = self.h_thumb_rect(engine, bounds) else {
+            return Handled::No;
+        };
+        let max = self.max_scroll_x(engine, bounds);
+        let travel = (self.h_bar_rect(engine, bounds).width - 4 - thumb.width).max(1) as i64;
+        let moved = (x - from_x) as i64 * max as i64 / travel;
+        let scroll = (from_scroll as i64 + moved).clamp(0, max as i64) as i32;
+        if scroll == self.scroll_x.get() {
+            return Handled::No;
+        }
+        self.scroll_x.set(scroll);
+        Handled::Yes
+    }
+
     /// The thumb, held, followed the pointer to `y`.
-    fn drag_thumb(&mut self, engine: &TextEngine, bounds: Rect, y: i32) -> Handled {
+    fn drag_thumb(&mut self, engine: &mut TextEngine, bounds: Rect, y: i32) -> Handled {
         let Some((from_y, from_top)) = self.thumb_drag else {
             return Handled::No;
         };
@@ -1358,7 +1523,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
         };
         let rows = self.rows(engine, bounds);
         let max_top = self.max_top(rows);
-        let travel = (self.bar_rect(bounds).height - 4 - thumb.height).max(1) as i64;
+        let travel = (self.bar_rect(engine, bounds).height - 4 - thumb.height).max(1) as i64;
         let moved = (y - from_y) as i64 * max_top as i64 / travel;
         let top = (from_top as i64 + moved).clamp(0, max_top as i64) as usize;
         if top == self.top {
@@ -1368,14 +1533,21 @@ impl<M, D: TextDocument> TextArea<M, D> {
         Handled::Yes
     }
 
-    fn wheel(&mut self, engine: &TextEngine, bounds: Rect, delta_x: f32, delta_y: f32) -> Handled {
+    fn wheel(
+        &mut self,
+        engine: &mut TextEngine,
+        bounds: Rect,
+        delta_x: f32,
+        delta_y: f32,
+    ) -> Handled {
         let row_h = self.row_height(engine);
         self.wheel_rest += delta_y as i32;
         let lines = self.wheel_rest / row_h;
         self.wheel_rest -= lines * row_h;
         let max_top = self.max_top(self.rows(engine, bounds));
         let top = self.top.saturating_add_signed(lines as isize).min(max_top);
-        let scroll_x = (self.scroll_x.get() + delta_x as i32).max(0);
+        let scroll_x =
+            (self.scroll_x.get() + delta_x as i32).clamp(0, self.max_scroll_x(engine, bounds));
         if top == self.top && scroll_x == self.scroll_x.get() {
             return Handled::No;
         }
@@ -1462,6 +1634,9 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
         if self.reveal_pending.take() {
             self.reveal_range_x(ctx.text, bounds);
         }
+        // A window made wider, or an edit that took the longest line away,
+        // can leave the view scrolled past the end of the text.
+        self.clamp_scroll_x(ctx.text, bounds);
         let area = self.text_rect(ctx.text, bounds);
         let text_x = area.x - self.scroll_x.get();
         let content = if disabled {
@@ -1483,12 +1658,12 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
         self.rows_seen.set(self.rows(ctx.text, bounds));
         let mut spans = Vec::new();
         let mut marks: Vec<Range<usize>> = Vec::new();
-        let rows = (bounds.height / row_h + 1).max(1) as usize;
+        let rows = (area.height / row_h + 1).max(1) as usize;
         for row in 0..rows {
             let n = self.top + row;
             let Some(line) = self.line_text(n) else { break };
             let y = bounds.y + row as i32 * row_h;
-            if y >= bounds.bottom() {
+            if y >= area.bottom() {
                 break;
             }
             let strip = Rect::new(bounds.x, y, bounds.width, row_h);
@@ -1573,8 +1748,10 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 at = span.end;
             }
             if at < line.len() {
-                self.draw_run(ctx.text, &mut clipped, origin, x, &line[at..], content);
+                x = self.draw_run(ctx.text, &mut clipped, origin, x, &line[at..], content);
             }
+            // Drawing the line has measured it, so the width comes free.
+            self.saw_width(x);
 
             if n == self.caret.line && focused && self.caret_on && !disabled {
                 let x = text_x + self.x_of(ctx.text, &line, self.caret.col);
@@ -1590,10 +1767,25 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
         // lines, so a file still being counted shows a thumb that shrinks as
         // the count climbs.
         if let Some(thumb) = self.thumb_rect(ctx.text, bounds) {
-            let bar = self.bar_rect(bounds);
+            let bar = self.bar_rect(ctx.text, bounds);
             let radius = bar.width / 3;
             canvas.fill_rect(bar, theme.color(Role::Base200));
             let alpha = if self.thumb_drag.is_some() { 170 } else { 110 };
+            canvas.fill_rounded_rect(thumb, radius, content.with_alpha(alpha));
+        }
+
+        // And the same along the bottom, of the width of the lines drawn so
+        // far rather than of the lines themselves — there when the text is
+        // wider than the room for it, and not there at all when it fits.
+        if let Some(thumb) = self.h_thumb_rect(ctx.text, bounds) {
+            let bar = self.h_bar_rect(ctx.text, bounds);
+            let radius = bar.height / 3;
+            canvas.fill_rect(bar, theme.color(Role::Base200));
+            let alpha = if self.h_thumb_drag.is_some() {
+                170
+            } else {
+                110
+            };
             canvas.fill_rounded_rect(thumb, radius, content.with_alpha(alpha));
         }
     }
@@ -1610,12 +1802,14 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 self.has_focus = false;
                 self.dragging = false;
                 self.thumb_drag = None;
+                self.h_thumb_drag = None;
                 self.wake_caret(ctx.now_ms);
                 Handled::No
             }
             Event::PressCancelled => {
                 self.dragging = false;
                 self.thumb_drag = None;
+                self.h_thumb_drag = None;
                 Handled::No
             }
             Event::Input(InputEvent::Text { ch }) if !ch.is_control() => {
@@ -1647,13 +1841,17 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 ..
             }) => {
                 self.dragging = false;
-                let held = self.thumb_drag.take().is_some();
-                // The thumb draws differently while held.
+                let held = self.thumb_drag.take().is_some() | self.h_thumb_drag.take().is_some();
+                // A thumb draws differently while held.
                 if held { Handled::Yes } else { Handled::No }
             }
             Event::Input(InputEvent::PointerMoved { position }) if self.thumb_drag.is_some() => {
                 let bounds = ctx.bounds;
                 self.drag_thumb(ctx.text, bounds, position.y)
+            }
+            Event::Input(InputEvent::PointerMoved { position }) if self.h_thumb_drag.is_some() => {
+                let bounds = ctx.bounds;
+                self.drag_h_thumb(ctx.text, bounds, position.x)
             }
             Event::Input(InputEvent::PointerMoved { position }) if self.dragging => {
                 let bounds = ctx.bounds;
