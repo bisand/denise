@@ -411,7 +411,17 @@ impl TextEngine {
 
     /// Draws one line with its baseline at `origin`.
     ///
-    /// Returns the total advance.
+    /// Returns the total advance, of the whole line and not of the part drawn:
+    /// a caller measuring a line to know how far it scrolls needs all of it.
+    ///
+    /// Only the glyphs the canvas would keep are rasterised and handed over.
+    /// The painter clips the rest away to nothing, so the pixels are the same
+    /// either way, but handing them over is not free: a line a megabyte long
+    /// is a million glyphs, and a painter that builds geometry per glyph turns
+    /// that into hundreds of megabytes for the few hundred that are on screen
+    /// — more, on some, than a GPU will take in one buffer. Laying the line
+    /// out is still the whole of it, which is where `width` comes from; it is
+    /// cheap beside rasterising, being an advance apiece from the cache.
     pub fn draw_line(
         &mut self,
         canvas: &mut Pen<'_>,
@@ -421,14 +431,28 @@ impl TextEngine {
         color: Color,
     ) -> i32 {
         let width = self.shape_into_run(style, text);
+        let clip = canvas.clip();
+        // What a glyph may reach outside its own advance: an italic's
+        // overhang, an accent, a bearing that starts left of the pen. Four ems
+        // is more than any face asks for, and still leaves nothing but the
+        // screenful.
+        let margin = i32::from(style.size_px).saturating_mul(4);
+        let line_h = self.line_height(style).saturating_add(margin);
+        if origin.y + line_h < clip.y || origin.y - line_h > clip.bottom() {
+            return width;
+        }
         for index in 0..self.run.len() {
             let glyph = self.run[index];
+            let x = origin.x + glyph.x;
+            if x + margin < clip.x || x - margin > clip.right() {
+                continue;
+            }
             let Some(placed) = self.placed(style, glyph.id) else {
                 continue;
             };
             if !placed.rect.is_empty() {
                 let at = Point::new(
-                    origin.x + glyph.x + placed.metrics.bearing_x,
+                    x + placed.metrics.bearing_x,
                     origin.y + glyph.y - placed.metrics.bearing_y,
                 );
                 // The page with its identity, not a mask cut from it: a painter

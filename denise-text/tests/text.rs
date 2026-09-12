@@ -326,6 +326,131 @@ fn the_cache_is_bounded_by_what_it_was_asked_for() {
     assert_eq!(GlyphAtlas::with_default_size().capacity_bytes(), 65_536);
 }
 
+/// A line far longer than the clip hands over the glyphs on screen and not
+/// the rest of them, while still measuring to its end.
+///
+/// What it costs to hand a glyph over is the painter's business — a rasteriser
+/// clips it away for nothing, and one building geometry per glyph pays for
+/// every one — so the engine is the only place that knows enough to stop. A
+/// binary file opened as text is a line of hundreds of thousands of glyphs,
+/// and a GPU will not take a buffer that size.
+#[test]
+fn a_line_longer_than_the_clip_only_hands_over_what_is_in_it() {
+    use denise::{ClipToken, Mask, Paint, Painter, PixelFormat, PixelView};
+
+    /// Counts the glyphs handed to it, and draws nothing.
+    struct Tally {
+        clip: Rect,
+        glyphs: usize,
+    }
+    impl Painter for Tally {
+        fn size(&self) -> Size {
+            SURFACE
+        }
+        fn format(&self) -> PixelFormat {
+            PixelFormat::Xrgb8888
+        }
+        fn clip(&self) -> Rect {
+            self.clip
+        }
+        fn push_clip(&mut self, rect: Rect) -> ClipToken {
+            let previous = self.clip;
+            self.clip = self.clip.intersect(&rect).unwrap_or(Rect::ZERO);
+            ClipToken::restoring(previous)
+        }
+        fn pop_clip(&mut self, token: ClipToken) {
+            self.clip = token.previous();
+        }
+        fn clear(&mut self, _: Color) {}
+        fn fill_rect(&mut self, _: Rect, _: Paint) {}
+        fn fill_rounded_rect(&mut self, _: Rect, _: i32, _: Paint) {}
+        fn stroke_rounded_rect(&mut self, _: Rect, _: i32, _: i32, _: Paint) {}
+        fn fill_circle(&mut self, _: Point, _: i32, _: Paint) {}
+        fn stroke_circle(&mut self, _: Point, _: i32, _: i32, _: Paint) {}
+        fn stroke_arc(&mut self, _: Point, _: i32, _: i32, _: i32, _: i32, _: Paint) {}
+        fn draw_line(&mut self, _: Point, _: Point, _: Paint) {}
+        fn fill_polygon_fx(&mut self, _: &[(i32, i32)], _: Paint) {}
+        fn blit_mask(&mut self, _: Point, _: &Mask<'_>, _: Paint) {
+            self.glyphs += 1;
+        }
+        fn blit(&mut self, _: &PixelView<'_>, _: Point) {}
+        fn blit_scaled(&mut self, _: &PixelView<'_>, _: Rect) {}
+        fn blit_rounded(&mut self, _: &PixelView<'_>, _: Rect, _: Rect, _: i32) {}
+    }
+
+    let mut engine = engine();
+    let style = TextStyle::built_in(16);
+    let line = "x".repeat(200_000);
+    let mut tally = Tally {
+        clip: Rect::from_size(SURFACE),
+        glyphs: 0,
+    };
+    let width = {
+        let mut canvas = denise_render::Pen::new(&mut tally);
+        engine.draw_line(&mut canvas, style, Point::new(0, 20), &line, Color::WHITE)
+    };
+
+    assert_eq!(
+        width,
+        engine.measure_line(style, &line),
+        "the whole line is measured, whatever is drawn of it"
+    );
+    // The surface is 240 px of an 8 px font: thirty glyphs fit, and the margin
+    // for what a glyph may reach outside its advance allows a few more.
+    assert!(
+        tally.glyphs < 200,
+        "handed over {} glyphs for a surface that fits thirty",
+        tally.glyphs
+    );
+
+    // Scrolled so the far end is what shows, it is the far end that is drawn
+    // and the count is the same.
+    let mut tally = Tally {
+        clip: Rect::from_size(SURFACE),
+        glyphs: 0,
+    };
+    {
+        let mut canvas = denise_render::Pen::new(&mut tally);
+        engine.draw_line(
+            &mut canvas,
+            style,
+            Point::new(-width + 100, 20),
+            &line,
+            Color::WHITE,
+        );
+    }
+    assert!(
+        tally.glyphs > 0 && tally.glyphs < 200,
+        "handed over {} glyphs at the far end",
+        tally.glyphs
+    );
+}
+
+/// The pixels are the same whether or not the glyphs off to one side were
+/// handed over: what is drawn is what a clip would have left.
+#[test]
+fn culling_draws_the_same_pixels_a_clip_would_leave() {
+    let mut engine = engine();
+    let style = TextStyle::built_in(16);
+    let mut short = Sheet::new();
+    short.draw(|canvas| {
+        engine.draw_line(canvas, style, Point::new(4, 20), "abc", Color::WHITE);
+    });
+    // The same three letters, with a long tail that falls outside the surface.
+    let mut long = Sheet::new();
+    let text = format!("abc{}", "d".repeat(100_000));
+    long.draw(|canvas| {
+        engine.draw_line(canvas, style, Point::new(4, 20), &text, Color::WHITE);
+    });
+    let bounds = long.ink_bounds().expect("something was drawn");
+    assert_eq!(bounds.y, short.ink_bounds().expect("short").y);
+    assert!(
+        bounds.right() <= SURFACE.width as i32,
+        "nothing landed outside the surface"
+    );
+    assert!(!long.is_blank());
+}
+
 #[test]
 fn drawing_off_the_surface_is_harmless() {
     let mut engine = engine();
