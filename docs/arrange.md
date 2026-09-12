@@ -44,31 +44,45 @@ The issue assumes the crate's job is to make queries that already exist:
 
 That is half true, and the missing half is most of the work.
 
-**Twelve of twenty-seven widgets offer a query at all.** The fourteen that offer
-nothing are `avatar`, `carousel`, `collapse`, `divider`, `image`, `label`,
-`panel`, `progress`, `radial-progress`, `select`, `slider`, `spinner`,
-`text-input` and `video`.
+**Twelve of twenty-seven widgets offered a query at all**, when this survey was
+made. The fourteen that offered nothing were `avatar`, `carousel`, `collapse`,
+`divider`, `image`, `label`, `panel`, `progress`, `radial-progress`, `select`,
+`slider`, `spinner`, `text-input` and `video`.
 
-`label` is on that list. *A label as wide as its text* is the issue's own first
-example of what content-driven sizing means, and today it cannot be answered at
-all.
+`label` was on that list. *A label as wide as its text* is the issue's own first
+example of what content-driven sizing means, and it could not be answered at all.
 
-**The twelve that do answer do not agree on the question.** These are inherent
-methods on concrete types, each grown when one example needed it:
+**`Widget` had no measure method.** Paint, event, hit-test, focus — nothing about
+size. So a crate holding `NodeId`s could not ask a node how big it wants to be,
+not because the answer was missing but because there was no door.
+
+### What has changed since
+
+`Widget::measure` and `Ui::measure` are that door, and they landed in `denise-ui`
+first, which is what this note concluded they would have to. **Eighteen of the
+twenty-eight widgets answer today**; `label` is one of them, and measures its own
+text. The ten that answer nothing are `avatar`, `carousel`, `divider`, `image`,
+`panel`, `progress`, `radial-progress`, `slider`, `spinner` and `video` — each of
+them a thing that is whatever rectangle it is given, which is the honest answer
+rather than a gap. Nothing in `denise-ui` consumes any of it: the tree still never
+measures.
+
+**The thirteen inherent methods that predate the protocol still disagree on the
+question.** They stay, because `examples/gallery` calls them and they are the
+nicer call when you are holding the widget rather than an id:
 
 | | |
 |---|---|
 | `badge`, `button`, `tabs`, `list`, `tree` | `(engine)` — free measure |
 | `checkbox`, `radio-group`, `toggle` | `(theme, engine)` — the theme decides part of the size |
-| `list`, `radio-group`, `timeline`, `tree` | `preferred_height(theme)` — no text measured |
+| `list`, `radio-group`, `timeline`, `tree`, `menubar` | `preferred_height(theme, …)` — no text measured, or measured only for the bar |
 | `table` | `(theme, rows)` — a count the widget does not hold |
 | `alert` | `preferred_height(engine, width)` — **height for a width** |
 | `rating` | `preferred_width(height)` — **width for a height** |
 
-**`Widget` has no measure method.** Paint, event, hit-test, focus — nothing about
-size. So a crate holding `NodeId`s cannot ask a node how big it wants to be, not
-because the answer is missing but because there is no door. Today's only caller,
-`examples/gallery`, measures widgets it is holding **before** it inserts them:
+That disagreement is the reason the protocol exists rather than a thirteenth
+signature. `examples/gallery` measures widgets it is holding **before** it inserts
+them:
 
 ```rust
 let badge = Badge::new(text).with_role(role).with_style(self.small);
@@ -80,8 +94,8 @@ That works because `badge` is a local. A layout pass over a built tree has no
 local — it has a `NodeId` — and `widget.preferred_width(ui.text_mut())` cannot
 compile anyway, because both halves borrow the same `Ui`.
 
-So the crate's real prerequisite is a **uniform measure protocol**, and that lands
-in `denise-ui` before any arranging is possible.
+So the crate's real prerequisite was a **uniform measure protocol**, and it landed
+in `denise-ui` before any arranging was possible.
 
 ## The model: rows, columns and layers
 

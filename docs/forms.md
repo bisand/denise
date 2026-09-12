@@ -479,9 +479,14 @@ nothing at startup; it supplies the records it always had.
 
 ## The widgets
 
-Twenty-six widgets and one container. Every property is optional unless marked
-**required**; every default below is the widget's own, and a property at its
-default is not written to the file.
+Twenty-five widgets and one container are described below. Every property is
+optional unless marked **required**; every default below is the widget's own, and
+a property at its default is not written to the file.
+
+Two more kinds load and are not documented here yet: `menubar` and `text-area`.
+The loader accepts them, the designer offers them from `widgets::all()`, and
+their properties are the ones the widgets themselves declare — but until they
+have a section of their own, this page is not the place to learn them from.
 
 ### Containers
 

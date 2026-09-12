@@ -140,10 +140,11 @@ which is the entire reason for the generation in the key.
 
 ### The widget set, and what a widget has to earn
 
-Twenty-five of them: `Panel`, `Label`, `Button`, `TextInput`, `Checkbox`,
-`Toggle`, `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`, `Alert`,
-`Tabs`, `List`, `RadialProgress`, `Spinner`, `Select`, `Image`, `Rating`,
-`Avatar`, `Table`, `Timeline`, `Carousel`, `Collapse`, `Video`. The first four are CoreCanvas 0.4
+Twenty-eight of them: `Panel`, `Label`, `Button`, `TextInput`, `TextArea`,
+`Checkbox`, `Toggle`, `RadioGroup`, `Progress`, `Slider`, `Divider`, `Badge`,
+`Alert`, `Tabs`, `MenuBar`, `List`, `Tree`, `RadialProgress`, `Spinner`,
+`Select`, `Image`, `Rating`, `Avatar`, `Table`, `Timeline`, `Carousel`,
+`Collapse`, `Video`. The first four are CoreCanvas 0.4
 parity; the rest are being added one at a time against
 [issue #6](https://github.com/bisand/denise/issues/6), which triages the DaisyUI
 component list against what a toolkit with no layout engine can honestly support.
@@ -177,16 +178,16 @@ Three rules hold across all of them:
   because it looks like the same thing. An intrinsic-size *protocol* is one where
   the tree asks every widget how big it wants to be and then places it. Here the
   *application* asks, does its own arithmetic, and passes a rectangle — exactly as
-  it does for a node with no natural size at all. Sixteen of the twenty-seven answer
-  — the ten that are whatever rectangle they are given say so, which is the honest
-  answer and not a gap — and **nothing in `denise-ui` consumes any of it**.
+  it does for a node with no natural size at all. Eighteen of the twenty-eight
+  answer — the ten that are whatever rectangle they are given say so, which is the
+  honest answer and not a gap — and **nothing in `denise-ui` consumes any of it**.
 
   `Widget::measure` and `Ui::measure` are the uniform way to ask, added because a
-  caller holding a `NodeId` rather than the widget has no other door: the twelve
+  caller holding a `NodeId` rather than the widget has no other door: the thirteen
   inherent `preferred_width`/`preferred_height` methods disagree on a signature,
   each having grown when one example needed it, and
   `widget.preferred_width(ui.text_mut())` cannot be written at all — both halves
-  borrow the same `Ui`. Those twelve stay, because `examples/gallery` calls them
+  borrow the same `Ui`. Those thirteen stay, because `examples/gallery` calls them
   and they are the nicer call when you are holding the widget.
 
   The protocol changes nothing about the line above. The tree still never asks.
@@ -1320,9 +1321,10 @@ Set p = CreateObject("Denise.Panel")
 p.Caption = "Hei"
 ```
 
-There is no type library, so a host is late-bound: it asks for a name and invokes
-it. VBScript, JScript, VB6 through an `Object` variable, MFC's
-`COleDispatchDriver` and every OLE container work that way and need nothing else.
+The shim shipped without a type library at first, so a host is late-bound: it asks
+for a name and invokes it. VBScript, JScript, VB6 through an `Object` variable,
+MFC's `COleDispatchDriver` and every OLE container work that way, need nothing
+else, and still reach it like that today.
 
 **PowerShell is the exception, and chasing it was the most instructive part of
 this.** It builds its member table from `ITypeInfo` and will not ask for a name it
@@ -1342,9 +1344,11 @@ complaint at all. Nothing in the method table changes the kind.
 
 So it was removed. `GetTypeInfoCount` answers zero, which is honest, and PowerShell
 reaches the control through `[System.__ComObject].InvokeMember` — which goes
-straight to `Invoke` and works. The real fix is a registered type library, and it
-buys a form designer's property sheet and early binding at the same time; it is on
-the outstanding list rather than half-built.
+straight to `Invoke` and works. The real fix is a registered type library, which
+buys a form designer's property sheet and early binding at the same time — and
+that is what landed in the end, rather than anything half-built: registration now
+writes and registers `denise_activex.tlb`, and CI builds one and reads it back on
+every push.
 
 There was a third thing wrong, and CI found it first: reading that description
 crashed the Windows runner outright, `STATUS_ACCESS_VIOLATION`. The module holding
@@ -1563,8 +1567,9 @@ Still outstanding, and deliberately not hidden:
 - **The Norwegian layout is a reconstruction.** `æøå` and the `¨^~` dead key are
   certain; the AltGr assignments on the `+?` and `´` positions are less so, and
   want checking against a physical keyboard.
-- **Only two layouts.** US and Norwegian. Adding one is about thirty lines,
-  because a layout table lists only what differs from the Latin alphabet.
+- **Three layouts.** US, Norwegian and German, in `denise-layout`, which also
+  reads which one the machine is configured for. Adding a fourth is about thirty
+  lines, because a layout table lists only what differs from the Latin alphabet.
 - **No layout engine.** Nodes are positioned with explicit rectangles relative to
   their parent, which is what a fixed-resolution panel wants; the opt-in vertical
   stack (`Ui::set_stack`) is the one placement rule the tree owns, and a

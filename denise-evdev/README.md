@@ -41,8 +41,10 @@ the first list forever is how a panel ends up with a mouse it can see in
 ## Keyboards
 
 Key positions are translated to `KeyCode`, then composed into text: dead keys,
-AltGr, and the modifier state that decides both. Two layouts ship, **US** and
-**Norwegian** — the Norwegian AltGr assignments are a careful reconstruction and
+AltGr, and the modifier state that decides both. The tables live in
+[`denise-layout`](https://crates.io/crates/denise-layout), which ships three —
+**US**, **Norwegian** and **German** — and reads which one the machine is
+configured for. The non-US AltGr assignments are a careful reconstruction and
 want checking against real hardware.
 
 There is also a console guard: on a bare VT the kernel is still echoing every

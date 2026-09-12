@@ -1,11 +1,14 @@
 # Running the Win32 control
 
-`denise-win32` was written against the documentation and has never run. It
-compiles for `x86_64-pc-windows-msvc`, its keymap is tested everywhere and its
-DIB tests pass on a Windows CI runner — none of which says anything about whether
-a real window behaves.
+`denise-win32` was written against the documentation before it had ever run. It
+has run since: the input path is confirmed on Windows 11 ARM64 — Tab, AltGr, dead
+keys, hover and mouse-leave — and the ActiveX shim above it has been sited,
+activated and scripted. What is still unverified is at the edges: `SetCapture` on
+a drag off a pressed button, the wheel's screen-to-client conversion, DPI changes
+(`WM_DPICHANGED` reaches top-level windows only), and the control inside a real
+dialog, which is what `WM_GETDLGCODE` exists for.
 
-This is how to find out, in a UTM VM on a Mac.
+This is how to check any of it, in a UTM VM on a Mac.
 
 ## The VM
 

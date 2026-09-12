@@ -5,7 +5,7 @@ at runtime.
 
 ```toml
 [dependencies]
-denise-forms = "0.19"
+denise-forms = "0.23"
 ```
 
 A form in Denise is ordinarily Rust: a `Ui<M>`, a tree of `ui.add(parent, widget,
@@ -244,7 +244,7 @@ The full argument, including why text scaling is a DPI answer rather than a
 
 ```toml
 [build-dependencies]
-denise-forms = { version = "0.19", features = ["codegen"] }
+denise-forms = { version = "0.23", features = ["codegen"] }
 ```
 
 ```text
