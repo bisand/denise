@@ -1562,11 +1562,12 @@ Still outstanding, and deliberately not hidden:
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.
-- **No clipboard and no keyboard word motion** in `TextInput`. Selecting is
-  there — the same three click counts and the same word rule as `TextArea`,
-  which is `is_word`, shared rather than copied — but the clipboard is
-  `TextArea`'s alone, because it needs a message the host answers and a field
-  on a panel with no keyboard has nowhere to paste from.
+- **No undo and no keyboard word motion** in `TextInput`. Selecting and the
+  clipboard are there — the same three click counts, the same word rule
+  (`is_word`, shared rather than copied) and the same `ClipboardRequest` the
+  editor uses, so a host that already answers one answers both. A field refuses
+  copy and cut while it is a password field: the mask exists so the value cannot
+  be read, and one keystroke to the system clipboard would undo that.
 - **The Norwegian layout is a reconstruction.** `æøå` and the `¨^~` dead key are
   certain; the AltGr assignments on the `+?` and `´` positions are less so, and
   want checking against a physical keyboard.

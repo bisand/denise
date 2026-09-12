@@ -4,7 +4,7 @@
 use denise::{
     ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Rect, Size, theme,
 };
-use denise_ui::widgets::TextInput;
+use denise_ui::widgets::{ClipboardRequest, TextInput};
 use denise_ui::{NodeId, TextEngine, TextStyle, Ui};
 
 const SIZE: Size = Size::new(400, 120);
@@ -14,6 +14,7 @@ const STYLE: TextStyle = TextStyle::built_in(16);
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Msg {
     Submitted,
+    Clipboard(ClipboardRequest),
 }
 
 fn key(code: KeyCode) -> InputEvent {
@@ -72,6 +73,7 @@ fn field(initial: &str) -> (Ui<Msg>, NodeId) {
             root,
             TextInput::<Msg>::new()
                 .with_submit(Msg::Submitted)
+                .with_clipboard(Msg::Clipboard)
                 .with_style(STYLE),
             FIELD,
         )
@@ -84,6 +86,17 @@ fn field(initial: &str) -> (Ui<Msg>, NodeId) {
 
 fn input(ui: &Ui<Msg>, id: NodeId) -> &TextInput<Msg> {
     ui.widget::<TextInput<Msg>>(id).expect("field")
+}
+
+fn messages(ui: &mut Ui<Msg>) -> Vec<Msg> {
+    ui.drain_messages().collect()
+}
+
+/// The application answering a paste, the way a host with a clipboard does.
+fn paste(ui: &mut Ui<Msg>, id: NodeId, text: &str) {
+    ui.widget_mut::<TextInput<Msg>>(id)
+        .expect("field")
+        .insert_text(text);
 }
 
 /// The built-in font is fixed-pitch, so a character index has an x.
@@ -301,5 +314,174 @@ fn enter_still_submits_and_nothing_else_emits() {
         ui.drain_messages().collect::<Vec<_>>(),
         vec![Msg::Submitted]
     );
+    assert_eq!(input(&ui, id).text(), "value");
+}
+
+// ---------------------------------------------------------------- clipboard
+
+#[test]
+fn copy_hands_over_the_selection_and_leaves_it_alone() {
+    let (mut ui, id) = field("hello brave world");
+    ui.focus(Some(id));
+    ui.handle(&[press(at_char(8)), release(at_char(8))]);
+    ui.handle(&[press(at_char(8)), release(at_char(8))]);
+    assert_eq!(input(&ui, id).selected_text(), Some("brave"));
+
+    ui.handle(&[key_with(KeyCode::C, Modifiers::CTRL)]);
+    assert_eq!(
+        messages(&mut ui),
+        vec![Msg::Clipboard(ClipboardRequest::Copy("brave".into()))]
+    );
+    assert_eq!(
+        input(&ui, id).text(),
+        "hello brave world",
+        "copy edits nothing"
+    );
+    assert_eq!(input(&ui, id).selected_text(), Some("brave"));
+}
+
+#[test]
+fn cut_hands_over_the_selection_already_removed() {
+    let (mut ui, id) = field("hello brave world");
+    ui.focus(Some(id));
+    ui.handle(&[press(at_char(8)), release(at_char(8))]);
+    ui.handle(&[press(at_char(8)), release(at_char(8))]);
+
+    ui.handle(&[key_with(KeyCode::X, Modifiers::SUPER)]);
+    assert_eq!(
+        messages(&mut ui),
+        vec![Msg::Clipboard(ClipboardRequest::Cut("brave".into()))]
+    );
+    assert_eq!(input(&ui, id).text(), "hello  world");
+    assert_eq!(input(&ui, id).caret(), 6);
+    assert_eq!(input(&ui, id).selection(), None);
+}
+
+#[test]
+fn paste_asks_and_insert_text_answers() {
+    let (mut ui, id) = field("ab");
+    ui.focus(Some(id));
+    ui.handle(&[key(KeyCode::End)]);
+    ui.handle(&[key_with(KeyCode::V, Modifiers::CTRL)]);
+    assert_eq!(
+        messages(&mut ui),
+        vec![Msg::Clipboard(ClipboardRequest::Paste)],
+        "the widget asks; it has no clipboard of its own"
+    );
+    assert_eq!(
+        input(&ui, id).text(),
+        "ab",
+        "and nothing happens until answered"
+    );
+
+    paste(&mut ui, id, "cd");
+    assert_eq!(input(&ui, id).text(), "abcd");
+    assert_eq!(input(&ui, id).caret(), 4);
+
+    // A paste replaces what is selected, as typing does.
+    ui.handle(&[key(KeyCode::Home)]);
+    ui.handle(&keys(KeyCode::ArrowRight, Modifiers::SHIFT, 2));
+    paste(&mut ui, id, "ZZ");
+    assert_eq!(input(&ui, id).text(), "ZZcd");
+}
+
+#[test]
+fn a_paste_of_many_lines_takes_the_first() {
+    let (mut ui, id) = field("");
+    ui.focus(Some(id));
+    paste(&mut ui, id, "first line\nsecond line\nthird");
+    assert_eq!(input(&ui, id).text(), "first line");
+
+    // Tabs and other control characters are dropped rather than drawn as boxes.
+    let (mut ui, id) = field("");
+    ui.focus(Some(id));
+    paste(&mut ui, id, "a\tb\u{7}c");
+    assert_eq!(input(&ui, id).text(), "abc");
+}
+
+#[test]
+fn a_paste_is_truncated_to_what_the_field_holds() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            TextInput::<Msg>::new().with_max_chars(4).with_style(STYLE),
+            FIELD,
+        )
+        .expect("field");
+    ui.widget_mut::<TextInput<Msg>>(id)
+        .expect("field")
+        .insert_text("abcdefgh");
+    assert_eq!(input(&ui, id).text(), "abcd");
+    assert_eq!(input(&ui, id).caret(), 4);
+}
+
+#[test]
+fn a_password_field_refuses_copy_and_cut_and_takes_a_paste() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(
+            root,
+            TextInput::<Msg>::new()
+                .with_password(true)
+                .with_clipboard(Msg::Clipboard)
+                .with_style(STYLE),
+            FIELD,
+        )
+        .expect("field");
+    ui.widget_mut::<TextInput<Msg>>(id)
+        .expect("field")
+        .set_text("hunter2");
+    ui.focus(Some(id));
+    assert_eq!(input(&ui, id).selected_text(), Some("hunter2"));
+
+    ui.handle(&[key_with(KeyCode::C, Modifiers::CTRL)]);
+    ui.handle(&[key_with(KeyCode::X, Modifiers::CTRL)]);
+    assert!(
+        messages(&mut ui).is_empty(),
+        "a masked value does not reach the clipboard"
+    );
+    assert_eq!(input(&ui, id).text(), "hunter2", "and cut changed nothing");
+
+    ui.handle(&[key_with(KeyCode::V, Modifiers::CTRL)]);
+    assert_eq!(
+        messages(&mut ui),
+        vec![Msg::Clipboard(ClipboardRequest::Paste)],
+        "pasting into one is still allowed"
+    );
+}
+
+#[test]
+fn without_wiring_the_clipboard_keys_do_nothing() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let id = ui
+        .add(root, TextInput::<Msg>::new().with_style(STYLE), FIELD)
+        .expect("field");
+    ui.widget_mut::<TextInput<Msg>>(id)
+        .expect("field")
+        .set_text("secret plans");
+    ui.focus(Some(id));
+    ui.handle(&[key_with(KeyCode::C, Modifiers::CTRL)]);
+    ui.handle(&[key_with(KeyCode::X, Modifiers::CTRL)]);
+    ui.handle(&[key_with(KeyCode::V, Modifiers::CTRL)]);
+    assert!(messages(&mut ui).is_empty());
+    assert_eq!(
+        input(&ui, id).text(),
+        "secret plans",
+        "and cut with nowhere to go must not delete"
+    );
+}
+
+#[test]
+fn copy_with_nothing_selected_says_nothing() {
+    let (mut ui, id) = field("value");
+    ui.focus(Some(id));
+    ui.handle(&[key(KeyCode::End)]);
+    ui.handle(&[key_with(KeyCode::C, Modifiers::CTRL)]);
+    ui.handle(&[key_with(KeyCode::X, Modifiers::CTRL)]);
+    assert!(messages(&mut ui).is_empty());
     assert_eq!(input(&ui, id).text(), "value");
 }
