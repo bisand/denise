@@ -1562,12 +1562,14 @@ Still outstanding, and deliberately not hidden:
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.
-- **No undo and no keyboard word motion** in `TextInput`. Selecting and the
-  clipboard are there — the same three click counts, the same word rule
-  (`is_word`, shared rather than copied) and the same `ClipboardRequest` the
+- **No undo** in `TextInput`. Selecting, word motion and the clipboard are
+  there — the same three click counts, the same word rule (`is_word`, shared
+  rather than copied by either widget) and the same `ClipboardRequest` the
   editor uses, so a host that already answers one answers both. A field refuses
   copy and cut while it is a password field: the mask exists so the value cannot
-  be read, and one keystroke to the system clipboard would undo that.
+  be read, and one keystroke to the system clipboard would undo that. What a
+  field still has no answer for is undo, which is `TextBuffer`'s journal in the
+  editor and nothing at all here.
 - **The Norwegian layout is a reconstruction.** `æøå` and the `¨^~` dead key are
   certain; the AltGr assignments on the `+?` and `´` positions are less so, and
   want checking against a physical keyboard.

@@ -43,12 +43,18 @@ const BLINK_MS: u64 = 500;
 /// the screen cannot be read, and handing the value to the system clipboard
 /// would undo that for one keystroke. Pasting into one is still allowed.
 ///
+/// # Moving by word
+///
+/// Ctrl and an arrow move by word, and so does Option on a Mac — the widget
+/// cannot ask which keyboard it is in front of, so it takes both spellings.
+/// Command and an arrow go to the start or the end, which is what Command does
+/// on the machine that has it and what Home and End do everywhere. Shift
+/// extends with all of them.
+///
 /// # What it still does not do
 ///
-/// No undo, and no word motion from the keyboard: Ctrl and an arrow move a
-/// character, as a bare arrow does. A kiosk field takes a name, a PIN or a
-/// setpoint; [`TextArea`](super::TextArea) is where an editor's machinery
-/// lives.
+/// No undo. A kiosk field takes a name, a PIN or a setpoint;
+/// [`TextArea`](super::TextArea) is where an editor's machinery lives.
 ///
 /// # Blinking
 ///
@@ -454,6 +460,36 @@ impl<M> TextInput<M> {
         (start, end)
     }
 
+    /// The start of the word to the left of `from`.
+    ///
+    /// Skips what is not a word and then the word itself, so the caret lands
+    /// where the word begins and pressing again walks to the one before it.
+    fn word_left(&self, from: usize) -> usize {
+        let at = |i: usize| self.text.chars().nth(i);
+        let mut index = from;
+        while index > 0 && at(index - 1).is_some_and(|c| !is_word(c)) {
+            index -= 1;
+        }
+        while index > 0 && at(index - 1).is_some_and(is_word) {
+            index -= 1;
+        }
+        index
+    }
+
+    /// The end of the word to the right of `from`, by the mirror of that rule.
+    fn word_right(&self, from: usize) -> usize {
+        let len = self.len_chars();
+        let at = |i: usize| self.text.chars().nth(i);
+        let mut index = from;
+        while index < len && at(index).is_some_and(|c| !is_word(c)) {
+            index += 1;
+        }
+        while index < len && at(index).is_some_and(is_word) {
+            index += 1;
+        }
+        index
+    }
+
     /// What a press at `index` means, given what came before it.
     ///
     /// One places the caret, two takes the word, three takes everything, and a
@@ -728,6 +764,13 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                 // neither. Named as `TextArea` names it.
                 let primary =
                     modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::SUPER);
+                // Ctrl on Windows and Linux, Option on a Mac: the two spellings
+                // of "by word", taken together because the widget cannot ask
+                // which keyboard it is in front of. Command is the Mac's "to the
+                // end", and a field is one line, so that is Home and End.
+                let by_word =
+                    modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::ALT);
+                let to_end = modifiers.contains(Modifiers::SUPER);
                 match code {
                     KeyCode::A if primary => self.select_all(),
                     KeyCode::C if primary => return self.clipboard(ctx, false),
@@ -754,6 +797,19 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                     // An arrow with a selection and no Shift collapses to that
                     // end rather than moving from the caret, which is what puts
                     // the caret back where a person is looking.
+                    KeyCode::ArrowLeft if to_end => self.move_to(0, extend),
+                    KeyCode::ArrowRight if to_end => {
+                        let end = self.len_chars();
+                        self.move_to(end, extend);
+                    }
+                    KeyCode::ArrowLeft if by_word => {
+                        let to = self.word_left(self.caret);
+                        self.move_to(to, extend);
+                    }
+                    KeyCode::ArrowRight if by_word => {
+                        let to = self.word_right(self.caret);
+                        self.move_to(to, extend);
+                    }
                     KeyCode::ArrowLeft => match self.selection() {
                         Some((from, _)) if !extend => {
                             self.caret = from;
