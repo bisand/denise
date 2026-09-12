@@ -57,7 +57,7 @@ Twenty-eight of them, deliberately few:
 | `Panel` | A surface with an optional border |
 | `Label` | Static text, aligned in its box |
 | `Button` | Emits a message of your type |
-| `TextInput` | Editing, a caret, and the only widget that animates by default |
+| `TextInput` | Editing, a caret, selection by click, word, field or drag, and the only widget that animates by default |
 | `TextArea` | Many lines, edited through a document it does not own — so a file too big to load can sit behind it |
 | `Checkbox` · `Toggle` | A boolean, as a box or as a switch |
 | `RadioGroup` | One choice from a few. **One node, so one tab stop** |

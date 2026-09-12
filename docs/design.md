@@ -1562,8 +1562,11 @@ Still outstanding, and deliberately not hidden:
 - **Touch is unverified on hardware.** The multitouch slot path is unit tested and
   a single touch is routed to widgets as a pointer would be, but no physical
   touchscreen has driven it.
-- **No text selection, clipboard or word motion** in `TextInput`. The measurement
-  it needs now exists; the editing model does not.
+- **No clipboard and no keyboard word motion** in `TextInput`. Selecting is
+  there — the same three click counts and the same word rule as `TextArea`,
+  which is `is_word`, shared rather than copied — but the clipboard is
+  `TextArea`'s alone, because it needs a message the host answers and a field
+  on a panel with no keyboard has nowhere to paste from.
 - **The Norwegian layout is a reconstruction.** `æøå` and the `¨^~` dead key are
   certain; the AltGr assignments on the `+?` and `´` positions are less so, and
   want checking against a physical keyboard.

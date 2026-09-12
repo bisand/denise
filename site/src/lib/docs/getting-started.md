@@ -170,7 +170,7 @@ The snapshot path works because a `Frame` is only a borrowed pixel buffer with a
 
 ## What is deliberately missing
 
-From the README's known gaps: no layout engine, no text selection, clipboard or word motion in `TextInput`, three keyboard layouts (US, Norwegian, German), and touch input that is unit tested but has not been driven by a physical touchscreen.
+From the README's known gaps: no layout engine, no clipboard or keyboard word motion in `TextInput` (selecting is there), three keyboard layouts (US, Norwegian, German), and touch input that is unit tested but has not been driven by a physical touchscreen.
 
 ## Where next
 

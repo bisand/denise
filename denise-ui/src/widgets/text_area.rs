@@ -346,6 +346,16 @@ pub enum ClipboardRequest {
 ///
 /// No focus ring. The caret is the sign that the keyboard goes here, and a
 /// ring around a widget the size of a window would frame the whole window.
+///
+/// # Selecting
+///
+/// A press places the caret, a second on the same spot takes the word under it,
+/// and a third takes the line — its text, not the newline after it, so deleting
+/// a line taken that way leaves an empty one rather than pulling the next one
+/// up. A fourth press starts the count again. Dragging extends from where the
+/// press landed, and Shift extends with the arrows, Home, End and a click. The
+/// word rule is [`TextInput`](super::TextInput)'s, shared so that a
+/// double-click takes the same run of characters in a field as in an editor.
 pub struct TextArea<M, D = TextBuffer> {
     doc: RefCell<D>,
     caret: Pos,
@@ -379,7 +389,9 @@ pub struct TextArea<M, D = TextBuffer> {
     /// Whole rows the last paint had room for, so a jump made from outside
     /// an event — [`go_to`](Self::go_to) — can centre its line.
     rows_seen: Cell<usize>,
-    last_click: Option<(Pos, u64)>,
+    /// Where the last press landed, when, and how many have stacked up on that
+    /// spot: one places the caret, two take the word, three take the line.
+    last_click: Option<(Pos, u64, u8)>,
     blink_epoch: u64,
     caret_on: bool,
     has_focus: bool,
@@ -1227,21 +1239,36 @@ impl<M, D: TextDocument> TextArea<M, D> {
         }
         let pos = self.pos_at(ctx.text, bounds, position);
         let now = ctx.now_ms;
-        let again = self
-            .last_click
-            .is_some_and(|(at, when)| at == pos && now.saturating_sub(when) <= DOUBLE_CLICK_MS);
-        if again {
-            // A second click on the same spot takes the word under it.
-            let line = self.line_text(pos.line).unwrap_or_default();
-            let (start, end) = word_at(&line, pos.col);
-            self.anchor = Some(Pos::new(pos.line, start));
-            self.caret = Pos::new(pos.line, end);
-            self.last_click = None;
-            self.dragging = false;
-        } else {
-            self.move_to(pos, modifiers.contains(Modifiers::SHIFT));
-            self.last_click = Some((pos, now));
-            self.dragging = true;
+        // One press places the caret, a second on the same spot takes the word
+        // under it, a third takes the line, and a fourth starts the count over
+        // rather than sticking on the line.
+        let count = match self.last_click {
+            Some((at, when, count)) if at == pos && now.saturating_sub(when) <= DOUBLE_CLICK_MS => {
+                count % 3 + 1
+            }
+            _ => 1,
+        };
+        self.last_click = Some((pos, now, count));
+        match count {
+            2 => {
+                let line = self.line_text(pos.line).unwrap_or_default();
+                let (start, end) = word_at(&line, pos.col);
+                self.anchor = Some(Pos::new(pos.line, start));
+                self.caret = Pos::new(pos.line, end);
+                self.dragging = false;
+            }
+            3 => {
+                // The line's text and not the newline after it, so Backspace on
+                // a line taken this way leaves an empty line where it was rather
+                // than pulling the next one up onto the line above.
+                self.anchor = Some(Pos::new(pos.line, 0));
+                self.caret = Pos::new(pos.line, self.line_len(pos.line));
+                self.dragging = false;
+            }
+            _ => {
+                self.move_to(pos, modifiers.contains(Modifiers::SHIFT));
+                self.dragging = true;
+            }
         }
         self.goal_x = None;
         self.moved(ctx)
@@ -1318,7 +1345,11 @@ fn next_boundary(line: &str, col: usize) -> usize {
 }
 
 /// Whether `c` is part of a word, for double-click selection.
-fn is_word(c: char) -> bool {
+///
+/// Shared with [`TextInput`](super::TextInput) so that a double-click takes the
+/// same run of characters in a field as it does in an editor. One rule, because
+/// two would drift and nobody would notice which one was wrong.
+pub(crate) fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 

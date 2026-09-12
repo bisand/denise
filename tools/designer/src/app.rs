@@ -9862,19 +9862,29 @@ mod tests {
             panic!("`text` is not a field");
         };
 
+        // Focus takes the field's contents, the way it does in every other
+        // toolkit, so the first character typed replaces the old value rather
+        // than extending it. What #93 is about is what happens *after* that
+        // character: the canvas follows each keystroke with no Enter and no
+        // message in between, which is what this checks one letter at a time.
         designer.ui.focus(Some(field));
-        for character in "Go".chars() {
-            feed(&mut designer, &[InputEvent::Text { ch: character }]);
-            designer.poll();
-        }
-
+        feed(&mut designer, &[InputEvent::Text { ch: 'G' }]);
+        designer.poll();
         assert_eq!(
             designer.ui.get_property(button, "text"),
-            Some(denise_ui::widgets::Value::text("⟲Go")),
+            Some(denise_ui::widgets::Value::text("G")),
+            "the canvas did not follow the first keystroke"
+        );
+
+        feed(&mut designer, &[InputEvent::Text { ch: 'o' }]);
+        designer.poll();
+        assert_eq!(
+            designer.ui.get_property(button, "text"),
+            Some(denise_ui::widgets::Value::text("Go")),
             "the canvas did not follow the keystrokes"
         );
         assert!(
-            text(&designer).contains(r#"button "⟲Go""#),
+            text(&designer).contains(r#"button "Go""#),
             "{}",
             text(&designer)
         );

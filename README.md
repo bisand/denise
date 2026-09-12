@@ -476,8 +476,11 @@ is in [docs/design.md](docs/design.md).
   positions, and deadlines like a carousel's eight-second advance are untouched.
   `Motion::None` lands everything at once and leaves the tree asking for no wake
   at all, which is both the reduced-motion answer and the tightest power budget.
-- **No text selection, clipboard or word motion** in `TextInput`. The measurement
-  it needs exists; the editing model does not.
+- **No clipboard and no keyboard word motion** in `TextInput`. Selection is
+  there — focus takes the whole field, a press places the caret, a second takes
+  the word, a third takes everything, dragging and Shift extend — but cut, copy
+  and paste are `TextArea`'s alone, and Ctrl+arrow moves a character like a
+  plain arrow does.
 - **One surface per tree, so a modal is a scene** over a dimmed backdrop in the
   same buffer — which is what a kiosk wants and what an embedded control must do.
   The desktop backend is the exception: `denise-winit` runs one tree per window,
