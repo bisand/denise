@@ -8,13 +8,19 @@ name: Website
 on:
   push:
     branches: [main]
-    paths:
+    paths: &site
       - 'site/**'
       - '.github/workflows/site.yml'
       - 'examples/gallery/**'
       - 'examples/table-editor/**'
       - 'denise*/**'
       - 'Cargo.toml'
+  # The site is the one thing the fourteen Rust jobs deliberately do not check —
+  # `site/**` is in CI's inert-paths list — so it checks itself here, on the pull
+  # request, and not for the first time on main. A `'` inside a single-quoted
+  # string in `widgets.ts` deployed red twice before this existed.
+  pull_request:
+    paths: *site
   workflow_dispatch:
 
 permissions:
@@ -62,11 +68,14 @@ jobs:
           BASE_PATH: /${{ github.event.repository.name }}
 
       - uses: actions/upload-pages-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           path: site/build
 
   deploy:
     needs: build
+    # A pull request builds to find out whether it would deploy; only main does.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
