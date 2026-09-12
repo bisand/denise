@@ -479,14 +479,9 @@ nothing at startup; it supplies the records it always had.
 
 ## The widgets
 
-Twenty-five widgets and one container are described below. Every property is
-optional unless marked **required**; every default below is the widget's own, and
-a property at its default is not written to the file.
-
-Two more kinds load and are not documented here yet: `menubar` and `text-area`.
-The loader accepts them, the designer offers them from `widgets::all()`, and
-their properties are the ones the widgets themselves declare — but until they
-have a section of their own, this page is not the place to learn them from.
+Twenty-seven widgets and one container. Every property is optional unless marked
+**required**; every default below is the widget's own, and a property at its
+default is not written to the file.
 
 ### Containers
 
@@ -577,6 +572,39 @@ No positional argument: a field's text is its state, not its identity.
 | `max-chars` | integer | `256` | |
 | `password` | bool | `#false` | |
 | `size` | integer | `16` | |
+
+#### `text-area`
+
+Many lines rather than one, and the positional argument **is** the text — unlike
+`text-input`, where a field's contents are its state. A form that ships with
+something in its editor writes it here; `\n` is a line break, `\t` is a tab.
+
+| | Type | Default | |
+|---|---|---|---|
+| *(first argument)* | string | `""` | The initial text. |
+| `gutter` | bool | `#true` | Number the lines down the left. |
+| `read-only` | bool | `#false` | A caret and selection, but nothing changes. |
+| `tab-width` | integer | `4` | Columns from one tab stop to the next, 1 to 16. |
+| `size` | integer | `16` | |
+
+```kdl
+text-area "one\ntwo\n\tindented" name=notes x=16 y=72 w=488 h=200 \
+    gutter=#false tab-width=2 size=14
+```
+
+**It declares no message, so a file cannot wire an event on it.** A text area is
+edited in place; the application reaches the widget through its `NodeId` —
+`ui.widget_mut::<TextArea<M>>(id)` — to read the text back or replace it.
+
+The widget edits through a document it does not own, and a form file supplies the
+simplest one there is: a `TextBuffer` holding the string above, with undo. An
+application that has something better to put behind it — a file too big to load,
+say — builds that tree in Rust, because a form file has no way to name a type.
+
+There is no wrapping, and `tab-width` is about *drawing*: it is how wide a tab
+character already in the text is laid out. Pressing Tab still moves the focus to
+the next widget, because the tree owns Tab and a text area is not an exception to
+that.
 
 #### `checkbox`, `toggle`
 
@@ -686,6 +714,39 @@ answers no press and takes no caret — so a `tabs` whose pages are all in the
 file still costs a panel only the one it shows.
 
 [`Tabs::strip_height`]: https://docs.rs/denise-ui/latest/denise_ui/widgets/struct.Tabs.html#method.strip_height
+
+#### `menubar`
+
+A row of menu titles along the top. No positional argument: the titles are child
+nodes, the way a `list`'s rows and a `tabs` strip's labels are.
+
+| | Type | Default | |
+|---|---|---|---|
+| `on-open` | message (index) | — | The index of the title that was pressed. |
+| `role` | [role](#roles) | `primary` | The open title's highlight. |
+| `size` | integer | `16` | |
+
+Children: `title "File"` — one per menu, in order.
+
+```kdl
+menubar name=bar x=0 y=0 w=520 h=28 on-open=open-menu {
+    title "File"
+    title "Edit"
+    title "View"
+}
+```
+
+**The file describes the bar, not the menus.** What drops down is a popup the
+application opens: `open_menu`, with a list of items, in Rust. A menu's rows
+carry submenus, separators and a message each — code and a message type, two of
+[the three things a file cannot hold](#the-three-things-a-file-cannot-hold). So
+the bar reports *which title was pressed* and stops there, and the application
+decides what that means.
+
+Without `on-open` it is inert, and inert here means all the way down: the bar
+answers `accepts_pointer` with `false`, so it does not hover, does not light, and
+lets a press fall through to whatever is behind it — the same as a `label`. That
+is what a bar looks like in a form that has been drawn and not yet wired.
 
 ### Display
 
