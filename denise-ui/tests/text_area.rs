@@ -563,3 +563,97 @@ fn ctrl_arrows_move_by_word_and_cross_line_ends() {
     assert_eq!(area(&ui, id).selected_text().as_deref(), Some("line"));
     assert!(messages(&mut ui).is_empty(), "moving is not a change");
 }
+/// The width of `text` in the built-in font, so a test can say where a long
+/// line ends.
+fn text_width(text: &str) -> i32 {
+    TextEngine::new().measure_line(TextStyle::built_in(16), text)
+}
+
+fn wheel(delta_x: f32, delta_y: f32) -> InputEvent {
+    InputEvent::PointerScroll {
+        delta_x,
+        delta_y,
+        position: Point::new(100, 100),
+    }
+}
+
+#[test]
+fn scrolling_sideways_stops_past_the_end_of_the_longest_line_drawn() {
+    let long = "x".repeat(200);
+    let (mut ui, id) = editor(&format!("short\n{long}\nshort"));
+    paint_once(&mut ui);
+
+    ui.handle(&[wheel(10_000.0, 0.0)]);
+    let far = area(&ui, id).scroll_x();
+    let line = text_width(&long);
+    assert!(far > 0, "the long line scrolls");
+    assert!(far < line, "and not past the text it is scrolling over");
+    assert!(
+        far > line - AREA.width,
+        "the end of the line is in the view, {far} of {line}"
+    );
+
+    // Wheeling on does nothing: there is no more text to the right.
+    ui.handle(&[wheel(10_000.0, 0.0)]);
+    assert_eq!(area(&ui, id).scroll_x(), far, "and stops there");
+
+    ui.handle(&[wheel(-10_000.0, 0.0)]);
+    assert_eq!(
+        area(&ui, id).scroll_x(),
+        0,
+        "and at the left edge going back"
+    );
+}
+
+#[test]
+fn text_that_fits_does_not_scroll_sideways_at_all() {
+    let (mut ui, id) = editor("one\ntwo\nthree");
+    paint_once(&mut ui);
+    ui.handle(&[wheel(10_000.0, 0.0)]);
+    assert_eq!(area(&ui, id).scroll_x(), 0);
+
+    // A press where the bottom bar would be is a press in the text, since
+    // there is no bar there: the caret lands on the last line.
+    let at = Point::new(AREA.right() - 20, AREA.bottom() - 3);
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    assert_eq!(area(&ui, id).caret(), Pos::new(2, 5));
+}
+
+#[test]
+fn the_bottom_scrollbar_pages_across_and_follows_a_dragged_thumb() {
+    let long = "x".repeat(400);
+    let (mut ui, id) = editor(&format!("short\n{long}"));
+    paint_once(&mut ui);
+    let strip = AREA.bottom() - 3;
+
+    // Right of the thumb, which starts at the left: a page across. The
+    // caret is untouched — the scrollbar moves the view, not the place in
+    // the text.
+    let right = Point::new(AREA.right() - 20, strip);
+    ui.handle(&[press(right, Modifiers::NONE), release(right)]);
+    let paged = area(&ui, id).scroll_x();
+    assert!(paged > 0, "a page across");
+    assert_eq!(area(&ui, id).caret(), Pos::ZERO);
+
+    // On to the end, then take the thumb — now at the right — and drag it
+    // back to the left edge.
+    let mut end = paged;
+    loop {
+        ui.handle(&[press(right, Modifiers::NONE), release(right)]);
+        let now = area(&ui, id).scroll_x();
+        if now == end {
+            break;
+        }
+        end = now;
+    }
+    assert!(end > paged, "the pages went on across");
+    let left = Point::new(AREA.x, strip);
+    ui.handle(&[press(right, Modifiers::NONE), moved(left)]);
+    assert_eq!(area(&ui, id).scroll_x(), 0, "dragged back to the start");
+    ui.handle(&[release(left)]);
+    assert_eq!(area(&ui, id).caret(), Pos::ZERO);
+
+    // Left of the thumb, back at the start: a page across leaves it there.
+    ui.handle(&[press(left, Modifiers::NONE), release(left)]);
+    assert_eq!(area(&ui, id).scroll_x(), 0);
+}
