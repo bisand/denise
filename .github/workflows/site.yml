@@ -21,6 +21,11 @@ on:
   # string in `widgets.ts` deployed red twice before this existed.
   pull_request:
     paths: *site
+  # A release changes the version the site shows and touches no file here, so
+  # nothing above would notice it. The build asks GitHub for the latest release
+  # rather than reading the manifest, and this is what makes it ask again.
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -66,6 +71,11 @@ jobs:
           # Served from https://bisand.github.io/denise/. Drop this if a custom
           # domain (CNAME) ever points at the site.
           BASE_PATH: /${{ github.event.repository.name }}
+          # For the latest-release lookup in `vite.config.ts`: unauthenticated,
+          # a runner's address shares sixty requests an hour with everything
+          # else on it, and a rate-limited build would quietly show the
+          # manifest's version instead of the published one.
+          GITHUB_TOKEN: ${{ github.token }}
 
       - uses: actions/upload-pages-artifact@v4
         if: github.event_name != 'pull_request'

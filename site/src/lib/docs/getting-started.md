@@ -7,15 +7,15 @@ DeniseUI is a set of crates rather than one. You pick the core, the widget tree,
 
 ## Add the crates
 
-The toolkit needs Rust 1.95 or later. All the crates share one version number.
+The toolkit needs Rust 1.95 or later. All the crates share one version number, and this page shows the one that is published.
 
 ```toml
 [dependencies]
-denise = "0.23"
-denise-ui = "0.23"
-denise-winit = "0.23"    # develop on a desktop
-# denise-drm = "0.23"    # ship on a display with no compositor
-# denise-image = "0.23"  # decode PNG, JPEG, GIF and BMP
+denise = "__DENISE_MINOR__"
+denise-ui = "__DENISE_MINOR__"
+denise-winit = "__DENISE_MINOR__"    # develop on a desktop
+# denise-drm = "__DENISE_MINOR__"    # ship on a display with no compositor
+# denise-image = "__DENISE_MINOR__"  # decode PNG, JPEG, GIF and BMP
 ```
 
 | Crate | What it is |
