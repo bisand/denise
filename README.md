@@ -476,11 +476,12 @@ is in [docs/design.md](docs/design.md).
   positions, and deadlines like a carousel's eight-second advance are untouched.
   `Motion::None` lands everything at once and leaves the tree asking for no wake
   at all, which is both the reduced-motion answer and the tightest power budget.
-- **No clipboard and no keyboard word motion** in `TextInput`. Selection is
-  there — focus takes the whole field, a press places the caret, a second takes
-  the word, a third takes everything, dragging and Shift extend — but cut, copy
-  and paste are `TextArea`'s alone, and Ctrl+arrow moves a character like a
-  plain arrow does.
+- **No undo and no keyboard word motion** in `TextInput`. Selection and the
+  clipboard are there — focus takes the whole field, a press places the caret, a
+  second takes the word, a third takes everything, and ⌘C, ⌘X and ⌘V go through
+  the application the way `TextArea`'s do, because a panel has no clipboard for a
+  widget to reach. Ctrl and an arrow still move one character, and there is no
+  undo stack behind a field.
 - **One surface per tree, so a modal is a scene** over a dimmed backdrop in the
   same buffer — which is what a kiosk wants and what an embedded control must do.
   The desktop backend is the exception: `denise-winit` runs one tree per window,

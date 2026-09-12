@@ -14,7 +14,7 @@ use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, Value,
 };
 use crate::widgets::style::{Align, DOUBLE_CLICK_MS, focus_ring, interactive_pair};
-use crate::widgets::text_area::is_word;
+use crate::widgets::text_area::{ClipboardRequest, is_word};
 
 /// Half-period of the caret blink, in milliseconds.
 const BLINK_MS: u64 = 500;
@@ -30,12 +30,25 @@ const BLINK_MS: u64 = 500;
 /// Shift extends with the arrows, Home and End; ⌘A or Ctrl+A takes everything.
 /// Typing, Backspace and Delete replace what is selected.
 ///
+/// # The clipboard
+///
+/// ⌘C, ⌘X and ⌘V — or Ctrl — when the application has said where they go with
+/// [`with_clipboard`](Self::with_clipboard). The widget has no clipboard to
+/// reach, so it asks: copy and cut hand over the text, paste emits
+/// [`ClipboardRequest::Paste`] and the application answers with
+/// [`insert_text`](Self::insert_text). Without that wiring the three keys do
+/// nothing at all, which is what a panel with no clipboard wants.
+///
+/// A **password field refuses copy and cut**. Its whole job is that what is on
+/// the screen cannot be read, and handing the value to the system clipboard
+/// would undo that for one keystroke. Pasting into one is still allowed.
+///
 /// # What it still does not do
 ///
-/// No clipboard, no undo, no word motion from the keyboard. A kiosk field takes
-/// a name, a PIN or a setpoint, and those three are the ones a panel with no
-/// physical keyboard cannot ask for anyway; [`TextArea`](super::TextArea) is
-/// where an editor's machinery lives.
+/// No undo, and no word motion from the keyboard: Ctrl and an arrow move a
+/// character, as a bare arrow does. A kiosk field takes a name, a PIN or a
+/// setpoint; [`TextArea`](super::TextArea) is where an editor's machinery
+/// lives.
 ///
 /// # Blinking
 ///
@@ -79,6 +92,8 @@ pub struct TextInput<M> {
     /// Where the last press landed, when, and how many have stacked up on that
     /// spot: one places the caret, two take the word, three take everything.
     clicks: Option<(usize, u64, u8)>,
+    /// Where copy, cut and paste go, when the application has said.
+    on_clipboard: Option<fn(ClipboardRequest) -> M>,
 }
 
 impl<M> TextInput<M> {
@@ -100,6 +115,7 @@ impl<M> TextInput<M> {
             anchor: None,
             dragging: false,
             clicks: None,
+            on_clipboard: None,
         }
     }
 
@@ -112,6 +128,16 @@ impl<M> TextInput<M> {
     /// Sets the message emitted when Enter is pressed.
     pub fn with_submit(mut self, message: M) -> Self {
         self.submit = Some(message);
+        self
+    }
+
+    /// Wires copy, cut and paste to the application, which owns the clipboard.
+    ///
+    /// Without this the three keys do nothing: a panel with no window system
+    /// has nowhere to copy to, and a widget that pretended otherwise would be
+    /// lying about where the text went.
+    pub fn with_clipboard(mut self, message: fn(ClipboardRequest) -> M) -> Self {
+        self.on_clipboard = Some(message);
         self
     }
 
@@ -158,6 +184,34 @@ impl<M> TextInput<M> {
         self.caret = self.len_chars();
         self.first_visible = 0;
         // The anchor indexed text that is no longer there.
+        self.anchor = None;
+    }
+
+    /// Inserts `text` at the caret, replacing the selection: the answer to
+    /// [`ClipboardRequest::Paste`].
+    ///
+    /// **A field is one line**, so this takes what it is given up to the first
+    /// line break and drops the rest, along with any other control characters.
+    /// Pasting three lines into a setpoint has no meaning a widget could guess
+    /// at, and joining them into one would invent a value nobody copied.
+    ///
+    /// What is left is truncated to fit `max_chars` rather than refused: a
+    /// paste one character too long is still mostly what somebody wanted.
+    pub fn insert_text(&mut self, text: &str) {
+        self.delete_selection();
+        let line = text.split(['\n', '\r']).next().unwrap_or_default();
+        let room = self.max_chars.saturating_sub(self.len_chars());
+        let mut at = self.byte_of(self.caret);
+        let mut added = 0;
+        for ch in line.chars().filter(|c| !c.is_control()) {
+            if added == room {
+                break;
+            }
+            self.text.insert(at, ch);
+            at += ch.len_utf8();
+            added += 1;
+        }
+        self.caret += added;
         self.anchor = None;
     }
 
@@ -444,6 +498,31 @@ impl<M> TextInput<M> {
         Handled::Yes
     }
 
+    /// Copy or cut the selection, when there is one and the application asked
+    /// to be told.
+    fn clipboard(&mut self, ctx: &mut EventCtx<'_, M>, cut: bool) -> Handled {
+        let Some(request) = self.on_clipboard else {
+            return Handled::No;
+        };
+        // See the type's docs: a password field does not hand its value over.
+        if self.password {
+            return Handled::No;
+        }
+        let Some(text) = self.selected_text().map(String::from) else {
+            return Handled::No;
+        };
+        if cut {
+            self.delete_selection();
+            ctx.emit(request(ClipboardRequest::Cut(text)));
+            self.wake_caret(ctx.now_ms);
+            let bounds = ctx.bounds;
+            self.scroll_to_caret(ctx.text, bounds);
+            return Handled::Yes;
+        }
+        ctx.emit(request(ClipboardRequest::Copy(text)));
+        Handled::Yes
+    }
+
     /// The pointer moved with the press still down: the selection follows it.
     fn drag(&mut self, position: Point, ctx: &mut EventCtx<'_, M>) -> Handled {
         let bounds = ctx.bounds;
@@ -644,12 +723,22 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                 ..
             }) => {
                 let extend = modifiers.contains(Modifiers::SHIFT);
-                // Ctrl on a keyboard, Command on a Mac: one of the two is
-                // "select all" on every machine this runs on.
-                let shortcut =
+                // Ctrl on the desktops that use it, Command on the one that does
+                // not; a panel with a bare keyboard has neither and needs
+                // neither. Named as `TextArea` names it.
+                let primary =
                     modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::SUPER);
                 match code {
-                    KeyCode::A if shortcut => self.select_all(),
+                    KeyCode::A if primary => self.select_all(),
+                    KeyCode::C if primary => return self.clipboard(ctx, false),
+                    KeyCode::X if primary => return self.clipboard(ctx, true),
+                    KeyCode::V if primary => {
+                        let Some(request) = self.on_clipboard else {
+                            return Handled::No;
+                        };
+                        ctx.emit(request(ClipboardRequest::Paste));
+                        return Handled::Yes;
+                    }
                     // A selection is what Backspace and Delete take first; only
                     // an empty one falls through to the character either side.
                     KeyCode::Backspace => {
