@@ -489,3 +489,45 @@ fn moving_the_caret_off_screen_scrolls_to_it() {
     ui.handle(&[ctrl(KeyCode::Home)]);
     assert_eq!(area(&ui, id).top(), 0);
 }
+
+#[test]
+fn a_third_press_takes_the_line() {
+    let (mut ui, id) = editor("first line\nsecond line\nthird");
+    let row = row_height();
+    // Inside "second", on the middle row.
+    let at = Point::new(AREA.x + 60, AREA.y + row + row / 2);
+
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    assert_eq!(area(&ui, id).selection(), None, "one press is a caret");
+
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    assert_eq!(
+        area(&ui, id).selected_text().as_deref(),
+        Some("second"),
+        "two takes the word"
+    );
+
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    assert_eq!(
+        area(&ui, id).selected_text().as_deref(),
+        Some("second line"),
+        "three takes the line, and not the newline after it"
+    );
+    assert_eq!(
+        area(&ui, id).selection(),
+        Some((Pos::new(1, 0), Pos::new(1, 11)))
+    );
+
+    // A fourth starts the count again rather than sticking on the line.
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    assert_eq!(area(&ui, id).selection(), None);
+
+    // And the line it took is one Backspace from being empty, with its
+    // neighbours where they were.
+    ui.tick(5_000);
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    ui.handle(&[key(KeyCode::Backspace)]);
+    assert_eq!(area(&ui, id).text(), "first line\n\nthird");
+}
