@@ -1,5 +1,6 @@
+/** The latest published release, resolved at build time. See `vite.config.ts`. */
 export const version = __DENISE_VERSION__;
-/** `0.23` from `0.23.0`: what a Cargo dependency line says. */
+/** `0.24` from `0.24.0`: what a Cargo dependency line says. */
 export const minor = version.split('.').slice(0, 2).join('.');
 
 const github = 'https://github.com/bisand/denise';
