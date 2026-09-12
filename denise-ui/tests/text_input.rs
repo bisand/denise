@@ -485,3 +485,61 @@ fn copy_with_nothing_selected_says_nothing() {
     assert!(messages(&mut ui).is_empty());
     assert_eq!(input(&ui, id).text(), "value");
 }
+
+// -------------------------------------------------------------- word motion
+
+#[test]
+fn ctrl_and_option_arrows_move_by_word() {
+    let (mut ui, id) = field("hello brave world");
+    ui.focus(Some(id));
+    ui.handle(&[key(KeyCode::End)]);
+
+    ui.handle(&[key_with(KeyCode::ArrowLeft, Modifiers::CTRL)]);
+    assert_eq!(input(&ui, id).caret(), 12, "to the start of `world`");
+    // Option is the same gesture on a Mac, and the widget cannot ask which
+    // keyboard it is in front of.
+    ui.handle(&[key_with(KeyCode::ArrowLeft, Modifiers::ALT)]);
+    assert_eq!(input(&ui, id).caret(), 6, "and then `brave`");
+
+    ui.handle(&[key_with(KeyCode::ArrowRight, Modifiers::CTRL)]);
+    assert_eq!(input(&ui, id).caret(), 11, "right lands at the word's end");
+
+    ui.handle(&[key_with(
+        KeyCode::ArrowRight,
+        Modifiers::CTRL | Modifiers::SHIFT,
+    )]);
+    assert_eq!(
+        input(&ui, id).selected_text(),
+        Some(" world"),
+        "and Shift extends by word"
+    );
+}
+
+#[test]
+fn command_arrows_go_to_the_ends() {
+    let (mut ui, id) = field("hello brave world");
+    ui.focus(Some(id));
+    ui.handle(&[key(KeyCode::End)]);
+
+    ui.handle(&[key_with(KeyCode::ArrowLeft, Modifiers::SUPER)]);
+    assert_eq!(input(&ui, id).caret(), 0);
+    assert_eq!(input(&ui, id).selection(), None);
+
+    ui.handle(&[key_with(
+        KeyCode::ArrowRight,
+        Modifiers::SUPER | Modifiers::SHIFT,
+    )]);
+    assert_eq!(input(&ui, id).selected_text(), Some("hello brave world"));
+}
+
+#[test]
+fn word_motion_stops_at_the_ends_of_the_field() {
+    let (mut ui, id) = field("one two");
+    ui.focus(Some(id));
+    ui.handle(&[key(KeyCode::Home)]);
+    ui.handle(&[key_with(KeyCode::ArrowLeft, Modifiers::CTRL)]);
+    assert_eq!(input(&ui, id).caret(), 0);
+    ui.handle(&[key(KeyCode::End)]);
+    ui.handle(&[key_with(KeyCode::ArrowRight, Modifiers::CTRL)]);
+    assert_eq!(input(&ui, id).caret(), 7);
+}

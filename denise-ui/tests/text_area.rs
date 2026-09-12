@@ -531,3 +531,35 @@ fn a_third_press_takes_the_line() {
     ui.handle(&[key(KeyCode::Backspace)]);
     assert_eq!(area(&ui, id).text(), "first line\n\nthird");
 }
+
+#[test]
+fn ctrl_arrows_move_by_word_and_cross_line_ends() {
+    let (mut ui, id) = editor("first line\nsecond line\nthird");
+
+    ui.handle(&[key_with(KeyCode::ArrowRight, Modifiers::CTRL)]);
+    assert_eq!(area(&ui, id).caret(), Pos::new(0, 5), "the end of `first`");
+    ui.handle(&[key_with(KeyCode::ArrowRight, Modifiers::CTRL)]);
+    assert_eq!(area(&ui, id).caret(), Pos::new(0, 10), "then `line`");
+    ui.handle(&[key_with(KeyCode::ArrowRight, Modifiers::CTRL)]);
+    assert_eq!(
+        area(&ui, id).caret(),
+        Pos::new(1, 0),
+        "a line end is crossed the way a plain arrow crosses it"
+    );
+
+    ui.handle(&[key_with(KeyCode::ArrowLeft, Modifiers::ALT)]);
+    assert_eq!(area(&ui, id).caret(), Pos::new(0, 10), "and back over it");
+
+    // Command is the Mac's "to the end of the line".
+    ui.handle(&[key_with(KeyCode::ArrowLeft, Modifiers::SUPER)]);
+    assert_eq!(area(&ui, id).caret(), Pos::new(0, 0));
+    ui.handle(&[key_with(KeyCode::ArrowRight, Modifiers::SUPER)]);
+    assert_eq!(area(&ui, id).caret(), Pos::new(0, 10));
+
+    ui.handle(&[key_with(
+        KeyCode::ArrowLeft,
+        Modifiers::CTRL | Modifiers::SHIFT,
+    )]);
+    assert_eq!(area(&ui, id).selected_text().as_deref(), Some("line"));
+    assert!(messages(&mut ui).is_empty(), "moving is not a change");
+}

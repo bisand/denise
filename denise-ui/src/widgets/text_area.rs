@@ -347,6 +347,12 @@ pub enum ClipboardRequest {
 /// No focus ring. The caret is the sign that the keyboard goes here, and a
 /// ring around a widget the size of a window would frame the whole window.
 ///
+/// # Moving by word
+///
+/// Ctrl and an arrow move by word, and so does Option on a Mac; Command and an
+/// arrow go to the start or end of the line, and with Home or End to the start
+/// or end of the document. Shift extends with all of them.
+///
 /// # Selecting
 ///
 /// A press places the caret, a second on the same spot takes the word under it,
@@ -988,6 +994,39 @@ impl<M, D: TextDocument> TextArea<M, D> {
         }
     }
 
+    /// The start of the word to the left of `pos`, crossing a line end the way
+    /// a plain arrow does when there is no word left on this line.
+    fn word_left(&self, pos: Pos) -> Pos {
+        if pos.col == 0 {
+            return self.left_of(pos);
+        }
+        let line = self.line_text(pos.line).unwrap_or_default();
+        let mut col = pos.col;
+        while col > 0 && line[..col].chars().next_back().is_some_and(|c| !is_word(c)) {
+            col = prev_boundary(&line, col);
+        }
+        while col > 0 && line[..col].chars().next_back().is_some_and(is_word) {
+            col = prev_boundary(&line, col);
+        }
+        Pos::new(pos.line, col)
+    }
+
+    /// The end of the word to the right of `pos`, by the mirror of that rule.
+    fn word_right(&self, pos: Pos) -> Pos {
+        let line = self.line_text(pos.line).unwrap_or_default();
+        if pos.col >= line.len() {
+            return self.right_of(pos);
+        }
+        let mut col = pos.col;
+        while col < line.len() && line[col..].chars().next().is_some_and(|c| !is_word(c)) {
+            col = next_boundary(&line, col);
+        }
+        while col < line.len() && line[col..].chars().next().is_some_and(is_word) {
+            col = next_boundary(&line, col);
+        }
+        Pos::new(pos.line, col)
+    }
+
     fn right_of(&self, pos: Pos) -> Pos {
         let line = self.line_text(pos.line).unwrap_or_default();
         if pos.col < line.len() {
@@ -1083,20 +1122,38 @@ impl<M, D: TextDocument> TextArea<M, D> {
         // Ctrl on the desktops that use it, Command on the one that does not;
         // a panel with a bare keyboard has neither and needs neither.
         let primary = modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::SUPER);
+        // Ctrl on Windows and Linux, Option on a Mac: the two spellings of "by
+        // word", taken together because the widget cannot ask which keyboard it
+        // is in front of. Command and an arrow is the Mac's "to the end of the
+        // line", which is what Home and End do here.
+        let by_word = modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::ALT);
+        let to_line_end = modifiers.contains(Modifiers::SUPER);
         let edited = match code {
             KeyCode::ArrowLeft => {
-                let to = match self.selection() {
-                    Some((from, _)) if !shift => from,
-                    _ => self.left_of(self.caret),
+                let to = if to_line_end {
+                    Pos::new(self.caret.line, 0)
+                } else if by_word {
+                    self.word_left(self.caret)
+                } else {
+                    match self.selection() {
+                        Some((from, _)) if !shift => from,
+                        _ => self.left_of(self.caret),
+                    }
                 };
                 self.move_to(to, shift);
                 self.goal_x = None;
                 return self.moved(ctx);
             }
             KeyCode::ArrowRight => {
-                let to = match self.selection() {
-                    Some((_, to)) if !shift => to,
-                    _ => self.right_of(self.caret),
+                let to = if to_line_end {
+                    Pos::new(self.caret.line, self.line_len(self.caret.line))
+                } else if by_word {
+                    self.word_right(self.caret)
+                } else {
+                    match self.selection() {
+                        Some((_, to)) if !shift => to,
+                        _ => self.right_of(self.caret),
+                    }
                 };
                 self.move_to(to, shift);
                 self.goal_x = None;
