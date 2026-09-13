@@ -206,3 +206,29 @@ jobs:
     uses: ./.github/workflows/binaries.yml
     with:
       tag: ${{ github.event.release.tag_name }}
+
+  # The site advertises the latest release's number and builds its download
+  # links out of it, so it is rebuilt here — after the binaries, so the files
+  # behind those links exist by the time the page offers them.
+  #
+  # Dispatched onto `main` rather than triggered by the release event, which
+  # would run it at the tag: the `github-pages` environment only lets `main`
+  # deploy, so a tag-ref run is rejected, and the red `deploy` it leaves on the
+  # released commit is read as a red tree by the CI gate above. That is not
+  # hypothetical — it stopped v0.25.0's publish until the site was dispatched
+  # from main by hand.
+  #
+  # Binaries that failed still get a rebuilt site: a page naming the version
+  # nobody can download yet is a smaller wrong than a page still naming the
+  # last one, and re-running `binaries` alone would never rebuild the site.
+  site:
+    name: rebuild the website
+    needs: [publish, binaries]
+    if: ${{ !cancelled() && github.event_name == 'release' && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run site.yml --repo "$GITHUB_REPOSITORY" --ref main

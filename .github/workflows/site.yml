@@ -21,11 +21,14 @@ on:
   # string in `widgets.ts` deployed red twice before this existed.
   pull_request:
     paths: *site
-  # A release changes the version the site shows and touches no file here, so
-  # nothing above would notice it. The build asks GitHub for the latest release
-  # rather than reading the manifest, and this is what makes it ask again.
-  release:
-    types: [published]
+  # Deliberately **not** `release: published`. A release event runs at the tag,
+  # and the `github-pages` environment only lets `main` deploy, so such a run
+  # is rejected after building — a red `deploy` on the released commit, which
+  # the release workflow's CI gate reads as a red tree and refuses to publish
+  # over. It has stopped a publish (v0.25.0) and gone unnoticed twice before
+  # that. A release still rebuilds the site, which is how the version it shows
+  # gets updated: `release.yml` dispatches this workflow onto `main` once the
+  # crates and the downloads are up. See `docs/releasing.md`.
   workflow_dispatch:
 
 permissions:

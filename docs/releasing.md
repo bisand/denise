@@ -28,6 +28,8 @@ everything the number touches:
    release. Red CI still stops everything, before anything is uploaded.
 4. Rehearses with a full `--dry-run`, then publishes, and lists what went out
    in the run summary.
+5. Once the downloads below are attached, **dispatches the Website workflow
+   onto `main`**, which is what updates the version the site advertises.
 
 A release cut on a tree whose manifests already carry the tag's version — a
 manual `bump-version.py` commit, or a re-run — skips 1 and 2 and just verifies
@@ -78,6 +80,24 @@ person, and the tag drives the rest — so adopting it would have meant rewritin
 the one part of this process that is written down and understood, in exchange for
 installer scripts. What is left once its opinions are not needed is eighty lines
 of workflow.
+
+### Why the site is dispatched and not triggered
+
+The site shows the latest release's number and builds its download links out of
+it, so it wants rebuilding on every release — but not by the release event.
+That event runs at the **tag**, and the `github-pages` environment only lets
+`main` deploy, so such a run builds and is then rejected: a red `deploy` on the
+released commit. Step 3 above reads every check on that commit, so the site's
+rejection reads as a red tree and refuses to publish over it.
+
+It did exactly that to v0.25.0, and had already gone unnoticed at v0.24.0 and
+v0.24.1, which published only because the gate happened to look before the
+check appeared. Dispatching from `main` after the publish is allowed, is late
+enough that the gate has finished, and is late enough for the downloads to
+exist behind the links the page builds.
+
+To rebuild the site without a release — the fallback if that step ever fails —
+run the **Website** workflow by hand from the Actions tab, on `main`.
 
 ### When a release fails partway
 

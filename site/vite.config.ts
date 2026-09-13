@@ -8,8 +8,9 @@ import { readFileSync } from 'node:fs';
 // **The latest published release**, asked for at build time, because that is
 // what a visitor can actually `cargo add` — and because it is one number in one
 // place rather than a dependency snippet, a download link and a badge that each
-// go stale on their own. The Website workflow rebuilds on `release: published`,
-// so a release updates the site without anybody touching the site.
+// go stale on their own. Releasing dispatches the Website workflow onto main
+// once the crates and the downloads are up, so a release updates the site
+// without anybody touching the site.
 //
 // The workspace manifest is the fallback, for a clone with no network and for
 // the case the API is having a day. It is the right answer a moment before a
