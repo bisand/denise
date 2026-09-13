@@ -25,10 +25,10 @@ on:
   # and the `github-pages` environment only lets `main` deploy, so such a run
   # is rejected after building — a red `deploy` on the released commit, which
   # the release workflow's CI gate reads as a red tree and refuses to publish
-  # over. It has stopped a publish (v0.25.0) and gone unnoticed twice before
-  # that. A release still rebuilds the site, which is how the version it shows
-  # gets updated: `release.yml` dispatches this workflow onto `main` once the
-  # crates and the downloads are up. See `docs/releasing.md`.
+  # over. It has stopped a publish (v0.25.0) and gone unnoticed once before
+  # that, at v0.24.1. A release still rebuilds the site, which is how the
+  # version it shows gets updated: `release.yml` dispatches this workflow onto
+  # `main` once the crates and the downloads are up. See `docs/releasing.md`.
   workflow_dispatch:
 
 permissions:
