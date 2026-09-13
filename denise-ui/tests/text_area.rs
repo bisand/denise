@@ -657,3 +657,86 @@ fn the_bottom_scrollbar_pages_across_and_follows_a_dragged_thumb() {
     ui.handle(&[press(left, Modifiers::NONE), release(left)]);
     assert_eq!(area(&ui, id).scroll_x(), 0);
 }
+
+/// An editor of `lines` numbered lines that scrolls by the pixel.
+fn smooth_editor(lines: usize) -> (Ui<Msg>, NodeId) {
+    let text: Vec<String> = (1..=lines).map(|n| format!("line {n}")).collect();
+    let (mut ui, id) = editor(&text.join("\n"));
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .set_smooth_scroll(true);
+    (ui, id)
+}
+
+#[test]
+fn a_smooth_wheel_moves_the_text_by_the_pixel() {
+    let (mut ui, id) = smooth_editor(100);
+    let row = row_height();
+    ui.handle(&[wheel(0.0, 3.0)]);
+    assert_eq!((area(&ui, id).top(), area(&ui, id).top_px()), (0, 3));
+    ui.handle(&[wheel(0.0, (row * 2) as f32)]);
+    assert_eq!(
+        (area(&ui, id).top(), area(&ui, id).top_px()),
+        (2, 3),
+        "a fast wheel goes as far as it does by lines"
+    );
+    ui.handle(&[wheel(0.0, -4.0)]);
+    assert_eq!((area(&ui, id).top(), area(&ui, id).top_px()), (1, row - 1));
+    paint_once(&mut ui);
+    assert_eq!(area(&ui, id).caret(), Pos::ZERO, "the caret stays put");
+}
+
+#[test]
+fn a_smooth_wheel_stops_at_both_ends_on_a_whole_line() {
+    let (mut ui, id) = smooth_editor(100);
+    let rows = (AREA.height / row_height()) as usize;
+    ui.handle(&[wheel(0.0, 5.0), wheel(0.0, -1000.0)]);
+    assert_eq!((area(&ui, id).top(), area(&ui, id).top_px()), (0, 0));
+    ui.handle(&[wheel(0.0, 100_000.0)]);
+    assert_eq!(
+        (area(&ui, id).top(), area(&ui, id).top_px()),
+        (100 - rows, 0)
+    );
+}
+
+#[test]
+fn a_click_lands_on_the_line_drawn_under_it_when_scrolled_part_way() {
+    let (mut ui, id) = smooth_editor(100);
+    let row = row_height();
+    ui.handle(&[wheel(0.0, (row / 2) as f32)]);
+    // Half the first line is above the view, so a little past the half-row
+    // mark is already the second line.
+    let at = Point::new(AREA.x + 60, AREA.y + row / 2 + 2);
+    ui.handle(&[press(at, Modifiers::NONE), release(at)]);
+    assert_eq!(area(&ui, id).caret().line, 1);
+    assert_eq!(
+        area(&ui, id).top_px(),
+        row / 2,
+        "a visible line is not scrolled to"
+    );
+}
+
+#[test]
+fn a_caret_on_the_part_hidden_first_line_brings_it_back_whole() {
+    let (mut ui, id) = smooth_editor(100);
+    ui.handle(&[wheel(0.0, 5.0)]);
+    ui.handle(&[key(KeyCode::End)]);
+    assert_eq!((area(&ui, id).top(), area(&ui, id).top_px()), (0, 0));
+}
+
+#[test]
+fn turning_smooth_scrolling_off_settles_on_a_line() {
+    let (mut ui, id) = smooth_editor(100);
+    let row = row_height();
+    ui.handle(&[wheel(0.0, (row + 5) as f32)]);
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .set_smooth_scroll(false);
+    assert_eq!((area(&ui, id).top(), area(&ui, id).top_px()), (1, 0));
+    ui.handle(&[wheel(0.0, 5.0)]);
+    assert_eq!(
+        (area(&ui, id).top(), area(&ui, id).top_px()),
+        (1, 0),
+        "and the wheel waits for a line's worth again"
+    );
+}

@@ -377,6 +377,12 @@ pub struct TextArea<M, D = TextBuffer> {
     goal_x: Option<i32>,
     /// First line drawn.
     top: usize,
+    /// Pixels of the first line scrolled up out of view, less than a row.
+    /// Always 0 unless `smooth_scroll` is on, and 0 again whenever the view
+    /// moves by whole lines — a jump, a page, the thumb, the caret.
+    top_px: i32,
+    /// The wheel moves the text a pixel at a time rather than a line.
+    smooth_scroll: bool,
     /// Pixels the text is scrolled sideways. A `Cell`, because a range
     /// selected from outside an event — [`select_range`](Self::select_range)
     /// — can only be measured, and so scrolled to, by the next paint.
@@ -459,6 +465,7 @@ impl<M> TextArea<M, TextBuffer> {
         self.caret = Pos::ZERO;
         self.anchor = None;
         self.top = 0;
+        self.top_px = 0;
         self.scroll_x.set(0);
         self.content_w.set(0);
     }
@@ -480,6 +487,8 @@ impl<M, D: TextDocument> TextArea<M, D> {
             anchor: None,
             goal_x: None,
             top: 0,
+            top_px: 0,
+            smooth_scroll: false,
             scroll_x: Cell::new(0),
             content_w: Cell::new(0),
             reveal_pending: Cell::new(false),
@@ -552,6 +561,15 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self
     }
 
+    /// Whether the wheel moves the text a pixel at a time, as a trackpad
+    /// reports it, rather than a whole line once a line's worth has built
+    /// up. Off unless told. A fast wheel goes as far either way.
+    #[must_use]
+    pub fn with_smooth_scroll(mut self, smooth: bool) -> Self {
+        self.set_smooth_scroll(smooth);
+        self
+    }
+
     /// The document.
     pub fn document(&self) -> core::cell::Ref<'_, D> {
         self.doc.borrow()
@@ -569,6 +587,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
         self.caret = Pos::ZERO;
         self.anchor = None;
         self.top = 0;
+        self.top_px = 0;
         self.scroll_x.set(0);
         self.content_w.set(0);
     }
@@ -583,6 +602,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
     /// the old font, and is taken again as the lines are drawn.
     pub fn set_style(&mut self, style: TextStyle) {
         self.style = style;
+        self.top_px = 0;
         self.content_w.set(0);
     }
 
@@ -619,6 +639,22 @@ impl<M, D: TextDocument> TextArea<M, D> {
     /// Turns editing off or on.
     pub fn set_read_only(&mut self, read_only: bool) {
         self.read_only = read_only;
+    }
+
+    /// Whether the wheel scrolls a pixel at a time.
+    #[inline]
+    pub const fn smooth_scroll(&self) -> bool {
+        self.smooth_scroll
+    }
+
+    /// Scrolls by the pixel, or by the line. Turned off, the view settles on
+    /// the line it was part way through.
+    pub fn set_smooth_scroll(&mut self, smooth: bool) {
+        self.smooth_scroll = smooth;
+        if !smooth {
+            self.top_px = 0;
+            self.wheel_rest = 0;
+        }
     }
 
     /// Where the caret is.
@@ -683,6 +719,15 @@ impl<M, D: TextDocument> TextArea<M, D> {
     pub fn set_top(&mut self, line: usize) {
         let last = self.known_lines() - 1;
         self.top = line.min(last);
+        self.top_px = 0;
+    }
+
+    /// Pixels of the first line drawn that are scrolled up out of view: 0
+    /// unless [`smooth_scroll`](Self::smooth_scroll) is on, and less than a
+    /// row.
+    #[inline]
+    pub const fn top_px(&self) -> i32 {
+        self.top_px
     }
 
     /// Whole rows the last paint had room for; 0 before the first.
@@ -698,6 +743,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
         let rows = self.rows_seen.get();
         let top = self.caret.line.saturating_sub(rows / 2);
         self.top = top.min(self.max_top(rows));
+        self.top_px = 0;
         self.scroll_x.set(0);
     }
 
@@ -715,6 +761,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
         if !shown {
             let top = from.line.saturating_sub(rows / 2);
             self.top = top.min(self.max_top(rows));
+            self.top_px = 0;
         }
         self.reveal_pending.set(true);
     }
@@ -777,6 +824,12 @@ impl<M, D: TextDocument> TextArea<M, D> {
 
     fn row_height(&self, engine: &TextEngine) -> i32 {
         engine.line_height(self.style).max(1)
+    }
+
+    /// How far the first line is scrolled up, kept under a row of `row_h`
+    /// — which a size set through [`Describe`] can shrink under it.
+    fn offset_in(&self, row_h: i32) -> i32 {
+        self.top_px.clamp(0, row_h - 1)
     }
 
     /// Width of the gutter, numbers or not.
@@ -1026,7 +1079,8 @@ impl<M, D: TextDocument> TextArea<M, D> {
     /// The position under `point`.
     fn pos_at(&self, engine: &mut TextEngine, bounds: Rect, point: Point) -> Pos {
         let row_h = self.row_height(engine);
-        let row = ((point.y - bounds.y).max(0) / row_h).max(0) as usize;
+        let y = point.y - bounds.y + self.offset_in(row_h);
+        let row = (y.max(0) / row_h) as usize;
         let line = (self.top + row).min(self.known_lines() - 1);
         let text = self.line_text(line).unwrap_or_default();
         let x = point.x - self.text_rect(engine, bounds).x + self.scroll_x.get();
@@ -1036,10 +1090,20 @@ impl<M, D: TextDocument> TextArea<M, D> {
     /// Scrolls so the caret is on screen.
     fn reveal_caret(&mut self, engine: &mut TextEngine, bounds: Rect) {
         let rows = self.rows(engine, bounds);
-        if self.caret.line < self.top {
+        let row_h = self.row_height(engine);
+        let height = self.text_rect(engine, bounds).height;
+        let offset = self.offset_in(row_h);
+        // Part of the first line hidden above hides a caret on it, as a line
+        // below the last whole row does.
+        let below = (self.caret.line.saturating_sub(self.top) + 1) as i64 * row_h as i64
+            - offset as i64
+            > height.max(row_h) as i64;
+        if self.caret.line < self.top || (self.caret.line == self.top && offset > 0) {
             self.top = self.caret.line;
-        } else if self.caret.line >= self.top + rows {
+            self.top_px = 0;
+        } else if below {
             self.top = self.caret.line + 1 - rows;
+            self.top_px = 0;
         }
         self.reveal_caret_x(engine, bounds);
     }
@@ -1295,6 +1359,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
                 // it, so the caret keeps its row on screen.
                 let max_top = self.max_top(rows as usize);
                 self.top = self.top.saturating_add_signed(by).min(max_top);
+                self.top_px = 0;
                 return self.moved(ctx);
             }
             KeyCode::Home => {
@@ -1466,8 +1531,10 @@ impl<M, D: TextDocument> TextArea<M, D> {
             self.thumb_drag = Some((position.y, self.top));
         } else if position.y < thumb.y {
             self.top = self.top.saturating_sub(rows);
+            self.top_px = 0;
         } else {
             self.top = (self.top + rows).min(self.max_top(rows));
+            self.top_px = 0;
         }
         Handled::Yes
     }
@@ -1526,10 +1593,11 @@ impl<M, D: TextDocument> TextArea<M, D> {
         let travel = (self.bar_rect(engine, bounds).height - 4 - thumb.height).max(1) as i64;
         let moved = (y - from_y) as i64 * max_top as i64 / travel;
         let top = (from_top as i64 + moved).clamp(0, max_top as i64) as usize;
-        if top == self.top {
+        if top == self.top && self.top_px == 0 {
             return Handled::No;
         }
         self.top = top;
+        self.top_px = 0;
         Handled::Yes
     }
 
@@ -1541,17 +1609,30 @@ impl<M, D: TextDocument> TextArea<M, D> {
         delta_y: f32,
     ) -> Handled {
         let row_h = self.row_height(engine);
-        self.wheel_rest += delta_y as i32;
-        let lines = self.wheel_rest / row_h;
-        self.wheel_rest -= lines * row_h;
         let max_top = self.max_top(self.rows(engine, bounds));
-        let top = self.top.saturating_add_signed(lines as isize).min(max_top);
+        let (top, top_px) = if self.smooth_scroll {
+            // The view as one distance in pixels, moved and clamped as one,
+            // and split back into a line and the part of it above the view.
+            // The furthest it goes is the last line's end at a whole row, as
+            // it is scrolling by lines.
+            let row = row_h as i64;
+            let at = self.top as i64 * row + self.offset_in(row_h) as i64 + delta_y as i64;
+            let at = at.clamp(0, max_top as i64 * row);
+            ((at / row) as usize, (at % row) as i32)
+        } else {
+            self.wheel_rest += delta_y as i32;
+            let lines = self.wheel_rest / row_h;
+            self.wheel_rest -= lines * row_h;
+            let top = self.top.saturating_add_signed(lines as isize).min(max_top);
+            (top, 0)
+        };
         let scroll_x =
             (self.scroll_x.get() + delta_x as i32).clamp(0, self.max_scroll_x(engine, bounds));
-        if top == self.top && scroll_x == self.scroll_x.get() {
+        if top == self.top && top_px == self.top_px && scroll_x == self.scroll_x.get() {
             return Handled::No;
         }
         self.top = top;
+        self.top_px = top_px;
         self.scroll_x.set(scroll_x);
         Handled::Yes
     }
@@ -1658,11 +1739,14 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
         self.rows_seen.set(self.rows(ctx.text, bounds));
         let mut spans = Vec::new();
         let mut marks: Vec<Range<usize>> = Vec::new();
-        let rows = (area.height / row_h + 1).max(1) as usize;
+        // The first line starts above the view by as much of it as is
+        // scrolled away, and a row more is drawn for the room that frees.
+        let offset = self.offset_in(row_h);
+        let rows = ((area.height + offset) / row_h + 1).max(1) as usize;
         for row in 0..rows {
             let n = self.top + row;
             let Some(line) = self.line_text(n) else { break };
-            let y = bounds.y + row as i32 * row_h;
+            let y = bounds.y + row as i32 * row_h - offset;
             if y >= area.bottom() {
                 break;
             }
@@ -1676,8 +1760,12 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 let w = ctx.text.measure_line(self.style, &number);
                 let x = bounds.x + gutter_w - self.pad() - w;
                 let color = if n == self.caret.line { content } else { dim };
+                // Clipped at the top, where a number part scrolled away
+                // would otherwise draw over whatever is above the editor.
+                let gutter = Rect::new(bounds.x, bounds.y, gutter_w, bounds.height);
+                let mut numbers = canvas.with_clip(gutter);
                 ctx.text
-                    .draw(canvas, self.style, Point::new(x, y), &number, color);
+                    .draw(&mut numbers, self.style, Point::new(x, y), &number, color);
             }
 
             let mut clipped = canvas.with_clip(area);
@@ -1931,6 +2019,11 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
         )
         .in_pixels(),
         Property::new(
+            "smooth-scroll",
+            PropertyKind::Bool,
+            "Scroll a pixel at a time on the wheel, not a line.",
+        ),
+        Property::new(
             "tab-width",
             PropertyKind::Int { min: 1, max: 16 },
             "Columns from one tab stop to the next.",
@@ -1942,6 +2035,7 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
             "gutter" => Value::Bool(self.gutter),
             "read-only" => Value::Bool(self.read_only),
             "size" => Value::Int(i32::from(self.style.size_px)),
+            "smooth-scroll" => Value::Bool(self.smooth_scroll),
             "tab-width" => Value::Int(i32::from(self.tab_width)),
             _ => return None,
         })
@@ -1952,6 +2046,7 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
             "gutter" => self.gutter = value.as_bool()?,
             "read-only" => self.read_only = value.as_bool()?,
             "size" => self.style.size_px = value.as_size()?,
+            "smooth-scroll" => self.set_smooth_scroll(value.as_bool()?),
             "tab-width" => self.tab_width = value.as_index()?.clamp(1, 16) as u8,
             _ => return Err(Mismatch::Unknown),
         }

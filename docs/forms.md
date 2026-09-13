@@ -584,6 +584,7 @@ something in its editor writes it here; `\n` is a line break, `\t` is a tab.
 | *(first argument)* | string | `""` | The initial text. |
 | `gutter` | bool | `#true` | Number the lines down the left. |
 | `read-only` | bool | `#false` | A caret and selection, but nothing changes. |
+| `smooth-scroll` | bool | `#false` | The wheel moves the text a pixel at a time, not a line. |
 | `tab-width` | integer | `4` | Columns from one tab stop to the next, 1 to 16. |
 | `size` | integer | `16` | |
 
