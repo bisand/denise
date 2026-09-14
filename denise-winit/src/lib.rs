@@ -188,6 +188,21 @@ pub struct WindowConfig {
     /// The size is still worth setting: it is what the window goes back to when
     /// the user un-maximises it.
     pub maximized: bool,
+    /// The name the desktop knows this application by — Wayland's `app_id`,
+    /// X11's `WM_CLASS` — or `None` for none.
+    ///
+    /// It is what ties a window to the application's desktop entry, so a
+    /// launcher and a task bar show its name and icon, and what a window
+    /// manager's rules match. Give it the entry's file name without
+    /// `.desktop`: a window of `squint.desktop` says `squint`. Without one a
+    /// Wayland compositor has nothing to go on, and every window rule and
+    /// taskbar icon for the application is lost.
+    ///
+    /// Set it on every window the application opens, the secondary ones
+    /// included: each is a window of its own to the compositor. Ignored on
+    /// macOS and Windows, which know an application by its bundle and its
+    /// executable.
+    pub app_id: Option<String>,
 }
 
 impl Default for WindowConfig {
@@ -201,6 +216,7 @@ impl Default for WindowConfig {
             fill_monitor: false,
             position: None,
             maximized: false,
+            app_id: None,
         }
     }
 }

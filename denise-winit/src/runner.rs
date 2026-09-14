@@ -216,6 +216,22 @@ impl Runner {
         if config.maximized {
             attrs = attrs.with_maximized(true);
         }
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        ))]
+        if let Some(app_id) = &config.app_id {
+            // One setting behind both: winit keeps a single name, which Wayland
+            // sends as the app_id and X11 writes into WM_CLASS as both halves.
+            attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
+                attrs,
+                app_id.clone(),
+                app_id.clone(),
+            );
+        }
 
         // The owner relationship is a creation-time fact on Windows, so it has to
         // be said here even though the platform that needs it most is not the one
