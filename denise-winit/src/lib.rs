@@ -115,6 +115,18 @@ pub enum Present {
     /// [`Error::Gpu`] rather than silently drawing the other way. For the
     /// designer on a large display, not for a preview of a panel.
     Gpu,
+    /// [`Gpu`](Self::Gpu) where a GPU can present to the window, and
+    /// [`Software`](Self::Software) where none can — decided for each window
+    /// as it opens, with the reason written to stderr when it falls back.
+    ///
+    /// For an application that ships to machines nobody has seen: a virtual
+    /// machine, a remote display, a driver that is not there. The fallback has
+    /// to happen here rather than around [`run_with`], because winit allows
+    /// one event loop per process and a failed run cannot be started again.
+    /// Without the `gpu` feature it is `Software`.
+    ///
+    /// The application should implement [`DeniseApp::paint`], as for `Gpu`.
+    GpuOrSoftware,
 }
 
 /// How the preview window is created.

@@ -251,6 +251,25 @@ impl Runner {
                     "denise-winit was built without the `gpu` feature".into(),
                 ));
             }
+            // Decided here, for this window, rather than by the application
+            // after `run_with` returns: winit makes one event loop per process,
+            // so a second attempt at the run is not a thing that can be made.
+            // The window itself is kept; only what draws into it changes.
+            #[cfg(feature = "gpu")]
+            Present::GpuOrSoftware => match GpuSurface::new(window.clone()) {
+                Ok(gpu) => Backend::Gpu(Box::new(gpu)),
+                Err(Error::Gpu(reason) | Error::Present(reason)) => {
+                    eprintln!(
+                        "denise: cannot draw through the GPU ({reason}); drawing in software"
+                    );
+                    Backend::Software(Box::new(PlatformSurface::new(window.clone())?))
+                }
+                Err(err) => return Err(err),
+            },
+            #[cfg(not(feature = "gpu"))]
+            Present::GpuOrSoftware => {
+                Backend::Software(Box::new(PlatformSurface::new(window.clone())?))
+            }
         };
         let id = window.id();
 

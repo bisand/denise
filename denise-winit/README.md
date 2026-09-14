@@ -245,6 +245,12 @@ needed there and `BufferAge::Undefined` is what tells the application so. An
 application that implements only `render` — one that wants a `Frame` — gets
 `Error::Gpu` at window creation rather than a blank window.
 
+`Present::GpuOrSoftware` asks for the GPU and takes the software path for any
+window no GPU can present to — a virtual machine, a remote display, a missing
+driver — saying why on stderr. It has to be asked for this way: winit makes one
+event loop per process, so catching `Error::Gpu` from `run_with` and running
+again in software is not something that can work.
+
 This is for the designer on a large display. A preview of a panel does not
 need it, and a panel never has it: the kiosk path is unchanged.
 
