@@ -13,7 +13,9 @@ use crate::widget::{
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Payload, Property, PropertyKind, Value,
 };
-use crate::widgets::style::{Align, DOUBLE_CLICK_MS, focus_ring, interactive_pair};
+use crate::widgets::style::{
+    Align, CARET_BLINKS_FOR_MS, DOUBLE_CLICK_MS, focus_ring, interactive_pair,
+};
 use crate::widgets::text_area::{ClipboardRequest, is_word};
 
 /// Half-period of the caret blink, in milliseconds.
@@ -343,10 +345,12 @@ impl<M> TextInput<M> {
         self.first_visible = self.window_start(engine, bounds);
     }
 
-    /// Restarts the blink so the caret is solid while it is being moved.
-    fn wake_caret(&mut self, now_ms: u64) {
-        self.blink_epoch = now_ms;
+    /// Restarts the blink so the caret is solid while it is being moved, and
+    /// asks to animate again, since a caret that blinked its fill has stopped.
+    fn wake_caret(&mut self, ctx: &mut EventCtx<'_, M>) {
+        self.blink_epoch = ctx.now_ms;
         self.caret_on = true;
+        ctx.request_animation();
     }
 
     fn insert(&mut self, ch: char) -> bool {
@@ -529,7 +533,7 @@ impl<M> TextInput<M> {
                 self.dragging = true;
             }
         }
-        self.wake_caret(ctx.now_ms);
+        self.wake_caret(ctx);
         self.scroll_to_caret(ctx.text, bounds);
         Handled::Yes
     }
@@ -550,7 +554,7 @@ impl<M> TextInput<M> {
         if cut {
             self.delete_selection();
             ctx.emit(request(ClipboardRequest::Cut(text)));
-            self.wake_caret(ctx.now_ms);
+            self.wake_caret(ctx);
             let bounds = ctx.bounds;
             self.scroll_to_caret(ctx.text, bounds);
             return Handled::Yes;
@@ -567,7 +571,7 @@ impl<M> TextInput<M> {
             return Handled::No;
         }
         self.move_to(index, true);
-        self.wake_caret(ctx.now_ms);
+        self.wake_caret(ctx);
         self.scroll_to_caret(ctx.text, bounds);
         Handled::Yes
     }
@@ -698,15 +702,14 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                 // is delivered *after* the focus it caused, so clicking into a
                 // field still collapses this to a caret where the finger landed.
                 self.select_all();
-                self.wake_caret(ctx.now_ms);
-                ctx.request_animation();
+                self.wake_caret(ctx);
                 // Not `Handled`: nothing was consumed. The tree already repaints
                 // on a focus change, so the caret appearing is covered.
                 Handled::No
             }
             Event::FocusLost => {
                 self.has_focus = false;
-                self.wake_caret(ctx.now_ms);
+                self.wake_caret(ctx);
                 Handled::No
             }
             // A finger is a pointer here: the same three counts, because a
@@ -744,7 +747,7 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                 let replaced = self.delete_selection();
                 let inserted = self.insert(*ch);
                 if replaced || inserted {
-                    self.wake_caret(ctx.now_ms);
+                    self.wake_caret(ctx);
                     let bounds = ctx.bounds;
                     self.scroll_to_caret(ctx.text, bounds);
                     Handled::Yes
@@ -845,7 +848,7 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
                     }
                     _ => return Handled::No,
                 }
-                self.wake_caret(ctx.now_ms);
+                self.wake_caret(ctx);
                 let bounds = ctx.bounds;
                 self.scroll_to_caret(ctx.text, bounds);
                 // Even a caret move that changed nothing must repaint, because the
@@ -872,6 +875,15 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
             return Animation::NONE;
         }
         let elapsed = now_ms.saturating_sub(self.blink_epoch);
+        if elapsed >= CARET_BLINKS_FOR_MS {
+            // Lit, and asleep until the caret is next moved.
+            let repaint = !self.caret_on;
+            self.caret_on = true;
+            return Animation {
+                repaint,
+                next: Wake::Never,
+            };
+        }
         let on = (elapsed / BLINK_MS).is_multiple_of(2);
         let repaint = on != self.caret_on;
         self.caret_on = on;
@@ -880,8 +892,9 @@ impl<M: Clone + 'static> Widget<M> for TextInput<M> {
             // A deadline, not a frame rate: the caret flips at the end of each
             // blink and wants exactly one wake to do it. Halving the tree's
             // animation rate must not halve the blink, and turning motion off
-            // must not stop it — a caret that has stopped blinking is a field
-            // that looks like it has lost focus.
+            // must not stop it — a caret gone out mid-blink is a field that
+            // looks like it has lost focus. (Resting after a while of nobody
+            // typing is different: it rests lit.)
             //
             // Saturating, because `now_ms` is the application's clock and this
             // widget does not get to assume anything about it. A host that

@@ -267,6 +267,16 @@ pub(crate) fn hovered_row(state: VisualState, remembered: Option<usize>) -> Opti
 /// `tick` has a clock frozen at zero, and every second click reads as a pair.
 pub(crate) const DOUBLE_CLICK_MS: u64 = 400;
 
+/// How long a caret blinks after it was last moved or typed at, in
+/// milliseconds; then it stays lit until it is moved again. GTK's default.
+///
+/// A caret that blinks forever wakes the event loop twice a second, for as
+/// long as a window sits focused and forgotten — a frame each time, and on a
+/// software-rendered desktop that is most of what an idle editor spends. An
+/// even number of half-periods, so the blink ends on a lit caret and the last
+/// wake is the one that stops it.
+pub(crate) const CARET_BLINKS_FOR_MS: u64 = 10_000;
+
 /// What a click on a row turned out to mean.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Intent {

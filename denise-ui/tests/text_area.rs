@@ -92,6 +92,25 @@ fn row_height() -> i32 {
 }
 
 #[test]
+fn the_caret_rests_after_ten_seconds_and_an_arrow_key_wakes_it() {
+    let (mut ui, _) = editor("two\nlines");
+    let mut now = 0;
+    ui.tick(now);
+    while let Some(wake) = ui.next_wake_ms() {
+        assert!(wake > now && wake <= 10_000, "woken at {wake} after {now}");
+        now = wake;
+        ui.tick(now);
+    }
+    assert_eq!(ui.animating(), 0, "a resting caret holds nothing awake");
+
+    ui.tick(30_000);
+    ui.handle(&[key(KeyCode::ArrowDown)]);
+    ui.tick(30_000);
+    assert_eq!(ui.animating(), 1, "moved, it blinks again");
+    assert_eq!(ui.next_wake_ms(), Some(30_500));
+}
+
+#[test]
 fn typing_makes_lines_and_the_caret_follows() {
     let (mut ui, id) = editor("");
     ui.handle(&text("ab"));

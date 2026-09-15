@@ -48,7 +48,7 @@ use crate::widget::{
 use crate::widgets::describe::{
     Describe, DynDescribe, Group, Mismatch, Property, PropertyKind, Value,
 };
-use crate::widgets::style::{DOUBLE_CLICK_MS, muted};
+use crate::widgets::style::{CARET_BLINKS_FOR_MS, DOUBLE_CLICK_MS, muted};
 
 /// Half-period of the caret blink, in milliseconds.
 const BLINK_MS: u64 = 500;
@@ -1285,15 +1285,17 @@ impl<M, D: TextDocument> TextArea<M, D> {
         true
     }
 
-    /// Restarts the blink so the caret is solid while it is being moved.
-    fn wake_caret(&mut self, now_ms: u64) {
-        self.blink_epoch = now_ms;
+    /// Restarts the blink so the caret is solid while it is being moved, and
+    /// asks to animate again, since a caret that blinked its fill has stopped.
+    fn wake_caret(&mut self, ctx: &mut EventCtx<'_, M>) {
+        self.blink_epoch = ctx.now_ms;
         self.caret_on = true;
+        ctx.request_animation();
     }
 
     /// What every caret move ends with.
     fn moved(&mut self, ctx: &mut EventCtx<'_, M>) -> Handled {
-        self.wake_caret(ctx.now_ms);
+        self.wake_caret(ctx);
         let bounds = ctx.bounds;
         self.reveal_caret(ctx.text, bounds);
         Handled::Yes
@@ -1882,8 +1884,7 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
         match event {
             Event::FocusGained => {
                 self.has_focus = true;
-                self.wake_caret(ctx.now_ms);
-                ctx.request_animation();
+                self.wake_caret(ctx);
                 Handled::No
             }
             Event::FocusLost => {
@@ -1891,7 +1892,7 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 self.dragging = false;
                 self.thumb_drag = None;
                 self.h_thumb_drag = None;
-                self.wake_caret(ctx.now_ms);
+                self.wake_caret(ctx);
                 Handled::No
             }
             Event::PressCancelled => {
@@ -1974,6 +1975,15 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             return Animation::NONE;
         }
         let elapsed = now_ms.saturating_sub(self.blink_epoch);
+        if elapsed >= CARET_BLINKS_FOR_MS {
+            // Lit, and asleep until the caret is next moved.
+            let repaint = !self.caret_on;
+            self.caret_on = true;
+            return Animation {
+                repaint,
+                next: Wake::Never,
+            };
+        }
         let on = (elapsed / BLINK_MS).is_multiple_of(2);
         let repaint = on != self.caret_on;
         self.caret_on = on;

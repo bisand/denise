@@ -270,6 +270,33 @@ fn only_the_focused_field_is_asked_to_blink() {
 }
 
 #[test]
+fn a_caret_nobody_moves_stops_blinking_lit_and_starts_again_when_typed_at() {
+    let (mut ui, field, _, _) = form();
+    ui.focus(Some(field));
+    let mut now = 0;
+    ui.tick(now);
+    // Blinks for ten seconds, asking to be woken at each edge...
+    while let Some(wake) = ui.next_wake_ms() {
+        assert!(wake > now, "a wake in the past would spin the loop");
+        now = wake;
+        ui.tick(now);
+        assert!(now <= 10_000, "still blinking at {now} ms");
+    }
+    // ...then rests, lit, holding nothing awake.
+    assert_eq!(now, 10_000);
+    assert_eq!(ui.animating(), 0);
+    ui.render_nothing();
+    ui.tick(60_000);
+    assert!(!ui.needs_paint(), "a resting caret costs nothing");
+
+    // Typing wakes it, and the blink starts over from the keystroke.
+    ui.handle(&[text('a')]);
+    ui.tick(60_000);
+    assert_eq!(ui.animating(), 1, "typed at, it blinks again");
+    assert_eq!(ui.next_wake_ms(), Some(60_500));
+}
+
+#[test]
 fn a_label_only_repaints_when_its_text_actually_changes() {
     let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
     let root = ui.root();
