@@ -4412,6 +4412,55 @@ fn a_press_outside_the_dropdown_does_not_reach_what_is_under_it() {
     );
 }
 
+/// A list longer than the surface fits in it and scrolls: it opens on the
+/// current choice, the wheel moves it, and the arrow keys pull it along to rows
+/// that started out of sight. Sized to its content, a hundred keyboard layouts
+/// ran off the bottom of the window where nothing could reach them.
+#[test]
+fn a_long_dropdown_fits_the_surface_and_scrolls() {
+    let mut ui: Ui<Msg> = Ui::new(SIZE, theme::DARK);
+    let root = ui.root();
+    let options: Vec<String> = (0..100).map(|i| format!("Oppsett {i}")).collect();
+    let select = ui
+        .add(root, Select::new(options, Msg::Save), Rect::new(40, 40, 180, 34))
+        .expect("select");
+    ui.widget_mut::<Select<Msg>>(select)
+        .expect("select")
+        .set_selected(Some(50));
+
+    let popup = denise_ui::widgets::open_select(&mut ui, select, Msg::Row).expect("opened");
+    let view = ui.bounds(popup).expect("popup");
+    assert!(
+        view.y >= 0 && view.bottom() <= SIZE.height as i32,
+        "the open list runs off the surface: {view:?}"
+    );
+    // The list scrolls inside the popup, so how far it sits above the popup's
+    // top is how far it has scrolled.
+    let list = ui.focused().expect("the list took focus");
+    let scrolled = |ui: &Ui<Msg>| view.y - ui.bounds(list).expect("list").y;
+    let row = ui.theme().metrics.size_field;
+    let opened = scrolled(&ui);
+    assert!(
+        opened > 0 && opened <= 50 * row && opened + view.height >= 51 * row,
+        "the current choice is not in sight: scrolled {opened} in {view:?}"
+    );
+
+    ui.handle(&[InputEvent::PointerScroll {
+        delta_x: 0.0,
+        delta_y: 48.0,
+        position: Point::new(view.x + 10, view.y + 10),
+    }]);
+    assert!(scrolled(&ui) > opened, "the wheel did not scroll it");
+
+    // Down to the last row, which started far out of sight: it is in sight at
+    // the end, and Enter chooses it.
+    ui.handle(&keys(KeyCode::ArrowDown, 49));
+    let last = ui.bounds(list).expect("list").bottom();
+    assert_eq!(last, view.bottom(), "the last row is not in sight");
+    ui.handle(&[key(KeyCode::Enter)]);
+    assert_eq!(ui.drain_messages().collect::<Vec<_>>(), vec![Msg::Row(99)]);
+}
+
 /// A select with no options opens nothing and is not a tab stop.
 #[test]
 fn an_empty_select_opens_nothing() {

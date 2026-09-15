@@ -469,18 +469,28 @@ pub fn open_select<M: Clone + 'static>(
     // more. A list narrower than the thing it drops out of looks detached.
     let pad = padding(style.size_px);
     let width = anchor.width.max(widest + pad * 2);
-    let height = row * options.len() as i32;
+    let content = row * options.len() as i32;
+    // No taller than the room on the roomier side of the control, in whole
+    // rows. A list of a hundred keyboard layouts sized to its content runs off
+    // the surface, where no wheel or arrow key can reach the rows it hides.
+    let surface = ui.bounds(ui.root())?;
+    let room = (surface.bottom() - anchor.bottom()).max(anchor.y - surface.y) - POPUP_MARGIN;
+    let height = content.min((room / row).max(1) * row);
 
     let container = ui.push_popup(
         select,
         denise::Size::new(width as u32, height as u32),
         crate::Side::Below,
     )?;
-    ui.add(
+    // The panel is the viewport and the list inside it is as tall as its rows:
+    // the tree scrolls it for the wheel and the page keys, and the list's arrow
+    // keys pull it along.
+    let viewport = ui.add(
         container,
         super::Panel::default(),
         Rect::new(0, 0, width, height),
     )?;
+    ui.set_scrollable(viewport, true);
     // Inert for selection, wired for activation: the arrows move the highlight
     // silently and only Enter or a tap reports a choice. `activate_on_click`
     // makes one tap do both, which is what a dropdown row is — a command, not
@@ -491,12 +501,22 @@ pub fn open_select<M: Clone + 'static>(
         .with_style(style)
         .activate_on_click()
         .with_selected(chosen);
-    let list = ui.add(container, list, Rect::new(0, 0, width, height))?;
+    let list = ui.add(viewport, list, Rect::new(0, 0, width, content))?;
     // So the keyboard works the moment it opens, and Escape has somewhere to
     // return focus from.
     ui.focus(Some(list));
+    // Open on the current choice, in the middle where there is room, rather
+    // than on the first rows with the choice somewhere out of sight below.
+    if let Some(chosen) = chosen {
+        let y = row * chosen as i32 - (height - row) / 2;
+        ui.set_scroll(viewport, Point::new(0, y));
+    }
     Some(container)
 }
+
+/// Space kept between an open list and the surface's edge, beyond the room
+/// the popup leaves between itself and its control.
+const POPUP_MARGIN: i32 = 8;
 
 #[cfg(test)]
 mod tests {
