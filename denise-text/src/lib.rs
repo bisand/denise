@@ -34,7 +34,7 @@
 //! | Tier | Feature | Cost | What it buys |
 //! |---|---|---|---|
 //! | Built-in bitmap | none | 0 | Latin plus `æøå`, whole-number scales |
-//! | TrueType | `truetype` | +145 KB | Real fonts, proportional metrics, anti-aliasing |
+//! | TrueType | `truetype` | +65 KB | Real fonts, proportional metrics, anti-aliasing |
 //! | Shaped | `shaping` | +3.1 MB | Ligatures, bidi, complex scripts, font fallback |
 //!
 //! For scale: the whole of Denise, DRM, evdev and the widgets is about 840 KB, so

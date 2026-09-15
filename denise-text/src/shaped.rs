@@ -10,7 +10,7 @@
 //! # Choose this deliberately
 //!
 //! - A temperature readout, a Norwegian name, a menu of European languages: the
-//!   `truetype` tier at 145 KB draws all of it correctly. Measured on the same
+//!   `truetype` tier at 65 KB draws all of it correctly. Measured on the same
 //!   Norwegian pangram, the two tiers differ by **two pixels** of total width.
 //! - Anything that has to typeset a script where a character is not a glyph: this
 //!   tier, and the three megabytes, and there is no way around it.

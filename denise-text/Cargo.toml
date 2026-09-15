@@ -19,10 +19,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["std"]
-std = ["denise/std", "denise-render/std"]
+std = ["denise/std", "denise-render/std", "ab_glyph?/std"]
 # Real TrueType and OpenType fonts, anti-aliased and proportionally spaced.
-# About 145 KB of static binary, and no shaping — see the crate docs.
-truetype = ["dep:fontdue"]
+# About 65 KB of static binary, and no shaping — see the crate docs.
+# `libm` is the maths ab_glyph uses without `std`, and is left unused with it.
+truetype = ["dep:ab_glyph", "ab_glyph/libm"]
 # Shaping, bidirectional text and font fallback, via cosmic-text. About 3.1 MB
 # of static binary — four times the rest of the toolkit — so this is for panels
 # that genuinely need a script the other tiers cannot draw.
@@ -31,7 +32,7 @@ shaping = ["dep:cosmic-text", "std"]
 [dependencies]
 denise = { workspace = true }
 denise-render = { workspace = true }
-fontdue = { workspace = true, optional = true }
+ab_glyph = { workspace = true, optional = true }
 cosmic-text = { workspace = true, optional = true }
 
 [lints.rust]

@@ -42,7 +42,7 @@
 		{
 			icon: 'type',
 			title: 'Text in three tiers',
-			body: 'The built-in 8×8 bitmap font costs nothing, TrueType through fontdue adds about 145 KB, and full shaping through cosmic-text adds 3.1 MB. You pay for what you draw.'
+			body: 'The built-in 8×8 bitmap font costs nothing, TrueType through ab_glyph adds about 65 KB, and full shaping through cosmic-text adds 3.1 MB. You pay for what you draw.'
 		},
 		{
 			icon: 'keyboard',

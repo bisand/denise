@@ -1117,7 +1117,7 @@ measured rather than estimated.
 | Tier | Feature | Cost | Buys |
 |---|---|---|---|
 | Built-in bitmap | none | 0 | Latin plus `ÆØÅ æøå ÄÖÜ äöü Éé ß °`, whole-number scales |
-| TrueType | `truetype` | **+145 KB** | Real faces, anti-aliased, proportionally spaced, any size |
+| TrueType | `truetype` | **+65 KB** | Real faces, anti-aliased, proportionally spaced, any size |
 | Shaped | `shaping` | **+3.1 MB** | Ligatures, bidirectional text, font fallback, complex scripts |
 
 For scale, the whole of Denise, DRM, evdev and the widgets is **848 KB**, so the
@@ -1512,7 +1512,10 @@ looked fine on the Pi.
 
 M4 also added a tier the bootstrap did not name. It listed `cosmic-text` and
 `fontdue`; measuring them showed 3.1 MB against 145 KB, and a middle tier with
-real fonts but no shaper is what most panels actually want.
+real fonts but no shaper is what most panels actually want. The tier moved to
+`ab_glyph` in 0.30, which reads a glyph when it is drawn rather than every glyph
+when the face is opened: a Nerd Font went from 60 MB to 3 MB, and the tier from
+145 KB to 65 KB.
 
 M5 was gated on the Pi story being solid, which it was not quite: the console
 keyboard was still unmuted, so every character typed into a Denise text field was

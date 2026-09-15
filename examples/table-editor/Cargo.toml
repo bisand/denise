@@ -32,7 +32,7 @@ kiosk = ["dep:bare-linux", "dep:denise-evdev", "dep:rustix"]
 denise = { workspace = true, features = ["std"] }
 # The edit form is the form-filling case, and the panel has no other keyboard.
 denise-keyboard = { workspace = true }
-# `truetype` pulls fontdue, which is what `--font` needs. Without the feature the
+# `truetype` pulls ab_glyph, which is what `--font` needs. Without the feature the
 # example still builds and draws with the built-in 8x8 bitmap font.
 denise-text = { workspace = true, features = ["truetype"] }
 system-font = { path = "../system-font" }

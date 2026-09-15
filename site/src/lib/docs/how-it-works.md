@@ -127,7 +127,7 @@ Three tiers, chosen by feature so you pay for what you draw. The cost is the inc
 | Tier | Feature | Cost | Buys |
 |---|---|---|---|
 | Built-in bitmap | none | 0 | Latin plus `ÆØÅ æøå ÄÖÜ äöü`, whole-number scales |
-| TrueType, via `fontdue` | `truetype` | +145 KB | Real faces, anti-aliased, any size |
+| TrueType, via `ab_glyph` | `truetype` | +65 KB | Real faces, anti-aliased, any size |
 | Shaped, via `cosmic-text` | `shaping` | +3.1 MB | Ligatures, bidirectional text, font fallback, complex scripts |
 
 The shaping tier is four times the rest of the toolkit put together, and the choice is not obvious: on Arabic, `truetype` draws the right glyphs unjoined and in logical order — which looks like text, is wrong, and nobody who cannot read the script will notice.

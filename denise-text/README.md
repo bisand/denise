@@ -39,7 +39,7 @@ Measured as the increase in a stripped, statically linked
 | Tier | Feature | Cost | What it buys |
 |---|---|---:|---|
 | Built-in bitmap | *none* | 0 | Latin plus `æøå`, whole-number scales |
-| TrueType | `truetype` | +145 KB | Real fonts, proportional metrics, anti-aliasing |
+| TrueType | `truetype` | +65 KB | Real fonts, proportional metrics, anti-aliasing |
 | Shaped | `shaping` | +3.1 MB | Ligatures, bidi, complex scripts, font fallback |
 
 A style that names no font carries `FontId::DEFAULT`, which is a redirection

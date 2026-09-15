@@ -166,7 +166,7 @@ The snapshot path works because a `Frame` is only a borrowed pixel buffer with a
 
 ## Text, in one paragraph
 
-`hello` draws in the built-in 8×8 bitmap font because it never asks for another. Real faces are the `truetype` feature (about 145 KB) and full shaping is `shaping` (about 3.1 MB), both passed through `denise-ui`. [How it works](../how-it-works/) has the trade-off.
+`hello` draws in the built-in 8×8 bitmap font because it never asks for another. Real faces are the `truetype` feature (about 65 KB) and full shaping is `shaping` (about 3.1 MB), both passed through `denise-ui`. [How it works](../how-it-works/) has the trade-off.
 
 ## What is deliberately missing
 

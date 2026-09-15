@@ -32,7 +32,7 @@ codegen = []
 cli = ["dep:denise-image"]
 # Passed through, so `render --font` can draw real text. Off by default here for
 # the same reason it is off in `denise-ui`: the built-in bitmap font costs
-# nothing and `fontdue` costs 145 KB — and a snapshot drawn in the built-in font
+# nothing and `ab_glyph` costs 65 KB — and a snapshot drawn in the built-in font
 # is the same on every machine, which is what makes one worth committing.
 truetype = ["denise-ui/truetype", "dep:denise-text"]
 

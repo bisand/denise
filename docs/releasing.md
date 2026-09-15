@@ -143,7 +143,7 @@ The workflow fails closed at four points, because an upload cannot be taken back
 
 Since the release waits on CI *by check name*, every job in `ci.yml` is a release
 guard whether or not it was added as one. The `advisories` job is the case worth
-naming: a RUSTSEC advisory against `png`, `gif`, `zune-jpeg` or `fontdue` — the
+naming: a RUSTSEC advisory against `png`, `gif`, `zune-jpeg` or `ab_glyph` — the
 crates that parse untrusted bytes — now fails CI, and a failed CI stops the
 publish. Nothing had to be wired into `release.yml` for that; adding the job to
 CI was the whole of it.

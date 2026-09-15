@@ -2,7 +2,7 @@
 #
 # Eighteen crates go to crates.io together, and four of the things they pull in
 # parse **untrusted bytes** on a panel that may run unattended for a year: `png`,
-# `zune-jpeg` and `gif` behind `denise-image`, and `fontdue` behind
+# `zune-jpeg` and `gif` behind `denise-image`, and `ab_glyph` behind
 # `denise-text`. An advisory against any of those ships in the next release
 # unless something is watching, and nothing was.
 #
