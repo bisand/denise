@@ -28,8 +28,8 @@ use winit::window::{Window, WindowId};
 #[cfg(feature = "gpu")]
 use crate::GpuSurface;
 use crate::{
-    Build, DeniseApp, Error, LINE_HEIGHT_PX, Modality, PlatformSurface, Present, WindowConfig,
-    WindowRequest, keymap, owner,
+    Build, DeniseApp, Error, LINE_HEIGHT_PX, Modality, PlatformSurface, Present, Waker,
+    WindowConfig, WindowRequest, keymap, owner,
 };
 
 /// One window, its surface, and the application drawing into it.
@@ -143,11 +143,14 @@ pub(crate) struct Runner {
     /// result — and honoured in `about_to_wait`, a few microseconds later.
     pending: Vec<(WindowId, WindowRequest)>,
     pub(crate) error: Option<Error>,
+    /// Handed to every application as its window opens.
+    waker: Waker,
 }
 
 impl Runner {
-    pub(crate) fn new(config: WindowConfig, build: Build) -> Self {
+    pub(crate) fn new(config: WindowConfig, build: Build, waker: Waker) -> Self {
         Self {
+            waker,
             config,
             build: Some(build),
             windows: HashMap::new(),
@@ -298,7 +301,8 @@ impl Runner {
             }
         }
 
-        let app = build(surface.size(), surface.scale_factor());
+        let mut app = build(surface.size(), surface.scale_factor());
+        app.set_waker(self.waker.clone());
 
         self.windows.insert(
             id,
@@ -616,6 +620,15 @@ impl ApplicationHandler for Runner {
         match self.spawn(event_loop, &config, build, None, Modality::Independent) {
             Ok(id) => self.main = Some(id),
             Err(err) => self.fail(event_loop, err),
+        }
+    }
+
+    /// A [`Waker`]'s message: every window is due a frame now, as it would be
+    /// for input.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, (): ()) {
+        let now = Instant::now();
+        for state in self.windows.values_mut() {
+            state.next_frame = Some(now);
         }
     }
 

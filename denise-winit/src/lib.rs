@@ -44,7 +44,7 @@ mod surface;
 use std::time::Duration;
 
 use denise::{BufferAge, DamageTracker, Frame, InputEvent, Pen, Point, Rect, Size};
-use winit::event_loop::EventLoop;
+use winit::event_loop::{EventLoop, EventLoopProxy};
 
 use runner::Runner;
 
@@ -358,6 +358,18 @@ pub trait DeniseApp {
     /// at logout the system is waiting on it: keep it to the saving.
     fn exiting(&mut self) {}
 
+    /// Handed the run's [`Waker`] once, as the window opens, before the first
+    /// frame.
+    ///
+    /// For an application with work arriving from somewhere the loop cannot
+    /// see — a socket, a file watcher, another thread — which would otherwise
+    /// have to answer [`next_frame_in`](DeniseApp::next_frame_in) with a short
+    /// wait forever just to look. Keep it, or a clone of it where the work
+    /// arrives, and let the loop sleep.
+    fn set_waker(&mut self, waker: Waker) {
+        let _ = waker;
+    }
+
     /// Windows this application wants opened, taken once per frame.
     ///
     /// This is the whole of the secondary-window API, and what it hands back is
@@ -435,8 +447,9 @@ where
     A: DeniseApp + 'static,
     B: FnOnce(Size, f32) -> A + 'static,
 {
-    let event_loop = EventLoop::new()?;
-    let mut runner = Runner::new(config, boxed(build));
+    let event_loop = EventLoop::with_user_event().build()?;
+    let waker = Waker(event_loop.create_proxy());
+    let mut runner = Runner::new(config, boxed(build), waker);
     event_loop.run_app(&mut runner)?;
     match runner.error {
         Some(err) => Err(err),
@@ -535,6 +548,31 @@ impl WindowRequest {
 /// settings form is not the main window with different data, it is a different
 /// program — and the loop holds them in one collection.
 type Build = Box<dyn FnOnce(Size, f32) -> Box<dyn DeniseApp>>;
+
+/// Wakes a running loop from any thread, so every window is asked for a frame
+/// as soon as one can be drawn.
+///
+/// An application's [`update`](DeniseApp::update) then runs with whatever
+/// input there is, possibly none, and can take up what the waking thread left
+/// for it. Waking a loop that is already awake costs a message; waking one that
+/// has finished does nothing. See [`DeniseApp::set_waker`].
+#[derive(Clone, Debug)]
+pub struct Waker(EventLoopProxy<()>);
+
+impl Waker {
+    /// Asks for a frame in every window.
+    pub fn wake(&self) {
+        // The only failure is a loop that has already ended, which has nothing
+        // left to draw.
+        let _ = self.0.send_event(());
+    }
+}
+
+// A waker is for handing to other threads, so it has to be allowed there.
+const _: fn() = || {
+    fn shareable<T: Send + Sync>() {}
+    shareable::<Waker>();
+};
 
 /// Erases a builder's application type.
 fn boxed<A, B>(build: B) -> Build
