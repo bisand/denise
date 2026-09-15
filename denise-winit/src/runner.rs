@@ -303,6 +303,11 @@ impl Runner {
 
         let mut app = build(surface.size(), surface.scale_factor());
         app.set_waker(self.waker.clone());
+        app.presenting(match surface {
+            Backend::Software(_) => Present::Software,
+            #[cfg(feature = "gpu")]
+            Backend::Gpu(_) => Present::Gpu,
+        });
 
         self.windows.insert(
             id,

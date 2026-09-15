@@ -370,6 +370,19 @@ pub trait DeniseApp {
         let _ = waker;
     }
 
+    /// Told how the window draws once it is open, before the first frame:
+    /// [`Present::Gpu`] or [`Present::Software`], never
+    /// [`Present::GpuOrSoftware`].
+    ///
+    /// Where [`Present::GpuOrSoftware`] was asked for, this is the answer, and
+    /// it is worth keeping: a machine where no GPU could present has paid for
+    /// finding out — graphics drivers loaded, tried and given up on, which can
+    /// be seconds and tens of megabytes that stay mapped — and the next run, or
+    /// the next window, can ask for [`Present::Software`] and skip it.
+    fn presenting(&mut self, present: Present) {
+        let _ = present;
+    }
+
     /// Windows this application wants opened, taken once per frame.
     ///
     /// This is the whole of the secondary-window API, and what it hands back is
