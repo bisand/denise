@@ -17,6 +17,14 @@
 //! - **Contact identity.** Multitouch slots are stateful: a slot keeps reporting
 //!   for the same finger until its tracking id goes to `-1`, and only the axes
 //!   that changed are resent.
+//!
+//! A touchpad reports the same slots as a touchscreen, and is not one: where the
+//! finger is on the pad says nothing about where on the screen it points. A
+//! translator told it is reading a touchpad ([`Translator::set_touchpad`]) moves
+//! the pointer by how far a finger travels, scrolls with two, and turns a short
+//! tap into a click. The rest of the protocol is read the same way.
+
+use core::time::Duration;
 
 use denise::{ElementState, InputEvent, KeyCode, Modifiers, Point, PointerButton, Size, TouchId};
 
@@ -30,6 +38,19 @@ pub const MAX_SLOTS: usize = 10;
 
 /// Pixels scrolled per wheel detent.
 const SCROLL_STEP: f32 = 40.0;
+
+/// How far a finger's travel across a touchpad moves the pointer: the pad's full
+/// width is this many widths of the surface. One pad across for one screen across
+/// reaches every point in a stroke without the pointer racing away from a finger
+/// that barely moved.
+const TOUCHPAD_SPEED: f32 = 1.0;
+
+/// The longest a touch can last and still be a tap.
+const TAP_TIME: Duration = Duration::from_millis(200);
+
+/// How far fingers may travel during a tap, as a share of the pad's width. A
+/// resting finger drifts; one that moves further than this was pointing.
+const TAP_TRAVEL: f32 = 0.03;
 
 /// One event as read from `/dev/input/eventN`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +120,35 @@ struct Slot {
     ended: bool,
 }
 
+/// What a touchpad remembers from one frame to the next.
+#[derive(Clone, Copy, Debug, Default)]
+struct Touchpad {
+    /// Where each finger was when the last frame closed, in pad units, by slot.
+    /// A single-contact pad keeps its one finger in the first.
+    last: [Option<(i32, i32)>; MAX_SLOTS],
+    /// Fingers down when the last frame closed.
+    fingers: usize,
+    /// The part of a pixel travelled but not yet moved, so slow motion is not
+    /// lost to rounding.
+    carry_x: f32,
+    carry_y: f32,
+    /// When the fingers now down first touched, if this can still be a tap.
+    tap_start: Option<Duration>,
+    /// How far they have travelled since, in pad units.
+    tap_travel: f32,
+    /// The most fingers down at once since, which decides the tap's button.
+    tap_fingers: usize,
+    /// The pad's own button went down with two fingers on the pad, so its
+    /// release is a right button too.
+    right_click: bool,
+    /// Fingers down as the `BTN_TOOL_*` keys count them, for a pad without
+    /// slots, which reports two fingers as one position.
+    tool_fingers: usize,
+    /// The finger's position on a pad without slots, which resends only the axis
+    /// that changed.
+    single: (i32, i32),
+}
+
 /// A pointer or key event waiting for its frame to close.
 #[derive(Clone, Copy, Debug)]
 enum Deferred {
@@ -146,6 +196,12 @@ pub struct Translator {
     single_touch_active: bool,
 
     deferred: Vec<Deferred>,
+
+    /// Contacts move the pointer rather than touching the surface.
+    touchpad: bool,
+    pad: Touchpad,
+    /// When the event being fed happened, where the caller knows.
+    now: Option<Duration>,
 }
 
 impl Translator {
@@ -170,7 +226,27 @@ impl Translator {
             single_touch_active: false,
             composer: Composer::new(&layout::US),
             deferred: Vec::new(),
+            touchpad: false,
+            pad: Touchpad::default(),
+            now: None,
         }
+    }
+
+    /// Reads this device as a touchpad.
+    ///
+    /// A finger moves the pointer by how far it travels rather than to where it
+    /// is, two fingers scroll, the pad's button is a right button with two
+    /// fingers down, and a short tap is a click — a right click with two
+    /// fingers. Taps need to know when events happened, so they come only
+    /// through [`feed_at`](Self::feed_at).
+    pub fn set_touchpad(&mut self, touchpad: bool) {
+        self.touchpad = touchpad;
+        self.pad = Touchpad::default();
+    }
+
+    /// Whether this device is read as a touchpad.
+    pub fn is_touchpad(&self) -> bool {
+        self.touchpad
     }
 
     /// Reads this device with a different keyboard layout.
@@ -249,6 +325,16 @@ impl Translator {
         }
     }
 
+    /// Feeds one raw event that happened at `at`, on any clock that only moves
+    /// forward — the kernel's timestamp, as a duration since the epoch.
+    ///
+    /// The same as [`feed`](Self::feed), except that a touchpad can tell a tap
+    /// from a touch that lasted.
+    pub fn feed_at(&mut self, event: RawEvent, at: Duration, out: &mut Vec<InputEvent>) {
+        self.now = Some(at);
+        self.feed(event, out);
+    }
+
     /// Feeds a whole batch, which need not be frame-aligned.
     pub fn feed_all(&mut self, events: &[RawEvent], out: &mut Vec<InputEvent>) {
         for event in events {
@@ -324,6 +410,31 @@ impl Translator {
                 self.deferred.push(Deferred::Button { button, state });
             }
             btn::TOUCH => self.touch_down = state.is_down(),
+            // How many fingers are down, not keys: a pad without slots counts its
+            // fingers this way, and on anything else they are not worth a
+            // keypress nobody can bind.
+            btn::TOOL_FINGER
+            | btn::TOOL_DOUBLETAP
+            | btn::TOOL_TRIPLETAP
+            | btn::TOOL_QUADTAP
+            | btn::TOOL_QUINTTAP => {
+                if repeat {
+                    return;
+                }
+                let count = match event.code {
+                    btn::TOOL_FINGER => 1,
+                    btn::TOOL_DOUBLETAP => 2,
+                    btn::TOOL_TRIPLETAP => 3,
+                    btn::TOOL_QUADTAP => 4,
+                    _ => 5,
+                };
+                if state.is_down() {
+                    self.pad.tool_fingers = count;
+                } else if self.pad.tool_fingers == count {
+                    self.pad.tool_fingers = 0;
+                }
+            }
+            btn::TOOL_PEN => {}
             code => {
                 let key = key_code(code);
                 self.update_modifiers(key, state.is_down());
@@ -376,7 +487,9 @@ impl Translator {
 
     /// Closes a frame: motion first, then everything positioned by it.
     fn flush(&mut self, out: &mut Vec<InputEvent>) {
-        if self.multitouch {
+        if self.touchpad {
+            self.flush_touchpad(out);
+        } else if self.multitouch {
             self.flush_slots(out);
         } else {
             self.flush_pointer(out);
@@ -465,6 +578,162 @@ impl Translator {
                 position: self.pointer,
             });
         }
+    }
+
+    /// A touchpad's frame: pointer motion or scrolling from how the fingers
+    /// travelled, and a tap when they lifted soon enough and had not moved.
+    fn flush_touchpad(&mut self, out: &mut Vec<InputEvent>) {
+        // Where each finger is now, in pad units.
+        let mut now: [Option<(i32, i32)>; MAX_SLOTS] = [None; MAX_SLOTS];
+        let fingers = if self.multitouch {
+            for (index, slot) in self.slots.iter_mut().enumerate() {
+                if slot.tracking_id.is_some() && !slot.ended {
+                    now[index] = Some((slot.x, slot.y));
+                }
+                slot.began = false;
+                slot.moved = false;
+                if slot.ended {
+                    slot.ended = false;
+                    slot.tracking_id = None;
+                }
+            }
+            // The legacy single-touch axes repeat the first finger; the slots
+            // already said it.
+            self.pending_abs_x = None;
+            self.pending_abs_y = None;
+            now.iter().flatten().count()
+        } else {
+            if let Some(x) = self.pending_abs_x.take() {
+                self.pad.single.0 = x;
+            }
+            if let Some(y) = self.pending_abs_y.take() {
+                self.pad.single.1 = y;
+            }
+            if self.touch_down {
+                now[0] = Some(self.pad.single);
+                self.pad.tool_fingers.max(1)
+            } else {
+                0
+            }
+        };
+
+        // How far the fingers that were already down travelled, on average. A
+        // finger arriving or leaving says nothing about motion, and averaging it
+        // in would jump the pointer by the distance between two fingers.
+        let (mut dx, mut dy, mut moving) = (0.0f32, 0.0f32, 0u32);
+        if fingers == self.pad.fingers {
+            for (was, is) in self.pad.last.iter().zip(now.iter()) {
+                if let (Some(was), Some(is)) = (was, is) {
+                    dx += (is.0 - was.0) as f32;
+                    dy += (is.1 - was.1) as f32;
+                    moving += 1;
+                }
+            }
+        } else {
+            self.pad.carry_x = 0.0;
+            self.pad.carry_y = 0.0;
+        }
+        if moving > 0 {
+            dx /= moving as f32;
+            dy /= moving as f32;
+        }
+
+        let span = self
+            .abs_x
+            .map_or(0, |axis| i64::from(axis.max) - i64::from(axis.min));
+        let scale = if span > 0 {
+            self.surface.width as f32 * TOUCHPAD_SPEED / span as f32
+        } else {
+            1.0
+        };
+
+        match fingers {
+            1 if moving > 0 => {
+                let x = dx * scale + self.pad.carry_x;
+                let y = dy * scale + self.pad.carry_y;
+                let (step_x, step_y) = (x.trunc(), y.trunc());
+                self.pad.carry_x = x - step_x;
+                self.pad.carry_y = y - step_y;
+                let next = self.clamp(Point::new(
+                    self.pointer.x + step_x as i32,
+                    self.pointer.y + step_y as i32,
+                ));
+                if next != self.pointer {
+                    self.pointer = next;
+                    out.push(InputEvent::PointerMoved {
+                        position: self.pointer,
+                    });
+                }
+            }
+            // Two fingers or more scroll the way a wheel does: moving them away
+            // from you is a detent away from you.
+            2.. if moving > 0 && (dx != 0.0 || dy != 0.0) => {
+                self.scroll_x += dx * scale;
+                self.scroll_y += dy * scale;
+            }
+            _ => {}
+        }
+
+        // Taps. A touch starts one; travel, a press of the pad's own button, or
+        // lasting too long ends it; lifting the last finger in time clicks.
+        if self.pad.fingers == 0 && fingers > 0 {
+            self.pad.tap_start = self.now;
+            self.pad.tap_travel = 0.0;
+            self.pad.tap_fingers = 0;
+        }
+        if fingers > 0 {
+            self.pad.tap_travel += dx.abs() + dy.abs();
+            self.pad.tap_fingers = self.pad.tap_fingers.max(fingers);
+            let still = span <= 0 || self.pad.tap_travel <= TAP_TRAVEL * span as f32;
+            let brief = match (self.pad.tap_start, self.now) {
+                (Some(start), Some(now)) => now.saturating_sub(start) <= TAP_TIME,
+                _ => false,
+            };
+            if !still || !brief {
+                self.pad.tap_start = None;
+            }
+        }
+
+        // The pad's own button: a right button with two fingers down, released
+        // as the button it was pressed as.
+        for deferred in &mut self.deferred {
+            if let Deferred::Button {
+                button: button @ PointerButton::Left,
+                state,
+            } = deferred
+            {
+                self.pad.tap_start = None;
+                match state {
+                    ElementState::Down if fingers >= 2 => {
+                        self.pad.right_click = true;
+                        *button = PointerButton::Right;
+                    }
+                    ElementState::Up if self.pad.right_click => {
+                        self.pad.right_click = false;
+                        *button = PointerButton::Right;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if fingers == 0
+            && self.pad.fingers > 0
+            && let (Some(start), Some(now)) = (self.pad.tap_start.take(), self.now)
+            && now.saturating_sub(start) <= TAP_TIME
+        {
+            let button = if self.pad.tap_fingers >= 2 {
+                PointerButton::Right
+            } else {
+                PointerButton::Left
+            };
+            for state in [ElementState::Down, ElementState::Up] {
+                self.deferred.push(Deferred::Button { button, state });
+            }
+        }
+
+        self.pad.last = now;
+        self.pad.fingers = fingers;
     }
 
     fn flush_single_touch(&mut self, out: &mut Vec<InputEvent>) {
@@ -1073,5 +1342,331 @@ mod tests {
         );
         assert!(again.is_empty(), "a repeated position moved the pointer");
         assert_eq!(t.pointer(), Point::new(100, 100));
+    }
+
+    // Touchpads. The pad is 1600 by 1000 units on an 800-pixel-wide surface, so
+    // a unit of travel is half a pixel.
+
+    fn touchpad() -> Translator {
+        let mut t = translator();
+        for axis in [abs::X, abs::MT_POSITION_X] {
+            t.set_abs_range(axis, AbsAxis::new(0, 1599));
+        }
+        for axis in [abs::Y, abs::MT_POSITION_Y] {
+            t.set_abs_range(axis, AbsAxis::new(0, 999));
+        }
+        t.set_touchpad(true);
+        t
+    }
+
+    /// Feeds a frame that happened `ms` milliseconds in.
+    fn at(t: &mut Translator, ms: u64, events: &[RawEvent]) -> Vec<InputEvent> {
+        let mut out = Vec::new();
+        for event in events.iter().chain([&RawEvent::SYN]) {
+            t.feed_at(*event, Duration::from_millis(ms), &mut out);
+        }
+        out
+    }
+
+    fn touch(slot: i32, id: i32, x: i32, y: i32) -> [RawEvent; 4] {
+        [
+            RawEvent::new(ev::ABS, abs::MT_SLOT, slot),
+            RawEvent::new(ev::ABS, abs::MT_TRACKING_ID, id),
+            RawEvent::new(ev::ABS, abs::MT_POSITION_X, x),
+            RawEvent::new(ev::ABS, abs::MT_POSITION_Y, y),
+        ]
+    }
+
+    fn slide(slot: i32, x: i32, y: i32) -> [RawEvent; 3] {
+        [
+            RawEvent::new(ev::ABS, abs::MT_SLOT, slot),
+            RawEvent::new(ev::ABS, abs::MT_POSITION_X, x),
+            RawEvent::new(ev::ABS, abs::MT_POSITION_Y, y),
+        ]
+    }
+
+    fn lift(slot: i32) -> [RawEvent; 2] {
+        [
+            RawEvent::new(ev::ABS, abs::MT_SLOT, slot),
+            RawEvent::new(ev::ABS, abs::MT_TRACKING_ID, -1),
+        ]
+    }
+
+    fn buttons(out: &[InputEvent]) -> Vec<(PointerButton, ElementState)> {
+        out.iter()
+            .filter_map(|event| match event {
+                InputEvent::PointerButton { button, state, .. } => Some((*button, *state)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_finger_on_a_touchpad_moves_the_pointer_by_its_travel_not_to_where_it_is() {
+        // The bug this fixes: the pad read as a touchscreen, so a finger in its
+        // corner touched the corner of the screen and the pointer never moved.
+        let mut t = touchpad();
+        let start = t.pointer();
+
+        let down = at(&mut t, 0, &touch(0, 1, 0, 0));
+        assert!(down.is_empty(), "a finger landing did something: {down:?}");
+        assert_eq!(t.pointer(), start);
+
+        let moved = at(&mut t, 10, &slide(0, 200, 100));
+        assert_eq!(
+            moved,
+            vec![InputEvent::PointerMoved {
+                position: Point::new(start.x + 100, start.y + 50)
+            }]
+        );
+    }
+
+    #[test]
+    fn slow_travel_on_a_touchpad_is_not_lost_to_rounding() {
+        let mut t = touchpad();
+        let start = t.pointer();
+        at(&mut t, 0, &touch(0, 1, 100, 100));
+        for step in 1..=10 {
+            at(&mut t, step * 10, &slide(0, 100 + step as i32, 100));
+        }
+        // Ten units at half a pixel each.
+        assert_eq!(t.pointer().x, start.x + 5);
+    }
+
+    #[test]
+    fn two_fingers_scroll_the_way_a_wheel_does_and_leave_the_pointer_alone() {
+        let mut t = touchpad();
+        let start = t.pointer();
+        at(
+            &mut t,
+            0,
+            &[touch(0, 1, 400, 600), touch(1, 2, 800, 600)].concat(),
+        );
+        // Both fingers move 200 units away from the user: a wheel turned away.
+        let out = at(
+            &mut t,
+            20,
+            &[slide(0, 400, 400), slide(1, 800, 400)].concat(),
+        );
+
+        assert_eq!(t.pointer(), start);
+        assert!(
+            !out.iter()
+                .any(|e| matches!(e, InputEvent::PointerMoved { .. })),
+            "scrolling moved the pointer: {out:?}"
+        );
+        match out.as_slice() {
+            [InputEvent::PointerScroll { delta_y, .. }] => {
+                assert!(*delta_y < -90.0 && *delta_y > -110.0, "delta_y {delta_y}");
+            }
+            other => panic!("expected one scroll, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_second_finger_arriving_does_not_jump_the_pointer() {
+        let mut t = touchpad();
+        at(&mut t, 0, &touch(0, 1, 100, 100));
+        let before = t.pointer();
+        let out = at(&mut t, 10, &touch(1, 2, 1500, 900));
+        assert!(out.is_empty(), "a finger arriving moved something: {out:?}");
+        assert_eq!(t.pointer(), before);
+    }
+
+    #[test]
+    fn a_quick_still_tap_is_a_left_click_where_the_pointer_is() {
+        let mut t = touchpad();
+        let pointer = t.pointer();
+        at(&mut t, 0, &touch(0, 1, 800, 500));
+        let out = at(&mut t, 90, &lift(0));
+        assert_eq!(
+            out,
+            vec![
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state: ElementState::Down,
+                    position: pointer,
+                    modifiers: Modifiers::NONE,
+                },
+                InputEvent::PointerButton {
+                    button: PointerButton::Left,
+                    state: ElementState::Up,
+                    position: pointer,
+                    modifiers: Modifiers::NONE,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_two_finger_tap_is_a_right_click() {
+        let mut t = touchpad();
+        at(&mut t, 0, &touch(0, 1, 600, 500));
+        at(&mut t, 15, &touch(1, 2, 900, 500));
+        at(&mut t, 80, &lift(1));
+        let out = at(&mut t, 95, &lift(0));
+        assert_eq!(
+            buttons(&out),
+            vec![
+                (PointerButton::Right, ElementState::Down),
+                (PointerButton::Right, ElementState::Up)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_touch_that_lasts_is_not_a_tap() {
+        let mut t = touchpad();
+        at(&mut t, 0, &touch(0, 1, 800, 500));
+        let out = at(&mut t, 600, &lift(0));
+        assert!(
+            buttons(&out).is_empty(),
+            "a resting finger clicked: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_touch_that_travels_is_not_a_tap() {
+        let mut t = touchpad();
+        at(&mut t, 0, &touch(0, 1, 100, 500));
+        at(&mut t, 40, &slide(0, 700, 500));
+        let out = at(&mut t, 80, &lift(0));
+        assert!(buttons(&out).is_empty(), "pointing clicked: {out:?}");
+    }
+
+    #[test]
+    fn taps_need_to_know_when_events_happened() {
+        // Fed without timestamps there is no telling a tap from a finger left
+        // resting, so none is guessed at.
+        let mut t = touchpad();
+        drain(
+            &mut t,
+            &[touch(0, 1, 800, 500).as_slice(), &[RawEvent::SYN]].concat(),
+        );
+        let out = drain(&mut t, &[lift(0).as_slice(), &[RawEvent::SYN]].concat());
+        assert!(buttons(&out).is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn the_pads_button_with_two_fingers_down_is_a_right_click_released_as_one() {
+        let mut t = touchpad();
+        at(
+            &mut t,
+            0,
+            &[touch(0, 1, 600, 800), touch(1, 2, 900, 800)].concat(),
+        );
+        let press = at(
+            &mut t,
+            300,
+            &[RawEvent::new(ev::KEY, btn::LEFT, key_value::DOWN)],
+        );
+        assert_eq!(
+            buttons(&press),
+            vec![(PointerButton::Right, ElementState::Down)]
+        );
+
+        // One finger lifts before the button comes up: still a right button.
+        at(&mut t, 320, &lift(1));
+        let release = at(
+            &mut t,
+            340,
+            &[RawEvent::new(ev::KEY, btn::LEFT, key_value::UP)],
+        );
+        assert_eq!(
+            buttons(&release),
+            vec![(PointerButton::Right, ElementState::Up)]
+        );
+
+        // And lifting the last finger afterwards is not a tap on top of it.
+        let lifted = at(&mut t, 360, &lift(0));
+        assert!(buttons(&lifted).is_empty(), "{lifted:?}");
+    }
+
+    #[test]
+    fn the_pads_button_with_one_finger_is_a_left_click() {
+        let mut t = touchpad();
+        at(&mut t, 0, &touch(0, 1, 600, 800));
+        let press = at(
+            &mut t,
+            300,
+            &[RawEvent::new(ev::KEY, btn::LEFT, key_value::DOWN)],
+        );
+        assert_eq!(
+            buttons(&press),
+            vec![(PointerButton::Left, ElementState::Down)]
+        );
+    }
+
+    #[test]
+    fn a_touchpad_without_slots_counts_its_fingers_from_its_tools() {
+        let mut t = translator();
+        t.set_abs_range(abs::X, AbsAxis::new(0, 1599));
+        t.set_abs_range(abs::Y, AbsAxis::new(0, 999));
+        t.set_touchpad(true);
+        let start = t.pointer();
+
+        let down = at(
+            &mut t,
+            0,
+            &[
+                RawEvent::new(ev::KEY, btn::TOUCH, key_value::DOWN),
+                RawEvent::new(ev::KEY, btn::TOOL_FINGER, key_value::DOWN),
+                RawEvent::new(ev::ABS, abs::X, 400),
+                RawEvent::new(ev::ABS, abs::Y, 400),
+            ],
+        );
+        assert!(down.is_empty(), "{down:?}");
+        let moved = at(&mut t, 10, &[RawEvent::new(ev::ABS, abs::X, 600)]);
+        assert_eq!(
+            moved,
+            vec![InputEvent::PointerMoved {
+                position: Point::new(start.x + 100, start.y)
+            }]
+        );
+
+        // Two fingers, reported as one position and a double-tap tool.
+        at(
+            &mut t,
+            20,
+            &[
+                RawEvent::new(ev::KEY, btn::TOOL_FINGER, key_value::UP),
+                RawEvent::new(ev::KEY, btn::TOOL_DOUBLETAP, key_value::DOWN),
+            ],
+        );
+        let scrolled = at(&mut t, 30, &[RawEvent::new(ev::ABS, abs::Y, 600)]);
+        assert!(
+            matches!(scrolled.as_slice(), [InputEvent::PointerScroll { delta_y, .. }] if *delta_y > 0.0),
+            "{scrolled:?}"
+        );
+    }
+
+    #[test]
+    fn finger_tools_are_not_keys() {
+        // Touchscreens report BTN_TOOL_FINGER too; it used to come out as a key
+        // press nobody could name.
+        let mut t = touchscreen();
+        let out = drain(
+            &mut t,
+            &[
+                RawEvent::new(ev::KEY, btn::TOOL_FINGER, key_value::DOWN),
+                RawEvent::SYN,
+            ],
+        );
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    #[test]
+    fn a_touchscreen_still_touches() {
+        // The touchpad reading is asked for, never assumed.
+        let mut t = touchscreen();
+        assert!(!t.is_touchpad());
+        let out = drain(
+            &mut t,
+            &[touch(0, 1, 0, 0).as_slice(), &[RawEvent::SYN]].concat(),
+        );
+        assert!(
+            matches!(out.as_slice(), [InputEvent::TouchDown { id: 0, .. }]),
+            "{out:?}"
+        );
     }
 }

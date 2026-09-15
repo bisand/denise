@@ -1,7 +1,7 @@
 //! Linux evdev input for Denise.
 //!
-//! Reads mice, touchscreens and keyboards straight from `/dev/input/event*`, with
-//! no display server in the way.
+//! Reads mice, touchpads, touchscreens and keyboards straight from
+//! `/dev/input/event*`, with no display server in the way.
 //!
 //! # Testing
 //!

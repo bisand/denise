@@ -1,6 +1,6 @@
 [package]
 name = "denise-evdev"
-description = "Linux evdev input for Denise: mouse, touch and keyboard, with no display server."
+description = "Linux evdev input for Denise: mouse, touchpad, touch and keyboard, with no display server."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

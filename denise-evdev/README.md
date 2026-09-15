@@ -7,8 +7,8 @@
 Linux evdev input for **[Denise]**, a direct-rendering UI toolkit in Rust for
 embedded Linux and systems without a desktop environment.
 
-Reads mice, touchscreens and keyboards straight from `/dev/input/event*`, with **no
-display server in the way**, and turns them into `denise::InputEvent`s.
+Reads mice, touchpads, touchscreens and keyboards straight from `/dev/input/event*`,
+with **no display server in the way**, and turns them into `denise::InputEvent`s.
 
 ```rust
 # #[cfg(target_os = "linux")]
@@ -37,6 +37,27 @@ device node until somebody moves it, and `poll` opens it when it appears — so 
 `devices_changed()` each pass and take `raw_fds` again when it says yes. Holding
 the first list forever is how a panel ends up with a mouse it can see in
 `/dev/input` and cannot read.
+
+## Touchpads
+
+A touchpad reports the same multitouch slots as a touchscreen and is not one:
+where a finger is on the pad says nothing about where on the screen it points.
+Read as a touchscreen, a small laptop's pad touches the corner of the screen its
+finger is in the corner of, and the pointer never moves. So a device with a finger
+tool that the kernel has not marked as a screen (`INPUT_PROP_DIRECT`) is read as a
+touchpad, which `capabilities()` reports:
+
+- one finger moves the pointer by how far it travels, the pad's full width taking
+  it once across the surface, with fractions of a pixel carried rather than lost;
+- two fingers scroll the way a wheel does;
+- the pad's own button is a left button, and a right one with two fingers down;
+- a short tap that barely moves is a left click, and a right click with two
+  fingers.
+
+Taps need to know when events happened. `InputBackend` hands the translator the
+kernel's timestamps; a `Translator` fed without them (`feed` rather than
+`feed_at`) never guesses at one. A pen tablet reports a pen, not a finger, and
+stays an absolute pointer.
 
 ## Keyboards
 
@@ -83,7 +104,8 @@ Implements `denise::InputSource`. Pair it with
 ## Status
 
 **M2 complete**, with touch routing exercised in unit tests and on a VM; no
-physical touchscreen has confirmed it yet. Part of [Denise][Denise] — see the
+physical touchscreen has confirmed it yet. Touchpads are unit tested, and an Asus
+E200HA's I2C pad is recognised as one. Part of [Denise][Denise] — see the
 [repository README][Denise] for the whole picture.
 
 MIT licensed.

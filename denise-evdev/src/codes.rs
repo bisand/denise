@@ -61,6 +61,18 @@ pub mod btn {
     pub const MIDDLE: u16 = 0x112;
     /// A contact is present. Single-touch panels report this instead of slots.
     pub const TOUCH: u16 = 0x14a;
+    /// One finger is on a touchpad. What a touchpad has and a pen tablet lacks.
+    pub const TOOL_FINGER: u16 = 0x145;
+    /// A pen is in range. What a pen tablet has.
+    pub const TOOL_PEN: u16 = 0x140;
+    /// Five fingers are down.
+    pub const TOOL_QUINTTAP: u16 = 0x148;
+    /// Two fingers are down.
+    pub const TOOL_DOUBLETAP: u16 = 0x14d;
+    /// Three fingers are down.
+    pub const TOOL_TRIPLETAP: u16 = 0x14e;
+    /// Four fingers are down.
+    pub const TOOL_QUADTAP: u16 = 0x14f;
 }
 
 /// `EV_KEY` values.

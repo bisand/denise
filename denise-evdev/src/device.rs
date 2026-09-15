@@ -10,7 +10,7 @@ use rustix::io::Errno;
 
 use denise::{InputEvent, InputSource, Point, Size};
 
-use crate::codes::abs;
+use crate::codes::{abs, btn};
 use crate::error::EvdevError;
 use crate::layout::{self, Layout};
 use crate::translate::{AbsAxis, RawEvent, Translator};
@@ -25,8 +25,11 @@ use crate::translate::{AbsAxis, RawEvent, Translator};
 pub struct Capabilities {
     /// Reports a mouse or an absolute pointing device.
     pub pointer: bool,
-    /// Reports multitouch contacts.
+    /// Reports multitouch contacts on a screen.
     pub touch: bool,
+    /// A touchpad: its contacts move the pointer rather than touching the screen.
+    /// Always a [`pointer`](Self::pointer) too, and never [`touch`](Self::touch).
+    pub touchpad: bool,
     /// Reports letter keys.
     pub keyboard: bool,
 }
@@ -35,7 +38,7 @@ impl Capabilities {
     /// Returns `true` if the device reports nothing this backend can use.
     #[inline]
     pub const fn is_empty(self) -> bool {
-        !self.pointer && !self.touch && !self.keyboard
+        !self.pointer && !self.touch && !self.touchpad && !self.keyboard
     }
 }
 
@@ -44,7 +47,8 @@ impl core::fmt::Display for Capabilities {
         let mut first = true;
         for (present, name) in [
             (self.keyboard, "keyboard"),
-            (self.pointer, "pointer"),
+            (self.pointer && !self.touchpad, "pointer"),
+            (self.touchpad, "touchpad"),
             (self.touch, "touch"),
         ] {
             if present {
@@ -116,7 +120,8 @@ pub struct InputBackend {
     /// The pointer position shared across devices, so a mouse and a tablet move
     /// the same cursor rather than fighting over two.
     pointer: Point,
-    scratch: Vec<RawEvent>,
+    /// Each event read, with when the kernel took it.
+    scratch: Vec<(RawEvent, Duration)>,
     last_event_age: Option<Duration>,
     /// The surface size, kept so a device opened later is calibrated like the
     /// ones opened at startup.
@@ -344,10 +349,13 @@ impl InputSource for InputBackend {
                 // The kernel's own timestamp, so queuing before this read is
                 // included rather than invisible.
                 self.last_event_age = now.duration_since(event.timestamp()).ok();
-                self.scratch.push(RawEvent::new(
-                    event.event_type().0,
-                    event.code(),
-                    event.value(),
+                let at = event
+                    .timestamp()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default();
+                self.scratch.push((
+                    RawEvent::new(event.event_type().0, event.code(), event.value()),
+                    at,
                 ));
             }
 
@@ -358,7 +366,9 @@ impl InputSource for InputBackend {
             // Every pointing device drives the same cursor, so hand the shared
             // position in and take back whatever it became.
             device.translator.set_pointer(self.pointer);
-            device.translator.feed_all(&self.scratch, out);
+            for &(event, at) in &self.scratch {
+                device.translator.feed_at(event, at, out);
+            }
             self.pointer = device.translator.pointer();
         }
     }
@@ -373,6 +383,7 @@ fn adopt(path: PathBuf, device: evdev::Device, surface: Size) -> Option<InputDev
 
     let name = device.name().unwrap_or("<unnamed>").to_owned();
     let mut translator = Translator::new(surface);
+    translator.set_touchpad(capabilities.touchpad);
 
     // An absolute device is unusable without knowing what its readings are out
     // of, and every device has its own range.
@@ -433,12 +444,26 @@ fn classify(device: &evdev::Device) -> Capabilities {
     let has_abs = |code: u16| abs_axes.is_some_and(|axes| axes.iter().any(|axis| axis.0 == code));
     let has_key = |code: u16| keys.is_some_and(|k| k.iter().any(|key| key.0 == code));
 
+    // A finger tool on something that is not a screen: a touchpad. The kernel
+    // marks a touchscreen INPUT_PROP_DIRECT, because where it is touched is where
+    // it points; a touchpad has the same slots and no such mark. A pen tablet
+    // is not a screen either, and reports a pen: its positions are absolute, so
+    // it stays a pointer that goes where the pen is.
+    let direct = device.properties().contains(evdev::PropType::DIRECT);
+    let touchpad = !direct
+        && has_key(btn::TOOL_FINGER)
+        && !has_key(btn::TOOL_PEN)
+        && (has_abs(abs::X) || has_abs(abs::MT_POSITION_X));
+
     Capabilities {
         // BTN_LEFT is what separates a pointing device from something that merely
-        // has axes, such as a joystick or an accelerometer.
-        pointer: has_key(crate::codes::btn::LEFT),
-        // Slots mean a real touchscreen rather than a tablet or a touchpad.
-        touch: has_abs(abs::MT_POSITION_X),
+        // has axes, such as a joystick or an accelerometer. A touchpad without a
+        // button of its own is still one: it clicks by tapping.
+        pointer: has_key(btn::LEFT) || touchpad,
+        // Slots mean a real touchscreen rather than a tablet — unless the device
+        // is a touchpad, whose slots are fingers on the pad and not the screen.
+        touch: has_abs(abs::MT_POSITION_X) && !touchpad,
+        touchpad,
         // Letter keys, not any key at all: a power button and a lid switch both
         // report EV_KEY and neither is a keyboard. KEY_A is 30, KEY_Z is 44.
         keyboard: has_key(30) && has_key(44),
