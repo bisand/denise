@@ -4422,7 +4422,11 @@ fn a_long_dropdown_fits_the_surface_and_scrolls() {
     let root = ui.root();
     let options: Vec<String> = (0..100).map(|i| format!("Oppsett {i}")).collect();
     let select = ui
-        .add(root, Select::new(options, Msg::Save), Rect::new(40, 40, 180, 34))
+        .add(
+            root,
+            Select::new(options, Msg::Save),
+            Rect::new(40, 40, 180, 34),
+        )
         .expect("select");
     ui.widget_mut::<Select<Msg>>(select)
         .expect("select")
