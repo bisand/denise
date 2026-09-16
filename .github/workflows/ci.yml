@@ -517,6 +517,12 @@ jobs:
       - run: cargo clippy -p denise-macos --all-targets -- -D warnings
       - run: cargo test -p denise-macos
 
+      # A variable face has to be on disk for `denise-text` to prove it can
+      # read one, and the face that exposed it could not is this runner's own:
+      # /System/Library/Fonts/SFNS.ttf. The test skips where there is no such
+      # face, so the Linux jobs run past it and a Mac is where it counts.
+      - run: cargo test -p denise-text --features truetype
+
       # The designer is a desktop program and this is one of the three desktops
       # it claims to run on. Building it here is what keeps that claim honest —
       # `denise-winit` and the file dialog both reach for platform APIs that

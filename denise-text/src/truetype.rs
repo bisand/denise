@@ -310,6 +310,39 @@ mod tests {
     }
 
     #[cfg(feature = "std")]
+    /// A variable face this machine has, or `None` where it has none.
+    fn variable_face() -> Option<TrueTypeSource> {
+        [
+            // What a Mac draws its own chrome in, and the face this is here
+            // for: read without `variable-fonts`, it draws nothing at all.
+            "/System/Library/Fonts/SFNS.ttf",
+            // Windows 10 and later ship this one.
+            "C:\\Windows\\Fonts\\bahnschrift.ttf",
+        ]
+        .iter()
+        .find_map(|path| std::fs::read(path).ok())
+        .map(|bytes| TrueTypeSource::from_vec("variable", bytes).expect("a font"))
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_variable_face_has_ink_in_it() {
+        // The `truetype` feature once asked ab_glyph for `libm` and not for
+        // `variable-fonts`, and a variable face read that way parses, reports
+        // a glyph for every character it has, and rasterises all of them
+        // empty. Nothing returns an error and nothing logs: the window simply
+        // has no words in it, which is a long way from the cause. Machines
+        // without one of these faces have nothing to check.
+        let Some(mut face) = variable_face() else {
+            return;
+        };
+        let a = face.glyph_id('a').expect("a");
+        let a = face.rasterise(a, 16).expect("an outline");
+        assert!(!a.metrics.is_blank(), "no mask at all: {:?}", a.metrics);
+        assert!(a.coverage.iter().any(|&ink| ink > 0), "no ink in the mask");
+    }
+
+    #[cfg(feature = "std")]
     #[test]
     fn a_glyph_the_face_does_not_have_is_the_box() {
         let Some(face) = system_face() else {
