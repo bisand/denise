@@ -13,10 +13,10 @@ use denise::{Frame, Surface, SurfaceError};
 #[cfg(feature = "raster")]
 use denise_render::Canvas;
 use denise_text::{FontId, GlyphSource, TextEngine};
-use slotmap::SlotMap;
 
+use crate::arena::{Arena, NodeId};
 use crate::cursor::{Cursor, CursorImage};
-use crate::node::{Node, NodeId, Popup, Scene};
+use crate::node::{Node, Popup, Scene};
 use crate::toast::Toasts;
 use crate::tooltip::Tooltip;
 
@@ -138,7 +138,7 @@ struct Scrolled {
 /// something unrelated repaints over it. That bug is not fixed here so much as made
 /// unrepresentable.
 pub struct Ui<M: 'static> {
-    nodes: SlotMap<NodeId, Node<M>>,
+    nodes: Arena<Node<M>>,
     scenes: Vec<Scene>,
     /// Flattened paint order across every scene: parents before children, siblings
     /// by z. Rebuilt only on structural or z-order change, never per frame.
@@ -203,7 +203,7 @@ pub struct Ui<M: 'static> {
 impl<M: 'static> Ui<M> {
     /// Creates a tree covering a surface of `size`, with one base scene.
     pub fn new(size: Size, theme: Theme) -> Self {
-        let mut nodes = SlotMap::with_key();
+        let mut nodes = Arena::new();
         let root = nodes.insert(Node::new(Box::new(Void), Rect::from_size(size), 0));
         Self {
             nodes,

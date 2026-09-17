@@ -1,8 +1,8 @@
 # The external crates each library is allowed to pull in — every feature, every
 # target, build dependencies included; `[crate default]` is the same with the
-# default features only. Checked by `scripts/dependency-budget.py`
-# in CI; see that file for why. A crate arriving here should come with a reason
-# in the commit that adds it. `--write` regenerates the lists, not the reasons.
+# default features only. Checked by `scripts/dependency-budget.py` in CI; see
+# that file for why. A crate arriving here should come with a reason in the
+# commit that adds it. `--write` regenerates the lists, not the reasons.
 
 [denise]
 
@@ -55,8 +55,6 @@ yazi
 zeno
 
 [denise-ui default]
-slotmap
-version_check
 
 [denise-ui]
 ab_glyph
@@ -101,16 +99,10 @@ yazi
 zeno
 
 [denise-arrange]
-slotmap
-version_check
 
 [denise-keyboard]
-slotmap
-version_check
 
 [denise-ffi]
-slotmap
-version_check
 
 [denise-image]
 adler2
@@ -147,10 +139,8 @@ num-traits
 owned_ttf_parser
 png
 simd-adler32
-slotmap
 ttf-parser
 unicode-width
-version_check
 weezl
 winnow
 zune-core

@@ -31,7 +31,6 @@ shaping = ["denise-text/shaping"]
 denise = { workspace = true }
 denise-render = { workspace = true, optional = true }
 denise-text = { workspace = true }
-slotmap = { workspace = true }
 
 [dev-dependencies]
 denise-render = { workspace = true, features = ["std"] }

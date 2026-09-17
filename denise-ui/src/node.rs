@@ -5,35 +5,8 @@ use alloc::vec::Vec;
 use denise::Rect;
 
 use crate::anchor::{Anchors, Dock};
+use crate::arena::NodeId;
 use crate::widget::{BoxedWidget, VisualState};
-
-slotmap::new_key_type! {
-    /// Identifies a node for exactly as long as that node exists.
-    ///
-    /// The generation in the key is the point: an application that keeps an id
-    /// after removing the node gets `None` back, not somebody else's widget. That
-    /// is also why the tree stores ids rather than references — parent-linked
-    /// component graphs are what forced `Rc<RefCell<_>>` on CoreCanvas, and this
-    /// is the replacement.
-    pub struct NodeId;
-}
-
-impl NodeId {
-    /// The key as a plain `u64`, for carrying across the C ABI in M5.
-    #[inline]
-    pub fn as_ffi(self) -> u64 {
-        use slotmap::Key as _;
-        self.data().as_ffi()
-    }
-
-    /// Rebuilds a key from [`NodeId::as_ffi`]. A value that never came from there
-    /// simply fails to resolve.
-    #[inline]
-    pub fn from_ffi(value: u64) -> Self {
-        use slotmap::KeyData;
-        NodeId::from(KeyData::from_ffi(value))
-    }
-}
 
 pub(crate) struct Node<M> {
     pub(crate) widget: BoxedWidget<M>,
@@ -151,28 +124,4 @@ pub(crate) struct Popup {
     /// The positioned container the caller fills. A press outside its bounds
     /// dismisses the popup.
     pub(crate) container: NodeId,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ffi_round_trip_preserves_identity() {
-        use slotmap::SlotMap;
-        let mut map: SlotMap<NodeId, u32> = SlotMap::with_key();
-        let a = map.insert(1);
-        assert_eq!(NodeId::from_ffi(a.as_ffi()), a);
-    }
-
-    #[test]
-    fn a_stale_id_does_not_resolve_to_the_next_node() {
-        use slotmap::SlotMap;
-        let mut map: SlotMap<NodeId, u32> = SlotMap::with_key();
-        let a = map.insert(1);
-        map.remove(a);
-        let b = map.insert(2);
-        assert_ne!(a, b);
-        assert_eq!(map.get(a), None);
-    }
 }
