@@ -88,31 +88,56 @@ pub use surface::DibSurface;
 
 /// Failures from this backend.
 #[cfg(windows)]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Error {
     /// A surface was asked for with no pixels in it.
-    #[error("a surface needs a non-zero width and height")]
     EmptySurface,
 
     /// `CreateDIBSection` failed, or handed back no pixels.
-    #[error("could not create a DIB section")]
     DibSection,
 
     /// `CreateCompatibleDC` failed.
-    #[error("could not create a memory device context")]
     MemoryDc,
 
     /// The window class could not be registered.
-    #[error("could not register the window class")]
     RegisterClass,
 
     /// `CreateWindowEx` failed.
-    #[error("could not create the control window")]
     CreateWindow,
 
     /// A surface operation failed.
-    #[error(transparent)]
-    Surface(#[from] denise::SurfaceError),
+    Surface(denise::SurfaceError),
+}
+
+#[cfg(windows)]
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptySurface => f.write_str("a surface needs a non-zero width and height"),
+            Self::DibSection => f.write_str("could not create a DIB section"),
+            Self::MemoryDc => f.write_str("could not create a memory device context"),
+            Self::RegisterClass => f.write_str("could not register the window class"),
+            Self::CreateWindow => f.write_str("could not create the control window"),
+            Self::Surface(err) => core::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Surface(err) => core::error::Error::source(err),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(windows)]
+impl From<denise::SurfaceError> for Error {
+    fn from(err: denise::SurfaceError) -> Self {
+        Self::Surface(err)
+    }
 }
 
 /// Compiles the examples in this crate's README, so they cannot drift from the API

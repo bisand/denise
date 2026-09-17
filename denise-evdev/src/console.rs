@@ -73,25 +73,44 @@ pub const KD_GRAPHICS: u32 = 0x01;
 const CANDIDATES: [&str; 3] = ["/dev/tty", "/dev/tty0", "/dev/console"];
 
 /// Something went wrong talking to the console.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum ConsoleError {
     /// None of the candidate paths was openable and a real console.
     ///
     /// Over SSH this is the expected outcome: there is no VT to mute.
-    #[error("no console found (tried {}); over SSH there is no VT to mute", CANDIDATES.join(", "))]
     NoConsole,
     /// A console ioctl failed.
-    #[error("console ioctl failed: {0}")]
-    Ioctl(#[source] std::io::Error),
+    Ioctl(std::io::Error),
     /// The console device could not be opened.
-    #[error("could not open {path}: {source}")]
     Open {
         /// The path that failed.
         path: String,
         /// Why.
-        #[source]
         source: std::io::Error,
     },
+}
+
+impl std::fmt::Display for ConsoleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoConsole => write!(
+                f,
+                "no console found (tried {}); over SSH there is no VT to mute",
+                CANDIDATES.join(", ")
+            ),
+            Self::Ioctl(err) => write!(f, "console ioctl failed: {err}"),
+            Self::Open { path, source } => write!(f, "could not open {path}: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for ConsoleError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Ioctl(source) | Self::Open { source, .. } => Some(source),
+            Self::NoConsole => None,
+        }
+    }
 }
 
 /// A handle to the virtual terminal, which restores whatever it changed on drop.

@@ -18,7 +18,6 @@ all-features = true
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-thiserror = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The player reads a keyboard for one reason: to stop. A panel demo with no way

@@ -129,7 +129,7 @@ fn style_into(
         NodeData::Element { name, .. } => {
             let mut style = ua_defaults(&name.local, parent, palette);
             if style.link.is_none()
-                && name.local.as_ref() == "a"
+                && &*name.local == "a"
                 && let Some(href) = dom.attr(idx, "href")
             {
                 out.links.push(href.to_string());
@@ -145,7 +145,7 @@ fn style_into(
             {
                 style.background = Some(bg);
             }
-            if name.local.as_ref() == "font"
+            if &*name.local == "font"
                 && let Some(c) = dom
                     .attr(idx, "color")
                     .and_then(crate::css::parse_color_attr)

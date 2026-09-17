@@ -61,7 +61,7 @@ impl Dom {
         match &self.nodes[idx].data {
             NodeData::Element { attrs, .. } => attrs
                 .iter()
-                .find(|(name, _)| name.as_ref() == attr)
+                .find(|(name, _)| &**name == attr)
                 .map(|(_, value)| value.as_str()),
             _ => None,
         }

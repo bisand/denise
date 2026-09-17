@@ -46,8 +46,6 @@ denise-ui = { workspace = true, features = ["std", "raster"] }
 # what turns a parse failure into a line and a column.
 kdl = { workspace = true }
 
-thiserror = { workspace = true, features = ["std"] }
-
 # `render` only, and only to turn a form's `src=` into pixels.
 # Every decoder, listed rather than inherited: the workspace pins this crate with
 # `default-features = false`, so a bare `workspace = true` here would compile PNG,

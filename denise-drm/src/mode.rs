@@ -191,25 +191,36 @@ pub struct Selection {
 }
 
 /// Why no output could be chosen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SelectionError {
     /// The device reported no connectors at all.
-    #[error("the device has no connectors")]
     NoConnectors,
 
     /// Connectors exist but none has a display attached and modes to offer.
-    #[error("no connector has a display attached")]
     NothingConnected,
 
     /// A specific connector was asked for and is not usable.
-    #[error("connector {0} was requested but is not connected")]
     RequestedIdUnavailable(u32),
 
     /// A connector kind was asked for and none is usable.
-    #[error("no usable {0:?} connector")]
     RequestedKindUnavailable(ConnectorKind),
 }
+
+impl core::fmt::Display for SelectionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoConnectors => f.write_str("the device has no connectors"),
+            Self::NothingConnected => f.write_str("no connector has a display attached"),
+            Self::RequestedIdUnavailable(id) => {
+                write!(f, "connector {id} was requested but is not connected")
+            }
+            Self::RequestedKindUnavailable(kind) => write!(f, "no usable {kind:?} connector"),
+        }
+    }
+}
+
+impl core::error::Error for SelectionError {}
 
 /// Picks an output and a mode.
 ///

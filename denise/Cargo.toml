@@ -20,10 +20,7 @@ all-features = true
 
 [features]
 default = ["std"]
-std = ["thiserror/std"]
-
-[dependencies]
-thiserror = { workspace = true }
+std = []
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -3,11 +3,10 @@
 use std::path::PathBuf;
 
 /// Video errors: enumeration, negotiation, streaming, scanout.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum VideoError {
     /// A device node would not open.
-    #[error("could not open {path}: {source}")]
     Open {
         /// The node that failed.
         path: PathBuf,
@@ -19,11 +18,9 @@ pub enum VideoError {
     ///
     /// The menu is two codecs wide precisely so this stays unreachable on a
     /// Raspberry Pi — a kiosk that ships both files always has a playable one.
-    #[error("no hardware decoder accepts any offered asset")]
     NothingPlayable,
 
     /// An ioctl against the decoder failed.
-    #[error("V4L2 {what} failed: {source}")]
     V4l2 {
         /// Which call.
         what: &'static str,
@@ -32,15 +29,12 @@ pub enum VideoError {
     },
 
     /// The decoder produced a frame format the plane path does not handle.
-    #[error("decoder produced unsupported pixel format {0:#010x}")]
     UnsupportedFormat(u32),
 
     /// The stream never yielded a decodable picture.
-    #[error("the stream produced no decoded frames — not an Annex-B elementary stream?")]
     NoFrames,
 
     /// A DRM call on the plane path failed.
-    #[error("DRM {what} failed: {source}")]
     Drm {
         /// Which call.
         what: &'static str,
@@ -49,8 +43,40 @@ pub enum VideoError {
     },
 
     /// No video plane on the CRTC supports the decoder's output format.
-    #[error("no DRM plane accepts the decoded format on this CRTC")]
     NoPlane,
+}
+
+impl std::fmt::Display for VideoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Open { path, source } => {
+                write!(f, "could not open {}: {source}", path.display())
+            }
+            Self::NothingPlayable => f.write_str("no hardware decoder accepts any offered asset"),
+            Self::V4l2 { what, source } => write!(f, "V4L2 {what} failed: {source}"),
+            Self::UnsupportedFormat(format) => write!(
+                f,
+                "decoder produced unsupported pixel format {format:#010x}"
+            ),
+            Self::NoFrames => f.write_str(
+                "the stream produced no decoded frames — not an Annex-B elementary stream?",
+            ),
+            Self::Drm { what, source } => write!(f, "DRM {what} failed: {source}"),
+            Self::NoPlane => f.write_str("no DRM plane accepts the decoded format on this CRTC"),
+        }
+    }
+}
+
+impl std::error::Error for VideoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Open { source, .. } | Self::Drm { source, .. } => Some(source),
+            Self::V4l2 { source, .. } => Some(source),
+            Self::NothingPlayable | Self::UnsupportedFormat(_) | Self::NoFrames | Self::NoPlane => {
+                None
+            }
+        }
+    }
 }
 
 impl VideoError {
