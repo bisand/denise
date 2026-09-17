@@ -21,7 +21,6 @@ all-features = true
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-thiserror = { workspace = true, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 drm = { workspace = true }

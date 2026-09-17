@@ -195,29 +195,25 @@ fn parse_modes(text: &str) -> Option<Size> {
 }
 
 /// Why a framebuffer's geometry could not be understood.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FbInfoError {
     /// A sysfs attribute did not hold what it should.
-    #[error("could not parse the {attribute} attribute")]
     Unparsable {
         /// Which attribute.
         attribute: &'static str,
     },
 
     /// The depth is not one this backend can drive.
-    #[error("unsupported depth: {bits_per_pixel} bits per pixel")]
     UnsupportedDepth {
         /// The depth reported.
         bits_per_pixel: u32,
     },
 
     /// The framebuffer reported a zero dimension.
-    #[error("the framebuffer has no visible area")]
     EmptyGeometry,
 
     /// The reported stride cannot hold one row.
-    #[error("stride of {stride_bytes} bytes cannot hold a row needing {required}")]
     StrideTooNarrow {
         /// The stride reported.
         stride_bytes: u32,
@@ -225,6 +221,29 @@ pub enum FbInfoError {
         required: u32,
     },
 }
+
+impl fmt::Display for FbInfoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unparsable { attribute } => {
+                write!(f, "could not parse the {attribute} attribute")
+            }
+            Self::UnsupportedDepth { bits_per_pixel } => {
+                write!(f, "unsupported depth: {bits_per_pixel} bits per pixel")
+            }
+            Self::EmptyGeometry => f.write_str("the framebuffer has no visible area"),
+            Self::StrideTooNarrow {
+                stride_bytes,
+                required,
+            } => write!(
+                f,
+                "stride of {stride_bytes} bytes cannot hold a row needing {required}"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for FbInfoError {}
 
 #[cfg(test)]
 mod tests {

@@ -46,25 +46,47 @@ pub use surface::ViewSurface;
 pub use view::{DeniseView, ViewDelegate, ViewState};
 
 /// Failures from this backend.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Error {
     /// A surface was asked for with no pixels in it.
-    #[error("a surface needs a non-zero width and height")]
     EmptySurface,
 
     /// `CGColorSpaceCreateDeviceRGB` returned null, which should not happen and
     /// leaves nothing sensible to fall back to.
-    #[error("could not create a device RGB colour space")]
     ColorSpace,
 
     /// `CGBitmapContextCreate` failed, or produced a pitch that is not a whole
     /// number of 32-bit words.
-    #[error("could not create a bitmap context")]
     BitmapContext,
 
     /// A surface operation failed.
-    #[error(transparent)]
-    Surface(#[from] denise::SurfaceError),
+    Surface(denise::SurfaceError),
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptySurface => f.write_str("a surface needs a non-zero width and height"),
+            Self::ColorSpace => f.write_str("could not create a device RGB colour space"),
+            Self::BitmapContext => f.write_str("could not create a bitmap context"),
+            Self::Surface(err) => core::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Surface(err) => core::error::Error::source(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<denise::SurfaceError> for Error {
+    fn from(err: denise::SurfaceError) -> Self {
+        Self::Surface(err)
+    }
 }
 
 /// Compiles the examples in this crate's README, so they cannot drift from the API

@@ -229,23 +229,23 @@ pub trait Surface {
 }
 
 /// Failures from [`Surface`].
-#[derive(Debug, thiserror::Error)]
+///
+/// `Display` and `Error` are written out below rather than derived: a derive
+/// would be the only external dependency this crate has, and every crate in the
+/// workspace would inherit it, proc-macro and all.
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum SurfaceError {
     /// The surface has no valid size yet, or is not currently displayable.
-    #[error("surface is not ready to render")]
     NotReady,
 
     /// [`Surface::acquire`] was called twice without an intervening present.
-    #[error("a frame is already in flight; present it before acquiring another")]
     FrameInFlight,
 
     /// [`Surface::present`] was called without a preceding acquire.
-    #[error("no frame has been acquired")]
     NoFrame,
 
     /// The backend handed over a buffer too small for the geometry it declared.
-    #[error("buffer too small: need {required} pixels, got {actual}")]
     BufferTooSmall {
         /// Words the declared geometry requires.
         required: usize,
@@ -258,10 +258,6 @@ pub enum SurfaceError {
     /// Cursor planes are fixed-size, so this is a limit rather than a shortage.
     /// Refused rather than cropped: a pointer missing its lower half reads as a
     /// rendering bug, not as a hardware constraint.
-    #[error(
-        "cursor sprite is {}x{} but the plane holds at most {}x{}",
-        requested.width, requested.height, limit.width, limit.height
-    )]
     CursorTooLarge {
         /// The largest sprite the hardware accepts.
         limit: crate::geom::Size,
@@ -270,9 +266,33 @@ pub enum SurfaceError {
     },
 
     /// A platform-specific failure.
-    #[error("backend error: {0}")]
     Backend(Box<dyn core::error::Error + Send + Sync + 'static>),
 }
+
+impl core::fmt::Display for SurfaceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotReady => f.write_str("surface is not ready to render"),
+            Self::FrameInFlight => {
+                f.write_str("a frame is already in flight; present it before acquiring another")
+            }
+            Self::NoFrame => f.write_str("no frame has been acquired"),
+            Self::BufferTooSmall { required, actual } => {
+                write!(f, "buffer too small: need {required} pixels, got {actual}")
+            }
+            Self::CursorTooLarge { limit, requested } => write!(
+                f,
+                "cursor sprite is {}x{} but the plane holds at most {}x{}",
+                requested.width, requested.height, limit.width, limit.height
+            ),
+            Self::Backend(err) => write!(f, "backend error: {err}"),
+        }
+    }
+}
+
+// No `source`: the backend's message is already in `Display`, and a chain that
+// printed it twice is what a reporter walking `source` would show.
+impl core::error::Error for SurfaceError {}
 
 impl SurfaceError {
     /// Wraps a platform error without leaking its type into the core.
@@ -308,6 +328,34 @@ impl core::error::Error for BackendMessage {}
 mod tests {
     use super::*;
     use alloc::vec;
+
+    /// The messages were a derive's once. They are an interface — logs get
+    /// grepped for them — so writing them by hand must not have moved a word.
+    #[test]
+    fn the_messages_are_the_ones_the_derive_wrote() {
+        use alloc::string::ToString;
+        use core::error::Error as _;
+
+        assert_eq!(
+            SurfaceError::BufferTooSmall {
+                required: 8,
+                actual: 4
+            }
+            .to_string(),
+            "buffer too small: need 8 pixels, got 4"
+        );
+        assert_eq!(
+            SurfaceError::CursorTooLarge {
+                limit: crate::geom::Size::new(64, 64),
+                requested: crate::geom::Size::new(128, 96),
+            }
+            .to_string(),
+            "cursor sprite is 128x96 but the plane holds at most 64x64"
+        );
+        let wrapped = SurfaceError::backend_msg("the panel is on fire");
+        assert_eq!(wrapped.to_string(), "backend error: the panel is on fire");
+        assert!(wrapped.source().is_none());
+    }
 
     /// The geometry that used to slip through the buffer check on a 32-bit
     /// target. `required_words` answers in `u64`, so the number is the same on

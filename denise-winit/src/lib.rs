@@ -70,35 +70,81 @@ type PlatformSurface = WinitSurface;
 const LINE_HEIGHT_PX: f32 = 16.0;
 
 /// Failures from this backend.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Error {
     /// The event loop could not be created or run.
-    #[error("event loop: {0}")]
-    EventLoop(#[from] winit::error::EventLoopError),
+    EventLoop(winit::error::EventLoopError),
 
     /// The window could not be created.
-    #[error("window creation: {0}")]
-    Window(#[from] winit::error::OsError),
+    Window(winit::error::OsError),
 
     /// softbuffer could not bind to the window or present.
     ///
     /// Absent on macOS, which does not present through softbuffer.
     #[cfg(not(target_os = "macos"))]
-    #[error("softbuffer: {0}")]
-    Softbuffer(#[from] softbuffer::SoftBufferError),
+    Softbuffer(softbuffer::SoftBufferError),
 
     /// A surface operation failed.
-    #[error(transparent)]
-    Surface(#[from] denise::SurfaceError),
+    Surface(denise::SurfaceError),
 
     /// The platform's presentation path could not be set up.
-    #[error("present: {0}")]
     Present(String),
 
     /// The GPU path was asked for and could not be taken: no adapter, a device
     /// that would not open, or a build without the `gpu` feature.
-    #[error("gpu: {0}")]
     Gpu(String),
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EventLoop(err) => write!(f, "event loop: {err}"),
+            Self::Window(err) => write!(f, "window creation: {err}"),
+            #[cfg(not(target_os = "macos"))]
+            Self::Softbuffer(err) => write!(f, "softbuffer: {err}"),
+            Self::Surface(err) => core::fmt::Display::fmt(err, f),
+            Self::Present(msg) => write!(f, "present: {msg}"),
+            Self::Gpu(msg) => write!(f, "gpu: {msg}"),
+        }
+    }
+}
+
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::EventLoop(err) => Some(err),
+            Self::Window(err) => Some(err),
+            #[cfg(not(target_os = "macos"))]
+            Self::Softbuffer(err) => Some(err),
+            Self::Surface(err) => core::error::Error::source(err),
+            Self::Present(_) | Self::Gpu(_) => None,
+        }
+    }
+}
+
+impl From<winit::error::EventLoopError> for Error {
+    fn from(err: winit::error::EventLoopError) -> Self {
+        Self::EventLoop(err)
+    }
+}
+
+impl From<winit::error::OsError> for Error {
+    fn from(err: winit::error::OsError) -> Self {
+        Self::Window(err)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl From<softbuffer::SoftBufferError> for Error {
+    fn from(err: softbuffer::SoftBufferError) -> Self {
+        Self::Softbuffer(err)
+    }
+}
+
+impl From<denise::SurfaceError> for Error {
+    fn from(err: denise::SurfaceError) -> Self {
+        Self::Surface(err)
+    }
 }
 
 /// What draws a window's pixels.

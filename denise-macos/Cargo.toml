@@ -19,7 +19,6 @@ default-target = "x86_64-apple-darwin"
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
-thiserror = { workspace = true, features = ["std"] }
 
 # The `objc2` project's framework bindings. AppKit is where `NSView` and
 # `NSEvent` live and CoreGraphics is where the bitmap context does; neither can

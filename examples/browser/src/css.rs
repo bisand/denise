@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use cssparser::{Delimiter, Parser, ParserInput, Token};
+use cssparser::{Delimiter, ParseError, Parser, Token};
 use denise::Color;
 
 use crate::dom::Dom;
@@ -134,8 +134,7 @@ impl Stylesheet {
             by_tag: HashMap::new(),
             universal: Vec::new(),
         };
-        let mut input = ParserInput::new(css);
-        let mut parser = Parser::new(&mut input);
+        let mut parser = Parser::new(css);
         parse_rules(&mut parser, &mut sheet, viewport);
         sheet
     }
@@ -143,8 +142,7 @@ impl Stylesheet {
     /// Also how `style=""` attributes are read — a declaration list with no
     /// selector around it.
     pub fn parse_inline(declarations: &str) -> Vec<Decl> {
-        let mut input = ParserInput::new(declarations);
-        let mut parser = Parser::new(&mut input);
+        let mut parser = Parser::new(declarations);
         parse_declarations(&mut parser)
     }
 
@@ -360,7 +358,7 @@ fn parse_attr_check(text: &str) -> Option<AttrCheck> {
 
 /// One run of rules: a stylesheet, or the inside of a matching `@media`
 /// block — the recursion that makes nested media work for free.
-fn parse_rules(parser: &mut Parser<'_, '_>, sheet: &mut Stylesheet, viewport: i32) {
+fn parse_rules(parser: &mut Parser<'_>, sheet: &mut Stylesheet, viewport: i32) {
     let mut start = parser.position();
     loop {
         match parser.next() {
@@ -369,9 +367,7 @@ fn parse_rules(parser: &mut Parser<'_, '_>, sheet: &mut Stylesheet, viewport: i3
                 let prelude = parser.slice_from(start);
                 let prelude = prelude[..prelude.len() - 1].to_string();
                 let decls = parser
-                    .parse_nested_block(|block| {
-                        Ok::<_, cssparser::ParseError<'_, ()>>(parse_declarations(block))
-                    })
+                    .parse_nested_block(|block| Ok::<_, ParseError<()>>(parse_declarations(block)))
                     .unwrap_or_default();
                 if !decls.is_empty() {
                     for selector in parse_selectors(&prelude) {
@@ -398,14 +394,14 @@ fn parse_rules(parser: &mut Parser<'_, '_>, sheet: &mut Stylesheet, viewport: i3
                             if media && media_matches(&condition, viewport) {
                                 let _ = parser.parse_nested_block(|block| {
                                     parse_rules(block, sheet, viewport);
-                                    Ok::<_, cssparser::ParseError<'_, ()>>(())
+                                    Ok::<_, ParseError<()>>(())
                                 });
                             } else {
                                 // Every other at-rule, and media this one
                                 // medium is not: consumed and dropped.
                                 let _ = parser.parse_nested_block(|block| {
                                     while block.next().is_ok() {}
-                                    Ok::<_, cssparser::ParseError<'_, ()>>(())
+                                    Ok::<_, ParseError<()>>(())
                                 });
                             }
                             break;
@@ -458,20 +454,20 @@ fn media_matches(condition: &str, viewport: i32) -> bool {
     })
 }
 
-fn parse_declarations(parser: &mut Parser<'_, '_>) -> Vec<Decl> {
+fn parse_declarations(parser: &mut Parser<'_>) -> Vec<Decl> {
     let mut out = Vec::new();
     while !parser.is_exhausted() {
         let _ = parser.parse_until_after(Delimiter::Semicolon, |one| {
             let name = one.expect_ident()?.to_ascii_lowercase();
             one.expect_colon()?;
             declaration(&name, one, &mut out);
-            Ok::<_, cssparser::ParseError<'_, ()>>(())
+            Ok::<_, ParseError<()>>(())
         });
     }
     out
 }
 
-fn declaration(name: &str, value: &mut Parser<'_, '_>, out: &mut Vec<Decl>) {
+fn declaration(name: &str, value: &mut Parser<'_>, out: &mut Vec<Decl>) {
     match name {
         "color" => {
             if let Some(c) = color(value) {
@@ -677,7 +673,7 @@ fn declaration(name: &str, value: &mut Parser<'_, '_>, out: &mut Vec<Decl>) {
 
 /// A length this renderer honours: px exactly, em and rem approximately,
 /// bare zero, `auto` as zero. Anything else declines the declaration.
-fn length(parser: &mut Parser<'_, '_>) -> Option<i32> {
+fn length(parser: &mut Parser<'_>) -> Option<i32> {
     match parser.next().ok()? {
         Token::Dimension { value, unit, .. } => {
             let value = *value;
@@ -694,7 +690,7 @@ fn length(parser: &mut Parser<'_, '_>) -> Option<i32> {
     }
 }
 
-fn font_size(parser: &mut Parser<'_, '_>) -> Option<FontSize> {
+fn font_size(parser: &mut Parser<'_>) -> Option<FontSize> {
     match parser.next().ok()? {
         Token::Dimension { value, unit, .. } => {
             let value = *value;
@@ -726,12 +722,12 @@ fn font_size(parser: &mut Parser<'_, '_>) -> Option<FontSize> {
     }
 }
 
-fn color(parser: &mut Parser<'_, '_>) -> Option<Color> {
+fn color(parser: &mut Parser<'_>) -> Option<Color> {
     let token = parser.next().ok()?.clone();
     color_from(token, parser)
 }
 
-fn color_from(token: Token<'_>, parser: &mut Parser<'_, '_>) -> Option<Color> {
+fn color_from(token: Token<'_>, parser: &mut Parser<'_>) -> Option<Color> {
     match token {
         Token::Hash(value) | Token::IDHash(value) => hex_color(&value),
         Token::Ident(name) => named_color(&name.to_ascii_lowercase()),
@@ -755,7 +751,7 @@ fn color_from(token: Token<'_>, parser: &mut Parser<'_, '_>) -> Option<Color> {
                     }
                     match channels.as_slice() {
                         [r, g, b] => Ok(Color::rgb(*r, *g, *b)),
-                        _ => Err(args.new_custom_error::<_, ()>(())),
+                        _ => Err(ParseError::<()>::custom(())),
                     }
                 })
                 .ok()

@@ -22,7 +22,6 @@ default-target = "x86_64-pc-windows-msvc"
 denise = { workspace = true, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
-thiserror = { workspace = true, features = ["std"] }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

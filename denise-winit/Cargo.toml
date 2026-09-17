@@ -30,7 +30,6 @@ denise = { workspace = true, features = ["std"] }
 denise-render = { workspace = true, features = ["std"] }
 denise-wgpu = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
-thiserror = { workspace = true, features = ["std"] }
 wgpu = { workspace = true, optional = true }
 winit = { workspace = true }
 

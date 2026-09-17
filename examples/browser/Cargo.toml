@@ -47,8 +47,8 @@ system-font = { path = "../system-font" }
 # is denise-image's decoders — pure-Rust parsers for untrusted input, and the
 # rendering stays entirely Denise. rustls is why the kiosk build still
 # cross-compiles to aarch64-musl as one static binary.
-html5ever = "0.39"
-cssparser = "0.37"
+html5ever = "0.40"
+cssparser = "0.38"
 url = "2"
 ureq = { version = "3", default-features = false, features = ["gzip", "charset", "cookies"] }
 

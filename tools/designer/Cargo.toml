@@ -33,7 +33,7 @@ denise-image = { workspace = true, features = ["png", "jpeg", "gif"] }
 
 # The platform's own Open and Save dialogs. Its Linux default is the XDG desktop
 # portal rather than GTK, so this adds no system packages to a build.
-rfd = "0.15"
+rfd = "0.17"
 
 # The face the designer draws itself in. Not part of the toolkit and not
 # published: a panel ships the one face it was designed around, and this is a
