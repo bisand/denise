@@ -824,7 +824,6 @@ dependencies = [
  "denise",
  "denise-render",
  "denise-text",
- "slotmap",
 ]
 
 [[package]]
