@@ -47,6 +47,13 @@ on:
   # manifests, every time.
   workflow_dispatch:
 
+# Nothing here pushes, comments or releases, so the token is handed nothing
+# beyond reading the repository. Every job below compiles several hundred
+# crates' build scripts and proc-macros, which is to say it runs other people's
+# code; whatever that code finds in the environment should be worth nothing.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -60,7 +67,7 @@ jobs:
     name: fmt, clippy, test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install winit build dependencies
         run: |
@@ -68,56 +75,59 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features
-      - run: cargo test --workspace --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features
+      - run: cargo test --locked --workspace --all-features
       # Everything except the two Windows crates, whose public API is behind
       # `cfg(windows)` and so does not exist on this runner -- their own
       # intra-doc links cannot resolve here, and the Windows job below documents
       # them where they compile. Same reasoning as the `default-target` each one
       # carries for docs.rs.
-      - run: cargo doc --workspace --no-deps --all-features --exclude denise-win32 --exclude denise-activex
+      - run: cargo doc --locked --workspace --no-deps --all-features --exclude denise-win32 --exclude denise-activex
 
       # The optional text tiers are off by default, so `--all-features` is the
       # only build that ever sees them together and the default build is the only
       # one that sees neither. Both have to compile, and a `#[cfg]` that only
       # works in one combination is exactly the rot this catches.
-      - run: cargo clippy -p denise-text --all-targets -- -D warnings
-      - run: cargo test -p denise-text
+      - run: cargo clippy --locked -p denise-text --all-targets -- -D warnings
+      - run: cargo test --locked -p denise-text
 
       # `denise-forms` is the same shape and was not covered: `codegen` and `cli`
       # are both off by default, so the run above is the only one that ever built
       # its test targets. `tests/typed.rs` reached for a feature nothing said it
       # needed, which is a *compile* failure -- it took the whole default-build
       # run down before a test in any crate ran, and no job here noticed (#174).
-      - run: cargo clippy -p denise-forms --all-targets -- -D warnings
-      - run: cargo test -p denise-forms
+      - run: cargo clippy --locked -p denise-forms --all-targets -- -D warnings
+      - run: cargo test --locked -p denise-forms
 
   no-std:
     name: core builds without std
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --no-default-features
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo build --locked -p denise -p denise-render -p denise-text -p denise-ui --no-default-features
       # `denise-ui`'s rasteriser is an optional dependency, so the line above now
       # also covers the build that has no `denise-render` in it at all. This one
       # keeps `Ui::paint` under test without `std`, which is the combination a
       # kiosk actually ships.
-      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --no-default-features --features denise-ui/raster
+      - run: cargo build --locked -p denise -p denise-render -p denise-text -p denise-ui --no-default-features --features denise-ui/raster
 
   advisories:
     name: the dependency tree is allowed
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # Four of the crates this workspace pulls in parse bytes nobody here
       # wrote — `png`, `zune-jpeg` and `gif` behind `denise-image`, `ab_glyph`
@@ -126,7 +136,7 @@ jobs:
       # watching, sixteen crates at a time.
       #
       # The policy is in `deny.toml`, next to the reasoning for each line.
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
 
@@ -134,11 +144,12 @@ jobs:
     name: the unsafe holds up under Miri
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
         with:
+          toolchain: nightly
           components: miri
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # `denise` and `denise-render` are `unsafe`-free and the compiler enforces
       # that. `denise-ffi` is the other extreme — every entry point takes raw
@@ -149,19 +160,21 @@ jobs:
       # `read_dir`, which Miri's isolation refuses, and that test is about the C
       # header agreeing with the exports rather than about memory. Disabling
       # isolation to run it would trade a real check for a pointless one.
-      - run: cargo miri test -p denise-ffi --lib
+      - run: cargo miri test --locked -p denise-ffi --lib
 
   fuzz:
     name: the decoders, the ABI and the form parser survive a minute of nonsense
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@be39649afda95dbf70f87cce95f68b8d5797b296 # nightly
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # The explicit form. `install-action@cargo-fuzz` resolves — it is a real
       # tag — and then installs nothing, leaving `cargo fuzz` to fail as an
       # unknown command two steps later.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
           tool: cargo-fuzz
 
@@ -255,7 +268,7 @@ jobs:
       # away. `cargo fuzz run <target> <artifact>` replays one locally.
       - name: Keep what the fuzzer found
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-findings
           path: |
@@ -267,16 +280,18 @@ jobs:
     name: benches compile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # Compiled, not run. Criterion wall-clock on a shared GitHub runner varies
       # by well over the 10% a regression gate would want to trip on, so a timing
       # gate here would be noise that everyone learns to ignore. The gate belongs
       # on a self-hosted Pi — the target hardware — or on instruction counts.
       # Until then this job exists to stop the benches rotting.
-      - run: cargo bench --workspace --no-run
+      - run: cargo bench --locked --workspace --no-run
 
   cross:
     name: core for ${{ matrix.target }}
@@ -291,35 +306,38 @@ jobs:
           # somebody remembering to run scripts/deploy-pi.sh.
           - aarch64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.target }}
 
       # The core is a pure rlib with no C dependencies, so this needs no
       # cross-linker.
-      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --no-default-features
-      - run: cargo build -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --features std
+      - run: cargo build --locked -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --no-default-features
+      - run: cargo build --locked -p denise -p denise-render -p denise-text -p denise-ui --target ${{ matrix.target }} --features std
 
       # The Linux backends, on the architectures they are actually run on. These
       # landed in M2 and this job never grew to cover them: until now they were
       # compiled for arm only on the laptop of whoever last deployed to a Pi, and
       # never for arm-gnu at all. `check` rather than `build` because they are
       # rlibs -- nothing here links, and the question is whether they compile.
-      - run: cargo check -p denise-drm -p denise-evdev -p denise-fbdev -p denise-video --target ${{ matrix.target }} --all-features
+      - run: cargo check --locked -p denise-drm -p denise-evdev -p denise-fbdev -p denise-video --target ${{ matrix.target }} --all-features
 
   isolation:
     name: core pulls in no platform code
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # The central promise of the architecture: an embedded build never compiles
       # winit, Wayland, X11, Windows or macOS code. Assert it rather than hope.
@@ -334,7 +352,7 @@ jobs:
         run: |
           status=0
           for crate in denise denise-render denise-text denise-ui denise-layout denise-keyboard denise-arrange; do
-            tree=$(cargo tree -p "$crate" --no-default-features --edges normal --prefix none)
+            tree=$(cargo tree --locked -p "$crate" --no-default-features --edges normal --prefix none)
             echo "== $crate =="
             echo "$tree"
             if echo "$tree" | grep -Eiq '^(winit|softbuffer|wayland|x11|xkb|windows|objc|core-graphics|smithay|calloop)'; then
@@ -344,12 +362,23 @@ jobs:
           done
           exit $status
 
+      # The other half of the same promise. The step above knows the names of
+      # the platforms; it has nothing to say about a crate it has never heard
+      # of, and that is how a tree actually grows — four crates at a time, on
+      # the back of somebody else's minor version. `denise`, `denise-render`
+      # and `denise-layout` pull in nothing at all and the rest are written
+      # down by name, so an arrival is a diff somebody has to read.
+      - name: Assert no library pulls in a crate nobody agreed to
+        run: scripts/dependency-budget.py
+
   versions:
     name: the workspace versions agree
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
 
       # Every crate here shares one version and they are released together, so a
       # sibling dependency must require exactly the version that sibling is.
@@ -436,15 +465,17 @@ jobs:
     name: the C ABI links and runs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # The header is written by hand, so nothing but a real C compiler proves it
       # is valid C. `tests/header.rs` checks that it *agrees* with the Rust; this
       # checks that it parses, links, and that the library behind it works when
       # driven from the other side of the ABI.
-      - run: cargo build -p denise-ffi --release
+      - run: cargo build --locked -p denise-ffi --release
       - run: make -C denise-ffi/examples run
 
       # C++ hosts are half of what an ActiveX shim serves, and `extern "C"` in
@@ -461,22 +492,23 @@ jobs:
     name: the Win32 control builds and its tests run
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # This is the only machine in CI that can compile `denise-win32` at all —
       # everywhere else it is `#![cfg(windows)]` and disappears. Its unit tests
       # need real GDI, which is the point of running them here rather than
       # mocking a DIB section.
-      - run: cargo clippy -p denise-win32 --all-targets -- -D warnings
-      - run: cargo test -p denise-win32
+      - run: cargo clippy --locked -p denise-win32 --all-targets -- -D warnings
+      - run: cargo test --locked -p denise-win32
 
       # Where these two can actually be documented: RUSTDOCFLAGS is -D warnings
       # for every job, so a dead link here fails the build like anywhere else.
-      - run: cargo doc -p denise-win32 -p denise-activex --no-deps --all-features
+      - run: cargo doc --locked -p denise-win32 -p denise-activex --no-deps --all-features
 
       # The COM server is the only crate here that produces a DLL Windows loads
       # by class id, and it compiles nowhere else. `tests/automation.rs` is the
@@ -484,29 +516,30 @@ jobs:
       # arrives as a VARIANT, built and read by hand through three nested unions,
       # and that code needs oleaut32 to coerce and a real Invoke at either end
       # before it means anything.
-      - run: cargo clippy -p denise-activex --all-targets -- -D warnings
-      - run: cargo test -p denise-activex
-      - run: cargo build -p denise-activex --release
+      - run: cargo clippy --locked -p denise-activex --all-targets -- -D warnings
+      - run: cargo test --locked -p denise-activex
+      - run: cargo build --locked -p denise-activex --release
 
       # The cdylib and its header are meant to be linked from Windows hosts, and
       # the export list differs from the ELF one enough to be worth proving.
-      - run: cargo build -p denise-ffi --release
-      - run: cargo test -p denise-ffi
+      - run: cargo build --locked -p denise-ffi --release
+      - run: cargo test --locked -p denise-ffi
 
       # As on the Mac: the designer says it runs on this platform, so this
       # platform builds it.
-      - run: cargo build -p denise-designer
-      - run: cargo test -p denise-designer
+      - run: cargo build --locked -p denise-designer
+      - run: cargo test --locked -p denise-designer
 
   macos:
     name: the Cocoa view builds and its tests run
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # The counterpart to the Windows job, and the same argument. `denise-macos`
       # is `#![cfg(target_os = "macos")]` from its first line, so on every other
@@ -514,33 +547,35 @@ jobs:
       # went to crates.io having been built by nobody but its author. Its surface
       # tests want a real CGBitmapContext and a real IOSurface, which is the
       # point of running them on a Mac rather than asserting about strides.
-      - run: cargo clippy -p denise-macos --all-targets -- -D warnings
-      - run: cargo test -p denise-macos
+      - run: cargo clippy --locked -p denise-macos --all-targets -- -D warnings
+      - run: cargo test --locked -p denise-macos
 
       # A variable face has to be on disk for `denise-text` to prove it can
       # read one, and the face that exposed it could not is this runner's own:
       # /System/Library/Fonts/SFNS.ttf. The test skips where there is no such
       # face, so the Linux jobs run past it and a Mac is where it counts.
-      - run: cargo test -p denise-text --features truetype
+      - run: cargo test --locked -p denise-text --features truetype
 
       # The designer is a desktop program and this is one of the three desktops
       # it claims to run on. Building it here is what keeps that claim honest —
       # `denise-winit` and the file dialog both reach for platform APIs that
       # compile to nothing on Linux.
-      - run: cargo build -p denise-designer
-      - run: cargo test -p denise-designer
+      - run: cargo build --locked -p denise-designer
+      - run: cargo test --locked -p denise-designer
 
       # Where this one can actually be documented, for the reason the manifest's
       # `default-target` gives: linux documents an empty crate.
-      - run: cargo doc -p denise-macos --no-deps --all-features
+      - run: cargo doc --locked -p denise-macos --no-deps --all-features
 
   forms:
     name: every form file still loads
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # A `.dform` is text somebody hand-edits, and nothing else in this workflow
       # reads one: the crate's own tests load two by name, so a third could be
@@ -561,7 +596,7 @@ jobs:
             exit 1
           fi
           echo "$forms"
-          cargo run --quiet -p denise-forms --features cli --bin denise-forms \
+          cargo run --locked --quiet -p denise-forms --features cli --bin denise-forms \
             -- check $forms
 
       # `forms/` only, and that is the point: `denise-forms/tests/awkward/` is a
@@ -572,5 +607,5 @@ jobs:
       - name: The example forms are laid out
         run: |
           forms=$(git ls-files 'forms/*.dform')
-          cargo run --quiet -p denise-forms --features cli --bin denise-forms \
+          cargo run --locked --quiet -p denise-forms --features cli --bin denise-forms \
             -- fmt --check $forms

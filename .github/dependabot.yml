@@ -1,0 +1,36 @@
+# Updates arrive as pull requests, weekly and in one piece, so that falling
+# behind is something somebody declines rather than something that happens.
+# Fifty-three crates were out of date the day this file was written, and
+# nothing had said so.
+version: 2
+updates:
+  # One PR for every semver-compatible bump: they are lockfile-only and CI is
+  # the review. A new major version changes a manifest and usually some code,
+  # so each of those comes alone and gets read.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      compatible:
+        update-types: [minor, patch]
+
+  # The fuzz targets are their own workspace with their own lockfile.
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: weekly
+    groups:
+      compatible:
+        update-types: [minor, patch]
+
+  # Actions are pinned to commit SHAs — a tag can be moved under a workflow
+  # that holds the crates.io token, a commit cannot. Dependabot reads the
+  # `# vX.Y.Z` comment beside each pin and moves both together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
