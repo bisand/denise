@@ -104,7 +104,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-io-surface = { version = "0.3", default-features = false, features = ["std"] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["std"] }
 windows = "0.62"
-windows-core = "0.62"
+windows-core = "0.100"
 winit = "0.30"
 wgpu = "30"
 pollster = "1.0"
