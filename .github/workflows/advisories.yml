@@ -1,0 +1,28 @@
+name: Advisories
+
+# An advisory is published on somebody else's schedule, not on this
+# repository's. CI runs `cargo deny check` on every push, which is no help in
+# the month nobody pushes — and that is exactly the month a panel in the field
+# goes on running a decoder with a hole in it. So: once a week, whether or not
+# anything changed here, and by hand when a CVE is in the news.
+#
+# Advisories only. Licences, bans and sources can only change when the
+# lockfile does, and CI sees every one of those changes.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Monday morning, off the hour when everybody's cron fires
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: no advisory has landed on the locked tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories

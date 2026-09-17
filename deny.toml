@@ -24,10 +24,23 @@ all-features = true
 
 [advisories]
 version = 2
-# Unmaintained *transitive* dependencies are worth knowing about but are not
-# somebody else's emergency: warn, and let a human decide. A vulnerability is a
-# different matter and fails by default.
-unmaintained = "workspace"
+# Unmaintained crates fail wherever they are in the tree. This used to say
+# "workspace", which looks only at what a manifest here names directly — and
+# the first unmaintained crate to matter was one level below that: `ttf-parser`
+# sits under `ab_glyph`, reads font bytes, and went unmaintained with a green
+# tick on every run. A human still decides; the decision is just written down
+# in `ignore` below, where the next person can see it was made.
+unmaintained = "all"
+ignore = [
+    # `ttf-parser`, behind `ab_glyph`, behind `denise-text`'s `truetype`. The
+    # author has stopped; there is no fixed version to move to, and the way out
+    # is a different parser (`skrifa`), which is a change to `denise-text` and
+    # not to this file. Accepted until then because a panel's font is an asset
+    # its owner chose rather than bytes off a wire, and the fuzz job holds the
+    # path to "errors, never panics". Unmaintained is not vulnerable: an actual
+    # advisory against it has its own id and fails regardless of this line.
+    { id = "RUSTSEC-2026-0192", reason = "no maintained release exists; tracked as a move to skrifa in denise-text" },
+]
 
 [bans]
 # Duplicate versions of one crate cost binary size, which is a stated feature

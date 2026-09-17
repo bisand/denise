@@ -543,10 +543,16 @@ is in [docs/design.md](docs/design.md).
   `armv7-unknown-linux-gnueabihf`, and asserts the core's dependency tree contains
   no platform crates. An embedded build that quietly starts compiling winit is a
   regression.
+- `denise`, `denise-render` and `denise-layout` depend on no external crate at
+  all, and `denise-ui` on one. CI holds every library to a list of the crates it
+  is known to pull in, by name — `dependency-budget.txt` — so a tree that grows
+  does it in a diff somebody reads rather than on the back of a minor version.
 - CI runs `cargo deny` over the whole tree — advisories, licences, sources and
   wildcards — because four crates it pulls in parse untrusted bytes on a panel
   that may run for a year. The release waits on CI, so an advisory stops a
-  publish.
+  publish; a weekly run catches the one that lands in a month nobody pushed.
+  Every build is `--locked`, every action is pinned to a commit, and Dependabot
+  keeps both moving.
 - CI runs Miri over `denise-ffi`, the crate where the raw pointers live, and
   fuzzes both the image decoders and the C ABI for a minute each. The ABI target
   earned its place on its first run, with an overflow panic reachable from

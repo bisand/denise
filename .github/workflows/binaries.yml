@@ -85,12 +85,13 @@ jobs:
 
     steps:
       # The tag when there is one; on a pull request, whatever the branch says.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.slug == 'universal-apple-darwin' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       # The same packages the publish job installs, and for the same reason:
@@ -296,7 +297,7 @@ jobs:
 
       # Kept whatever happens next, so a rehearsal on a tag with no release —
       # and a release upload that fails — still leaves something to download.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: denise-${{ matrix.slug }}
           path: out/*

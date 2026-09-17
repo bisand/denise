@@ -43,7 +43,7 @@ jobs:
     steps:
       # The release's own tag rather than whatever ref the event happens to
       # carry, and full history so the bump commit can be pushed to main.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.release.tag_name || github.ref }}
           fetch-depth: 0
@@ -58,7 +58,9 @@ jobs:
       # Deliberately no build cache: a release should verify from cold, this is
       # the one job holding the registry token so it runs the fewest third-party
       # actions it can, and rust-cache chokes on `target/package/` anyway.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
 
       # The tag is the single source of the version. If the tree already says
       # the same number this is a no-op; otherwise the bump lands as a commit on
