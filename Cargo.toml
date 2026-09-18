@@ -22,6 +22,7 @@ members = [
     "denise-win32",
     "denise-winit",
     "examples/arranged",
+    "examples/baked",
     "examples/bare-linux",
     "examples/browser",
     "examples/designed",
