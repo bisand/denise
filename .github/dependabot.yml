@@ -14,6 +14,18 @@ updates:
     groups:
       compatible:
         update-types: [minor, patch]
+    ignore:
+      # `windows` and `windows-core` are one thing in two crates: `windows`
+      # re-exports the `windows-core` it was built against, and a major of
+      # either alone does not compile. The first such PR bumped `windows-core`
+      # to 0.100 while the newest `windows` still wanted 0.62, and there is no
+      # way to tell Dependabot "both or neither". They are bumped by hand,
+      # together, when a `windows` release exists for the new core. Minors
+      # and patches still arrive with the group.
+      - dependency-name: windows
+        update-types: ["version-update:semver-major"]
+      - dependency-name: windows-core
+        update-types: ["version-update:semver-major"]
 
   # The fuzz targets are their own workspace with their own lockfile.
   - package-ecosystem: cargo
