@@ -85,6 +85,11 @@ jobs:
           else
             scripts/bump-version.py "$version"
             cargo update --workspace
+            # The fuzz targets are their own workspace with their own lockfile,
+            # which names every crate here by version too. v0.31.0 left it at
+            # 0.30.1: the fuzz job resolves afresh and never minded, and the
+            # first `--locked` check of that file came up red on every job.
+            cargo update --workspace --manifest-path fuzz/Cargo.toml
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -am "chore: release $version"

@@ -81,6 +81,7 @@ def main(argv: list[str]) -> int:
         f"{snippets} README lines)"
     )
     print("\nRemember: cargo update --workspace   # refresh Cargo.lock")
+    print("      and: cargo update --workspace --manifest-path fuzz/Cargo.toml")
     print(f"Releasing is just: gh release create v{new} --notes '...'")
     print("The Release workflow sets the version from the tag by itself; running")
     print("this script first is only for landing the bump as your own commit.")
