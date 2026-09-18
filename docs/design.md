@@ -1118,6 +1118,7 @@ measured rather than estimated.
 |---|---|---|---|
 | Built-in bitmap | none | 0 | Latin plus `ÆØÅ æøå ÄÖÜ äöü Éé ß °`, whole-number scales |
 | TrueType | `truetype` | **+270 KB** | Real faces, anti-aliased, proportionally spaced, any size |
+| Baked | `bake`, in a `build.rs` | **the tables** | A real face at the sizes it was baked at; no parser on the panel |
 | Shaped | `shaping` | **+3.1 MB** | Ligatures, bidirectional text, font fallback, complex scripts |
 
 For scale, the whole of Denise, DRM, evdev and the widgets is **848 KB**, so the
@@ -1540,6 +1541,21 @@ crates where there were six, one of them a derive macro. Both were weighed
 against an unmaintained parser and lost. `ttf-parser` is not gone from the
 workspace — cosmic-text's `fontdb` and winit's Wayland title bar still bring it,
 which `deny.toml` records — but no `truetype` panel reads a font with it.
+
+The 270 KB then bought a fourth tier, which is the TrueType tier's drawing
+without its reading. Most of what that parser does on a panel is work out
+answers that were fixed the day the binary was built: the font is compiled in,
+the sizes are the layout's, so the outline of `A` at 16 px is the same on every
+boot for the life of the product. `bake` does that work once, in a `build.rs`,
+and writes the answers — every glyph's metrics and coverage at each size — as
+plain tables into a `static`; `BakedSource` draws from them with a binary search
+and a slice. The panel links no parser, no external crate, and does nothing at
+boot; the tables draw byte for byte what the `truetype` tier would have, which
+a test checks against a real face. What is given up is what the panel did not
+know at build time — an unbaked size snaps to the nearest, an unbaked character
+is the box — and a font the user brings at run time is still `truetype`'s
+business, which the same binary can link beside the tables. `examples/baked` is
+a program with no font parser in it, and says so in its dependency tree.
 
 M5 was gated on the Pi story being solid, which it was not quite: the console
 keyboard was still unmuted, so every character typed into a Denise text field was

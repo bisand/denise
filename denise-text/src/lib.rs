@@ -35,12 +35,19 @@
 //! |---|---|---|---|
 //! | Built-in bitmap | none | 0 | Latin plus `æøå`, whole-number scales |
 //! | TrueType | `truetype` | +270 KB | Real fonts, proportional metrics, anti-aliasing |
+//! | Baked | none; `bake` in a build script | the tables | A real face at the sizes it was baked at, no parser on the panel |
 //! | Shaped | `shaping` | +3.1 MB | Ligatures, bidi, complex scripts, font fallback |
 //!
 //! For scale: the whole of Denise, DRM, evdev and the widgets is about 840 KB, so
 //! the shaping tier is four times the rest of the toolkit put together. It is
 //! there because some panels genuinely need it, and off by default because most
 //! do not — a temperature readout and a Norwegian name do not need a shaper.
+//!
+//! The baked tier is the TrueType tier's drawing without its reading: a build
+//! script rasterises the face at the sizes the UI uses, and the panel embeds
+//! the result as tables and links no parser at all. A product that ships one
+//! face wants this; one that lets its user pick a font at run time wants
+//! `truetype`, and the two coexist. See [`baked`].
 //!
 //! # What this is not
 //!
@@ -63,6 +70,9 @@
 extern crate alloc;
 
 pub mod atlas;
+#[cfg(feature = "bake")]
+pub mod bake;
+pub mod baked;
 pub mod bitmap;
 pub mod engine;
 #[cfg(feature = "truetype")]
@@ -74,6 +84,7 @@ pub mod source;
 pub mod truetype;
 
 pub use atlas::{AtlasStats, GlyphAtlas, GlyphKey, Placed};
+pub use baked::{BakedFont, BakedGlyph, BakedSize, BakedSource};
 pub use bitmap::BitmapSource;
 pub use engine::{PositionedGlyph, TextEngine, TextStyle};
 #[cfg(feature = "shaping")]

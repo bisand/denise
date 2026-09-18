@@ -40,6 +40,7 @@ Measured as the increase in a stripped, statically linked
 |---|---|---:|---|
 | Built-in bitmap | *none* | 0 | Latin plus `æøå`, whole-number scales |
 | TrueType | `truetype` | +270 KB | Real fonts, proportional metrics, anti-aliasing |
+| Baked | none; `bake` in a build script | the tables | A real face at the sizes it was baked at, no parser on the panel |
 | Shaped | `shaping` | +3.1 MB | Ligatures, bidi, complex scripts, font fallback |
 
 A style that names no font carries `FontId::DEFAULT`, which is a redirection

@@ -33,6 +33,9 @@ truetype = ["dep:skrifa", "skrifa/libm"]
 # of static binary — four times the rest of the toolkit — so this is for panels
 # that genuinely need a script the other tiers cannot draw.
 shaping = ["dep:cosmic-text", "std"]
+# Rasterises a face in advance, for a build script or a tool — never a panel,
+# which links only the tables it writes. See `bake.rs`.
+bake = ["std", "truetype"]
 
 [dependencies]
 denise = { workspace = true }
