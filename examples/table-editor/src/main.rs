@@ -18,8 +18,8 @@
 //! - **A fixed set of row nodes.** Nine of them, however many records there are.
 //!   Scrolling changes what they display, not how many exist.
 //! - **Real fonts.** `--font` loads a TrueType or OpenType file. Without one it
-//!   falls back to the built-in 8×8 bitmap, which is what a panel with 65 KB to
-//!   spare and no font file uses.
+//!   falls back to the built-in 8×8 bitmap, which is what a panel with no font file
+//!   uses.
 //! - **A modal that needs no flags.** Deleting opens a dimmed scene; everything
 //!   underneath stops taking input because something is above it.
 //! - **Rules separate from drawing.** `table.rs` knows nothing about widgets and

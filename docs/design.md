@@ -1117,7 +1117,7 @@ measured rather than estimated.
 | Tier | Feature | Cost | Buys |
 |---|---|---|---|
 | Built-in bitmap | none | 0 | Latin plus `ÆØÅ æøå ÄÖÜ äöü Éé ß °`, whole-number scales |
-| TrueType | `truetype` | **+65 KB** | Real faces, anti-aliased, proportionally spaced, any size |
+| TrueType | `truetype` | **+270 KB** | Real faces, anti-aliased, proportionally spaced, any size |
 | Shaped | `shaping` | **+3.1 MB** | Ligatures, bidirectional text, font fallback, complex scripts |
 
 For scale, the whole of Denise, DRM, evdev and the widgets is **848 KB**, so the
@@ -1516,6 +1516,30 @@ real fonts but no shaper is what most panels actually want. The tier moved to
 `ab_glyph` in 0.30, which reads a glyph when it is drawn rather than every glyph
 when the face is opened: a Nerd Font went from 60 MB to 3 MB, and the tier from
 145 KB to 65 KB.
+
+It moved again, to `skrifa`, and that one was not for size — it cost size.
+`ttf-parser`, which `ab_glyph` reads fonts with, lost its maintainer
+(RUSTSEC-2026-0192), and a parser nobody patches is the wrong thing to hand a
+font file on a panel that runs unattended. Skrifa is what Chrome reads fonts with,
+forbids `unsafe` throughout, and reads any variable face without the fixed
+32-tuple stack that made 0.30.1 necessary. It reads and does not draw, so the
+fill is `denise-text`'s own: `fill.rs`, a page of signed-area accumulation.
+Against a near-exact rendering of the same 770 glyphs it is off by 0.2 levels of
+coverage on average and never by more than 4, where the rasteriser it replaced
+was off by 1.7 and by as much as 49, having flattened its curves more coarsely;
+advances, line metrics and glyph ids are identical. An uncached glyph takes about
+1.25× as long, which the atlas pays once per glyph and size, and a character's
+glyph is looked up in a table filled when the face is opened rather than in the
+file.
+
+The price is the tier's size: **+107 KB became +270 KB**, measured the same way
+on the same probe. About 48 KB of that is a TrueType hinting interpreter that
+nothing here calls and the linker cannot prove it; the rest is what a complete
+reader has in it — CFF, variations, variable composites. It is also twelve
+crates where there were six, one of them a derive macro. Both were weighed
+against an unmaintained parser and lost. `ttf-parser` is not gone from the
+workspace — cosmic-text's `fontdb` and winit's Wayland title bar still bring it,
+which `deny.toml` records — but no `truetype` panel reads a font with it.
 
 M5 was gated on the Pi story being solid, which it was not quite: the console
 keyboard was still unmuted, so every character typed into a Denise text field was

@@ -13,8 +13,6 @@
 [denise-text default]
 
 [denise-text]
-ab_glyph
-ab_glyph_rasterizer
 bitflags
 bytemuck
 bytemuck_derive
@@ -29,7 +27,6 @@ linebender_resource_handle
 log
 memmap2
 once_cell
-owned_ttf_parser
 proc-macro2
 quote
 rangemap
@@ -57,8 +54,6 @@ zeno
 [denise-ui default]
 
 [denise-ui]
-ab_glyph
-ab_glyph_rasterizer
 bitflags
 bytemuck
 bytemuck_derive
@@ -73,7 +68,6 @@ linebender_resource_handle
 log
 memmap2
 once_cell
-owned_ttf_parser
 proc-macro2
 quote
 rangemap
@@ -120,26 +114,32 @@ zune-core
 zune-jpeg
 
 [denise-forms]
-ab_glyph
-ab_glyph_rasterizer
 adler2
 autocfg
 bitflags
+bytemuck
+bytemuck_derive
 cfg-if
 core_maths
 crc32fast
 fdeflate
 flate2
+font-types
 gif
 kdl
 libm
 miette
 miniz_oxide
 num-traits
-owned_ttf_parser
+once_cell
 png
+proc-macro2
+quote
+read-fonts
 simd-adler32
-ttf-parser
+skrifa
+syn
+unicode-ident
 unicode-width
 weezl
 winnow
