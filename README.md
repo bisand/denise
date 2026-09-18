@@ -31,11 +31,11 @@ opens the display, draws, and reads input.
 
 ```toml
 [dependencies]
-denise = "0.30"
-denise-ui = "0.30"
-denise-winit = "0.30"    # develop on a desktop
-# denise-drm = "0.30"    # ship on a display with no compositor
-# denise-image = "0.30"  # decode PNG, JPEG, GIF and BMP
+denise = "0.31"
+denise-ui = "0.31"
+denise-winit = "0.31"    # develop on a desktop
+# denise-drm = "0.31"    # ship on a display with no compositor
+# denise-image = "0.31"  # decode PNG, JPEG, GIF and BMP
 ```
 
 Or **[download the form designer](https://github.com/bisand/denise/releases/latest)**
