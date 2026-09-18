@@ -382,8 +382,8 @@ show. The Rust examples in every one of them are compiled by `cargo test --doc`,
 they cannot drift from the API they claim to demonstrate.
 
 Text rendering comes in three tiers, chosen by feature so you pay for what you
-draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `ab_glyph`
-(+65 KB, `truetype`), and full shaping via `cosmic-text` (+3.1 MB, `shaping`).
+draw: the built-in 8×8 bitmap font (0 KB, always there), TrueType via `skrifa`
+(+270 KB, `truetype`), and full shaping via `cosmic-text` (+3.1 MB, `shaping`).
 
 ## Examples
 

@@ -6,7 +6,7 @@
 //!
 //! With no font path it renders the built-in bitmap font, which needs no feature
 //! flag and no file. With one, it renders that face beside the built-in one at the
-//! same sizes, which is the comparison that actually decides whether 65 KB is
+//! same sizes, which is the comparison that actually decides whether 270 KB is
 //! worth spending on a given panel.
 //!
 //! No font ships with Denise. Type designers' licences differ, and quietly

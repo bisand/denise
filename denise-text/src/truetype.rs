@@ -1,7 +1,7 @@
 //! Real TrueType and OpenType fonts, behind the `truetype` feature.
 //!
 //! Anti-aliased, proportionally spaced, at any size — everything the built-in
-//! bitmap font cannot do, for about 65 KB of static binary. What it still does
+//! bitmap font cannot do, for about 270 KB of static binary. What it still does
 //! not do is *shaping*: no ligatures, no contextual forms, no reordering, no
 //! bidirectional text. For Latin, Cyrillic and Greek that costs nothing anyone
 //! will notice. For Arabic or Devanagari it is the whole ball game, and those need
@@ -34,28 +34,55 @@
 //! millisecond rather than most of a second on a slow core.
 
 use alloc::borrow::ToOwned;
-use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use ab_glyph::{Font, FontRef, FontVec, OutlinedGlyph, PxScale, PxScaleFactor, point};
 use denise::Size;
+use skrifa::instance::LocationRef;
+use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::raw::TableProvider;
+use skrifa::{FontRef, MetadataProvider};
 
+use crate::fill::{Bounds, Outline};
 use crate::source::{FontMetrics, GlyphId, GlyphMetrics, GlyphSource, Rasterised};
 
 /// What a face is read from: bytes the source owns, or bytes that live as long
 /// as the program does and need no copy.
 enum Face {
-    Owned(FontVec),
-    // A parsed face's tables are a few kilobytes, which `FontVec` keeps boxed.
-    Static(Box<FontRef<'static>>),
+    Owned(Vec<u8>),
+    Static(&'static [u8]),
 }
 
 /// A TrueType or OpenType face, read glyph by glyph as it is drawn.
 pub struct TrueTypeSource {
     name: String,
     face: Face,
+    /// The glyph of every ASCII character, looked up once. Layout asks for a
+    /// glyph per character per measurement, nearly all of them these, and
+    /// finding the character map in the file again for each would cost four
+    /// times what the lookup does.
+    ascii: [u32; 128],
+    outline: Outline,
     scratch: Vec<u8>,
+}
+
+impl Face {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Face::Owned(data) => data,
+            Face::Static(data) => data,
+        }
+    }
+}
+
+/// The first face in `data`, which is the only one in anything but a collection.
+///
+/// This reads the table directory — a few dozen bytes — and nothing else, so it
+/// is done again for every question asked of the face rather than kept: a parsed
+/// face borrows its bytes, and a struct that owns bytes and borrows them at once
+/// is `unsafe` however it is dressed.
+fn parse(data: &[u8]) -> Result<FontRef<'_>, String> {
+    FontRef::from_index(data, 0).map_err(|e| e.to_string())
 }
 
 impl TrueTypeSource {
@@ -70,64 +97,106 @@ impl TrueTypeSource {
 
     /// Reads a font from bytes read for it, which the face takes without a copy.
     pub fn from_vec(name: &str, data: Vec<u8>) -> Result<Self, String> {
-        let font = FontVec::try_from_vec(data).map_err(|e| e.to_string())?;
-        Ok(Self::with(name, Face::Owned(font)))
+        Self::with(name, Face::Owned(data))
     }
 
     /// Reads a font from bytes that live as long as the program — an
     /// `include_bytes!` — which are neither copied nor held twice.
     pub fn from_static(name: &str, data: &'static [u8]) -> Result<Self, String> {
-        let font = FontRef::try_from_slice(data).map_err(|e| e.to_string())?;
-        Ok(Self::with(name, Face::Static(Box::new(font))))
+        Self::with(name, Face::Static(data))
     }
 
-    fn with(name: &str, face: Face) -> Self {
-        Self {
+    fn with(name: &str, face: Face) -> Result<Self, String> {
+        // A table directory is all `parse` reads, and plenty of files that are
+        // not fonts have a plausible one. A face with no `head` or no `maxp`
+        // can answer nothing this trait asks.
+        let font = parse(face.bytes())?;
+        font.head().map_err(|e| e.to_string())?;
+        font.maxp().map_err(|e| e.to_string())?;
+        let charmap = font.charmap();
+        let mut ascii = [0; 128];
+        for (code, glyph) in (0u8..).zip(&mut ascii) {
+            *glyph = charmap.map(code).map_or(0, skrifa::GlyphId::to_u32);
+        }
+        Ok(Self {
             name: name.to_owned(),
             face,
+            ascii,
+            outline: Outline::default(),
             scratch: Vec::new(),
+        })
+    }
+
+    /// The face, which parsed when the source was made and whose bytes have not
+    /// changed since. `None` would be a glyph not drawn rather than a panic.
+    fn font(&self) -> Option<FontRef<'_>> {
+        parse(self.face.bytes()).ok()
+    }
+
+    /// The glyph `ch` maps to, where zero is `.notdef`: the face has no such
+    /// character.
+    fn lookup(&self, ch: char) -> u32 {
+        if let Some(&glyph) = self.ascii.get(ch as usize) {
+            return glyph;
         }
+        self.font()
+            .and_then(|font| font.charmap().map(ch))
+            .map_or(0, skrifa::GlyphId::to_u32)
     }
 
-    fn font(&self) -> &dyn Font {
-        match &self.face {
-            Face::Owned(font) => font,
-            Face::Static(font) => &**font,
-        }
-    }
-
-    /// Pixels per font unit at `size_px` pixels to the em, which is what this
-    /// trait's sizes are, as a CSS `font-size` is.
-    fn factor(&self, size_px: u16) -> f32 {
-        // A face that does not say how big its em is is broken; 1000 units is
-        // what most of the ones that forget would have said.
-        f32::from(size_px) / self.font().units_per_em().unwrap_or(1000.0)
-    }
-
-    /// `glyph` at `size_px`, outlined on the baseline at the origin, and its
-    /// advance. The outline is `None` for a glyph with no ink, such as a space,
-    /// and the whole answer is `None` for an id no face can have.
-    fn outline(&self, glyph: GlyphId, size_px: u16) -> Option<(i32, Option<OutlinedGlyph>)> {
-        let id = ab_glyph::GlyphId(u16::try_from(glyph.0).ok()?);
-        let font = self.font();
-        let factor = self.factor(size_px);
+    /// `glyph`'s advance at `size_px`, and the pixels it covers if it has ink —
+    /// a space has none — with its outline left in `self.outline`. `None` for an
+    /// id the face does not have.
+    fn outline(&mut self, glyph: GlyphId, size_px: u16) -> Option<(i32, Option<Bounds>)> {
+        // `self.face` rather than `self.font()`: the outline is written while
+        // the face is read, and they are separate fields.
+        let font = parse(self.face.bytes()).ok()?;
+        let id = skrifa::GlyphId::new(glyph.0);
+        // Pixels to the em, which is what this trait's sizes are, as a CSS
+        // `font-size` is. A variable face is drawn at its default instance.
+        let size = skrifa::instance::Size::new(f32::from(size_px));
         // Advances are fractional and pixels are not. Rounding here rather
         // than accumulating in floats keeps a line's width reproducible and
         // keeps the rasteriser's no-floating-point promise intact everywhere
-        // except the one crate that has to break it.
-        let advance = round(font.h_advance_unscaled(id) * factor);
-        let outlined = font.outline(id).map(|outline| {
-            // ab_glyph's scale is the height from descender to ascender rather
-            // than the em, so the em is turned into one.
-            let scale = PxScale::from(factor * font.height_unscaled());
-            let positioned = id.with_scale_and_position(scale, point(0.0, 0.0));
-            let factor = PxScaleFactor {
-                horizontal: factor,
-                vertical: factor,
-            };
-            OutlinedGlyph::new(positioned, outline, factor)
-        });
-        Some((advance, outlined))
+        // except the one module that has to break it.
+        let advance = font
+            .glyph_metrics(size, LocationRef::default())
+            .advance_width(id)?;
+        self.outline.clear();
+        if let Some(glyph) = font.outline_glyphs().get(id) {
+            let settings = DrawSettings::unhinted(size, LocationRef::default());
+            if glyph.draw(settings, &mut Pen(&mut self.outline)).is_err() {
+                // Half an outline is worse than none: the box is at least honest.
+                self.outline.clear();
+            }
+            self.outline.close();
+        }
+        Some((round(advance), self.outline.bounds()))
+    }
+}
+
+/// Skrifa's curves, passed on to be flattened.
+struct Pen<'a>(&'a mut Outline);
+
+impl OutlinePen for Pen<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.0.move_to(x, y);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.0.line_to(x, y);
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.0.quad_to(cx0, cy0, x, y);
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.0.curve_to(cx0, cy0, cx1, cy1, x, y);
+    }
+
+    fn close(&mut self) {
+        self.0.close();
     }
 }
 
@@ -141,11 +210,10 @@ fn round(value: f32) -> i32 {
     }
 }
 
-/// The metrics of a glyph from the pixels its outline covers, which ab_glyph
-/// gives with y growing downwards from the baseline. This trait wants the top
-/// as a distance above the baseline.
-fn convert(advance: i32, outlined: Option<&OutlinedGlyph>) -> GlyphMetrics {
-    let Some(bounds) = outlined.map(OutlinedGlyph::px_bounds) else {
+/// The metrics of a glyph from the pixels its outline covers, which grow
+/// downwards from the baseline. This trait wants the top as a distance above it.
+fn convert(advance: i32, bounds: Option<Bounds>) -> GlyphMetrics {
+    let Some(bounds) = bounds else {
         return GlyphMetrics {
             advance,
             bearing_x: 0,
@@ -155,9 +223,9 @@ fn convert(advance: i32, outlined: Option<&OutlinedGlyph>) -> GlyphMetrics {
     };
     GlyphMetrics {
         advance,
-        bearing_x: bounds.min.x as i32,
-        bearing_y: -bounds.min.y as i32,
-        size: Size::new(bounds.width() as u32, bounds.height() as u32),
+        bearing_x: bounds.x,
+        bearing_y: -bounds.y,
+        size: Size::new(bounds.width, bounds.height),
     }
 }
 
@@ -167,25 +235,26 @@ impl GlyphSource for TrueTypeSource {
     }
 
     fn metrics(&self, size_px: u16) -> FontMetrics {
-        let font = self.font();
-        let (ascent, descent) = (font.ascent_unscaled(), font.descent_unscaled());
-        if ascent == 0.0 && descent == 0.0 {
+        let size = skrifa::instance::Size::new(f32::from(size_px));
+        let metrics = self
+            .font()
+            .map(|font| font.metrics(size, LocationRef::default()));
+        match metrics {
+            Some(metrics) if metrics.ascent != 0.0 || metrics.descent != 0.0 => FontMetrics {
+                ascent: round(metrics.ascent),
+                // A face's descent is negative going down; this trait wants a
+                // positive distance from the baseline.
+                descent: round(-metrics.descent),
+                line_gap: round(metrics.leading),
+            },
             // A face with no vertical metrics is broken, but guessing from the
             // requested size beats returning zeroes and stacking every line on
             // top of the last.
-            return FontMetrics {
+            _ => FontMetrics {
                 ascent: i32::from(size_px) * 4 / 5,
                 descent: i32::from(size_px) / 5,
                 line_gap: i32::from(size_px) / 8,
-            };
-        }
-        let factor = self.factor(size_px);
-        FontMetrics {
-            ascent: round(ascent * factor),
-            // A face's descent is negative going down; this trait wants a
-            // positive distance from the baseline.
-            descent: round(-descent * factor),
-            line_gap: round(font.line_gap_unscaled() * factor),
+            },
         }
     }
 
@@ -194,37 +263,30 @@ impl GlyphSource for TrueTypeSource {
         // index rather than the character means the cache holds one entry for
         // every glyph the face actually has, not one per code point that maps to
         // the same one.
-        Some(GlyphId(u32::from(self.font().glyph_id(ch).0)))
+        Some(GlyphId(self.lookup(ch)))
     }
 
     fn glyph_metrics(&mut self, glyph: GlyphId, size_px: u16) -> Option<GlyphMetrics> {
-        let (advance, outlined) = self.outline(glyph, size_px)?;
-        Some(convert(advance, outlined.as_ref()))
+        let (advance, bounds) = self.outline(glyph, size_px)?;
+        Some(convert(advance, bounds))
     }
 
     fn rasterise(&mut self, glyph: GlyphId, size_px: u16) -> Option<Rasterised<'_>> {
-        let (advance, outlined) = self.outline(glyph, size_px)?;
-        let metrics = convert(advance, outlined.as_ref());
-        let width = metrics.size.width as usize;
-        self.scratch.clear();
-        self.scratch.resize(width * metrics.size.height as usize, 0);
-        if let Some(outlined) = outlined {
-            let scratch = &mut self.scratch;
-            outlined.draw(|x, y, coverage| {
-                if let Some(cell) = scratch.get_mut(y as usize * width + x as usize) {
-                    *cell = (coverage.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                }
-            });
+        let (advance, bounds) = self.outline(glyph, size_px)?;
+        match bounds {
+            Some(bounds) => self.outline.fill(bounds, &mut self.scratch),
+            None => self.scratch.clear(),
         }
+        let metrics = convert(advance, bounds);
         Some(Rasterised {
             metrics,
             coverage: &self.scratch,
-            stride: width,
+            stride: metrics.size.width as usize,
         })
     }
 
     fn contains(&self, ch: char) -> bool {
-        self.font().glyph_id(ch).0 != 0
+        self.lookup(ch) != 0
     }
 
     fn fallback_id(&self, _ch: char) -> Option<GlyphId> {
@@ -314,7 +376,7 @@ mod tests {
     fn variable_face() -> Option<TrueTypeSource> {
         [
             // What a Mac draws its own chrome in, and the face this is here
-            // for: read without `variable-fonts`, it draws nothing at all.
+            // for: read without its variations, it draws nothing at all.
             "/System/Library/Fonts/SFNS.ttf",
             // Windows 10 and later ship this one.
             "C:\\Windows\\Fonts\\bahnschrift.ttf",
@@ -327,12 +389,14 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn a_variable_face_has_ink_in_it() {
-        // The `truetype` feature once asked ab_glyph for `libm` and not for
-        // `variable-fonts`, and a variable face read that way parses, reports
-        // a glyph for every character it has, and rasterises all of them
-        // empty. Nothing returns an error and nothing logs: the window simply
-        // has no words in it, which is a long way from the cause. Machines
-        // without one of these faces have nothing to check.
+        // A variable face's outlines are its default ones plus deltas, and a
+        // reader that skips the deltas does not fail: under ab_glyph without
+        // `variable-fonts` such a face parsed, reported a glyph for every
+        // character it had, and rasterised all of them empty. Nothing returned
+        // an error and nothing logged: the window simply had no words in it,
+        // which is a long way from the cause. Skrifa needs nothing asked for,
+        // and this stays so that stays true. Machines without one of these
+        // faces have nothing to check.
         let Some(mut face) = variable_face() else {
             return;
         };
@@ -340,6 +404,69 @@ mod tests {
         let a = face.rasterise(a, 16).expect("an outline");
         assert!(!a.metrics.is_blank(), "no mask at all: {:?}", a.metrics);
         assert!(a.coverage.iter().any(|&ink| ink > 0), "no ink in the mask");
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_damaged_face_is_refused_or_drawn_wrong_and_never_panics() {
+        // A font is bytes somebody else wrote. Cut short or corrupted, a face
+        // may fail to load, or load and draw boxes and nonsense; what it may
+        // not do is take the panel down. The damage is the same on every run.
+        let Some(bytes) = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "C:\\Windows\\Fonts\\arial.ttf",
+        ]
+        .iter()
+        .find_map(|path| std::fs::read(path).ok()) else {
+            return;
+        };
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut loaded = 0;
+        for round in 0..400 {
+            let mut damaged = bytes.clone();
+            if round % 4 == 0 {
+                damaged.truncate(next() as usize % bytes.len());
+            }
+            for _ in 0..1 + next() % 64 {
+                if !damaged.is_empty() {
+                    // Early bytes are the table directory and the tables that
+                    // say where everything else is: damage there goes furthest.
+                    let reach = if round % 2 == 0 {
+                        damaged.len().min(4096)
+                    } else {
+                        damaged.len()
+                    };
+                    let at = next() as usize % reach;
+                    damaged[at] = next() as u8;
+                }
+            }
+            let Ok(mut face) = TrueTypeSource::from_vec("damaged", damaged) else {
+                continue;
+            };
+            loaded += 1;
+            let _ = face.metrics(16);
+            for ch in ['a', 'g', '@', 'Ω', '\u{10FFFD}'] {
+                let id = face.glyph_id(ch).expect("always some glyph");
+                let _ = face.glyph_metrics(id, 16);
+                if let Some(drawn) = face.rasterise(id, 48) {
+                    let size = drawn.metrics.size;
+                    assert_eq!(drawn.coverage.len(), (size.width * size.height) as usize);
+                }
+            }
+            let _ = face.rasterise(GlyphId(u32::MAX), 16);
+        }
+        assert!(
+            loaded > 0,
+            "every damaged face was refused, so nothing was tested"
+        );
     }
 
     #[cfg(feature = "std")]

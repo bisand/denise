@@ -130,7 +130,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # Four of the crates this workspace pulls in parse bytes nobody here
-      # wrote — `png`, `zune-jpeg` and `gif` behind `denise-image`, `ab_glyph`
+      # wrote — `png`, `zune-jpeg` and `gif` behind `denise-image`, `skrifa`
       # behind `denise-text` — and all four are on by default. An advisory
       # against any of them used to ship in the next release with nothing
       # watching, sixteen crates at a time.

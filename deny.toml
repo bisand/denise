@@ -2,7 +2,7 @@
 #
 # Eighteen crates go to crates.io together, and four of the things they pull in
 # parse **untrusted bytes** on a panel that may run unattended for a year: `png`,
-# `zune-jpeg` and `gif` behind `denise-image`, and `ab_glyph` behind
+# `zune-jpeg` and `gif` behind `denise-image`, and `skrifa` behind
 # `denise-text`. An advisory against any of those ships in the next release
 # unless something is watching, and nothing was.
 #
@@ -27,19 +27,27 @@ version = 2
 # Unmaintained crates fail wherever they are in the tree. This used to say
 # "workspace", which looks only at what a manifest here names directly — and
 # the first unmaintained crate to matter was one level below that: `ttf-parser`
-# sits under `ab_glyph`, reads font bytes, and went unmaintained with a green
-# tick on every run. A human still decides; the decision is just written down
-# in `ignore` below, where the next person can see it was made.
+# sat under `ab_glyph`, read a panel's font bytes, and went unmaintained with a
+# green tick on every run. A human still decides; the decision is just written
+# down in `ignore` below, where the next person can see it was made.
 unmaintained = "all"
 ignore = [
-    # `ttf-parser`, behind `ab_glyph`, behind `denise-text`'s `truetype`. The
-    # author has stopped; there is no fixed version to move to, and the way out
-    # is a different parser (`skrifa`), which is a change to `denise-text` and
-    # not to this file. Accepted until then because a panel's font is an asset
-    # its owner chose rather than bytes off a wire, and the fuzz job holds the
-    # path to "errors, never panics". Unmaintained is not vulnerable: an actual
-    # advisory against it has its own id and fails regardless of this line.
-    { id = "RUSTSEC-2026-0192", reason = "no maintained release exists; tracked as a move to skrifa in denise-text" },
+    # `ttf-parser`. `denise-text`'s `truetype` left it for `skrifa`, so the tier
+    # most panels use reads no font with it. Two things still bring it, and
+    # neither is ours to change from here:
+    #
+    # - `shaping`: cosmic-text's `fontdb` reads a face's names and metrics with
+    #   it, though the outlines go through skrifa there too. Out when
+    #   cosmic-text moves its font database, which it has said it will.
+    # - winit, on Wayland, draws a window's title bar itself — `sctk-adwaita`,
+    #   `ab_glyph`, this. A desktop's own title font on a developer's desktop.
+    #   The way out is winit's `wayland-csd-adwaita-notitle`, which costs the
+    #   title its text: a decision about how `denise-winit` looks, not one for
+    #   this file.
+    #
+    # Unmaintained is not vulnerable: an actual advisory against it has its own
+    # id and fails regardless of this line.
+    { id = "RUSTSEC-2026-0192", reason = "gone from truetype; remains under cosmic-text's fontdb (shaping) and winit's Wayland title bar" },
 ]
 
 [bans]

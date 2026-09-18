@@ -19,25 +19,16 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["std"]
-# `gvar-alloc` reads a glyph's variation tuples onto the heap. It is here
-# rather than under `truetype` because it turns on ttf-parser's `std`, and a
-# board with no allocator is the whole reason this crate builds without one:
-# see the note on `truetype`.
-std = ["denise/std", "denise-render/std", "ab_glyph?/std", "ab_glyph?/gvar-alloc"]
-# Real TrueType and OpenType fonts, anti-aliased and proportionally spaced.
-# About 65 KB of static binary, and no shaping — see the crate docs.
-# `libm` is the maths ab_glyph uses without `std`, and is left unused with it.
-# `variable-fonts` reads the outlines of a variable face. Without it such a
-# face parses, answers for every character it has, and rasterises all of them
-# to nothing, so a panel drawn in one lays out lines of the right height with
-# no ink in any of them — and macOS's own UI face is a variable face, which
-# made a blank window the default there. See `a_variable_face_has_ink_in_it`.
+std = ["denise/std", "denise-render/std", "skrifa?/std"]
+# Real TrueType and OpenType fonts, anti-aliased and proportionally spaced, and
+# no shaping — see the crate docs. Read by skrifa, which is what Chrome reads
+# fonts with and forbids `unsafe`, and filled by `fill.rs`, which is ours.
+# `libm` is the maths skrifa uses without `std`, and is left unused with it.
 #
-# A face whose glyphs carry more than 32 variation tuples takes a heap as
-# well, which `std` adds. Without `std` a face that complex still comes out
-# blank: that is the price of a target with no allocator, and a board that
-# embeds its own face is unlikely to embed San Francisco.
-truetype = ["dep:ab_glyph", "ab_glyph/libm", "ab_glyph/variable-fonts"]
+# Variable faces need nothing asked for: they are read at their default
+# instance, whatever they carry and with or without `std`. macOS's own UI face
+# is one, which is why `a_variable_face_has_ink_in_it` is there.
+truetype = ["dep:skrifa", "skrifa/libm"]
 # Shaping, bidirectional text and font fallback, via cosmic-text. About 3.1 MB
 # of static binary — four times the rest of the toolkit — so this is for panels
 # that genuinely need a script the other tiers cannot draw.
@@ -46,7 +37,7 @@ shaping = ["dep:cosmic-text", "std"]
 [dependencies]
 denise = { workspace = true }
 denise-render = { workspace = true }
-ab_glyph = { workspace = true, optional = true }
+skrifa = { workspace = true, optional = true }
 cosmic-text = { workspace = true, optional = true }
 
 [lints.rust]
