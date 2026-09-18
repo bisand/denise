@@ -24,6 +24,18 @@
 //! font is in the binary, so there is exactly one file to copy to the device and
 //! no way for it to arrive without its font.
 //!
+//! **Embed a font you are allowed to ship.** The face a desktop draws itself in
+//! — Arial, Helvetica, San Francisco, Segoe — is licensed for use on that
+//! machine, not for redistribution inside a product, and `include_bytes!` of
+//! one is the obvious thing to try and the one thing not to ship. A face under
+//! the SIL Open Font License — Inter, DejaVu, Noto, Liberation, Fira — may be
+//! embedded freely; a commercial one needs an embedding licence, which is a
+//! different thing from a desktop one. The examples in this workspace load
+//! whatever the machine they run on has, at run time, precisely so that
+//! nothing ships. The same applies to a face baked with
+//! [`bake`](crate::bake): the tables are a rendering of the font, and a
+//! rendering is the font's licence's business too.
+//!
 //! # What a face costs
 //!
 //! About what its file does. A glyph's outline is read from the font the first

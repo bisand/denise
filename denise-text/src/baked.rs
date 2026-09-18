@@ -22,6 +22,15 @@
 //! let inter = engine.add_font(Box::new(BakedSource::new(&INTER)));
 //! ```
 //!
+//! # Whose font it is
+//!
+//! The tables are a rendering of the face, and shipping a rendering is the
+//! face's licence's business as much as shipping the file is. An OFL face may
+//! be baked and shipped freely; a desktop's own face — Arial, San Francisco,
+//! Segoe — may not, however it got into the binary. `examples/baked` bakes
+//! whatever the machine it builds on has because the example is never
+//! shipped; a product names a font it holds a licence for.
+//!
 //! # What it costs
 //!
 //! Flash, in proportion to what is baked: a glyph's coverage is one byte per
