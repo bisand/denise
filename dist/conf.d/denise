@@ -9,6 +9,7 @@
 #   panel           M3: a widget tree, a modal and a cursor sprite
 #   kiosk           M2: display and input driving one another
 #   hello           a field, a button and a label
+#   solitaire       Klondike: a move repaints the piles it touched
 #   video-player    needs DRM and V4L2; takes a .h264/.h265 path in demo_args
 demo="launcher"
 

@@ -393,6 +393,7 @@ embeds with no parser at all (`bake`, in a `build.rs`), and full shaping via
 |---|---|
 | [`hello`](examples/hello) | **Start here.** Eighty lines: a message enum, a tree, an event loop. Builds for a window or a bare display. |
 | [`table-editor`](examples/table-editor) | A record editor with a grid, a form, validation, a modal and real fonts. Builds for a window *or* for a bare display. |
+| [`solitaire`](examples/solitaire) | **Klondike, as the damage argument.** Thirteen piles that are thirteen nodes, so a move repaints the piles it touched and a carried card repaints where it was and where it is. `--bench` prints the difference. Builds for a window or a bare display. |
 | [`designed`](examples/designed) | **`hello` again, from a file.** The same application built from [`hello.dform`](forms/hello.dform) rather than from Rust. Read the two side by side: a form replaces the tree-building and nothing else. |
 | [`runtime`](examples/runtime) | **Two forms, read from files at run time.** One application answering both; swap a screen by copying a file over it, and every event still reaches its function — or fails at load naming the one that does not. |
 | [`forms`](examples/forms) | Secondary windows on the desktop: a modeless settings form, a modal, and the state they share. Desktop only, deliberately. |

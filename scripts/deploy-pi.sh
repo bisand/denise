@@ -99,7 +99,7 @@ note "browser: $BROWSER_FEATURES"
 for crate in launcher splash panel kiosk; do
 	cargo build --release --target "$TARGET" -p "$crate" --manifest-path "$ROOT/Cargo.toml"
 done
-for crate in gallery hello table-editor; do
+for crate in gallery hello solitaire table-editor; do
 	cargo build --release --target "$TARGET" -p "$crate" \
 		--no-default-features --features kiosk --manifest-path "$ROOT/Cargo.toml"
 done
@@ -119,6 +119,7 @@ cp "$OUT/panel" "$STAGE/denise-panel"
 cp "$OUT/kiosk" "$STAGE/denise-kiosk"
 cp "$OUT/gallery" "$STAGE/denise-gallery"
 cp "$OUT/hello" "$STAGE/denise-hello"
+cp "$OUT/solitaire" "$STAGE/denise-solitaire"
 cp "$OUT/table-editor" "$STAGE/denise-table-editor"
 cp "$OUT/browser" "$STAGE/denise-browser"
 cp "$OUT/examples/player" "$STAGE/denise-video-player"
