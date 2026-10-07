@@ -1,0 +1,36 @@
+[package]
+name = "solitaire"
+description = "Klondike: thirteen piles that are thirteen nodes, so a move repaints the piles it touched."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# Which display this talks to, decided at compile time. See `table-editor` for
+# the longer version of why a library cannot decide it for you.
+#
+#   cargo run -p solitaire                                          # a window
+#   cargo run -p solitaire --no-default-features --features kiosk   # the display
+[features]
+default = ["desktop"]
+desktop = ["dep:denise-winit"]
+kiosk = ["dep:bare-linux"]
+
+[dependencies]
+denise = { workspace = true, features = ["std"] }
+# The cards are PNGs in the binary; see `cards/README.md`. One decoder, and
+# neither of the two this example has no picture for.
+denise-image = { workspace = true, features = ["png"] }
+denise-ui = { workspace = true, features = ["truetype", "raster"] }
+denise-winit = { workspace = true, optional = true }
+system-font = { path = "../system-font" }
+
+# The kiosk backend exists on Linux and nowhere else, so asking for it anywhere
+# else gets you a build that says so rather than one that mysteriously has no
+# display.
+[target.'cfg(target_os = "linux")'.dependencies]
+bare-linux = { path = "../bare-linux", optional = true }

@@ -3140,6 +3140,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "solitaire"
+version = "0.31.0"
+dependencies = [
+ "bare-linux",
+ "denise",
+ "denise-image",
+ "denise-ui",
+ "denise-winit",
+ "system-font",
+]
+
+[[package]]
 name = "spirv"
 version = "0.4.0+sdk-1.4.341.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
