@@ -91,7 +91,7 @@
 	</p>
 	<div class="mt-8 grid gap-3 sm:grid-cols-2">
 		{#each downloads as d}
-			<a href={downloadUrl(d.file)} rel="noopener" class="group flex items-center gap-4 rounded-box border border-base-300 bg-base-200/60 p-4 transition hover:border-primary/60">
+			<a href={downloadUrl(d.file)} rel="noopener" class="group flex min-w-0 items-center gap-4 rounded-box border border-base-300 bg-base-200/60 p-4 transition hover:border-primary/60">
 				<Icon name={d.icon} class="h-8 w-8 text-base-content/70 group-hover:text-primary" />
 				<span class="min-w-0 flex-1">
 					<span class="block font-display font-semibold">{d.os}</span>
