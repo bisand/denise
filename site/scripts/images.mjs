@@ -26,7 +26,7 @@ console.log('→ static/logo-256.png');
 if (existsSync('scripts/og.svg') && existsSync(join(dir, 'gallery-2x.webp'))) {
 	const shot = await sharp(join(dir, 'gallery-2x.webp')).resize(760).png().toBuffer();
 	await sharp(await readFile('scripts/og.svg'))
-		.composite([{ input: shot, left: 520, top: 150 }])
+		.composite([{ input: shot, left: 620, top: 150 }])
 		.png()
 		.toFile('static/og.png');
 	console.log('→ static/og.png');
