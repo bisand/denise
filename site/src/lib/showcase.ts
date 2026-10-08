@@ -64,6 +64,18 @@ export const programs: Program[] = [
 		tags: ['example', 'window or panel']
 	},
 	{
+		id: 'solitaire',
+		name: 'solitaire',
+		what: 'Klondike, where a move repaints the piles it touched',
+		body:
+			'A whole game with a mouse, a touch screen or the keyboard: drag the cards, double-click one home, take back any number of moves, and watch a game with nothing hidden play itself out. The bar, the clock and the questions are ordinary widgets. Each of the thirteen piles is a node of its own and the cards in the hand are a node that is moved, so the tree’s own damage is all the damage there is — on a Raspberry Pi 3A+ at 1920×1080 the table painted whole is 20 ms and a card carried across it is 3. The rules live in game.rs, which knows no widget exists and is tested without a display.',
+		shot: 'solitaire-2x.webp',
+		alt: 'A dealt game of Klondike: the stock with a picture of mountains on its back, four empty foundations, and seven piles each with its last card face up',
+		run: ['cargo run -p solitaire', 'cargo run -p solitaire -- --three', 'cargo run -p solitaire --no-default-features --features kiosk'],
+		source: 'examples/solitaire',
+		tags: ['example', 'window or panel']
+	},
+	{
 		id: 'browser',
 		name: 'browser',
 		what: 'A small web browser in which every visible thing is a widget',
