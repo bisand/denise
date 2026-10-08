@@ -1,6 +1,6 @@
 # The DeniseUI website
 
-The marketing site and guide at <https://bisand.github.io/denise/>, built with
+The marketing site and guide at <https://deniseui.eu/>, built with
 SvelteKit, Tailwind CSS 4 and daisyUI, prerendered to static HTML by
 `@sveltejs/adapter-static` so it can be hosted anywhere.
 

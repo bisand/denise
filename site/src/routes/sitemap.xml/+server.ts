@@ -2,7 +2,7 @@ import { docPages, nav } from '$lib/site';
 
 export const prerender = true;
 
-const ORIGIN = 'https://bisand.github.io/denise';
+const ORIGIN = 'https://deniseui.eu';
 
 export function GET() {
 	const paths = ['/', ...nav.map((n) => n.href), ...docPages.map((d) => `/docs/${d.slug}/`)];

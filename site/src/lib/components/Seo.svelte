@@ -4,8 +4,8 @@
 
 	let { title = '', description = site.description }: { title?: string; description?: string } = $props();
 	const full = $derived(title ? `${title} · ${site.name}` : `${site.name} · ${site.tagline}`);
-	// Social cards need an absolute URL; the site's origin is only known once built for Pages.
-	const origin = 'https://bisand.github.io';
+	// Social cards need an absolute URL.
+	const origin = 'https://deniseui.eu';
 </script>
 
 <svelte:head>
@@ -15,6 +15,6 @@
 	<meta property="og:title" content={full} />
 	<meta property="og:description" content={description} />
 	<meta property="og:url" content="{origin}{page.url.pathname}" />
-	<meta property="og:image" content="{origin}/denise/og.png" />
+	<meta property="og:image" content="{origin}/og.png" />
 	<meta name="twitter:card" content="summary_large_image" />
 </svelte:head>

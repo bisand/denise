@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://bisand.github.io/denise/sitemap.xml
+Sitemap: https://deniseui.eu/sitemap.xml

@@ -1,6 +1,6 @@
 name: Website
 
-# The marketing site and guide at https://bisand.github.io/denise/.
+# The marketing site and guide at https://deniseui.eu/.
 #
 # It carries the live demo, which is the gallery and the record editor compiled
 # to `wasm32-wasip1` from `site/wasm` — so a change to those examples or to the
@@ -72,9 +72,8 @@ jobs:
       - run: npm run build
         working-directory: site
         env:
-          # Served from https://bisand.github.io/denise/. Drop this if a custom
-          # domain (CNAME) ever points at the site.
-          BASE_PATH: /${{ github.event.repository.name }}
+          # No BASE_PATH: the site is served from the top of https://deniseui.eu/,
+          # the custom domain in the repository's Pages settings.
           # For the latest-release lookup in `vite.config.ts`: unauthenticated,
           # a runner's address shares sixty requests an hour with everything
           # else on it, and a rate-limited build would quietly show the
