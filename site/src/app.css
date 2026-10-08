@@ -186,6 +186,9 @@ h3,
 .prose-docs :where(table) {
 	@apply table table-sm my-5 max-sm:block max-sm:overflow-x-auto;
 }
+.prose-docs :where(td:first-child code) {
+	@apply whitespace-nowrap;
+}
 .prose-docs :where(blockquote) {
 	@apply my-5 border-l-4 border-primary/60 pl-4 text-base-content/80;
 }
