@@ -21,7 +21,7 @@
 <section class="mx-auto max-w-7xl space-y-16 px-4 pb-10">
 	{#each programs as p, i}
 		<article id={p.id} class="grid scroll-mt-24 items-center gap-10 lg:grid-cols-2" class:lg:grid-flow-dense={i % 2 === 1}>
-			<div class:lg:col-start-2={i % 2 === 1}>
+			<div class="min-w-0" class:lg:col-start-2={i % 2 === 1}>
 				<div class="flex flex-wrap items-center gap-2">
 					<h2 class="font-display text-2xl font-bold sm:text-3xl">{p.name}</h2>
 					{#each p.tags as tag}
@@ -52,7 +52,7 @@
 				</div>
 			</div>
 			{#if p.shot}
-				<Shot src={p.shot} alt={p.alt ?? p.name} class={i % 2 === 1 ? 'lg:col-start-1' : ''} />
+				<Shot src={p.shot} alt={p.alt ?? p.name} class={i % 2 === 1 ? 'min-w-0 lg:col-start-1' : 'min-w-0'} />
 			{/if}
 		</article>
 	{/each}
