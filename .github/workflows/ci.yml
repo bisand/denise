@@ -174,7 +174,7 @@ jobs:
       # The explicit form. `install-action@cargo-fuzz` resolves — it is a real
       # tag — and then installs nothing, leaving `cargo fuzz` to fail as an
       # unknown command two steps later.
-      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
+      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
         with:
           tool: cargo-fuzz
 
