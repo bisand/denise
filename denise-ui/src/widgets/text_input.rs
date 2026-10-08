@@ -447,7 +447,7 @@ impl<M> TextInput<M> {
         let len = self.len_chars();
         let index = index.min(len);
         let at = |i: usize| self.text.chars().nth(i);
-        let class = match (index.checked_sub(1).and_then(&at), at(index)) {
+        let class = match (index.checked_sub(1).and_then(at), at(index)) {
             (Some(b), _) if is_word(b) => true,
             (_, Some(a)) => is_word(a),
             (Some(b), None) => is_word(b),
