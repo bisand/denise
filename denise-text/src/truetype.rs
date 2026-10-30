@@ -293,29 +293,35 @@ impl OutlinePen for Pen<'_> {
 /// and an exact rasteriser says so honestly: two pixels of half ink, which is
 /// a grey smear where the reader wanted a stroke. Every rasteriser a desktop
 /// uses widens the coverage to answer it, FreeType's stem darkening and the
-/// font smoothing on a Mac being the same idea, and this is the curve: fixed,
-/// gentle, and steepest where it matters. Half coverage comes out at 0.62,
-/// nothing and everything come out as themselves, and a glyph's total ink
-/// grows by about a tenth.
+/// font smoothing on a Mac being the same idea, and this is the curve. It
+/// gives a pixel back what its neighbour would have lent it had the two been
+/// one stroke, so it lifts hardest where a stem lands and hardly at all at
+/// the edge of a glyph: two thirds covered comes out all but solid, half
+/// covered at 0.78, a tenth covered at 0.12. Nothing and everything come out as
+/// themselves, no pixel is ever dimmed, and a glyph ends up on slightly
+/// fewer pixels than it started on rather than more — a stroke with a core,
+/// not a fatter glyph.
 ///
 /// It is applied to every face this tier reads, in the mask the atlas keeps,
 /// so it is paid once per glyph per size and nothing per frame.
 ///
-/// shortcut: the same curve whatever the text is drawn on, which suits light
-/// text on a dark panel — what it was measured against — more than the other
-/// way round, where a stroke is widened into a background that is already
-/// brighter than it. Choosing the curve from the colour the glyph is drawn
-/// in means doing it where the mask is composited rather than where it is
-/// made: a table per painter rather than a pass per glyph, and a cost on
-/// every pixel of every frame instead of none. Worth doing when a panel
-/// drawn dark on light looks heavy.
+/// shortcut: the same curve whatever the text is drawn on. Leaving the faint
+/// end alone is most of what a panel drawn dark on light needs — what grows
+/// a halo there is lifting the pixels a glyph barely touches, and this curve
+/// does not — but a stroke still ends up a shade heavier than its outline
+/// asked for. Choosing the curve from the colour the glyph is drawn in means
+/// doing it where the mask is composited rather than where it is made: a
+/// table per painter rather than a pass per glyph, and a cost on every pixel
+/// of every frame instead of none.
 const fn dilate(ink: u8) -> u8 {
-    // `1.45c - 0.45c²`, in whole numbers: 371/256 and 115/(255 · 256). The
+    // `c + 2.2c²(1 - c)`, in whole numbers: 11/5 over 255², the squaring and
+    // the room above it fitting a `u32` with four bits to spare. The
     // rasteriser promises no floating point outside the outline itself, and
-    // a quadratic needs none.
+    // a cubic needs none.
     let c = ink as u32;
-    let widened = c * 371 / 256 - c * c * 115 / (255 * 256);
-    // The quadratic cannot leave 0..=255, but the compiler does not know it.
+    let widened = c + 11 * c * c * (255 - c) / (5 * 255 * 255);
+    // The curve crosses one a shade over two thirds covered and stays above
+    // it, so everything from there up is solid.
     if widened > 255 { 255 } else { widened as u8 }
 }
 
@@ -438,7 +444,9 @@ mod tests {
     fn coverage_is_widened_between_nothing_and_everything() {
         assert_eq!(dilate(0), 0);
         assert_eq!(dilate(255), 255);
-        assert_eq!(dilate(128), 157, "half covered comes out at 0.62");
+        assert_eq!(dilate(128), 198, "half covered comes out at 0.78");
+        assert_eq!(dilate(26), 31, "the faint edge of a glyph stays faint");
+        assert_eq!(dilate(172), 255, "and a stem reads as a stroke");
         let mut last = 0;
         for ink in 0..=255u8 {
             let out = dilate(ink);
