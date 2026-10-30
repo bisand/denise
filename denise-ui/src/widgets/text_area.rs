@@ -383,6 +383,11 @@ pub struct TextArea<M, D = TextBuffer> {
     top_px: i32,
     /// The wheel moves the text a pixel at a time rather than a line.
     smooth_scroll: bool,
+    /// How tall a row is as a percentage of the face's own line height: 100
+    /// is the face's, and more is the air between lines that long stretches
+    /// of code are easier to read with. The extra is split above and below,
+    /// so the text stays centred in its row.
+    line_height: u16,
     /// Pixels the text is scrolled sideways. A `Cell`, because a range
     /// selected from outside an event — [`select_range`](Self::select_range)
     /// — can only be measured, and so scrolled to, by the next paint.
@@ -489,6 +494,7 @@ impl<M, D: TextDocument> TextArea<M, D> {
             top: 0,
             top_px: 0,
             smooth_scroll: false,
+            line_height: 100,
             scroll_x: Cell::new(0),
             content_w: Cell::new(0),
             reveal_pending: Cell::new(false),
@@ -649,6 +655,28 @@ impl<M, D: TextDocument> TextArea<M, D> {
 
     /// Scrolls by the pixel, or by the line. Turned off, the view settles on
     /// the line it was part way through.
+    /// How tall a row is as a percentage of the face's own line height.
+    #[inline]
+    pub const fn line_height(&self) -> u16 {
+        self.line_height
+    }
+
+    /// Sets the row height as a percentage of the face's own line height.
+    /// Below 100 the lines crowd and are clipped by each other; 100 is the
+    /// face's own, and 140 is roomy. Clamped to 50..=300.
+    pub fn set_line_height(&mut self, percent: u16) {
+        self.line_height = percent.clamp(50, 300);
+        self.top_px = 0;
+    }
+
+    /// As [`set_line_height`](Self::set_line_height), building.
+    #[must_use]
+    pub fn with_line_height(mut self, percent: u16) -> Self {
+        self.set_line_height(percent);
+        self
+    }
+
+    /// Whether the view glides when it scrolls.
     pub fn set_smooth_scroll(&mut self, smooth: bool) {
         self.smooth_scroll = smooth;
         if !smooth {
@@ -823,7 +851,15 @@ impl<M, D: TextDocument> TextArea<M, D> {
     }
 
     fn row_height(&self, engine: &TextEngine) -> i32 {
-        engine.line_height(self.style).max(1)
+        let face = engine.line_height(self.style).max(1);
+        (face * i32::from(self.line_height) / 100).max(1)
+    }
+
+    /// How far below the top of its row a line is drawn: half the air added
+    /// to the face's own line height, so the extra is shared above and below.
+    fn leading(&self, engine: &TextEngine) -> i32 {
+        let face = engine.line_height(self.style).max(1);
+        (self.row_height(engine) - face) / 2
     }
 
     /// How far the first line is scrolled up, kept under a row of `row_h`
@@ -1702,7 +1738,7 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
     fn measure(&self, ctx: &mut MeasureCtx<'_>, _offered: Offer) -> Measured {
         // An editor is as big as you make it; the one thing it can say is
         // that fewer than three lines is not an editor.
-        Measured::tall(ctx.text.line_height(self.style).max(1) * 3)
+        Measured::tall(self.row_height(ctx.text) * 3)
     }
 
     fn paint(&self, ctx: &mut PaintCtx<'_>, canvas: &mut Pen<'_>) {
@@ -1766,8 +1802,8 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
                 // would otherwise draw over whatever is above the editor.
                 let gutter = Rect::new(bounds.x, bounds.y, gutter_w, bounds.height);
                 let mut numbers = canvas.with_clip(gutter);
-                ctx.text
-                    .draw(&mut numbers, self.style, Point::new(x, y), &number, color);
+                let at = Point::new(x, y + self.leading(ctx.text));
+                ctx.text.draw(&mut numbers, self.style, at, &number, color);
             }
 
             let mut clipped = canvas.with_clip(area);
@@ -1822,7 +1858,7 @@ impl<M: Clone + 'static, D: TextDocument> Widget<M> for TextArea<M, D> {
             if !disabled {
                 self.doc().spans(n, &mut spans);
             }
-            let origin = Point::new(text_x, y);
+            let origin = Point::new(text_x, y + self.leading(ctx.text));
             let mut x = 0;
             let mut at = 0;
             for span in spans
@@ -2018,6 +2054,11 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
             "Number the lines down the left.",
         ),
         Property::new(
+            "line-height",
+            PropertyKind::Int { min: 50, max: 300 },
+            "Row height as a percentage of the face's own line height.",
+        ),
+        Property::new(
             "read-only",
             PropertyKind::Bool,
             "Show the text and place a caret in it, but change nothing.",
@@ -2043,6 +2084,7 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
     fn get(&self, name: &str) -> Option<Value> {
         Some(match name {
             "gutter" => Value::Bool(self.gutter),
+            "line-height" => Value::Int(i32::from(self.line_height)),
             "read-only" => Value::Bool(self.read_only),
             "size" => Value::Int(i32::from(self.style.size_px)),
             "smooth-scroll" => Value::Bool(self.smooth_scroll),
@@ -2054,6 +2096,7 @@ impl<M, D: TextDocument> Describe for TextArea<M, D> {
     fn apply(&mut self, name: &str, value: Value) -> Result<(), Mismatch> {
         match name {
             "gutter" => self.gutter = value.as_bool()?,
+            "line-height" => self.set_line_height(value.as_index()?.clamp(50, 300) as u16),
             "read-only" => self.read_only = value.as_bool()?,
             "size" => self.style.size_px = value.as_size()?,
             "smooth-scroll" => self.set_smooth_scroll(value.as_bool()?),

@@ -344,6 +344,40 @@ fn a_read_only_area_moves_but_does_not_change() {
     assert!(messages(&mut ui).is_empty());
 }
 
+/// Roomier lines are taller rows: a click lands on the line the rows put
+/// under it, and what scrolls by a row scrolls by the taller one. The air is
+/// split above and below, so the text stays in the middle of its row.
+#[test]
+fn a_roomier_line_height_makes_every_row_taller() {
+    let lines: Vec<String> = (1..=100).map(|n| format!("line {n}")).collect();
+    let (mut ui, id) = editor(&lines.join("\n"));
+    let face = row_height();
+    assert_eq!(
+        area(&ui, id).line_height(),
+        100,
+        "the face's own, until asked"
+    );
+
+    ui.widget_mut::<TextArea<Msg>>(id)
+        .expect("editor")
+        .set_line_height(140);
+    let row = face * 140 / 100;
+    assert!(row > face);
+
+    // The third row of the taller rows, which is inside the second of the
+    // rows the face alone would have given.
+    let third = Point::new(AREA.right() - 20, AREA.y + row * 2 + row / 2);
+    ui.handle(&[press(third, Modifiers::NONE), release(third)]);
+    assert_eq!(area(&ui, id).caret(), Pos::new(2, 6));
+
+    ui.handle(&[InputEvent::PointerScroll {
+        delta_x: 0.0,
+        delta_y: row as f32,
+        position: Point::new(100, 100),
+    }]);
+    assert_eq!(area(&ui, id).top(), 1, "a row is the taller row");
+}
+
 #[test]
 fn the_wheel_scrolls_the_view_and_not_the_caret() {
     let lines: Vec<String> = (1..=100).map(|n| format!("line {n}")).collect();
