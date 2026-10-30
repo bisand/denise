@@ -51,9 +51,9 @@ use alloc::vec::Vec;
 
 use denise::Size;
 use skrifa::instance::LocationRef;
-use skrifa::outline::{
-    DrawSettings, Engine, HintingInstance, HintingOptions, OutlinePen, SmoothMode, Target,
-};
+use skrifa::outline::{DrawSettings, OutlinePen};
+#[cfg(feature = "hinting")]
+use skrifa::outline::{Engine, HintingInstance, HintingOptions, SmoothMode, Target};
 use skrifa::raw::TableProvider;
 use skrifa::{FontRef, MetadataProvider};
 
@@ -81,11 +81,13 @@ pub struct TrueTypeSource {
     /// The hinting state for the sizes drawn at, built the first time each is
     /// asked for. A panel draws at a handful of sizes — the text, the chrome,
     /// a size down for the tabs — and the oldest goes when a fifth arrives.
+    #[cfg(feature = "hinting")]
     hinters: Vec<(u16, Option<HintingInstance>)>,
 }
 
 /// How many sizes' hinting state is kept. A size costs a few kilobytes and a
 /// fraction of a millisecond to build.
+#[cfg(feature = "hinting")]
 const HINTED_SIZES: usize = 4;
 
 impl Face {
@@ -146,6 +148,7 @@ impl TrueTypeSource {
             ascii,
             outline: Outline::default(),
             scratch: Vec::new(),
+            #[cfg(feature = "hinting")]
             hinters: Vec::new(),
         })
     }
@@ -188,18 +191,22 @@ impl TrueTypeSource {
         self.outline.clear();
         let glyphs = font.outline_glyphs();
         if let Some(outline) = glyphs.get(id) {
-            // Hinted: the face's own instructions where it has them, and the
-            // autohinter where it does not. Light, so only the horizontal
-            // edges are moved — a baseline, an x-height and a crossbar land on
+            // Hinted, where the `hinting` feature is on: the face's own
+            // instructions, and nothing for a face that carries none. Light,
+            // so only the horizontal edges are moved — a baseline, an x-height and a crossbar land on
             // a pixel boundary instead of across two, which is the whole
             // difference between crisp text and grey text at the sizes code is
             // read at. Nothing moves sideways, so the advances and the grid a
             // monospaced face draws on are the ones measured unhinted.
+            #[cfg(feature = "hinting")]
             let hinter = hinter(&mut self.hinters, &glyphs, size_px);
+            #[cfg(feature = "hinting")]
             let settings = match &hinter {
                 Some(hinter) => DrawSettings::hinted(hinter, false),
                 None => DrawSettings::unhinted(size, LocationRef::default()),
             };
+            #[cfg(not(feature = "hinting"))]
+            let settings = DrawSettings::unhinted(size, LocationRef::default());
             if outline.draw(settings, &mut Pen(&mut self.outline)).is_err() {
                 // Half an outline is worse than none: the box is at least honest.
                 self.outline.clear();
@@ -216,6 +223,7 @@ impl TrueTypeSource {
 /// Returned by value because the cache is borrowed from the same struct as the
 /// outline being written; a `HintingInstance` is a few kilobytes and is cloned
 /// rather than threaded through a second borrow.
+#[cfg(feature = "hinting")]
 fn hinter(
     cache: &mut Vec<(u16, Option<HintingInstance>)>,
     glyphs: &skrifa::outline::OutlineGlyphCollection<'_>,
@@ -224,12 +232,15 @@ fn hinter(
     if let Some((_, hinter)) = cache.iter().find(|(size, _)| *size == size_px) {
         return hinter.clone();
     }
-    // The autohinter rather than the face's own bytecode: it is four times
-    // cheaper to run, it needs no face to carry hints, and over the faces code
-    // is read in it lands the same ink on fewer pixels. Light, so only the
-    // horizontal edges move and nothing shifts sideways.
+    // The face's own bytecode, and nothing for a face that carries none: the
+    // interpreter is already linked into this tier — 48 KB of it, which the
+    // linker could never prove was unreachable — while skrifa's autohinter is
+    // another 320 KB, and over the faces code is read in the two draw the
+    // same. A face with no hints is drawn as it always was.
+    //
+    // Light, so only the horizontal edges move and nothing shifts sideways.
     let options = HintingOptions {
-        engine: Engine::Auto(None),
+        engine: Engine::Interpreter,
         target: Target::Smooth {
             mode: SmoothMode::Light,
             symmetric_rendering: false,
@@ -437,7 +448,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "std", feature = "hinting"))]
     /// Hinting moves the outline, not the grid: a face's advances are the
     /// ones the metrics report, so a monospaced face stays monospaced and a
     /// line measures the same as it did before the hinter arrived.
@@ -467,7 +478,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "std", feature = "hinting"))]
     /// The hinting state is built once for a size and kept, and a fifth size
     /// pushes the oldest out rather than growing without end.
     #[test]

@@ -1118,6 +1118,7 @@ measured rather than estimated.
 |---|---|---|---|
 | Built-in bitmap | none | 0 | Latin plus `ÆØÅ æøå ÄÖÜ äöü Éé ß °`, whole-number scales |
 | TrueType | `truetype` | **+270 KB** | Real faces, anti-aliased, proportionally spaced, any size |
+| Hinted | `hinting` | **+310 KB** | Stems and baselines on the pixel grid, at the sizes a desktop reads at |
 | Baked | `bake`, in a `build.rs` | **the tables** | A real face at the sizes it was baked at; no parser on the panel |
 | Shaped | `shaping` | **+3.1 MB** | Ligatures, bidirectional text, font fallback, complex scripts |
 
@@ -1535,12 +1536,23 @@ file.
 
 The price is the tier's size: **+107 KB became +270 KB**, measured the same way
 on the same probe. About 48 KB of that is a TrueType hinting interpreter that
-nothing here calls and the linker cannot prove it; the rest is what a complete
+nothing calls until the `hinting` feature is asked for, and the linker cannot
+prove it unreachable even then; the rest is what a complete
 reader has in it — CFF, variations, variable composites. It is also twelve
 crates where there were six, one of them a derive macro. Both were weighed
 against an unmaintained parser and lost. `ttf-parser` is not gone from the
 workspace — cosmic-text's `fontdb` and winit's Wayland title bar still bring it,
 which `deny.toml` records — but no `truetype` panel reads a font with it.
+
+Asking for `hinting` turns that dead interpreter into live code and brings
+skrifa's autohinter with it, since the engine is chosen when a hinting state is
+built rather than when the crate is compiled: **+310 KB** over the tier, and a
+glyph that costs about nine times as long to rasterise — once, into the atlas.
+What it buys is a stem and a baseline on the pixel grid rather than across two
+pixels of it, which at the sizes a desktop reads text at is the difference
+between a stroke and a grey smear. It is off by default, a panel on a screen
+nobody reads code on having nothing to gain from it, and advances and metrics
+are the same either way, so a layout does not change when it is turned on.
 
 The 270 KB then bought a fourth tier, which is the TrueType tier's drawing
 without its reading. Most of what that parser does on a panel is work out

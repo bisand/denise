@@ -29,6 +29,17 @@ std = ["denise/std", "denise-render/std", "skrifa?/std"]
 # instance, whatever they carry and with or without `std`. macOS's own UI face
 # is one, which is why `a_variable_face_has_ink_in_it` is there.
 truetype = ["dep:skrifa", "skrifa/libm"]
+# Hints a glyph to the pixel grid before it is drawn, with the face's own
+# bytecode and skrifa's autohinter behind it, at FreeType's Light target: only
+# the horizontal edges move, so a baseline and an x-height land on a pixel
+# boundary instead of across two and nothing shifts sideways. Text at the sizes
+# a desktop reads at is visibly crisper for it, and a glyph costs about nine
+# times as long to rasterise — once, into the atlas, and nothing per frame.
+# About 310 KB of static binary, which is why a panel asks for it: skrifa's
+# hinting is compiled either way and the linker drops it until something calls
+# it. Nothing moves horizontally, so advances, metrics and layout are the same
+# either way, and a face that carries no hints is drawn as it always was.
+hinting = ["truetype"]
 # Shaping, bidirectional text and font fallback, via cosmic-text. About 3.1 MB
 # of static binary — four times the rest of the toolkit — so this is for panels
 # that genuinely need a script the other tiers cannot draw.

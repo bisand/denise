@@ -25,6 +25,8 @@ std = ["denise/std", "denise-render?/std", "denise-text/std"]
 raster = ["dep:denise-render"]
 # Passed through so an application picks its text tier once, on `denise-ui`.
 truetype = ["denise-text/truetype"]
+# Hints a glyph to the pixel grid: see `denise-text`.
+hinting = ["truetype", "denise-text/hinting"]
 shaping = ["denise-text/shaping"]
 
 [dependencies]

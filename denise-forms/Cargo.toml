@@ -35,6 +35,8 @@ cli = ["dep:denise-image"]
 # nothing and `skrifa` costs 270 KB — and a snapshot drawn in the built-in font
 # is the same on every machine, which is what makes one worth committing.
 truetype = ["denise-ui/truetype", "dep:denise-text"]
+# Hints a glyph to the pixel grid: see `denise-text`.
+hinting = ["truetype", "denise-ui/hinting"]
 
 [dependencies]
 denise = { workspace = true, features = ["std"] }
