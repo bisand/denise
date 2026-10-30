@@ -51,7 +51,9 @@ use alloc::vec::Vec;
 
 use denise::Size;
 use skrifa::instance::LocationRef;
-use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::outline::{
+    DrawSettings, Engine, HintingInstance, HintingOptions, OutlinePen, SmoothMode, Target,
+};
 use skrifa::raw::TableProvider;
 use skrifa::{FontRef, MetadataProvider};
 
@@ -76,7 +78,15 @@ pub struct TrueTypeSource {
     ascii: [u32; 128],
     outline: Outline,
     scratch: Vec<u8>,
+    /// The hinting state for the sizes drawn at, built the first time each is
+    /// asked for. A panel draws at a handful of sizes — the text, the chrome,
+    /// a size down for the tabs — and the oldest goes when a fifth arrives.
+    hinters: Vec<(u16, Option<HintingInstance>)>,
 }
+
+/// How many sizes' hinting state is kept. A size costs a few kilobytes and a
+/// fraction of a millisecond to build.
+const HINTED_SIZES: usize = 4;
 
 impl Face {
     fn bytes(&self) -> &[u8] {
@@ -136,6 +146,7 @@ impl TrueTypeSource {
             ascii,
             outline: Outline::default(),
             scratch: Vec::new(),
+            hinters: Vec::new(),
         })
     }
 
@@ -175,9 +186,21 @@ impl TrueTypeSource {
             .glyph_metrics(size, LocationRef::default())
             .advance_width(id)?;
         self.outline.clear();
-        if let Some(glyph) = font.outline_glyphs().get(id) {
-            let settings = DrawSettings::unhinted(size, LocationRef::default());
-            if glyph.draw(settings, &mut Pen(&mut self.outline)).is_err() {
+        let glyphs = font.outline_glyphs();
+        if let Some(outline) = glyphs.get(id) {
+            // Hinted: the face's own instructions where it has them, and the
+            // autohinter where it does not. Light, so only the horizontal
+            // edges are moved — a baseline, an x-height and a crossbar land on
+            // a pixel boundary instead of across two, which is the whole
+            // difference between crisp text and grey text at the sizes code is
+            // read at. Nothing moves sideways, so the advances and the grid a
+            // monospaced face draws on are the ones measured unhinted.
+            let hinter = hinter(&mut self.hinters, &glyphs, size_px);
+            let settings = match &hinter {
+                Some(hinter) => DrawSettings::hinted(hinter, false),
+                None => DrawSettings::unhinted(size, LocationRef::default()),
+            };
+            if outline.draw(settings, &mut Pen(&mut self.outline)).is_err() {
                 // Half an outline is worse than none: the box is at least honest.
                 self.outline.clear();
             }
@@ -185,6 +208,46 @@ impl TrueTypeSource {
         }
         Some((round(advance), self.outline.bounds()))
     }
+}
+
+/// The hinting state for `size_px`, built and kept the first time that size is
+/// drawn at. `None` for a face the hinter cannot read, which is drawn unhinted.
+///
+/// Returned by value because the cache is borrowed from the same struct as the
+/// outline being written; a `HintingInstance` is a few kilobytes and is cloned
+/// rather than threaded through a second borrow.
+fn hinter(
+    cache: &mut Vec<(u16, Option<HintingInstance>)>,
+    glyphs: &skrifa::outline::OutlineGlyphCollection<'_>,
+    size_px: u16,
+) -> Option<HintingInstance> {
+    if let Some((_, hinter)) = cache.iter().find(|(size, _)| *size == size_px) {
+        return hinter.clone();
+    }
+    // The autohinter rather than the face's own bytecode: it is four times
+    // cheaper to run, it needs no face to carry hints, and over the faces code
+    // is read in it lands the same ink on fewer pixels. Light, so only the
+    // horizontal edges move and nothing shifts sideways.
+    let options = HintingOptions {
+        engine: Engine::Auto(None),
+        target: Target::Smooth {
+            mode: SmoothMode::Light,
+            symmetric_rendering: false,
+            preserve_linear_metrics: true,
+        },
+    };
+    let built = HintingInstance::new(
+        glyphs,
+        skrifa::instance::Size::new(f32::from(size_px)),
+        LocationRef::default(),
+        options,
+    )
+    .ok();
+    if cache.len() >= HINTED_SIZES {
+        cache.remove(0);
+    }
+    cache.push((size_px, built.clone()));
+    built
 }
 
 /// Skrifa's curves, passed on to be flattened.
@@ -210,6 +273,39 @@ impl OutlinePen for Pen<'_> {
     fn close(&mut self) {
         self.0.close();
     }
+}
+
+/// A pixel's coverage, widened.
+///
+/// A stem a pixel and a bit wide — which is every stem of a face read at the
+/// size code is read at — lands across two pixels and covers neither of them,
+/// and an exact rasteriser says so honestly: two pixels of half ink, which is
+/// a grey smear where the reader wanted a stroke. Every rasteriser a desktop
+/// uses widens the coverage to answer it, FreeType's stem darkening and the
+/// font smoothing on a Mac being the same idea, and this is the curve: fixed,
+/// gentle, and steepest where it matters. Half coverage comes out at 0.62,
+/// nothing and everything come out as themselves, and a glyph's total ink
+/// grows by about a tenth.
+///
+/// It is applied to every face this tier reads, in the mask the atlas keeps,
+/// so it is paid once per glyph per size and nothing per frame.
+///
+/// shortcut: the same curve whatever the text is drawn on, which suits light
+/// text on a dark panel — what it was measured against — more than the other
+/// way round, where a stroke is widened into a background that is already
+/// brighter than it. Choosing the curve from the colour the glyph is drawn
+/// in means doing it where the mask is composited rather than where it is
+/// made: a table per painter rather than a pass per glyph, and a cost on
+/// every pixel of every frame instead of none. Worth doing when a panel
+/// drawn dark on light looks heavy.
+const fn dilate(ink: u8) -> u8 {
+    // `1.45c - 0.45c²`, in whole numbers: 371/256 and 115/(255 · 256). The
+    // rasteriser promises no floating point outside the outline itself, and
+    // a quadratic needs none.
+    let c = ink as u32;
+    let widened = c * 371 / 256 - c * c * 115 / (255 * 256);
+    // The quadratic cannot leave 0..=255, but the compiler does not know it.
+    if widened > 255 { 255 } else { widened as u8 }
 }
 
 /// `value` to the nearest whole pixel, halves away from zero: `f32::round`,
@@ -286,7 +382,12 @@ impl GlyphSource for TrueTypeSource {
     fn rasterise(&mut self, glyph: GlyphId, size_px: u16) -> Option<Rasterised<'_>> {
         let (advance, bounds) = self.outline(glyph, size_px)?;
         match bounds {
-            Some(bounds) => self.outline.fill(bounds, &mut self.scratch),
+            Some(bounds) => {
+                self.outline.fill(bounds, &mut self.scratch);
+                for ink in &mut self.scratch {
+                    *ink = dilate(*ink);
+                }
+            }
             None => self.scratch.clear(),
         }
         let metrics = convert(advance, bounds);
@@ -318,6 +419,72 @@ impl core::fmt::Debug for TrueTypeSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Widening coverage keeps the ends where they are, never dims a pixel
+    /// and never leaves the byte: a mask that came out solid stays solid, and
+    /// one that was empty stays empty, or the glyph would grow a halo.
+    #[test]
+    fn coverage_is_widened_between_nothing_and_everything() {
+        assert_eq!(dilate(0), 0);
+        assert_eq!(dilate(255), 255);
+        assert_eq!(dilate(128), 157, "half covered comes out at 0.62");
+        let mut last = 0;
+        for ink in 0..=255u8 {
+            let out = dilate(ink);
+            assert!(out >= ink, "{ink} dimmed to {out}");
+            assert!(out >= last, "{ink} went backwards");
+            last = out;
+        }
+    }
+
+    #[cfg(feature = "std")]
+    /// Hinting moves the outline, not the grid: a face's advances are the
+    /// ones the metrics report, so a monospaced face stays monospaced and a
+    /// line measures the same as it did before the hinter arrived.
+    #[test]
+    fn hinting_leaves_the_advances_alone() {
+        let Some(mut face) = system_face() else {
+            return;
+        };
+        for size in [11, 13, 20] {
+            let advance = |face: &mut TrueTypeSource, ch: char| {
+                let id = face.glyph_id(ch).expect("a glyph");
+                face.glyph_metrics(id, size).expect("metrics").advance
+            };
+            for ch in ['H', 'n', 'i', '.'] {
+                let hinted = advance(&mut face, ch);
+                let font = face.font().expect("the face");
+                let id = skrifa::GlyphId::new(face.lookup(ch));
+                let unhinted = font
+                    .glyph_metrics(
+                        skrifa::instance::Size::new(f32::from(size)),
+                        LocationRef::default(),
+                    )
+                    .advance_width(id)
+                    .expect("an advance");
+                assert_eq!(hinted, round(unhinted), "{ch} at {size}");
+            }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    /// The hinting state is built once for a size and kept, and a fifth size
+    /// pushes the oldest out rather than growing without end.
+    #[test]
+    fn a_handful_of_sizes_are_hinted_and_no_more() {
+        let Some(mut face) = system_face() else {
+            return;
+        };
+        let id = face.glyph_id('n').expect("n");
+        for size in 10..=10 + HINTED_SIZES as u16 {
+            let _ = face.rasterise(id, size);
+        }
+        assert_eq!(face.hinters.len(), HINTED_SIZES);
+        assert!(
+            !face.hinters.iter().any(|(size, _)| *size == 10),
+            "the oldest went"
+        );
+    }
 
     #[test]
     fn a_file_that_is_not_a_font_fails_with_a_reason() {
