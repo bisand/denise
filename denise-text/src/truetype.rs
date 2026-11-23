@@ -1,7 +1,7 @@
 //! Real TrueType and OpenType fonts, behind the `truetype` feature.
 //!
 //! Anti-aliased, proportionally spaced, at any size — everything the built-in
-//! bitmap font cannot do, for about 270 KB of static binary. What it still does
+//! bitmap font cannot do, for about 571 KB of static binary. What it still does
 //! not do is *shaping*: no ligatures, no contextual forms, no reordering, no
 //! bidirectional text. For Latin, Cyrillic and Greek that costs nothing anyone
 //! will notice. For Arabic or Devanagari it is the whole ball game, and those need
@@ -50,27 +50,25 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use denise::Size;
-use skrifa::instance::LocationRef;
-use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::{DrawMemory, Font, PathSink, ScalerFont};
 #[cfg(feature = "hinting")]
-use skrifa::outline::{Engine, HintingInstance, HintingOptions, SmoothMode, Target};
-use skrifa::raw::TableProvider;
-use skrifa::{FontRef, MetadataProvider};
+use skrifa::{HintOptions, RasterTarget};
 
 use crate::fill::{Bounds, Outline};
 use crate::source::{FontMetrics, GlyphId, GlyphMetrics, GlyphSource, Rasterised};
 
-/// What a face is read from: bytes the source owns, or bytes that live as long
-/// as the program does and need no copy.
-enum Face {
-    Owned(Vec<u8>),
-    Static(&'static [u8]),
-}
-
 /// A TrueType or OpenType face, read glyph by glyph as it is drawn.
 pub struct TrueTypeSource {
     name: String,
-    face: Face,
+    /// The face, parsed once and holding its own bytes.
+    ///
+    /// This used to be the bytes alone, re-parsed for every question asked of
+    /// the face, because a parsed face borrowed those bytes and a struct that
+    /// owns bytes and borrows them at once is `unsafe` however it is dressed.
+    /// Skrifa's own font model solves that with `yoke` — which is most of what
+    /// the tier pays for its size — so the table directory is now read once
+    /// instead of per glyph, per metric and per lookup.
+    font: Font,
     /// The glyph of every ASCII character, looked up once. Layout asks for a
     /// glyph per character per measurement, nearly all of them these, and
     /// finding the character map in the file again for each would cost four
@@ -78,36 +76,18 @@ pub struct TrueTypeSource {
     ascii: [u32; 128],
     outline: Outline,
     scratch: Vec<u8>,
-    /// The hinting state for the sizes drawn at, built the first time each is
+    /// The scaler for each size drawn at, built the first time that size is
     /// asked for. A panel draws at a handful of sizes — the text, the chrome,
     /// a size down for the tabs — and the oldest goes when a fifth arrives.
-    #[cfg(feature = "hinting")]
-    hinters: Vec<(u16, Option<HintingInstance>)>,
+    ///
+    /// A scaler is needed to draw at all, hinted or not, so this is not behind
+    /// the `hinting` feature: without it the scalers are simply unhinted ones.
+    scalers: Vec<(u16, ScalerFont)>,
 }
 
-/// How many sizes' hinting state is kept. A size costs a few kilobytes and a
+/// How many sizes' scaler state is kept. A size costs a few kilobytes and a
 /// fraction of a millisecond to build.
-#[cfg(feature = "hinting")]
 const HINTED_SIZES: usize = 4;
-
-impl Face {
-    fn bytes(&self) -> &[u8] {
-        match self {
-            Face::Owned(data) => data,
-            Face::Static(data) => data,
-        }
-    }
-}
-
-/// The first face in `data`, which is the only one in anything but a collection.
-///
-/// This reads the table directory — a few dozen bytes — and nothing else, so it
-/// is done again for every question asked of the face rather than kept: a parsed
-/// face borrows its bytes, and a struct that owns bytes and borrows them at once
-/// is `unsafe` however it is dressed.
-fn parse(data: &[u8]) -> Result<FontRef<'_>, String> {
-    FontRef::from_index(data, 0).map_err(|e| e.to_string())
-}
 
 impl TrueTypeSource {
     /// Reads a font from its bytes, which are copied: the face keeps them.
@@ -121,42 +101,39 @@ impl TrueTypeSource {
 
     /// Reads a font from bytes read for it, which the face takes without a copy.
     pub fn from_vec(name: &str, data: Vec<u8>) -> Result<Self, String> {
-        Self::with(name, Face::Owned(data))
+        Self::with(name, Font::new(data, 0))
     }
 
     /// Reads a font from bytes that live as long as the program — an
     /// `include_bytes!` — which are neither copied nor held twice.
     pub fn from_static(name: &str, data: &'static [u8]) -> Result<Self, String> {
-        Self::with(name, Face::Static(data))
+        Self::with(name, Font::new(data, 0))
     }
 
-    fn with(name: &str, face: Face) -> Result<Self, String> {
-        // A table directory is all `parse` reads, and plenty of files that are
-        // not fonts have a plausible one. A face with no `head` or no `maxp`
-        // can answer nothing this trait asks.
-        let font = parse(face.bytes())?;
-        font.head().map_err(|e| e.to_string())?;
-        font.maxp().map_err(|e| e.to_string())?;
+    fn with(name: &str, font: Option<Font>) -> Result<Self, String> {
+        // `Font::new` reads the table directory and refuses anything that is
+        // not a font in a format it supports, which is the `head`/`maxp` check
+        // this used to do by hand. It answers yes or no rather than saying what
+        // was wrong, so the reason below is ours; a panel still learns that the
+        // file was the problem and falls back to the built-in face.
+        let font = font.ok_or_else(|| "not a font in any supported format".to_string())?;
+        // A face whose em is zero divides every metric by nothing.
+        if font.units_per_em() == 0 {
+            return Err("the face declares an em of zero".to_string());
+        }
         let charmap = font.charmap();
         let mut ascii = [0; 128];
         for (code, glyph) in (0u8..).zip(&mut ascii) {
-            *glyph = charmap.map(code).map_or(0, skrifa::GlyphId::to_u32);
+            *glyph = charmap.map_unicode(code).map_or(0, skrifa::GlyphId::to_u32);
         }
         Ok(Self {
             name: name.to_owned(),
-            face,
+            font,
             ascii,
             outline: Outline::default(),
             scratch: Vec::new(),
-            #[cfg(feature = "hinting")]
-            hinters: Vec::new(),
+            scalers: Vec::new(),
         })
-    }
-
-    /// The face, which parsed when the source was made and whose bytes have not
-    /// changed since. `None` would be a glyph not drawn rather than a panic.
-    fn font(&self) -> Option<FontRef<'_>> {
-        parse(self.face.bytes()).ok()
     }
 
     /// The glyph `ch` maps to, where zero is `.notdef`: the face has no such
@@ -165,8 +142,9 @@ impl TrueTypeSource {
         if let Some(&glyph) = self.ascii.get(ch as usize) {
             return glyph;
         }
-        self.font()
-            .and_then(|font| font.charmap().map(ch))
+        self.font
+            .charmap()
+            .map_unicode(ch)
             .map_or(0, skrifa::GlyphId::to_u32)
     }
 
@@ -174,97 +152,99 @@ impl TrueTypeSource {
     /// a space has none — with its outline left in `self.outline`. `None` for an
     /// id the face does not have.
     fn outline(&mut self, glyph: GlyphId, size_px: u16) -> Option<(i32, Option<Bounds>)> {
-        // `self.face` rather than `self.font()`: the outline is written while
-        // the face is read, and they are separate fields.
-        let font = parse(self.face.bytes()).ok()?;
+        // A glyph the face does not have has no advance to report. The scaler
+        // answers for any id, so the face's own count is what says no — which
+        // `advance_width` used to do by returning `None`.
+        if glyph.0 >= self.font.num_glyphs() {
+            return None;
+        }
         let id = skrifa::GlyphId::new(glyph.0);
-        // Pixels to the em, which is what this trait's sizes are, as a CSS
-        // `font-size` is. A variable face is drawn at its default instance.
-        let size = skrifa::instance::Size::new(f32::from(size_px));
+        // Borrowed field by field: the outline is written while the scaler
+        // cache is read, and they are separate fields.
+        let Self {
+            font,
+            scalers,
+            outline,
+            ..
+        } = self;
+        let scaler = scaler(scalers, font, size_px);
         // Advances are fractional and pixels are not. Rounding here rather
         // than accumulating in floats keeps a line's width reproducible and
         // keeps the rasteriser's no-floating-point promise intact everywhere
         // except the one module that has to break it.
-        let advance = font
-            .glyph_metrics(size, LocationRef::default())
-            .advance_width(id)?;
-        self.outline.clear();
-        let glyphs = font.outline_glyphs();
-        if let Some(outline) = glyphs.get(id) {
-            // Hinted, where the `hinting` feature is on: the face's own
-            // instructions, and nothing for a face that carries none. Light,
-            // so only the horizontal edges are moved — a baseline, an x-height and a crossbar land on
-            // a pixel boundary instead of across two, which is the whole
-            // difference between crisp text and grey text at the sizes code is
-            // read at. Nothing moves sideways, so the advances and the grid a
-            // monospaced face draws on are the ones measured unhinted.
-            #[cfg(feature = "hinting")]
-            let hinter = hinter(&mut self.hinters, &glyphs, size_px);
-            #[cfg(feature = "hinting")]
-            let settings = match &hinter {
-                Some(hinter) => DrawSettings::hinted(hinter, false),
-                None => DrawSettings::unhinted(size, LocationRef::default()),
-            };
-            #[cfg(not(feature = "hinting"))]
-            let settings = DrawSettings::unhinted(size, LocationRef::default());
-            if outline.draw(settings, &mut Pen(&mut self.outline)).is_err() {
+        //
+        // Linear, which is to say unhinted: hinting moves the outline, not the
+        // grid, so a monospaced face stays monospaced and a line measures the
+        // same as it did before the hinter arrived.
+        let advance = scaler.linear_glyph_metrics().h_advance(id);
+        outline.clear();
+        if let Some(glyph) = scaler.outline(id) {
+            // The scaler carries the hinting, so there is nothing to choose
+            // here any more: see `scaler` below for what it was built with.
+            //
+            // Working memory comes from skrifa's own short-lived scratch
+            // rather than `self.scratch`, which is where the coverage mask
+            // being built for this very glyph lives.
+            if glyph.draw(DrawMemory::Scratch, &mut Pen(outline)).is_err() {
                 // Half an outline is worse than none: the box is at least honest.
-                self.outline.clear();
+                outline.clear();
             }
-            self.outline.close();
+            outline.close();
         }
         Some((round(advance), self.outline.bounds()))
     }
 }
 
-/// The hinting state for `size_px`, built and kept the first time that size is
-/// drawn at. `None` for a face the hinter cannot read, which is drawn unhinted.
+/// The scaler for `size_px`, built and kept the first time that size is drawn
+/// at.
 ///
-/// Returned by value because the cache is borrowed from the same struct as the
-/// outline being written; a `HintingInstance` is a few kilobytes and is cloned
-/// rather than threaded through a second borrow.
-#[cfg(feature = "hinting")]
-fn hinter(
-    cache: &mut Vec<(u16, Option<HintingInstance>)>,
-    glyphs: &skrifa::outline::OutlineGlyphCollection<'_>,
-    size_px: u16,
-) -> Option<HintingInstance> {
-    if let Some((_, hinter)) = cache.iter().find(|(size, _)| *size == size_px) {
-        return hinter.clone();
+/// Pixels to the em, which is what this trait's sizes are, as a CSS
+/// `font-size` is. A variable face is drawn at its default instance.
+fn scaler<'a>(cache: &'a mut Vec<(u16, ScalerFont)>, font: &Font, size_px: u16) -> &'a ScalerFont {
+    if let Some(at) = cache.iter().position(|(size, _)| *size == size_px) {
+        return &cache[at].1;
     }
-    // The face's own bytecode, and nothing for a face that carries none: the
-    // interpreter is already linked into this tier — 48 KB of it, which the
-    // linker could never prove was unreachable — while skrifa's autohinter is
-    // another 320 KB, and over the faces code is read in the two draw the
-    // same. A face with no hints is drawn as it always was.
+    let ppem = f32::from(size_px);
+    // Hinted, where the `hinting` feature is on: the face's own instructions,
+    // and nothing for a face that carries none. Light, so only the horizontal
+    // edges are moved — a baseline, an x-height and a crossbar land on a pixel
+    // boundary instead of across two, which is the whole difference between
+    // crisp text and grey text at the sizes code is read at. Nothing moves
+    // sideways, so the advances and the grid a monospaced face draws on are
+    // the ones measured unhinted.
     //
-    // Light, so only the horizontal edges move and nothing shifts sideways.
-    let options = HintingOptions {
-        engine: Engine::Interpreter,
-        target: Target::Smooth {
-            mode: SmoothMode::Light,
-            symmetric_rendering: false,
-            preserve_linear_metrics: true,
-        },
-    };
-    let built = HintingInstance::new(
-        glyphs,
-        skrifa::instance::Size::new(f32::from(size_px)),
-        LocationRef::default(),
-        options,
-    )
-    .ok();
+    // `interpreter`, not `auto_fallback`: the face's own bytecode, and nothing
+    // for a face that carries none. The interpreter is already linked into
+    // this tier — 48 KB of it, which the linker could never prove was
+    // unreachable — while skrifa's autohinter is another 320 KB, and over the
+    // faces code is read in the two draw the same. A face with no hints is
+    // drawn as it always was.
+    //
+    // The two `with_` calls are not decoration: `HintOptions` defaults to
+    // symmetric rendering on and linear metrics off, which is the opposite of
+    // what this tier asked the old API for on both counts.
+    #[cfg(feature = "hinting")]
+    let built = ScalerFont::hinted(
+        font.clone(),
+        ppem,
+        HintOptions::interpreter()
+            .with_target(RasterTarget::Light)
+            .with_symmetric_rendering(false)
+            .with_preserve_linear_metrics(true),
+    );
+    #[cfg(not(feature = "hinting"))]
+    let built = ScalerFont::unhinted(font.clone(), Some(ppem));
     if cache.len() >= HINTED_SIZES {
         cache.remove(0);
     }
-    cache.push((size_px, built.clone()));
-    built
+    cache.push((size_px, built));
+    &cache[cache.len() - 1].1
 }
 
 /// Skrifa's curves, passed on to be flattened.
 struct Pen<'a>(&'a mut Outline);
 
-impl OutlinePen for Pen<'_> {
+impl PathSink for Pen<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.0.move_to(x, y);
     }
@@ -360,17 +340,17 @@ impl GlyphSource for TrueTypeSource {
     }
 
     fn metrics(&self, size_px: u16) -> FontMetrics {
-        let size = skrifa::instance::Size::new(f32::from(size_px));
-        let metrics = self
-            .font()
-            .map(|font| font.metrics(size, LocationRef::default()));
-        match metrics {
-            Some(metrics) if metrics.ascent != 0.0 || metrics.descent != 0.0 => FontMetrics {
-                ascent: round(metrics.ascent),
+        // Scaled from the face's own units rather than through a scaler: the
+        // horizontal line box is all this wants, and building a scaler for it
+        // would resolve every outline in the face to answer three numbers.
+        let line = self.font.metrics().scaled_f32(f32::from(size_px)).h_line();
+        match line {
+            Some(line) if line.ascender != 0.0 || line.descender != 0.0 => FontMetrics {
+                ascent: round(line.ascender),
                 // A face's descent is negative going down; this trait wants a
                 // positive distance from the baseline.
-                descent: round(-metrics.descent),
-                line_gap: round(metrics.leading),
+                descent: round(-line.descender),
+                line_gap: round(line.line_gap),
             },
             // A face with no vertical metrics is broken, but guessing from the
             // requested size beats returning zeroes and stacking every line on
@@ -472,15 +452,13 @@ mod tests {
             };
             for ch in ['H', 'n', 'i', '.'] {
                 let hinted = advance(&mut face, ch);
-                let font = face.font().expect("the face");
                 let id = skrifa::GlyphId::new(face.lookup(ch));
-                let unhinted = font
-                    .glyph_metrics(
-                        skrifa::instance::Size::new(f32::from(size)),
-                        LocationRef::default(),
-                    )
-                    .advance_width(id)
-                    .expect("an advance");
+                // A scaler of its own, with no hinting at all, so this is the
+                // advance the face declares rather than one the hinted scaler
+                // happens to agree with.
+                let unhinted = ScalerFont::unhinted(face.font.clone(), Some(f32::from(size)))
+                    .linear_glyph_metrics()
+                    .h_advance(id);
                 assert_eq!(hinted, round(unhinted), "{ch} at {size}");
             }
         }
@@ -498,9 +476,9 @@ mod tests {
         for size in 10..=10 + HINTED_SIZES as u16 {
             let _ = face.rasterise(id, size);
         }
-        assert_eq!(face.hinters.len(), HINTED_SIZES);
+        assert_eq!(face.scalers.len(), HINTED_SIZES);
         assert!(
-            !face.hinters.iter().any(|(size, _)| *size == 10),
+            !face.scalers.iter().any(|(size, _)| *size == 10),
             "the oldest went"
         );
     }

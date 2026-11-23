@@ -1,6 +1,6 @@
 //! A face rasterised in advance, as a glyph source.
 //!
-//! The `truetype` tier reads a font on the panel: about 270 KB of parser, run
+//! The `truetype` tier reads a font on the panel: about 571 KB of parser, run
 //! at boot, to work out an outline of `A` at 16 px that was the same yesterday
 //! and will be the same next year, because the font is compiled into the binary.
 //! This tier does that work once, on the developer's machine, and compiles in
