@@ -10,7 +10,7 @@
 //! handed one, and that is the point — a kiosk that ships one face, at the
 //! sizes it was designed at, has nothing to parse at boot and nothing in its
 //! binary that parses. The same text through the `truetype` tier would draw
-//! byte for byte the same, at about 270 KB more of binary.
+//! byte for byte the same, at about 571 KB more of binary.
 //!
 //! A size that was not baked — 16 here — snaps to the nearest that was, and
 //! the program says so, because a panel that silently draws 14 px where its

@@ -35,9 +35,12 @@ truetype = ["dep:skrifa", "skrifa/libm"]
 # boundary instead of across two and nothing shifts sideways. Text at the sizes
 # a desktop reads at is visibly crisper for it, and a glyph costs about nine
 # times as long to rasterise — once, into the atlas, and nothing per frame.
-# About 310 KB of static binary, which is why a panel asks for it: skrifa's
-# hinting is compiled either way and the linker drops it until something calls
-# it. Nothing moves horizontally, so advances, metrics and layout are the same
+# It costs no binary at all since skrifa 0.50, which is a change from what this
+# said before. The engines are dispatched through a trait object there, so the
+# linker cannot drop the ones a panel never asks for and `truetype` already
+# carries the hinting apparatus — the two tiers come out within a few hundred
+# bytes of each other. The feature is a switch on behaviour now, not on size.
+# Nothing moves horizontally, so advances, metrics and layout are the same
 # either way, and a face that carries no hints is drawn as it always was.
 hinting = ["truetype"]
 # Shaping, bidirectional text and font fallback, via cosmic-text. About 3.1 MB

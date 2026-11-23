@@ -127,7 +127,7 @@ Three tiers, chosen by feature so you pay for what you draw. The cost is the inc
 | Tier | Feature | Cost | Buys |
 |---|---|---|---|
 | Built-in bitmap | none | 0 | Latin plus `ÆØÅ æøå ÄÖÜ äöü`, whole-number scales |
-| TrueType, via `skrifa` | `truetype` | +270 KB | Real faces, anti-aliased, any size |
+| TrueType, via `skrifa` | `truetype` | +571 KB | Real faces, anti-aliased, any size |
 | Baked at build time | `bake`, in a `build.rs` | the tables | A real face at the sizes it was baked at; no parser on the panel |
 | Shaped, via `cosmic-text` | `shaping` | +3.1 MB | Ligatures, bidirectional text, font fallback, complex scripts |
 

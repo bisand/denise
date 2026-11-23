@@ -18,6 +18,7 @@ bytemuck
 bytemuck_derive
 core_maths
 cosmic-text
+foldhash
 font-types
 fontdb
 harfrust
@@ -37,8 +38,10 @@ skrifa
 slotmap
 smallvec
 smol_str
+stable_deref_trait
 swash
 syn
+synstructure
 sys-locale
 tinyvec
 ttf-parser
@@ -49,7 +52,11 @@ unicode-script
 unicode-segmentation
 version_check
 yazi
+yoke
+yoke-derive
 zeno
+zerofrom
+zerofrom-derive
 
 [denise-ui default]
 
@@ -59,6 +66,7 @@ bytemuck
 bytemuck_derive
 core_maths
 cosmic-text
+foldhash
 font-types
 fontdb
 harfrust
@@ -78,8 +86,10 @@ skrifa
 slotmap
 smallvec
 smol_str
+stable_deref_trait
 swash
 syn
+synstructure
 sys-locale
 tinyvec
 ttf-parser
@@ -90,7 +100,11 @@ unicode-script
 unicode-segmentation
 version_check
 yazi
+yoke
+yoke-derive
 zeno
+zerofrom
+zerofrom-derive
 
 [denise-arrange]
 
@@ -124,6 +138,7 @@ core_maths
 crc32fast
 fdeflate
 flate2
+foldhash
 font-types
 gif
 kdl
@@ -138,11 +153,18 @@ quote
 read-fonts
 simd-adler32
 skrifa
+smallvec
+stable_deref_trait
 syn
+synstructure
 unicode-ident
 unicode-width
 weezl
 winnow
+yoke
+yoke-derive
+zerofrom
+zerofrom-derive
 zune-core
 zune-jpeg
 
